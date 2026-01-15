@@ -1,0 +1,17 @@
+[package]
+name = "rustfoil-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Command-line interface for RustFoil airfoil analysis"
+
+[[bin]]
+name = "rustfoil"
+path = "src/main.rs"
+
+[dependencies]
+rustfoil-core = { path = "../rustfoil-core" }
+rustfoil-solver = { path = "../rustfoil-solver" }
+clap = { version = "4.4", features = ["derive"] }
+thiserror.workspace = true

@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Harry"]
+
+[workspace.dependencies]
+nalgebra = "0.33"
+thiserror = "2.0"  # Only for CLI/WASM, core stays custom
+
+# Optimize for small WASM size in release
+[profile.release]
+opt-level = "s"
+lto = true

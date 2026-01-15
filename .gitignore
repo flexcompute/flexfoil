@@ -1,0 +1,33 @@
+# Rust build artifacts
+/target/
+**/target/
+
+# Cargo lock for libraries (keep for binaries)
+# Cargo.lock  # Uncomment if you want to ignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# WASM build output
+/pkg/
+**/pkg/
+
+# Node modules (for wasm-pack npm integration)
+node_modules/
+
+# Environment
+.env
+.env.local
+
+# Test coverage
+*.profraw
+*.profdata
+coverage/

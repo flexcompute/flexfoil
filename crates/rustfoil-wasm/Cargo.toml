@@ -1,0 +1,29 @@
+[package]
+name = "rustfoil-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "WebAssembly bindings for RustFoil airfoil analysis"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rustfoil-core = { path = "../rustfoil-core" }
+rustfoil-solver = { path = "../rustfoil-solver" }
+wasm-bindgen = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+js-sys = "0.3"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[features]
+default = ["console_error_panic_hook"]
+console_error_panic_hook = ["dep:console_error_panic_hook"]
+
+[dependencies.console_error_panic_hook]
+version = "0.1"
+optional = true
