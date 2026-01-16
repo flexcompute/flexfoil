@@ -138,7 +138,7 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
     return { coordinates: newCoords };
   }),
 
-  setBezierHandles: (handles) => set((state) => {
+  setBezierHandles: (handles) => set(() => {
     // When initially setting handles, don't re-evaluate - keep original shape
     // The curve will only change when handles are explicitly moved
     return { bezierHandles: handles };
