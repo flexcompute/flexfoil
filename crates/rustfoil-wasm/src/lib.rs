@@ -197,6 +197,27 @@ pub fn generate_naca4_from_string(digits: &str, n_points: usize) -> Vec<f64> {
 /// Repaneled coordinates as flat array.
 #[wasm_bindgen]
 pub fn repanel_with_spacing(coords: &[f64], spacing_knots: &[f64], n_panels: usize) -> Vec<f64> {
+    repanel_with_spacing_and_curvature(coords, spacing_knots, n_panels, 0.0)
+}
+
+/// Repanel airfoil with blended SSP and curvature-based spacing.
+///
+/// # Arguments
+/// * `coords` - Input coordinates as flat array [x0, y0, x1, y1, ...]
+/// * `spacing_knots` - Spacing knots as flat array [s0, f0, s1, f1, ...]
+///                     where s is normalized arc length (0-1) and f is spacing value
+/// * `n_panels` - Desired number of panels
+/// * `curvature_weight` - Blend factor: 0.0 = pure SSP, 1.0 = pure curvature-based
+///
+/// # Returns
+/// Repaneled coordinates as flat array.
+#[wasm_bindgen]
+pub fn repanel_with_spacing_and_curvature(
+    coords: &[f64], 
+    spacing_knots: &[f64], 
+    n_panels: usize,
+    curvature_weight: f64,
+) -> Vec<f64> {
     if coords.len() < 6 || coords.len() % 2 != 0 {
         return vec![];
     }
@@ -221,9 +242,11 @@ pub fn repanel_with_spacing(coords: &[f64], spacing_knots: &[f64], n_panels: usi
     // Get total arc length for scaling
     let s_max = spline.total_arc_length();
     
-    // Generate new parameter distribution based on spacing function
-    // SSP returns normalized parameters [0, 1], we need to scale to [0, s_max]
-    let new_params = generate_ssp_distribution(&knots, n_panels + 1);
+    // Clamp curvature weight to [0, 1]
+    let curvature_weight = curvature_weight.clamp(0.0, 1.0);
+    
+    // Generate new parameter distribution based on blended spacing function
+    let new_params = generate_blended_distribution(&spline, &knots, n_panels + 1, curvature_weight);
     
     // Sample spline at new parameters (scaled to actual arc length)
     let new_points: Vec<Point> = new_params
@@ -234,22 +257,94 @@ pub fn repanel_with_spacing(coords: &[f64], spacing_knots: &[f64], n_panels: usi
     new_points.iter().flat_map(|p| [p.x, p.y]).collect()
 }
 
-/// Generate parameter distribution using SSP algorithm.
+/// Compute curvature-based spacing values along the airfoil.
 /// 
-/// This implements Mark Drela's position-based spacing algorithm.
-fn generate_ssp_distribution(knots: &[(f64, f64)], n_points: usize) -> Vec<f64> {
+/// Returns an array of (s, curvature_density) pairs where higher curvature
+/// regions get higher density values.
+#[wasm_bindgen]
+pub fn compute_curvature_spacing(coords: &[f64], n_samples: usize) -> Vec<f64> {
+    if coords.len() < 6 || coords.len() % 2 != 0 {
+        return vec![];
+    }
+    
+    let points: Vec<Point> = coords.chunks(2).map(|c| point(c[0], c[1])).collect();
+    
+    let spline = match CubicSpline::from_points(&points) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+    
+    let s_max = spline.total_arc_length();
+    let n = n_samples.max(10);
+    
+    // Sample curvature along the spline
+    let curvatures: Vec<f64> = (0..n)
+        .map(|i| {
+            let s = (i as f64 / (n - 1) as f64) * s_max;
+            spline.curvature(s).abs()
+        })
+        .collect();
+    
+    // Convert curvature to spacing density
+    let spacing = curvature_to_spacing(&curvatures);
+    
+    // Return as flat array [s0, f0, s1, f1, ...]
+    let mut result = Vec::with_capacity(n * 2);
+    for i in 0..n {
+        let s_norm = i as f64 / (n - 1) as f64;
+        result.push(s_norm);
+        result.push(spacing[i]);
+    }
+    result
+}
+
+/// Generate parameter distribution blending SSP and curvature-based spacing.
+fn generate_blended_distribution(
+    spline: &CubicSpline,
+    knots: &[(f64, f64)],
+    n_points: usize,
+    curvature_weight: f64,
+) -> Vec<f64> {
     if n_points < 2 {
         return vec![0.0, 1.0];
     }
     
-    // Interpolate spacing function at many points
     let n_samples = 1000;
-    let mut spacing_values: Vec<f64> = Vec::with_capacity(n_samples);
+    let s_max = spline.total_arc_length();
     
-    for i in 0..n_samples {
-        let s = i as f64 / (n_samples - 1) as f64;
-        spacing_values.push(interpolate_spacing(knots, s));
-    }
+    // Compute SSP spacing values
+    let ssp_spacing: Vec<f64> = (0..n_samples)
+        .map(|i| {
+            let s = i as f64 / (n_samples - 1) as f64;
+            interpolate_spacing(knots, s)
+        })
+        .collect();
+    
+    // Compute curvature-based spacing values
+    let curvatures: Vec<f64> = (0..n_samples)
+        .map(|i| {
+            let s = (i as f64 / (n_samples - 1) as f64) * s_max;
+            spline.curvature(s).abs()
+        })
+        .collect();
+    let curvature_spacing = curvature_to_spacing(&curvatures);
+    
+    // Blend the two spacing functions
+    let blended_spacing: Vec<f64> = ssp_spacing
+        .iter()
+        .zip(curvature_spacing.iter())
+        .map(|(&ssp, &curv)| {
+            // Linear blend: (1 - w) * SSP + w * curvature
+            (1.0 - curvature_weight) * ssp + curvature_weight * curv
+        })
+        .collect();
+    
+    spacing_to_distribution(&blended_spacing, n_points)
+}
+
+/// Convert a spacing function (sampled at n_samples points) to a parameter distribution.
+fn spacing_to_distribution(spacing_values: &[f64], n_points: usize) -> Vec<f64> {
+    let n_samples = spacing_values.len();
     
     // Integrate spacing function to get cumulative distribution
     let ds = 1.0 / (n_samples - 1) as f64;
@@ -309,6 +404,38 @@ fn generate_ssp_distribution(knots: &[(f64, f64)], n_points: usize) -> Vec<f64> 
     }
     
     result
+}
+
+/// Convert curvature values to spacing density values.
+/// 
+/// Higher curvature → higher density (more points).
+/// Uses a power-law transformation with smoothing.
+fn curvature_to_spacing(curvatures: &[f64]) -> Vec<f64> {
+    if curvatures.is_empty() {
+        return vec![];
+    }
+    
+    // Find max curvature for normalization
+    let max_curv = curvatures.iter().cloned().fold(0.0_f64, f64::max);
+    
+    if max_curv < 1e-10 {
+        // Flat geometry - uniform spacing
+        return vec![1.0; curvatures.len()];
+    }
+    
+    // Transform curvature to spacing density
+    // Use sqrt to moderate the effect (pure linear would over-cluster at LE)
+    // Add a base level so flat regions still get some points
+    let base_density = 0.3;
+    let curv_scale = 1.0 - base_density;
+    
+    curvatures
+        .iter()
+        .map(|&k| {
+            let normalized = (k / max_curv).sqrt();
+            base_density + curv_scale * normalized
+        })
+        .collect()
 }
 
 /// Interpolate spacing value at parameter s using knot values.

@@ -6,6 +6,8 @@ import init, {
     generate_naca4,
     generate_naca4_from_string,
     repanel_with_spacing,
+    repanel_with_spacing_and_curvature,
+    compute_curvature_spacing,
     analyze_airfoil,
     greet,
     RustFoil,
@@ -118,6 +120,23 @@ export function repanelWithSpacing(
     spacingKnots: { s: number; f: number }[],
     nPanels: number
 ): { x: number; y: number }[] {
+    return repanelWithSpacingAndCurvature(coordinates, spacingKnots, nPanels, 0);
+}
+
+/**
+ * Repanel airfoil with blended SSP and curvature-based spacing.
+ * 
+ * @param coordinates - Current airfoil coordinates
+ * @param spacingKnots - Array of {s, f} knots for spacing function
+ * @param nPanels - Desired number of panels
+ * @param curvatureWeight - Blend factor: 0.0 = pure SSP, 1.0 = pure curvature-based
+ */
+export function repanelWithSpacingAndCurvature(
+    coordinates: { x: number; y: number }[],
+    spacingKnots: { s: number; f: number }[],
+    nPanels: number,
+    curvatureWeight: number
+): { x: number; y: number }[] {
     if (!initialized) {
         throw new Error('WASM not initialized. Call initWasm() first.');
     }
@@ -129,8 +148,34 @@ export function repanelWithSpacing(
         knotsFlat[i * 2 + 1] = spacingKnots[i].f;
     }
     
-    const result = repanel_with_spacing(coordsFlat, knotsFlat, nPanels);
+    const result = repanel_with_spacing_and_curvature(coordsFlat, knotsFlat, nPanels, curvatureWeight);
     return flatToPoints(result);
+}
+
+/**
+ * Compute curvature-based spacing values along the airfoil.
+ * 
+ * @param coordinates - Airfoil coordinates
+ * @param nSamples - Number of sample points
+ * @returns Array of {s, f} values representing curvature-based spacing
+ */
+export function computeCurvatureSpacing(
+    coordinates: { x: number; y: number }[],
+    nSamples: number = 100
+): { s: number; f: number }[] {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+    
+    const coordsFlat = pointsToFlat(coordinates);
+    const result = compute_curvature_spacing(coordsFlat, nSamples);
+    
+    // Convert flat array to {s, f} pairs
+    const knots: { s: number; f: number }[] = [];
+    for (let i = 0; i < result.length; i += 2) {
+        knots.push({ s: result[i], f: result[i + 1] });
+    }
+    return knots;
 }
 
 /**

@@ -14,9 +14,10 @@ import type {
 } from '../types';
 import { 
   generateNaca4 as wasmGenerateNaca4, 
-  repanelWithSpacing,
+  repanelWithSpacingAndCurvature,
   isWasmReady 
 } from '../lib/wasm';
+import { evaluateBSpline, evaluateBezierCurve } from '../lib/bspline';
 
 // Default NACA 0012 coordinates (simplified)
 const DEFAULT_NACA0012: AirfoilPoint[] = [
@@ -47,10 +48,15 @@ const DEFAULT_NACA0012: AirfoilPoint[] = [
   { x: 1.0, y: 0.0 },
 ];
 
+// Default spacing: cosine-like with fine spacing at LE and TE
+// In SSP: higher F = more points (denser), lower F = fewer points (sparser)
+// S=0 is TE (start), S=0.5 is LE, S=1 is TE (end)
 const DEFAULT_SPACING_KNOTS: SpacingKnot[] = [
-  { S: 0, F: 0.5 },   // Dense at TE
-  { S: 0.5, F: 1.5 }, // Coarser at mid
-  { S: 1, F: 0.5 },   // Dense at TE again
+  { S: 0, F: 1.5 },    // Dense at TE
+  { S: 0.25, F: 0.4 }, // Sparse between TE and LE
+  { S: 0.5, F: 1.5 },  // Dense at LE (high curvature region)
+  { S: 0.75, F: 0.4 }, // Sparse between LE and TE
+  { S: 1, F: 1.5 },    // Dense at TE
 ];
 
 interface AirfoilStore extends AirfoilState {
@@ -82,6 +88,7 @@ interface AirfoilStore extends AirfoilState {
   addSpacingKnot: (knot: SpacingKnot) => void;
   removeSpacingKnot: (index: number) => void;
   setNPanels: (n: number) => void;
+  setCurvatureWeight: (weight: number) => void;
   
   // NACA generation
   generateNaca4: (params: Naca4Params) => void;
@@ -104,6 +111,7 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
   bsplineDegree: 3,
   spacingKnots: DEFAULT_SPACING_KNOTS,
   nPanels: 50,
+  curvatureWeight: 0,
 
   // Actions
   setCoordinates: (coords) => set({ coordinates: coords }),
@@ -114,7 +122,8 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
   updatePoint: (index, point) => set((state) => {
     const newCoords = [...state.coordinates];
     newCoords[index] = point;
-    return { coordinates: newCoords };
+    // In surface mode, also update panels to show immediate feedback
+    return { coordinates: newCoords, panels: newCoords };
   }),
 
   addPoint: (index, point) => set((state) => {
@@ -129,20 +138,41 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
     return { coordinates: newCoords };
   }),
 
-  setBezierHandles: (handles) => set({ bezierHandles: handles }),
+  setBezierHandles: (handles) => set((state) => {
+    // When initially setting handles, don't re-evaluate - keep original shape
+    // The curve will only change when handles are explicitly moved
+    return { bezierHandles: handles };
+  }),
   
   updateBezierHandle: (index, handle) => set((state) => {
     const newHandles = [...state.bezierHandles];
     newHandles[index] = handle;
+    // Re-evaluate Bezier curve when handles change
+    if (state.coordinates.length > 0) {
+      const newPanels = evaluateBezierCurve(state.coordinates, newHandles, state.nPanels + 1);
+      return { bezierHandles: newHandles, panels: newPanels };
+    }
     return { bezierHandles: newHandles };
   }),
 
-  setBSplineControlPoints: (points) => set({ bsplineControlPoints: points }),
+  setBSplineControlPoints: (points) => set((state) => {
+    // When setting control points, also evaluate the B-spline curve
+    if (points.length >= 2) {
+      const newPanels = evaluateBSpline(points, state.bsplineDegree, state.nPanels + 1);
+      return { bsplineControlPoints: points, panels: newPanels, coordinates: newPanels };
+    }
+    return { bsplineControlPoints: points };
+  }),
   
   updateBSplineControlPoint: (id, point) => set((state) => {
     const newPoints = state.bsplineControlPoints.map((p) =>
       p.id === id ? { ...p, ...point } : p
     );
+    // Re-evaluate B-spline curve when control points change
+    if (newPoints.length >= 2) {
+      const newPanels = evaluateBSpline(newPoints, state.bsplineDegree, state.nPanels + 1);
+      return { bsplineControlPoints: newPoints, panels: newPanels, coordinates: newPanels };
+    }
     return { bsplineControlPoints: newPoints };
   }),
 
@@ -154,7 +184,15 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
     bsplineControlPoints: state.bsplineControlPoints.filter((p) => p.id !== id),
   })),
 
-  setBSplineDegree: (degree) => set({ bsplineDegree: Math.max(1, Math.min(5, degree)) }),
+  setBSplineDegree: (degree) => set((state) => {
+    const newDegree = Math.max(1, Math.min(5, degree));
+    // Re-evaluate B-spline curve when degree changes
+    if (state.bsplineControlPoints.length >= 2) {
+      const newPanels = evaluateBSpline(state.bsplineControlPoints, newDegree, state.nPanels + 1);
+      return { bsplineDegree: newDegree, panels: newPanels, coordinates: newPanels };
+    }
+    return { bsplineDegree: newDegree };
+  }),
 
   setSpacingKnots: (knots) => set({ spacingKnots: knots }),
   
@@ -176,6 +214,8 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
   }),
 
   setNPanels: (n) => set({ nPanels: Math.max(10, Math.min(500, n)) }),
+
+  setCurvatureWeight: (weight) => set({ curvatureWeight: Math.max(0, Math.min(1, weight)) }),
 
   generateNaca4: (params) => {
     const { m, p, t, nPoints } = params;
@@ -271,10 +311,11 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
     try {
       // Convert spacing knots to wasm format
       const spacingKnots = state.spacingKnots.map(k => ({ s: k.S, f: k.F }));
-      const newPanels = repanelWithSpacing(
+      const newPanels = repanelWithSpacingAndCurvature(
         state.coordinates,
         spacingKnots,
-        state.nPanels
+        state.nPanels,
+        state.curvatureWeight
       );
       
       if (newPanels.length === 0) {
@@ -298,5 +339,6 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
     bsplineDegree: 3,
     spacingKnots: DEFAULT_SPACING_KNOTS,
     nPanels: 50,
+    curvatureWeight: 0,
   }),
 }));

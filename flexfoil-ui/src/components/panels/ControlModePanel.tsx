@@ -4,7 +4,8 @@
 
 import { useCallback } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
-import type { ControlMode, BSplineControlPoint } from '../../types';
+import type { ControlMode } from '../../types';
+import { createBSplineControlPointsFromAirfoil, createBezierHandlesFromAirfoil } from '../../lib/bspline';
 
 export function ControlModePanel() {
   const { 
@@ -18,34 +19,26 @@ export function ControlModePanel() {
     addBSplineControlPoint,
   } = useAirfoilStore();
 
+  const { setBezierHandles } = useAirfoilStore();
+  
   const handleModeChange = useCallback((mode: ControlMode) => {
     setControlMode(mode);
     
     // Initialize B-spline control points if switching to bspline mode
-    if (mode === 'bspline' && bsplineControlPoints.length === 0) {
-      // Create initial control points from airfoil shape
-      // Use a simplified set of control points
-      const numCP = 8;
-      const newControlPoints: BSplineControlPoint[] = [];
-      
-      for (let i = 0; i < numCP; i++) {
-        const t = i / (numCP - 1);
-        const idx = Math.floor(t * (coordinates.length - 1));
-        const p = coordinates[idx];
-        
-        // Offset control points slightly to show they're off-surface
-        const offset = 0.02;
-        newControlPoints.push({
-          id: `cp-${i}`,
-          x: p.x,
-          y: p.y + (p.y >= 0 ? offset : -offset),
-          weight: 1,
-        });
-      }
-      
+    if (mode === 'bspline' && bsplineControlPoints.length === 0 && coordinates.length > 0) {
+      // Use least-squares fitting to find control points that approximate the airfoil
+      // Use more control points for better approximation
+      const numCP = Math.min(20, Math.max(8, Math.floor(coordinates.length / 3)));
+      const newControlPoints = createBSplineControlPointsFromAirfoil(coordinates, numCP, bsplineDegree);
       setBSplineControlPoints(newControlPoints);
     }
-  }, [setControlMode, coordinates, bsplineControlPoints.length, setBSplineControlPoints]);
+    
+    // Initialize Bezier handles if switching to bezier mode
+    if (mode === 'bezier' && coordinates.length > 0) {
+      const newHandles = createBezierHandlesFromAirfoil(coordinates, 10);
+      setBezierHandles(newHandles);
+    }
+  }, [setControlMode, coordinates, bsplineControlPoints.length, setBSplineControlPoints, setBezierHandles, bsplineDegree]);
 
   const handleAddControlPoint = useCallback(() => {
     const id = `cp-${Date.now()}`;

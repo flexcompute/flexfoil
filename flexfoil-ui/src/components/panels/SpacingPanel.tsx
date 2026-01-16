@@ -19,6 +19,8 @@ export function SpacingPanel() {
     removeSpacingKnot,
     nPanels, 
     setNPanels,
+    curvatureWeight,
+    setCurvatureWeight,
     repanel,
     panels,
     coordinates,
@@ -31,13 +33,13 @@ export function SpacingPanel() {
     return computeSpacing(spacingKnots, nPanels);
   }, [spacingKnots, nPanels]);
 
-  // Real-time update: repanel immediately when knots or nPanels change
+  // Real-time update: repanel immediately when knots, nPanels, or curvatureWeight change
   useEffect(() => {
     if (liveUpdate && isWasmReady() && coordinates.length > 0) {
       // No debounce for real-time updates
       repanel();
     }
-  }, [spacingKnots, nPanels, liveUpdate, repanel, coordinates.length]);
+  }, [spacingKnots, nPanels, curvatureWeight, liveUpdate, repanel, coordinates.length]);
 
   // Handle manual apply
   const handleApply = useCallback(() => {
@@ -72,46 +74,58 @@ export function SpacingPanel() {
   }, [spacingKnots.length, removeSpacingKnot]);
 
   // Presets
+  // NOTE: In SSP, F is the LOCAL POINT DENSITY:
+  //   - Higher F = more points (finer mesh)
+  //   - Lower F = fewer points (coarser mesh)
+  // S is the arc-length position: S=0 at TE, S=0.5 at LE, S=1 back at TE
   const applyPreset = useCallback((preset: 'uniform' | 'cosine' | 'le-te' | 'le-fine' | 'te-fine') => {
     switch (preset) {
       case 'uniform':
+        // Equal spacing everywhere
         setSpacingKnots([
           { S: 0, F: 1 },
           { S: 1, F: 1 },
         ]);
         break;
       case 'cosine':
+        // Classic cosine: fine at LE and TE, coarser in between
+        // This clusters points at both the leading edge and trailing edge
         setSpacingKnots([
-          { S: 0, F: 0.3 },
-          { S: 0.5, F: 1.5 },
-          { S: 1, F: 0.3 },
+          { S: 0, F: 1.5 },    // Dense at TE
+          { S: 0.25, F: 0.4 }, // Sparse between TE and LE
+          { S: 0.5, F: 1.5 },  // Dense at LE (high curvature)
+          { S: 0.75, F: 0.4 }, // Sparse between LE and TE
+          { S: 1, F: 1.5 },    // Dense at TE
         ]);
         break;
       case 'le-te':
+        // Fine at both LE and TE, coarser in the middle of each surface
         setSpacingKnots([
-          { S: 0, F: 0.5 },
-          { S: 0.25, F: 1.2 },
-          { S: 0.5, F: 0.3 },
-          { S: 0.75, F: 1.2 },
-          { S: 1, F: 0.5 },
+          { S: 0, F: 1.5 },
+          { S: 0.25, F: 0.3 },
+          { S: 0.5, F: 1.5 },
+          { S: 0.75, F: 0.3 },
+          { S: 1, F: 1.5 },
         ]);
         break;
       case 'le-fine':
+        // Extra fine at LE only (for high-curvature LE studies)
         setSpacingKnots([
-          { S: 0, F: 1.0 },
-          { S: 0.4, F: 1.5 },
-          { S: 0.5, F: 0.2 },
-          { S: 0.6, F: 1.5 },
-          { S: 1, F: 1.0 },
+          { S: 0, F: 0.5 },    // Normal at TE
+          { S: 0.35, F: 0.3 }, // Sparse approaching LE
+          { S: 0.5, F: 2.0 },  // Very dense at LE
+          { S: 0.65, F: 0.3 }, // Sparse leaving LE
+          { S: 1, F: 0.5 },    // Normal at TE
         ]);
         break;
       case 'te-fine':
+        // Extra fine at TE only (for wake/separation studies)
         setSpacingKnots([
-          { S: 0, F: 0.3 },
-          { S: 0.2, F: 1.5 },
-          { S: 0.5, F: 1.0 },
-          { S: 0.8, F: 1.5 },
-          { S: 1, F: 0.3 },
+          { S: 0, F: 2.0 },    // Very dense at TE
+          { S: 0.15, F: 0.3 }, // Sparse leaving TE
+          { S: 0.5, F: 0.5 },  // Normal at LE
+          { S: 0.85, F: 0.3 }, // Sparse approaching TE
+          { S: 1, F: 2.0 },    // Very dense at TE
         ]);
         break;
     }
@@ -194,6 +208,41 @@ export function SpacingPanel() {
             >
               +
             </button>
+          </div>
+        </div>
+
+        {/* Curvature weight control */}
+        <div className="form-group">
+          <div className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Curvature Clustering</span>
+            <span style={{ 
+              fontFamily: 'var(--font-mono)', 
+              fontSize: '14px',
+              fontWeight: 600,
+              color: curvatureWeight > 0 ? 'var(--accent-warning)' : 'var(--text-muted)',
+            }}>
+              {Math.round(curvatureWeight * 100)}%
+            </span>
+          </div>
+          <div className="form-row" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '10px', color: 'var(--text-muted)', width: '28px' }}>SSP</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={curvatureWeight * 100}
+              onChange={(e) => setCurvatureWeight(parseInt(e.target.value) / 100)}
+              style={{ flex: 1 }}
+            />
+            <span style={{ fontSize: '10px', color: 'var(--text-muted)', width: '28px', textAlign: 'right' }}>κ</span>
+          </div>
+          <div style={{ 
+            fontSize: '10px', 
+            color: 'var(--text-muted)',
+            marginTop: '4px',
+          }}>
+            Blend between manual SSP knots and automatic curvature-based clustering
           </div>
         </div>
 

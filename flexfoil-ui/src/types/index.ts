@@ -77,6 +77,8 @@ export interface AirfoilState {
   spacingKnots: SpacingKnot[];
   /** Number of output panels */
   nPanels: number;
+  /** Curvature weight for blending SSP and curvature-based spacing (0-1) */
+  curvatureWeight: number;
 }
 
 /** Panel configuration for FlexLayout */

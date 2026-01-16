@@ -2,7 +2,8 @@
  * AirfoilCanvas - Canvas 2D renderer for airfoil visualization
  * 
  * Renders:
- * - Airfoil curve (spline)
+ * - Airfoil curve (smooth spline)
+ * - Panel lines (linear connections between panel points)
  * - Panel points
  * - Control points (surface, bezier handles, b-spline)
  * - Grid and axes
@@ -11,12 +12,164 @@
  * - Pan and zoom
  * - Point dragging
  * - Point selection
- * - Show/hide toggles for points and grid
+ * - Show/hide toggles for curve, panels, points, and grid
  */
 
-import { useRef, useEffect, useCallback, useState } from 'react';
+import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { useAirfoilStore } from '../stores/airfoilStore';
-import type { Point, ViewportState } from '../types';
+import type { Point, ViewportState, AirfoilPoint } from '../types';
+
+/**
+ * Compute cumulative arc lengths for a sequence of points.
+ */
+function computeArcLengths(points: AirfoilPoint[]): number[] {
+  const s: number[] = [0];
+  for (let i = 1; i < points.length; i++) {
+    const dx = points[i].x - points[i - 1].x;
+    const dy = points[i].y - points[i - 1].y;
+    s.push(s[i - 1] + Math.sqrt(dx * dx + dy * dy));
+  }
+  return s;
+}
+
+/**
+ * Build natural cubic spline coefficients.
+ * Returns coefficients for evaluating the spline.
+ */
+function buildCubicSpline(s: number[], f: number[]): { a: number[]; b: number[]; c: number[]; d: number[] } {
+  const n = s.length;
+  if (n < 2) {
+    return { a: [], b: [], c: [], d: [] };
+  }
+  
+  if (n === 2) {
+    const h = s[1] - s[0];
+    return {
+      a: [f[0]],
+      b: [h > 0 ? (f[1] - f[0]) / h : 0],
+      c: [0],
+      d: [0],
+    };
+  }
+  
+  const nSeg = n - 1;
+  const h: number[] = [];
+  for (let i = 0; i < nSeg; i++) {
+    h.push(s[i + 1] - s[i]);
+  }
+  
+  // Build tridiagonal system for second derivatives
+  const c = new Array(n).fill(0);
+  
+  if (n > 2) {
+    const nInterior = n - 2;
+    const lower = new Array(nInterior).fill(0);
+    const diag = new Array(nInterior).fill(0);
+    const upper = new Array(nInterior).fill(0);
+    const rhs = new Array(nInterior).fill(0);
+    
+    for (let i = 0; i < nInterior; i++) {
+      const j = i + 1;
+      lower[i] = h[j - 1];
+      diag[i] = 2 * (h[j - 1] + h[j]);
+      upper[i] = h[j];
+      rhs[i] = 3 * ((f[j + 1] - f[j]) / h[j] - (f[j] - f[j - 1]) / h[j - 1]);
+    }
+    
+    // Thomas algorithm
+    const cPrime = new Array(nInterior).fill(0);
+    const dPrime = new Array(nInterior).fill(0);
+    
+    cPrime[0] = upper[0] / diag[0];
+    dPrime[0] = rhs[0] / diag[0];
+    
+    for (let i = 1; i < nInterior; i++) {
+      const denom = diag[i] - lower[i] * cPrime[i - 1];
+      cPrime[i] = i < nInterior - 1 ? upper[i] / denom : 0;
+      dPrime[i] = (rhs[i] - lower[i] * dPrime[i - 1]) / denom;
+    }
+    
+    const x = new Array(nInterior).fill(0);
+    x[nInterior - 1] = dPrime[nInterior - 1];
+    for (let i = nInterior - 2; i >= 0; i--) {
+      x[i] = dPrime[i] - cPrime[i] * x[i + 1];
+    }
+    
+    for (let i = 0; i < nInterior; i++) {
+      c[i + 1] = x[i];
+    }
+  }
+  
+  // Compute remaining coefficients
+  const a: number[] = [];
+  const b: number[] = [];
+  const d: number[] = [];
+  
+  for (let i = 0; i < nSeg; i++) {
+    a.push(f[i]);
+    b.push((f[i + 1] - f[i]) / h[i] - h[i] * (2 * c[i] + c[i + 1]) / 3);
+    d.push((c[i + 1] - c[i]) / (3 * h[i]));
+  }
+  
+  return { a, b, c: c.slice(0, nSeg), d };
+}
+
+/**
+ * Evaluate spline at parameter value.
+ */
+function evaluateSpline(
+  sValues: number[],
+  coeffs: { a: number[]; b: number[]; c: number[]; d: number[] },
+  t: number
+): number {
+  // Find segment
+  let i = 0;
+  for (let j = 0; j < sValues.length - 1; j++) {
+    if (t >= sValues[j] && t <= sValues[j + 1]) {
+      i = j;
+      break;
+    }
+    if (j === sValues.length - 2) {
+      i = j;
+    }
+  }
+  
+  const dt = t - sValues[i];
+  return coeffs.a[i] + coeffs.b[i] * dt + coeffs.c[i] * dt * dt + coeffs.d[i] * dt * dt * dt;
+}
+
+/**
+ * Generate smooth spline curve points from discrete airfoil coordinates.
+ */
+function generateSplineCurve(coordinates: AirfoilPoint[], numPoints: number = 200): AirfoilPoint[] {
+  if (coordinates.length < 3) {
+    return coordinates;
+  }
+  
+  const s = computeArcLengths(coordinates);
+  const sMax = s[s.length - 1];
+  
+  if (sMax < 1e-10) {
+    return coordinates;
+  }
+  
+  const xVals = coordinates.map(p => p.x);
+  const yVals = coordinates.map(p => p.y);
+  
+  const xCoeffs = buildCubicSpline(s, xVals);
+  const yCoeffs = buildCubicSpline(s, yVals);
+  
+  const result: AirfoilPoint[] = [];
+  for (let i = 0; i < numPoints; i++) {
+    const t = (i / (numPoints - 1)) * sMax;
+    result.push({
+      x: evaluateSpline(s, xCoeffs, t),
+      y: evaluateSpline(s, yCoeffs, t),
+    });
+  }
+  
+  return result;
+}
 
 // Constants
 const POINT_RADIUS = 5;
@@ -38,6 +191,7 @@ export function AirfoilCanvas() {
     bsplineControlPoints,
     updatePoint,
     updateBSplineControlPoint,
+    updateBezierHandle,
   } = useAirfoilStore();
 
   // Viewport state
@@ -50,9 +204,15 @@ export function AirfoilCanvas() {
 
   // Display toggles
   const [showGrid, setShowGrid] = useState(true);
-  const [showCurve, setShowCurve] = useState(true);
+  const [showCurve, setShowCurve] = useState(true);    // Smooth spline curve
+  const [showPanels, setShowPanels] = useState(false); // Linear panel connections
   const [showPoints, setShowPoints] = useState(true);
   const [showControls, setShowControls] = useState(true);
+  
+  // Memoize the spline curve to avoid recomputing on every render
+  const splineCurve = useMemo(() => {
+    return generateSplineCurve(coordinates, 300);
+  }, [coordinates]);
 
   // Interaction state
   const [isDragging, setIsDragging] = useState(false);
@@ -153,12 +313,28 @@ export function AirfoilCanvas() {
       ctx.setLineDash([]);
     }
 
-    // Draw airfoil curve (if enabled)
-    if (showCurve && panels.length > 1) {
+    // Draw smooth spline curve (if enabled)
+    if (showCurve && splineCurve.length > 1) {
       ctx.beginPath();
       ctx.strokeStyle = getComputedStyle(document.documentElement)
         .getPropertyValue('--foil-line').trim() || '#00d4aa';
       ctx.lineWidth = 2;
+      
+      const first = toCanvas(splineCurve[0]);
+      ctx.moveTo(first.x, first.y);
+      
+      for (let i = 1; i < splineCurve.length; i++) {
+        const p = toCanvas(splineCurve[i]);
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+    }
+    
+    // Draw panel lines (linear connections between panel points)
+    if (showPanels && panels.length > 1) {
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(255, 200, 100, 0.6)'; // Orange/yellow for panels
+      ctx.lineWidth = 1;
       
       const first = toCanvas(panels[0]);
       ctx.moveTo(first.x, first.y);
@@ -237,7 +413,7 @@ export function AirfoilCanvas() {
       }
     }
 
-  }, [viewport, panels, coordinates, controlMode, bezierHandles, bsplineControlPoints, hoveredPoint, showGrid, showCurve, showPoints, showControls, toCanvas]);
+  }, [viewport, panels, coordinates, splineCurve, controlMode, bezierHandles, bsplineControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, toCanvas]);
 
   // Draw grid
   const drawGrid = useCallback((ctx: CanvasRenderingContext2D) => {
@@ -360,6 +536,12 @@ export function AirfoilCanvas() {
         updatePoint(dragTarget.index, { x: airfoilPos.x, y: airfoilPos.y });
       } else if (dragTarget.type === 'bspline' && typeof dragTarget.index === 'string') {
         updateBSplineControlPoint(dragTarget.index, { x: airfoilPos.x, y: airfoilPos.y });
+      } else if (dragTarget.type === 'bezier' && typeof dragTarget.index === 'number') {
+        const handle = bezierHandles[dragTarget.index];
+        updateBezierHandle(dragTarget.index, {
+          ...handle,
+          position: { x: airfoilPos.x, y: airfoilPos.y },
+        });
       }
     } else if (isPanning) {
       // Pan viewport
@@ -376,7 +558,7 @@ export function AirfoilCanvas() {
     }
 
     lastMousePos.current = canvasPos;
-  }, [isDragging, isPanning, dragTarget, viewport.zoom, toAirfoil, findPointAt, updatePoint, updateBSplineControlPoint]);
+  }, [isDragging, isPanning, dragTarget, viewport.zoom, toAirfoil, findPointAt, updatePoint, updateBSplineControlPoint, updateBezierHandle, bezierHandles]);
 
   const handleMouseUp = useCallback(() => {
     setIsDragging(false);
@@ -490,6 +672,22 @@ export function AirfoilCanvas() {
             style={{ width: '12px', height: '12px' }}
           />
           Curve
+        </label>
+        <label style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: '4px',
+          fontSize: '11px',
+          color: 'var(--text-secondary)',
+          cursor: 'pointer',
+        }}>
+          <input 
+            type="checkbox" 
+            checked={showPanels} 
+            onChange={(e) => setShowPanels(e.target.checked)}
+            style={{ width: '12px', height: '12px' }}
+          />
+          Panels
         </label>
         <label style={{ 
           display: 'flex', 
