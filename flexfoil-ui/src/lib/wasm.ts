@@ -5,7 +5,6 @@
 import init, {
     generate_naca4,
     generate_naca4_from_string,
-    repanel_with_spacing,
     repanel_with_spacing_and_curvature,
     compute_curvature_spacing,
     analyze_airfoil,
