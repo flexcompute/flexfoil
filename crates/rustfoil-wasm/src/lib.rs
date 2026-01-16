@@ -129,25 +129,20 @@ fn generate_naca4_impl(m: f64, p: f64, t: f64, n_points: usize) -> Vec<Point> {
         lower.push(point(x_l, y_l));
     }
     
-    // Assemble in CLOCKWISE order: TE (upper) -> LE -> TE (lower) -> close
-    // This matches the convention used in the solver tests and XFOIL.
-    // Start from TE upper surface (x=1), go to LE (x=0), then to TE lower surface.
-    // IMPORTANT: Close the contour by adding the first point at the end.
-    // This ensures proper force integration without TE gap artifacts.
+    // Assemble in clockwise order: upper TE -> LE -> lower TE -> close
     let mut coords: Vec<Point> = Vec::with_capacity(2 * n);
     
-    // Upper surface: from TE (index n-1) to LE (index 0)
+    // Upper surface: TE to LE
     for i in (0..n).rev() {
         coords.push(upper[i]);
     }
     
-    // Lower surface: from LE+1 (index 1) to TE (index n-1), skip LE to avoid duplicate
+    // Lower surface: LE+1 to TE (skip LE to avoid duplicate)
     for i in 1..n {
         coords.push(lower[i]);
     }
     
-    // Close the contour by duplicating the first point (upper TE)
-    // This creates a closed loop for proper panel method handling
+    // Close contour for sharp TE
     coords.push(coords[0]);
     
     coords
@@ -561,11 +556,7 @@ pub fn repanel_xfoil_with_params(
 
     let repaneled = spline.resample_xfoil(n_panels, &params);
 
-    // Return coordinates as flat array
-    // NOTE: Do NOT add a closing point. XFOIL's paneling intentionally produces
-    // a blunt trailing edge where first point (upper TE) and last point (lower TE)
-    // are at the same x but different y. Adding a closing point would create a
-    // spurious sharp TE panel that breaks symmetry.
+    // Don't add a closing point - XFOIL produces blunt TE (upper/lower TE are distinct).
     let result: Vec<f64> = repaneled
         .iter()
         .flat_map(|p| [p.x, p.y])

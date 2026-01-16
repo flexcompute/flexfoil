@@ -104,17 +104,19 @@ const solution = foil.solve();
 
 ## Development Phases
 
-### Phase 1: Foundation (Current)
+### Phase 1: Foundation
 - [x] Geometry types (`Point`, `Panel`, `Body`)
 - [x] Cubic spline interpolation
-- [x] Cosine repaneling
-- [x] WASM bridge skeleton
+- [x] XFOIL-exact NACA generator
+- [x] XFOIL-exact paneling (PANGEN)
+- [x] WASM bridge
 - [ ] Coordinate file I/O (Selig, Lednicer formats)
 
-### Phase 2: Inviscid Solver
-- [x] Influence coefficient matrix
+### Phase 2: Inviscid Solver (Current)
+- [x] Linear vorticity panel method (PSILIN)
 - [x] Kutta condition
-- [x] Linear system solve
+- [x] Blunt TE handling
+- [x] XFOIL-exact Cl/Cm
 - [ ] Wake modeling
 - [ ] Multi-body interactions
 - [ ] Real-time Cp display

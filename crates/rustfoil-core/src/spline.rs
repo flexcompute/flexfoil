@@ -1,25 +1,12 @@
 //! Cubic spline interpolation for airfoil geometry.
 //!
-//! This module provides spline interpolation for smoothing and repaneling
-//! airfoil coordinates. The primary use cases are:
+//! Provides spline interpolation for smoothing and repaneling airfoil coordinates.
 //!
-//! 1. **Smoothing**: Raw digitized airfoil data often has noise. Spline
-//!    interpolation produces smooth derivatives needed for accurate
-//!    boundary layer calculations.
-//!
-//! 2. **Repaneling**: XFOIL's "cosine spacing" clusters panels near the
-//!    leading and trailing edges where gradients are steep. Splines allow
-//!    evaluating the airfoil shape at arbitrary arc-length positions.
-//!
-//! # Algorithm
-//! We use natural cubic splines with arc-length parameterization:
+//! Uses natural cubic splines with arc-length parameterization:
 //! - Parameter `s` = cumulative arc length along the airfoil
 //! - `x(s)` and `y(s)` are each represented by cubic splines
 //!
-//! # Future Work
-//! - Implement parametric cubic spline interpolation
-//! - Add cosine spacing repaneling
-//! - Support tension splines for sharp features (optional)
+//! Includes XFOIL-exact repaneling via `resample_xfoil()` (PANGEN algorithm).
 
 use crate::error::GeometryError;
 use crate::point::Point;
