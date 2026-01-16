@@ -22,6 +22,7 @@ export function SpacingPanel() {
     curvatureWeight,
     setCurvatureWeight,
     repanel,
+    repanelWithXfoil,
     panels,
     coordinates,
   } = useAirfoilStore();
@@ -265,6 +266,30 @@ export function SpacingPanel() {
             <button onClick={() => applyPreset('te-fine')} style={{ flex: '1 1 auto', fontSize: '10px', padding: '6px 8px' }}>
               TE Fine
             </button>
+          </div>
+          {/* XFOIL paneling */}
+          <div style={{ marginTop: '8px' }}>
+            <button 
+              onClick={repanelWithXfoil}
+              disabled={!isWasmReady() || coordinates.length === 0}
+              style={{ 
+                width: '100%', 
+                fontSize: '10px', 
+                padding: '8px 12px',
+                background: 'var(--accent-warning)',
+                color: 'var(--bg-primary)',
+                fontWeight: 600,
+              }}
+            >
+              XFOIL Paneling (Curvature-Based)
+            </button>
+            <div style={{ 
+              fontSize: '9px', 
+              color: 'var(--text-muted)',
+              marginTop: '4px',
+            }}>
+              Uses XFOIL's PANGEN algorithm: clusters panels at high-curvature regions (LE) and TE
+            </div>
           </div>
         </div>
 

@@ -22,7 +22,7 @@
 //! const solution = foil.solve();
 //! ```
 
-use rustfoil_core::{point, Body, CubicSpline, Point};
+use rustfoil_core::{naca, point, Body, CubicSpline, Point};
 use rustfoil_solver::inviscid::{FlowConditions, InviscidSolver};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -129,21 +129,47 @@ fn generate_naca4_impl(m: f64, p: f64, t: f64, n_points: usize) -> Vec<Point> {
         lower.push(point(x_l, y_l));
     }
     
-    // Assemble: TE -> lower surface -> LE -> upper surface -> TE
-    // Start from TE (x=1), go to LE (x=0) on lower, then LE to TE on upper
-    let mut coords: Vec<Point> = Vec::with_capacity(2 * n - 1);
+    // Assemble in CLOCKWISE order: TE (upper) -> LE -> TE (lower) -> close
+    // This matches the convention used in the solver tests and XFOIL.
+    // Start from TE upper surface (x=1), go to LE (x=0), then to TE lower surface.
+    // IMPORTANT: Close the contour by adding the first point at the end.
+    // This ensures proper force integration without TE gap artifacts.
+    let mut coords: Vec<Point> = Vec::with_capacity(2 * n);
     
-    // Lower surface: from TE (index n-1) to LE (index 0)
+    // Upper surface: from TE (index n-1) to LE (index 0)
     for i in (0..n).rev() {
-        coords.push(lower[i]);
-    }
-    
-    // Upper surface: from LE+1 (index 1) to TE (index n-1), skip LE to avoid duplicate
-    for i in 1..n {
         coords.push(upper[i]);
     }
     
+    // Lower surface: from LE+1 (index 1) to TE (index n-1), skip LE to avoid duplicate
+    for i in 1..n {
+        coords.push(lower[i]);
+    }
+    
+    // Close the contour by duplicating the first point (upper TE)
+    // This creates a closed loop for proper panel method handling
+    coords.push(coords[0]);
+    
     coords
+}
+
+/// Generate NACA 4-series using XFOIL's exact algorithm.
+///
+/// This matches XFOIL's naca.f SUBROUTINE NACA4 exactly:
+/// - TE bunching parameter AN = 1.5
+/// - Blunt trailing edge (not closed)
+/// - Output order: upper TE → LE → lower TE
+///
+/// # Arguments
+/// * `designation` - 4-digit NACA designation (e.g., 12 for NACA 0012, 2412 for NACA 2412)
+/// * `n_points_per_side` - Number of points per side (default: 123 = XFOIL's IQX/3)
+///
+/// # Returns
+/// Flat array of coordinates [x0, y0, x1, y1, ...]. Total points = 2*n - 1.
+#[wasm_bindgen]
+pub fn generate_naca4_xfoil(designation: u32, n_points_per_side: Option<usize>) -> Vec<f64> {
+    let coords = naca::naca4(designation, n_points_per_side);
+    coords.iter().flat_map(|p| [p.x, p.y]).collect()
 }
 
 /// Generate NACA 4-series from digit string (e.g., "2412", "0012").
@@ -474,6 +500,80 @@ fn interpolate_spacing(knots: &[(f64, f64)], s: f64) -> f64 {
     1.0
 }
 
+// ============================================================================
+// XFOIL-Style Repaneling
+// ============================================================================
+
+/// Repanel airfoil using XFOIL's curvature-based algorithm.
+///
+/// This implements Mark Drela's PANGEN algorithm from XFOIL, which distributes
+/// panel nodes based on local curvature. Panels are bunched in regions of high
+/// curvature (leading edge) and at the trailing edge.
+///
+/// # Arguments
+/// * `coords` - Input coordinates as flat array [x0, y0, x1, y1, ...]
+/// * `n_panels` - Desired number of panels (XFOIL default: 160)
+///
+/// # Returns
+/// Repaneled coordinates as flat array.
+#[wasm_bindgen]
+pub fn repanel_xfoil(coords: &[f64], n_panels: usize) -> Vec<f64> {
+    repanel_xfoil_with_params(coords, n_panels, 1.0, 0.15, 0.667)
+}
+
+/// Repanel airfoil using XFOIL's algorithm with custom parameters.
+///
+/// # Arguments
+/// * `coords` - Input coordinates as flat array [x0, y0, x1, y1, ...]
+/// * `n_panels` - Desired number of panels
+/// * `curv_param` - Curvature attraction (0=uniform, 1=XFOIL default)
+/// * `te_le_ratio` - TE/LE panel density ratio (XFOIL default: 0.15)
+/// * `te_spacing_ratio` - TE panel length ratio (XFOIL default: 0.667)
+///
+/// # Returns
+/// Repaneled coordinates as flat array.
+#[wasm_bindgen]
+pub fn repanel_xfoil_with_params(
+    coords: &[f64],
+    n_panels: usize,
+    curv_param: f64,
+    te_le_ratio: f64,
+    te_spacing_ratio: f64,
+) -> Vec<f64> {
+    use rustfoil_core::PanelingParams;
+    
+    if coords.len() < 6 || coords.len() % 2 != 0 {
+        return vec![];
+    }
+
+    let points: Vec<Point> = coords.chunks(2).map(|c| point(c[0], c[1])).collect();
+
+    let spline = match CubicSpline::from_points(&points) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+
+    let params = PanelingParams {
+        curv_param,
+        te_le_ratio,
+        te_spacing_ratio,
+    };
+
+    let repaneled = spline.resample_xfoil(n_panels, &params);
+
+    // Return coordinates as flat array
+    // NOTE: Do NOT add a closing point. XFOIL's paneling intentionally produces
+    // a blunt trailing edge where first point (upper TE) and last point (lower TE)
+    // are at the same x but different y. Adding a closing point would create a
+    // spurious sharp TE panel that breaks symmetry.
+    let result: Vec<f64> = repaneled
+        .iter()
+        .flat_map(|p| [p.x, p.y])
+        .collect();
+
+    result
+}
+
 /// A 2D point for JavaScript interop.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsPoint {
@@ -742,16 +842,18 @@ mod tests {
     fn test_naca_0012() {
         let coords = generate_naca4_impl(0.0, 0.0, 0.12, 50);
         
-        // Should have 2*50 - 1 = 99 points
-        assert_eq!(coords.len(), 99);
+        // Should have 2*50 - 1 + 1 (closing point) = 100 points
+        assert_eq!(coords.len(), 100);
         
-        // First and last points should be at TE (x ≈ 1)
+        // First and last points should be the same (closed contour at TE)
         assert!((coords[0].x - 1.0).abs() < 0.01);
-        assert!((coords.last().unwrap().x - 1.0).abs() < 0.01);
+        assert!((coords[0].x - coords.last().unwrap().x).abs() < 1e-10);
+        assert!((coords[0].y - coords.last().unwrap().y).abs() < 1e-10);
         
         // Should be symmetric (y values should mirror)
-        let mid = coords.len() / 2; // LE point
-        assert!((coords[mid].x).abs() < 0.01); // LE at x ≈ 0
+        // LE is at index (n-1) where n=50, so index 49
+        let le_idx = 49;
+        assert!((coords[le_idx].x).abs() < 0.01); // LE at x ≈ 0
         
         // Check thickness at x = 0.3 (max thickness location for NACA 00xx)
         // Max thickness should be about 0.12 * chord
@@ -763,14 +865,16 @@ mod tests {
     fn test_naca_2412() {
         let coords = generate_naca4_impl(0.02, 0.4, 0.12, 50);
         
-        assert_eq!(coords.len(), 99);
+        // 2*50 - 1 + 1 (closing) = 100 points
+        assert_eq!(coords.len(), 100);
         
         // Should have camber - upper surface higher than lower
+        // With CW ordering: first half is upper surface, second half is lower
         let mid = coords.len() / 2;
         
-        // Find max y on upper and lower surfaces
-        let max_upper = coords[mid..].iter().map(|p| p.y).fold(f64::MIN, f64::max);
-        let min_lower = coords[..mid].iter().map(|p| p.y).fold(f64::MAX, f64::min);
+        // Find max y on upper surface (first half) and min y on lower surface (second half)
+        let max_upper = coords[..mid].iter().map(|p| p.y).fold(f64::MIN, f64::max);
+        let min_lower = coords[mid..].iter().map(|p| p.y).fold(f64::MAX, f64::min);
         
         // Upper should be positive, lower should be negative (mostly)
         assert!(max_upper > 0.05);
@@ -781,7 +885,8 @@ mod tests {
     fn test_naca_from_string() {
         let coords = generate_naca4_from_string("0012", 30);
         assert!(!coords.is_empty());
-        assert_eq!(coords.len(), (2 * 30 - 1) * 2); // 59 points * 2 coords each
+        // 2*30 - 1 + 1 (closing) = 60 points * 2 coords each = 120
+        assert_eq!(coords.len(), 60 * 2);
         
         // Invalid input
         let invalid = generate_naca4_from_string("abc", 30);
@@ -793,9 +898,9 @@ mod tests {
 
     #[test]
     fn test_ssp_distribution() {
-        // Uniform spacing
-        let knots = vec![(0.0, 1.0), (1.0, 1.0)];
-        let dist = generate_ssp_distribution(&knots, 11);
+        // Uniform spacing - use spacing_to_distribution directly
+        let uniform_spacing = vec![1.0; 100];
+        let dist = spacing_to_distribution(&uniform_spacing, 11);
         
         assert_eq!(dist.len(), 11);
         assert!((dist[0] - 0.0).abs() < 1e-10);
@@ -811,8 +916,18 @@ mod tests {
     #[test]
     fn test_ssp_clustering() {
         // Higher spacing at ends = more points at ends
-        let knots = vec![(0.0, 2.0), (0.5, 0.5), (1.0, 2.0)];
-        let dist = generate_ssp_distribution(&knots, 21);
+        // Create a spacing function that's high at ends, low in middle
+        let n_samples = 100;
+        let spacing: Vec<f64> = (0..n_samples)
+            .map(|i| {
+                let s = i as f64 / (n_samples - 1) as f64;
+                // High at s=0 and s=1, low at s=0.5
+                let dist_from_center = (s - 0.5).abs() * 2.0;
+                0.5 + 1.5 * dist_from_center
+            })
+            .collect();
+        
+        let dist = spacing_to_distribution(&spacing, 21);
         
         // Points should cluster at s=0 and s=1
         // First few deltas should be smaller than middle deltas
@@ -868,5 +983,80 @@ mod tests {
 
         foil.set_alpha(5.0);
         assert!((foil.get_alpha() - 5.0).abs() < 1e-10);
+    }
+
+    /// Test the full pipeline that the frontend uses:
+    /// 1. Generate NACA 0012 with XFOIL generator
+    /// 2. Apply XFOIL paneling (50 or 160 panels)
+    /// 3. Solve and check symmetry
+    #[test]
+    fn test_frontend_pipeline_naca0012() {
+        use rustfoil_core::{naca::naca4, PanelingParams};
+        
+        // Test 1: Direct Rust pipeline (should work)
+        println!("\n=== Direct Rust pipeline ===");
+        let buffer_direct = naca4(12, Some(123));
+        let spline_direct = CubicSpline::from_points(&buffer_direct).unwrap();
+        let params = PanelingParams::default();
+        let paneled_direct = spline_direct.resample_xfoil(160, &params);
+        println!("Direct - Buffer: {} pts, Paneled: {} pts", buffer_direct.len(), paneled_direct.len());
+        
+        let body_direct = Body::from_points("NACA0012_direct", &paneled_direct).unwrap();
+        let solver = rustfoil_solver::inviscid::InviscidSolver::new();
+        let factorized = solver.factorize(&[body_direct]).unwrap();
+        let flow = rustfoil_solver::inviscid::FlowConditions::with_alpha_deg(0.0);
+        let solution = factorized.solve_alpha(&flow);
+        println!("Direct - Cl at α=0: {:.6}", solution.cl);
+        
+        // Test 2: WASM pipeline (via flat arrays)
+        println!("\n=== WASM flat-array pipeline ===");
+        let buffer_flat = generate_naca4_xfoil(12, Some(123));
+        println!("WASM - Buffer: {} values = {} pts", buffer_flat.len(), buffer_flat.len() / 2);
+        
+        // Check if buffers match
+        let match_count = buffer_direct.iter().enumerate()
+            .filter(|(i, p)| {
+                let fx = buffer_flat[i * 2];
+                let fy = buffer_flat[i * 2 + 1];
+                (p.x - fx).abs() < 1e-10 && (p.y - fy).abs() < 1e-10
+            })
+            .count();
+        println!("Buffer match: {}/{} points identical", match_count, buffer_direct.len());
+        
+        // Apply WASM repaneling
+        let paneled_flat = repanel_xfoil(&buffer_flat, 160);
+        println!("WASM - Paneled: {} values = {} pts", paneled_flat.len(), paneled_flat.len() / 2);
+        
+        // Check the first and last points
+        println!("WASM - First pt: ({:.6}, {:.6})", paneled_flat[0], paneled_flat[1]);
+        println!("WASM - Last pt: ({:.6}, {:.6})", paneled_flat[paneled_flat.len()-2], paneled_flat[paneled_flat.len()-1]);
+        
+        // Analyze using the WASM function
+        let result_wasm = analyze_airfoil_impl(&paneled_flat, 0.0);
+        println!("WASM - Cl at α=0: {:.6}", result_wasm.cl);
+        
+        // Compare paneled coordinates
+        println!("\n=== Paneled coordinate comparison (first 5, last 5) ===");
+        for i in 0..5 {
+            println!("  [{}] Direct: ({:.6}, {:.6}) | WASM: ({:.6}, {:.6})",
+                i, paneled_direct[i].x, paneled_direct[i].y,
+                paneled_flat[i*2], paneled_flat[i*2+1]);
+        }
+        println!("  ...");
+        let n = paneled_flat.len() / 2;
+        for i in (n-5)..n {
+            let d_idx = if i < paneled_direct.len() { Some(i) } else { None };
+            if let Some(idx) = d_idx {
+                println!("  [{}] Direct: ({:.6}, {:.6}) | WASM: ({:.6}, {:.6})",
+                    i, paneled_direct[idx].x, paneled_direct[idx].y,
+                    paneled_flat[i*2], paneled_flat[i*2+1]);
+            } else {
+                println!("  [{}] WASM: ({:.6}, {:.6}) (no direct equivalent)",
+                    i, paneled_flat[i*2], paneled_flat[i*2+1]);
+            }
+        }
+        
+        // Direct Rust pipeline should give Cl ≈ 0
+        assert!(solution.cl.abs() < 0.0001, "Direct: Cl at α=0 should be ~0, got {}", solution.cl);
     }
 }

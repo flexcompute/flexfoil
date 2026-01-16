@@ -12,10 +12,12 @@ import type {
   SpacingKnot,
   Naca4Params 
 } from '../types';
-import { 
-  generateNaca4 as wasmGenerateNaca4, 
+import {
+  generateNaca4 as wasmGenerateNaca4,
+  generateNaca4Xfoil,
   repanelWithSpacingAndCurvature,
-  isWasmReady 
+  repanelXfoil,
+  isWasmReady
 } from '../lib/wasm';
 import { evaluateBSpline, evaluateBezierCurve } from '../lib/bspline';
 
@@ -95,6 +97,7 @@ interface AirfoilStore extends AirfoilState {
   
   // Repaneling
   repanel: () => void;
+  repanelWithXfoil: () => void;
   
   // Reset
   reset: () => void;
@@ -110,7 +113,7 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
   bsplineControlPoints: [],
   bsplineDegree: 3,
   spacingKnots: DEFAULT_SPACING_KNOTS,
-  nPanels: 50,
+  nPanels: 160,  // XFOIL's default NPAN
   curvatureWeight: 0,
 
   // Actions
@@ -229,21 +232,49 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
     // Use WASM if available, otherwise fallback to JS
     if (isWasmReady()) {
       try {
-        // wasmGenerateNaca4 expects integer digits (0-9 for m, 0-9 for p, 00-99 for t)
-        // and converts them internally to fractions
-        const wasmCoords = wasmGenerateNaca4(mInt, pInt, tInt, nPoints);
-        const coords: AirfoilPoint[] = wasmCoords.map(pt => ({ x: pt.x, y: pt.y }));
+        // XFOIL procedure:
+        // 1. NACA4 generates buffer coordinates (XB/YB)
+        // 2. SCALC + SEGSPL fit splines to buffer
+        // 3. PANGEN creates working coordinates (X/Y) from splined buffer
+        //
+        // We replicate this exactly:
+        // 1. Generate buffer with XFOIL's exact NACA generator
+        const designation = mInt * 1000 + pInt * 100 + tInt;  // e.g., 0012 -> 12, 2412 -> 2412
+        const bufferCoords = generateNaca4Xfoil(designation, 123);  // 245 buffer points
+        const buffer: AirfoilPoint[] = bufferCoords.map(pt => ({ x: pt.x, y: pt.y }));
+        
+        // 2. Apply XFOIL paneling (PANGEN) - fits spline and distributes panels
+        // Use nPanels from current state, defaulting to 160 (XFOIL's NPAN default)
+        const currentNPanels = useAirfoilStore.getState().nPanels || 160;
+        const paneledCoords = repanelXfoil(buffer, currentNPanels);
+        const panels: AirfoilPoint[] = paneledCoords.map(pt => ({ x: pt.x, y: pt.y }));
         
         set({ 
-          coordinates: coords, 
-          panels: coords,
+          coordinates: buffer,  // Store original buffer as "coordinates"
+          panels: panels,       // Store paneled result as "panels" for analysis
           name,
           bezierHandles: [],
           bsplineControlPoints: [],
         });
         return;
       } catch (e) {
-        console.warn('WASM NACA generation failed, using JS fallback:', e);
+        console.warn('WASM XFOIL NACA generation failed, trying generic:', e);
+        try {
+          // Fallback to generic NACA generator (no auto-paneling)
+          const wasmCoords = wasmGenerateNaca4(mInt, pInt, tInt, nPoints);
+          const coords: AirfoilPoint[] = wasmCoords.map(pt => ({ x: pt.x, y: pt.y }));
+          
+          set({ 
+            coordinates: coords, 
+            panels: coords,
+            name,
+            bezierHandles: [],
+            bsplineControlPoints: [],
+          });
+          return;
+        } catch (e2) {
+          console.warn('WASM NACA generation failed, using JS fallback:', e2);
+        }
       }
     }
     
@@ -329,6 +360,26 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
     }
   }),
 
+  repanelWithXfoil: () => set((state) => {
+    if (!isWasmReady()) {
+      return state;
+    }
+    
+    try {
+      // Use XFOIL's PANGEN algorithm with curvature-based paneling
+      const newPanels = repanelXfoil(state.coordinates, state.nPanels);
+      
+      if (newPanels.length === 0) {
+        return state;
+      }
+      
+      return { panels: newPanels.map(pt => ({ x: pt.x, y: pt.y })) };
+    } catch (e) {
+      console.error('XFOIL repaneling failed:', e);
+      return state;
+    }
+  }),
+
   reset: () => set({
     name: 'NACA 0012',
     coordinates: DEFAULT_NACA0012,
@@ -338,7 +389,7 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
     bsplineControlPoints: [],
     bsplineDegree: 3,
     spacingKnots: DEFAULT_SPACING_KNOTS,
-    nPanels: 50,
+    nPanels: 160,  // XFOIL's default NPAN
     curvatureWeight: 0,
   }),
 }));

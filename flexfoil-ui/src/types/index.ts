@@ -19,6 +19,9 @@ export interface AirfoilPoint extends Point {
 /** Control modes for airfoil manipulation */
 export type ControlMode = 'surface' | 'bezier' | 'bspline';
 
+/** Spacing/paneling modes */
+export type SpacingMode = 'ssp' | 'xfoil';
+
 /** A Bezier handle attached to an airfoil point */
 export interface BezierHandle {
   /** Index of the airfoil point this handle belongs to */

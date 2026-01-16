@@ -13,6 +13,7 @@ import { AirfoilLibraryPanel } from './panels/AirfoilLibraryPanel';
 import { ControlModePanel } from './panels/ControlModePanel';
 import { SpacingPanel } from './panels/SpacingPanel';
 import { PropertiesPanel } from './panels/PropertiesPanel';
+import { SolvePanel } from './panels/SolvePanel';
 
 // Storage keys
 const LAYOUT_STORAGE_KEY = 'flexfoil-layout-v1';
@@ -24,6 +25,7 @@ export const PANELS = [
   { id: 'control', name: 'Control Mode', component: 'control' },
   { id: 'spacing', name: 'Spacing', component: 'spacing' },
   { id: 'properties', name: 'Properties', component: 'properties' },
+  { id: 'solve', name: 'Solve', component: 'solve' },
 ];
 
 // Default layout configuration
@@ -75,6 +77,7 @@ const defaultLayoutJson: IJsonModel = {
             weight: 50,
             children: [
               { type: 'tab', id: 'properties', name: 'Properties', component: 'properties' },
+              { type: 'tab', id: 'solve', name: 'Solve', component: 'solve' },
             ],
           },
           {
@@ -209,6 +212,8 @@ export function DockingLayout() {
         return <SpacingPanel />;
       case 'properties':
         return <PropertiesPanel />;
+      case 'solve':
+        return <SolvePanel />;
       default:
         return <div className="panel">Unknown panel: {component}</div>;
     }

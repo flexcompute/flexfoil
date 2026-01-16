@@ -5,7 +5,10 @@
 import init, {
     generate_naca4,
     generate_naca4_from_string,
+    generate_naca4_xfoil,
     repanel_with_spacing_and_curvature,
+    repanel_xfoil,
+    repanel_xfoil_with_params,
     compute_curvature_spacing,
     analyze_airfoil,
     greet,
@@ -108,6 +111,31 @@ export function generateNaca4FromString(
 }
 
 /**
+ * Generate NACA 4-series using XFOIL's exact algorithm.
+ * 
+ * This matches XFOIL's naca.f SUBROUTINE NACA4 exactly:
+ * - TE bunching parameter AN = 1.5
+ * - Blunt trailing edge (not closed)
+ * - Perfectly symmetric output for symmetric airfoils
+ * - Output order: upper TE → LE → lower TE
+ * 
+ * @param designation - 4-digit NACA designation as number (e.g., 12 for NACA 0012, 2412 for NACA 2412)
+ * @param nPointsPerSide - Number of points per side (default: 123 = XFOIL's IQX/3)
+ * @returns Array of {x, y} points. Total points = 2*n - 1.
+ */
+export function generateNaca4Xfoil(
+    designation: number,
+    nPointsPerSide?: number
+): { x: number; y: number }[] {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+    
+    const flat = generate_naca4_xfoil(designation, nPointsPerSide);
+    return flatToPoints(flat);
+}
+
+/**
  * Repanel airfoil with custom SSP spacing.
  * 
  * @param coordinates - Current airfoil coordinates
@@ -175,6 +203,70 @@ export function computeCurvatureSpacing(
         knots.push({ s: result[i], f: result[i + 1] });
     }
     return knots;
+}
+
+/**
+ * Repanel airfoil using XFOIL's curvature-based algorithm.
+ * 
+ * This implements Mark Drela's PANGEN algorithm from XFOIL, which distributes
+ * panel nodes based on local curvature. Panels are bunched in regions of high
+ * curvature (leading edge) and at the trailing edge.
+ * 
+ * @param coordinates - Current airfoil coordinates
+ * @param nPanels - Desired number of panels (XFOIL default: 160)
+ * @returns Repaneled coordinates
+ */
+export function repanelXfoil(
+    coordinates: { x: number; y: number }[],
+    nPanels: number = 160
+): { x: number; y: number }[] {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+    
+    const coordsFlat = pointsToFlat(coordinates);
+    const result = repanel_xfoil(coordsFlat, nPanels);
+    return flatToPoints(result);
+}
+
+/**
+ * XFOIL paneling parameters.
+ */
+export interface XfoilPanelingParams {
+    /** Curvature attraction (0=uniform, 1=XFOIL default bunching) */
+    curvParam?: number;
+    /** TE/LE panel density ratio (XFOIL default: 0.15) */
+    teLeRatio?: number;
+    /** TE panel length ratio (XFOIL default: 0.667) */
+    teSpacingRatio?: number;
+}
+
+/**
+ * Repanel airfoil using XFOIL's algorithm with custom parameters.
+ * 
+ * @param coordinates - Current airfoil coordinates
+ * @param nPanels - Desired number of panels
+ * @param params - XFOIL paneling parameters
+ * @returns Repaneled coordinates
+ */
+export function repanelXfoilWithParams(
+    coordinates: { x: number; y: number }[],
+    nPanels: number,
+    params: XfoilPanelingParams = {}
+): { x: number; y: number }[] {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+    
+    const coordsFlat = pointsToFlat(coordinates);
+    const result = repanel_xfoil_with_params(
+        coordsFlat,
+        nPanels,
+        params.curvParam ?? 1.0,
+        params.teLeRatio ?? 0.15,
+        params.teSpacingRatio ?? 0.667
+    );
+    return flatToPoints(result);
 }
 
 /**

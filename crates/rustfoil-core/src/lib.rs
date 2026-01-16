@@ -78,13 +78,16 @@
 
 pub mod body;
 pub mod error;
+pub mod naca;
 pub mod panel;
 pub mod point;
 pub mod spline;
+pub mod xfoil_spline;
 
 // Re-export commonly used types at the crate root
 pub use body::Body;
 pub use error::GeometryError;
 pub use panel::Panel;
 pub use point::{point, vec2, Point, Vec2};
-pub use spline::CubicSpline;
+pub use spline::{CubicSpline, PanelingParams};
+pub use xfoil_spline::XfoilSpline;

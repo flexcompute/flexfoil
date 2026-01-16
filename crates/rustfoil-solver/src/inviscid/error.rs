@@ -8,6 +8,9 @@ pub enum SolverError {
     /// No bodies were provided to the solver.
     NoBodies,
 
+    /// Insufficient panels for a valid solution (need at least 3).
+    InsufficientPanels,
+
     /// The influence coefficient matrix is singular.
     ///
     /// This typically indicates:
@@ -35,6 +38,9 @@ impl fmt::Display for SolverError {
         match self {
             SolverError::NoBodies => {
                 write!(f, "No bodies provided to solver")
+            }
+            SolverError::InsufficientPanels => {
+                write!(f, "Insufficient panels (need at least 3)")
             }
             SolverError::SingularMatrix => {
                 write!(f, "Influence matrix is singular (check geometry)")
