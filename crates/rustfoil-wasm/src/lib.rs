@@ -886,6 +886,17 @@ impl WasmSmokeSystem {
     pub fn set_max_age(&mut self, max_age: f64) {
         self.inner.set_max_age(max_age);
     }
+
+    /// Set freestream velocity magnitude (flow speed multiplier).
+    /// Values are clamped to [0.1, 10.0].
+    pub fn set_v_inf(&mut self, v_inf: f64) {
+        self.v_inf = v_inf.max(0.1).min(10.0);
+    }
+
+    /// Get current freestream velocity magnitude.
+    pub fn get_v_inf(&self) -> f64 {
+        self.v_inf
+    }
 }
 
 /// Main RustFoil interface for JavaScript.

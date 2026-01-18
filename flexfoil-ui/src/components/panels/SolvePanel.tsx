@@ -391,11 +391,11 @@ export function SolvePanel() {
         {error && (
           <div style={{
             padding: '8px',
-            background: 'rgba(255, 100, 100, 0.1)',
-            border: '1px solid rgba(255, 100, 100, 0.3)',
+            background: 'var(--bg-tertiary)',
+            border: '1px solid var(--accent-danger)',
             borderRadius: '4px',
             fontSize: '11px',
-            color: '#ff6b6b',
+            color: 'var(--accent-danger)',
             marginTop: '8px',
           }}>
             {error}

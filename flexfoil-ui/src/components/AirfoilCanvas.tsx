@@ -16,7 +16,10 @@
  */
 
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
-import { useAirfoilStore } from '../stores/airfoilStore';
+import { useAirfoilStore, pauseHistory, resumeHistory } from '../stores/airfoilStore';
+import { useVisualizationStore } from '../stores/visualizationStore';
+import { useTheme } from '../contexts/ThemeContext';
+import { useLayout } from '../contexts/LayoutContext';
 import type { Point, ViewportState, AirfoilPoint } from '../types';
 import { computeStreamlines, createSmokeSystem, isWasmReady, WasmSmokeSystem } from '../lib/wasm';
 
@@ -183,6 +186,12 @@ export function AirfoilCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
+  // Theme context
+  const { isDark } = useTheme();
+  
+  // Layout context for panel actions
+  const { openPanel } = useLayout();
+  
   // State from store
   const { 
     coordinates, 
@@ -204,17 +213,29 @@ export function AirfoilCanvas() {
     height: 600,
   });
 
-  // Display toggles
-  const [showGrid, setShowGrid] = useState(true);
-  const [showCurve, setShowCurve] = useState(true);    // Smooth spline curve
-  const [showPanels, setShowPanels] = useState(false); // Linear panel connections
-  const [showPoints, setShowPoints] = useState(true);
-  const [showControls, setShowControls] = useState(true);
-  const [showStreamlines, setShowStreamlines] = useState(false);
-  const [showSmoke, setShowSmoke] = useState(false);
+  // Visualization settings from store
+  const {
+    showGrid,
+    showCurve,
+    showPanels,
+    showPoints,
+    showControls,
+    showStreamlines,
+    showSmoke,
+    streamlineDensity,
+    adaptiveStreamlines,
+    smokeDensity,
+    smokeParticlesPerBlob,
+    smokeSpawnInterval,
+    smokeMaxAge,
+    flowSpeed,
+  } = useVisualizationStore();
   
   // Streamlines cache
   const [streamlines, setStreamlines] = useState<[number, number][][]>([]);
+  
+  // Track last zoom for adaptive streamlines
+  const lastZoomRef = useRef(viewport.zoom);
   
   // Smoke system
   const smokeSystemRef = useRef<WasmSmokeSystem | null>(null);
@@ -227,24 +248,54 @@ export function AirfoilCanvas() {
     return generateSplineCurve(coordinates, 300);
   }, [coordinates]);
 
-  // Compute streamlines when enabled and alpha/panels change
+  // Compute adaptive streamline count based on zoom
+  const getAdaptiveStreamlineCount = useCallback(() => {
+    if (!adaptiveStreamlines) {
+      return streamlineDensity;
+    }
+    // Increase count when zoomed in, decrease when zoomed out
+    const zoomFactor = Math.log10(viewport.zoom / 100 + 1);
+    return Math.min(100, Math.floor(streamlineDensity * (1 + zoomFactor * 0.5)));
+  }, [adaptiveStreamlines, streamlineDensity, viewport.zoom]);
+  
+  // Compute bounds for streamline domain - use large fixed bounds since Rust is fast
+  const getVisibleBounds = useCallback((): [number, number, number, number] => {
+    // Large domain that covers most reasonable viewing areas
+    // Streamlines will fill the entire screen regardless of zoom/pan
+    return [-2.0, 4.0, -2.0, 2.0];
+  }, []);
+
+  // Compute streamlines when enabled and alpha/panels/zoom change
   useEffect(() => {
     if (!showStreamlines || !isWasmReady() || panels.length < 10) {
       setStreamlines([]);
       return;
     }
     
+    // Check if zoom changed significantly for adaptive mode
+    const zoomChanged = adaptiveStreamlines && 
+      Math.abs(viewport.zoom - lastZoomRef.current) / lastZoomRef.current > 0.2;
+    
+    if (zoomChanged) {
+      lastZoomRef.current = viewport.zoom;
+    }
+    
     try {
-      const result = computeStreamlines(panels, displayAlpha, 30, [-0.5, 2.0, -0.5, 0.5]);
+      const seedCount = getAdaptiveStreamlineCount();
+      const bounds = getVisibleBounds();
+      const result = computeStreamlines(panels, displayAlpha, seedCount, bounds);
       if (result.success) {
         setStreamlines(result.streamlines);
       }
     } catch (e) {
       console.error('Streamline computation failed:', e);
     }
-  }, [showStreamlines, panels, displayAlpha]);
+  }, [showStreamlines, panels, displayAlpha, streamlineDensity, adaptiveStreamlines, viewport.zoom, getAdaptiveStreamlineCount, getVisibleBounds]);
   
-  // Initialize smoke system (only when toggled on or panels change)
+  // Get setSmokeDensity for adaptive performance
+  const { setSmokeDensity } = useVisualizationStore();
+  
+  // Initialize smoke system (only when toggled on or panels/settings change)
   useEffect(() => {
     if (!showSmoke || !isWasmReady() || panels.length < 10) {
       if (smokeAnimationRef.current) {
@@ -257,11 +308,14 @@ export function AirfoilCanvas() {
       return;
     }
     
-    // Create smoke system with spawn points
-    const spawnY = Array.from({ length: 20 }, (_, i) => -0.4 + (i * 0.8) / 19);
-    smokeSystemRef.current = createSmokeSystem(spawnY, -0.5, 10);
-    smokeSystemRef.current.set_spawn_interval(0.15);
-    smokeSystemRef.current.set_max_age(3.0);
+    // Create smoke system with spawn points based on smokeDensity
+    // Use large Y range to fill screen (-1.5 to 1.5) and spawn further back (-1.5)
+    const spawnY = Array.from({ length: smokeDensity }, (_, i) => 
+      -1.5 + (i * 3.0) / Math.max(1, smokeDensity - 1)
+    );
+    smokeSystemRef.current = createSmokeSystem(spawnY, -1.5, smokeParticlesPerBlob);
+    smokeSystemRef.current.set_spawn_interval(smokeSpawnInterval);
+    smokeSystemRef.current.set_max_age(smokeMaxAge);
     
     // Set initial flow
     smokeSystemRef.current.set_flow(
@@ -269,11 +323,48 @@ export function AirfoilCanvas() {
       displayAlpha
     );
     
-    // Animation loop
+    // Set initial flow speed
+    if (typeof smokeSystemRef.current.set_v_inf === 'function') {
+      smokeSystemRef.current.set_v_inf(flowSpeed);
+    }
+    
+    // Performance monitoring for adaptive density
+    const frameTimes: number[] = [];
+    const FRAME_WINDOW = 30; // Track last 30 frames
+    const MIN_FPS = 25; // Target minimum FPS
+    const MIN_DENSITY = 10; // Don't go below this
+    let lastPerfCheck = performance.now();
+    let currentDensity = smokeDensity;
+    
+    // Animation loop with performance monitoring
     let lastTime = performance.now();
     const animate = (time: number) => {
       const dt = Math.min((time - lastTime) / 1000, 0.05); // Cap dt at 50ms
+      const frameTime = time - lastTime;
       lastTime = time;
+      
+      // Track frame times
+      frameTimes.push(frameTime);
+      if (frameTimes.length > FRAME_WINDOW) {
+        frameTimes.shift();
+      }
+      
+      // Check performance every second
+      if (time - lastPerfCheck > 1000 && frameTimes.length >= FRAME_WINDOW) {
+        lastPerfCheck = time;
+        const avgFrameTime = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
+        const fps = 1000 / avgFrameTime;
+        
+        // If FPS is too low and we can reduce density, do so
+        if (fps < MIN_FPS && currentDensity > MIN_DENSITY) {
+          const newDensity = Math.max(MIN_DENSITY, Math.floor(currentDensity * 0.7));
+          if (newDensity < currentDensity) {
+            console.log(`Smoke: Reducing density ${currentDensity} -> ${newDensity} (${fps.toFixed(1)} FPS)`);
+            currentDensity = newDensity;
+            setSmokeDensity(newDensity);
+          }
+        }
+      }
       
       if (smokeSystemRef.current) {
         smokeSystemRef.current.update(dt);
@@ -293,7 +384,7 @@ export function AirfoilCanvas() {
         cancelAnimationFrame(smokeAnimationRef.current);
       }
     };
-  }, [showSmoke, panels]); // Only recreate when showSmoke or panels change
+  }, [showSmoke, panels, smokeDensity, smokeParticlesPerBlob, smokeSpawnInterval, smokeMaxAge, flowSpeed, setSmokeDensity]);
   
   // Update flow when alpha changes (without recreating the system)
   useEffect(() => {
@@ -377,9 +468,23 @@ export function AirfoilCanvas() {
 
     const { width, height } = viewport;
 
+    // Theme-based colors
+    const colors = {
+      bgPrimary: isDark ? '#0f0f0f' : '#ffffff',
+      foilLine: isDark ? '#00d4aa' : '#00a88a',
+      foilGrid: isDark ? '#333333' : '#dee2e6',
+      foilPoint: isDark ? '#ffffff' : '#212529',
+      foilPointSelected: isDark ? '#ffaa00' : '#e69500',
+      foilControl: isDark ? '#0099ff' : '#0077cc',
+      foilHandle: isDark ? '#ff6666' : '#dc3545',
+      accentSecondary: isDark ? '#0099ff' : '#0077cc',
+      accentWarning: isDark ? '#ffaa00' : '#e69500',
+      textSecondary: isDark ? '#a0a0a0' : '#495057',
+      textPrimary: isDark ? '#e0e0e0' : '#212529',
+    };
+
     // Clear canvas
-    ctx.fillStyle = getComputedStyle(document.documentElement)
-      .getPropertyValue('--bg-primary').trim() || '#0f0f0f';
+    ctx.fillStyle = colors.bgPrimary;
     ctx.fillRect(0, 0, width, height);
 
     // Draw grid (if enabled)
@@ -404,26 +509,28 @@ export function AirfoilCanvas() {
       };
     };
     
-    // Draw streamlines (behind airfoil)
+    // Draw streamlines (behind airfoil) - rotated by alpha to match airfoil
     if (showStreamlines && streamlines.length > 0) {
-      ctx.strokeStyle = 'rgba(100, 180, 255, 0.5)';
+      ctx.strokeStyle = colors.accentSecondary;
+      ctx.globalAlpha = 0.5;
       ctx.lineWidth = 1;
       
       for (const line of streamlines) {
         if (line.length < 2) continue;
         ctx.beginPath();
-        const first = toCanvas({ x: line[0][0], y: line[0][1] });
+        const first = toCanvas(rotatePoint({ x: line[0][0], y: line[0][1] }));
         ctx.moveTo(first.x, first.y);
         
         for (let i = 1; i < line.length; i++) {
-          const p = toCanvas({ x: line[i][0], y: line[i][1] });
+          const p = toCanvas(rotatePoint({ x: line[i][0], y: line[i][1] }));
           ctx.lineTo(p.x, p.y);
         }
         ctx.stroke();
       }
+      ctx.globalAlpha = 1; // Reset alpha
     }
     
-    // Draw smoke particles (behind airfoil)
+    // Draw smoke particles (behind airfoil) - rotated by alpha to match airfoil
     if (showSmoke && smokePositions && smokeAlphas) {
       const count = smokePositions.length / 2;
       for (let i = 0; i < count; i++) {
@@ -432,19 +539,22 @@ export function AirfoilCanvas() {
         const alpha = smokeAlphas[i] || 0;
         
         if (alpha > 0.01) {
-          const pCanvas = toCanvas({ x, y });
+          const pCanvas = toCanvas(rotatePoint({ x, y }));
           ctx.beginPath();
-          ctx.fillStyle = `rgba(200, 220, 255, ${alpha * 0.6})`;
+          ctx.fillStyle = colors.accentSecondary;
+          ctx.globalAlpha = alpha * 0.6;
           ctx.arc(pCanvas.x, pCanvas.y, 2, 0, Math.PI * 2);
           ctx.fill();
         }
       }
+      ctx.globalAlpha = 1; // Reset alpha
     }
 
     // Draw B-spline control polygon (if in bspline mode and controls visible)
     if (showControls && controlMode === 'bspline' && bsplineControlPoints.length > 1) {
       ctx.beginPath();
-      ctx.strokeStyle = 'rgba(0, 153, 255, 0.3)';
+      ctx.strokeStyle = colors.foilControl;
+      ctx.globalAlpha = 0.3;
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
       const firstCP = toCanvas(bsplineControlPoints[0]);
@@ -455,13 +565,13 @@ export function AirfoilCanvas() {
       }
       ctx.stroke();
       ctx.setLineDash([]);
+      ctx.globalAlpha = 1; // Reset alpha
     }
 
     // Draw smooth spline curve (if enabled) - rotated by alpha
     if (showCurve && splineCurve.length > 1) {
       ctx.beginPath();
-      ctx.strokeStyle = getComputedStyle(document.documentElement)
-        .getPropertyValue('--foil-line').trim() || '#00d4aa';
+      ctx.strokeStyle = colors.foilLine;
       ctx.lineWidth = 2;
       
       const first = toCanvas(rotatePoint(splineCurve[0]));
@@ -477,7 +587,8 @@ export function AirfoilCanvas() {
     // Draw panel lines (linear connections between panel points) - rotated by alpha
     if (showPanels && panels.length > 1) {
       ctx.beginPath();
-      ctx.strokeStyle = 'rgba(255, 200, 100, 0.6)'; // Orange/yellow for panels
+      ctx.strokeStyle = colors.accentWarning;
+      ctx.globalAlpha = 0.6;
       ctx.lineWidth = 1;
       
       const first = toCanvas(rotatePoint(panels[0]));
@@ -488,6 +599,7 @@ export function AirfoilCanvas() {
         ctx.lineTo(p.x, p.y);
       }
       ctx.stroke();
+      ctx.globalAlpha = 1; // Reset alpha
     }
 
     // Draw bezier handles (if in bezier mode and controls visible)
@@ -499,16 +611,18 @@ export function AirfoilCanvas() {
         
         // Draw handle line
         ctx.beginPath();
-        ctx.strokeStyle = 'rgba(255, 102, 102, 0.5)';
+        ctx.strokeStyle = colors.foilHandle;
+        ctx.globalAlpha = 0.5;
         ctx.lineWidth = 1;
         ctx.moveTo(pCanvas.x, pCanvas.y);
         ctx.lineTo(hCanvas.x, hCanvas.y);
         ctx.stroke();
+        ctx.globalAlpha = 1; // Reset alpha
         
         // Draw handle point
         const isHovered = hoveredPoint?.type === 'bezier' && hoveredPoint.index === i;
         ctx.beginPath();
-        ctx.fillStyle = isHovered ? '#ffaa00' : '#ff6666';
+        ctx.fillStyle = isHovered ? colors.foilPointSelected : colors.foilHandle;
         ctx.arc(hCanvas.x, hCanvas.y, HANDLE_RADIUS, 0, Math.PI * 2);
         ctx.fill();
       }
@@ -521,8 +635,8 @@ export function AirfoilCanvas() {
         const isHovered = hoveredPoint?.type === 'bspline' && hoveredPoint.index === cp.id;
         
         ctx.beginPath();
-        ctx.fillStyle = isHovered ? '#ffaa00' : '#0099ff';
-        ctx.strokeStyle = '#ffffff';
+        ctx.fillStyle = isHovered ? colors.foilPointSelected : colors.foilControl;
+        ctx.strokeStyle = colors.foilPoint;
         ctx.lineWidth = 2;
         ctx.arc(cpCanvas.x, cpCanvas.y, CONTROL_RADIUS, 0, Math.PI * 2);
         ctx.fill();
@@ -537,7 +651,7 @@ export function AirfoilCanvas() {
         const isHovered = hoveredPoint?.type === 'surface' && hoveredPoint.index === i;
         
         ctx.beginPath();
-        ctx.fillStyle = isHovered ? '#ffaa00' : '#ffffff';
+        ctx.fillStyle = isHovered ? colors.foilPointSelected : colors.foilPoint;
         ctx.arc(p.x, p.y, POINT_RADIUS, 0, Math.PI * 2);
         ctx.fill();
       }
@@ -545,8 +659,9 @@ export function AirfoilCanvas() {
 
     // Draw panel points (small white dots to show spacing distribution) - rotated by alpha
     if (showPoints) {
-      ctx.fillStyle = '#ffffff';
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+      ctx.fillStyle = colors.foilPoint;
+      ctx.strokeStyle = colors.textPrimary;
+      ctx.globalAlpha = 0.6;
       ctx.lineWidth = 1;
       for (const pt of panels) {
         const pCanvas = toCanvas(rotatePoint(pt));
@@ -555,16 +670,17 @@ export function AirfoilCanvas() {
         ctx.fill();
         ctx.stroke();
       }
+      ctx.globalAlpha = 1; // Reset alpha
     }
 
-  }, [viewport, panels, coordinates, splineCurve, controlMode, bezierHandles, bsplineControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showSmoke, streamlines, smokePositions, smokeAlphas, displayAlpha, toCanvas]);
+  }, [viewport, panels, coordinates, splineCurve, controlMode, bezierHandles, bsplineControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showSmoke, streamlines, smokePositions, smokeAlphas, displayAlpha, toCanvas, isDark]);
 
   // Draw grid
   const drawGrid = useCallback((ctx: CanvasRenderingContext2D) => {
     const { width, height, zoom, center } = viewport;
     
-    ctx.strokeStyle = getComputedStyle(document.documentElement)
-      .getPropertyValue('--foil-grid').trim() || '#333333';
+    const gridColor = isDark ? '#333333' : '#dee2e6';
+    ctx.strokeStyle = gridColor;
     ctx.lineWidth = 0.5;
 
     // Determine grid spacing based on zoom
@@ -599,14 +715,16 @@ export function AirfoilCanvas() {
       ctx.lineTo(width, canvasY);
       ctx.stroke();
     }
-  }, [viewport, toCanvas]);
+  }, [viewport, toCanvas, isDark]);
 
   // Draw axes
   const drawAxes = useCallback((ctx: CanvasRenderingContext2D) => {
     const { width, height } = viewport;
     const origin = toCanvas({ x: 0, y: 0 });
 
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+    const axesColor = isDark ? '#a0a0a0' : '#495057';
+    ctx.strokeStyle = axesColor;
+    ctx.globalAlpha = 0.3;
     ctx.lineWidth = 1;
 
     // X axis
@@ -620,7 +738,9 @@ export function AirfoilCanvas() {
     ctx.moveTo(origin.x, 0);
     ctx.lineTo(origin.x, height);
     ctx.stroke();
-  }, [viewport, toCanvas]);
+    
+    ctx.globalAlpha = 1; // Reset alpha
+  }, [viewport, toCanvas, isDark]);
 
   // Handle resize
   useEffect(() => {
@@ -659,6 +779,7 @@ export function AirfoilCanvas() {
     // Check for point hit
     const hit = findPointAt(canvasPos);
     if (hit) {
+      pauseHistory(); // Pause history tracking during drag
       setIsDragging(true);
       setDragTarget(hit);
     } else {
@@ -705,10 +826,13 @@ export function AirfoilCanvas() {
   }, [isDragging, isPanning, dragTarget, viewport.zoom, toAirfoil, findPointAt, updatePoint, updateBSplineControlPoint, updateBezierHandle, bezierHandles]);
 
   const handleMouseUp = useCallback(() => {
+    if (isDragging) {
+      resumeHistory(); // Resume history tracking after drag
+    }
     setIsDragging(false);
     setIsPanning(false);
     setDragTarget(null);
-  }, []);
+  }, [isDragging]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
@@ -767,7 +891,7 @@ export function AirfoilCanvas() {
         style={{ cursor: isDragging ? 'grabbing' : isPanning ? 'grabbing' : hoveredPoint ? 'pointer' : 'crosshair' }}
       />
       
-      {/* Overlay controls */}
+      {/* Overlay controls - simplified, full controls in Visualization panel */}
       <div
         style={{
           position: 'absolute',
@@ -778,131 +902,28 @@ export function AirfoilCanvas() {
           alignItems: 'center',
           zIndex: 10,
           pointerEvents: 'auto',
-          background: 'rgba(15, 15, 15, 0.8)',
+          background: 'var(--bg-secondary)',
+          backdropFilter: 'blur(8px)',
           padding: '6px 10px',
           borderRadius: '6px',
           border: '1px solid var(--border-color)',
         }}
       >
-        {/* Display toggles */}
-        <label style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          gap: '4px',
-          fontSize: '11px',
-          color: 'var(--text-secondary)',
-          cursor: 'pointer',
-        }}>
-          <input 
-            type="checkbox" 
-            checked={showGrid} 
-            onChange={(e) => setShowGrid(e.target.checked)}
-            style={{ width: '12px', height: '12px' }}
-          />
-          Grid
-        </label>
-        <label style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          gap: '4px',
-          fontSize: '11px',
-          color: 'var(--text-secondary)',
-          cursor: 'pointer',
-        }}>
-          <input 
-            type="checkbox" 
-            checked={showCurve} 
-            onChange={(e) => setShowCurve(e.target.checked)}
-            style={{ width: '12px', height: '12px' }}
-          />
-          Curve
-        </label>
-        <label style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          gap: '4px',
-          fontSize: '11px',
-          color: 'var(--text-secondary)',
-          cursor: 'pointer',
-        }}>
-          <input 
-            type="checkbox" 
-            checked={showPanels} 
-            onChange={(e) => setShowPanels(e.target.checked)}
-            style={{ width: '12px', height: '12px' }}
-          />
-          Panels
-        </label>
-        <label style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          gap: '4px',
-          fontSize: '11px',
-          color: 'var(--text-secondary)',
-          cursor: 'pointer',
-        }}>
-          <input 
-            type="checkbox" 
-            checked={showPoints} 
-            onChange={(e) => setShowPoints(e.target.checked)}
-            style={{ width: '12px', height: '12px' }}
-          />
-          Points
-        </label>
-        <label style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          gap: '4px',
-          fontSize: '11px',
-          color: 'var(--text-secondary)',
-          cursor: 'pointer',
-        }}>
-          <input 
-            type="checkbox" 
-            checked={showControls} 
-            onChange={(e) => setShowControls(e.target.checked)}
-            style={{ width: '12px', height: '12px' }}
-          />
-          Controls
-        </label>
-        
-        <div style={{ width: '1px', height: '16px', background: 'var(--border-color)' }} />
-        
-        <label style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          gap: '4px',
-          fontSize: '11px',
-          color: 'var(--text-secondary)',
-          cursor: 'pointer',
-        }}>
-          <input 
-            type="checkbox" 
-            checked={showStreamlines} 
-            onChange={(e) => setShowStreamlines(e.target.checked)}
-            style={{ width: '12px', height: '12px' }}
-          />
-          Streamlines
-        </label>
-        <label style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          gap: '4px',
-          fontSize: '11px',
-          color: 'var(--text-secondary)',
-          cursor: 'pointer',
-        }}>
-          <input 
-            type="checkbox" 
-            checked={showSmoke} 
-            onChange={(e) => setShowSmoke(e.target.checked)}
-            style={{ width: '12px', height: '12px' }}
-          />
-          Smoke
-        </label>
-        
-        <div style={{ width: '1px', height: '16px', background: 'var(--border-color)' }} />
-        
+        <button 
+          onClick={() => openPanel('visualization')} 
+          style={{ 
+            padding: '4px 8px', 
+            fontSize: '11px',
+            background: 'var(--accent-primary)',
+            color: 'var(--bg-primary)',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+          }}
+          title="Open Visualization Options panel"
+        >
+          Vis Options
+        </button>
         <button onClick={handleResetView} style={{ padding: '4px 8px', fontSize: '11px' }}>
           Reset View
         </button>

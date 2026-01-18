@@ -4,6 +4,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { DarkModeToggle } from './DarkModeToggle';
+import { useUndoRedo } from '../hooks/useUndoRedo';
 
 interface PanelInfo {
   id: string;
@@ -27,6 +28,9 @@ export function MenuBar({
 }: MenuBarProps) {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  
+  // Undo/redo functionality
+  const { undo, redo, canUndo, canRedo } = useUndoRedo();
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -112,8 +116,24 @@ export function MenuBar({
       />
       {activeMenu === 'edit' && (
         <MenuDropdown style={{ left: '120px' }}>
-          <MenuItem label="Undo" shortcut="Cmd+Z" disabled />
-          <MenuItem label="Redo" shortcut="Cmd+Shift+Z" disabled />
+          <MenuItem 
+            label="Undo" 
+            shortcut="Cmd+Z" 
+            disabled={!canUndo}
+            onClick={() => {
+              undo();
+              setActiveMenu(null);
+            }}
+          />
+          <MenuItem 
+            label="Redo" 
+            shortcut="Cmd+Shift+Z" 
+            disabled={!canRedo}
+            onClick={() => {
+              redo();
+              setActiveMenu(null);
+            }}
+          />
         </MenuDropdown>
       )}
 

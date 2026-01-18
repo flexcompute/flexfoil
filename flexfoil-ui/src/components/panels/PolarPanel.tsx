@@ -103,7 +103,8 @@ export function PolarPanel() {
     };
     
     // Draw grid
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.strokeStyle = getComputedStyle(document.documentElement)
+      .getPropertyValue('--foil-grid').trim() || '#333333';
     ctx.lineWidth = 1;
     
     const xTicks = generateTicks(xBounds[0], xBounds[1]);
@@ -126,7 +127,9 @@ export function PolarPanel() {
     }
     
     // Draw axes
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.strokeStyle = getComputedStyle(document.documentElement)
+      .getPropertyValue('--text-secondary').trim() || '#888888';
+    ctx.globalAlpha = 0.3;
     ctx.lineWidth = 1;
     
     // X axis
@@ -141,8 +144,11 @@ export function PolarPanel() {
     ctx.lineTo(margin.left, height - margin.bottom);
     ctx.stroke();
     
+    ctx.globalAlpha = 1; // Reset alpha
+    
     // Draw tick labels
-    ctx.fillStyle = 'var(--text-secondary)';
+    ctx.fillStyle = getComputedStyle(document.documentElement)
+      .getPropertyValue('--text-secondary').trim() || '#888888';
     ctx.font = '10px sans-serif';
     ctx.textAlign = 'center';
     
@@ -159,7 +165,8 @@ export function PolarPanel() {
     }
     
     // Draw axis labels
-    ctx.fillStyle = 'var(--text-primary)';
+    ctx.fillStyle = getComputedStyle(document.documentElement)
+      .getPropertyValue('--text-primary').trim() || '#000000';
     ctx.font = '12px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
@@ -175,7 +182,9 @@ export function PolarPanel() {
     // Draw data points and line
     if (polarData.length > 0) {
       // Line
-      ctx.strokeStyle = 'rgba(0, 200, 150, 0.8)';
+      ctx.strokeStyle = getComputedStyle(document.documentElement)
+        .getPropertyValue('--foil-line').trim() || '#00d4aa';
+      ctx.globalAlpha = 0.8;
       ctx.lineWidth = 2;
       ctx.beginPath();
       
@@ -190,8 +199,11 @@ export function PolarPanel() {
       }
       ctx.stroke();
       
+      ctx.globalAlpha = 1; // Reset alpha
+      
       // Points
-      ctx.fillStyle = '#00d4aa';
+      ctx.fillStyle = getComputedStyle(document.documentElement)
+        .getPropertyValue('--foil-line').trim() || '#00d4aa';
       for (let i = 0; i < polarData.length; i++) {
         const x = toCanvasX(xValues[i]);
         const y = toCanvasY(yValues[i]);
@@ -201,7 +213,8 @@ export function PolarPanel() {
       }
     } else {
       // No data message
-      ctx.fillStyle = 'var(--text-secondary)';
+      ctx.fillStyle = getComputedStyle(document.documentElement)
+        .getPropertyValue('--text-secondary').trim() || '#888888';
       ctx.font = '14px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';

@@ -1,8 +1,11 @@
 /**
  * Zustand store for airfoil state management
+ * 
+ * Uses zundo for undo/redo functionality.
  */
 
-import { create } from 'zustand';
+import { create, useStore } from 'zustand';
+import { temporal, type TemporalState } from 'zundo';
 import type { 
   AirfoilState, 
   AirfoilPoint, 
@@ -11,7 +14,10 @@ import type {
   BSplineControlPoint,
   SpacingKnot,
   Naca4Params,
-  PolarPoint
+  PolarPoint,
+  SpacingPanelMode,
+  SSPInterpolation,
+  SSPVisualization,
 } from '../types';
 import {
   generateNaca4 as wasmGenerateNaca4,
@@ -27,6 +33,25 @@ import {
   parseNacaFromName,
   type UrlState 
 } from '../lib/urlState';
+
+/**
+ * State that is tracked for undo/redo.
+ * We only track meaningful edits, not UI state like displayAlpha.
+ */
+type TrackedState = Pick<
+  AirfoilState,
+  | 'name'
+  | 'coordinates'
+  | 'panels'
+  | 'bezierHandles'
+  | 'bsplineControlPoints'
+  | 'bsplineDegree'
+  | 'spacingKnots'
+  | 'nPanels'
+  | 'curvatureWeight'
+  | 'spacingPanelMode'
+  | 'sspInterpolation'
+>;
 
 // Default NACA 0012 coordinates (simplified)
 const DEFAULT_NACA0012: AirfoilPoint[] = [
@@ -99,6 +124,9 @@ interface AirfoilStore extends AirfoilState {
   removeSpacingKnot: (index: number) => void;
   setNPanels: (n: number) => void;
   setCurvatureWeight: (weight: number) => void;
+  setSpacingPanelMode: (mode: SpacingPanelMode) => void;
+  setSSPInterpolation: (interp: SSPInterpolation) => void;
+  setSSPVisualization: (viz: SSPVisualization) => void;
   
   // NACA generation
   generateNaca4: (params: Naca4Params) => void;
@@ -116,308 +144,418 @@ interface AirfoilStore extends AirfoilState {
   reset: () => void;
 }
 
-export const useAirfoilStore = create<AirfoilStore>((set) => ({
-  // Initial state
-  name: 'NACA 0012',
-  coordinates: DEFAULT_NACA0012,
-  panels: DEFAULT_NACA0012,
-  controlMode: 'surface',
-  bezierHandles: [],
-  bsplineControlPoints: [],
-  bsplineDegree: 3,
-  spacingKnots: DEFAULT_SPACING_KNOTS,
-  nPanels: 160,  // XFOIL's default NPAN
-  curvatureWeight: 0,
-  displayAlpha: 0,
-  polarData: [],
-
-  // Actions
-  setCoordinates: (coords) => set({ coordinates: coords }),
-  setPanels: (panels) => set({ panels }),
-  setControlMode: (mode) => set({ controlMode: mode }),
-  setName: (name) => set({ name }),
-  setDisplayAlpha: (alpha) => set({ displayAlpha: alpha }),
-
-  updatePoint: (index, point) => set((state) => {
-    const newCoords = [...state.coordinates];
-    newCoords[index] = point;
-    // In surface mode, also update panels to show immediate feedback
-    return { coordinates: newCoords, panels: newCoords };
-  }),
-
-  addPoint: (index, point) => set((state) => {
-    const newCoords = [...state.coordinates];
-    newCoords.splice(index, 0, point);
-    return { coordinates: newCoords };
-  }),
-
-  removePoint: (index) => set((state) => {
-    if (state.coordinates.length <= 3) return state;
-    const newCoords = state.coordinates.filter((_, i) => i !== index);
-    return { coordinates: newCoords };
-  }),
-
-  setBezierHandles: (handles) => set(() => {
-    // When initially setting handles, don't re-evaluate - keep original shape
-    // The curve will only change when handles are explicitly moved
-    return { bezierHandles: handles };
-  }),
+/**
+ * Deep equality check for arrays of objects (used by temporal middleware)
+ */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== typeof b) return false;
+  if (typeof a !== 'object' || a === null || b === null) return false;
   
-  updateBezierHandle: (index, handle) => set((state) => {
-    const newHandles = [...state.bezierHandles];
-    newHandles[index] = handle;
-    // Re-evaluate Bezier curve when handles change
-    if (state.coordinates.length > 0) {
-      const newPanels = evaluateBezierCurve(state.coordinates, newHandles, state.nPanels + 1);
-      return { bezierHandles: newHandles, panels: newPanels };
-    }
-    return { bezierHandles: newHandles };
-  }),
-
-  setBSplineControlPoints: (points) => set((state) => {
-    // When setting control points, also evaluate the B-spline curve
-    if (points.length >= 2) {
-      const newPanels = evaluateBSpline(points, state.bsplineDegree, state.nPanels + 1);
-      return { bsplineControlPoints: points, panels: newPanels, coordinates: newPanels };
-    }
-    return { bsplineControlPoints: points };
-  }),
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    return a.every((item, i) => deepEqual(item, b[i]));
+  }
   
-  updateBSplineControlPoint: (id, point) => set((state) => {
-    const newPoints = state.bsplineControlPoints.map((p) =>
-      p.id === id ? { ...p, ...point } : p
-    );
-    // Re-evaluate B-spline curve when control points change
-    if (newPoints.length >= 2) {
-      const newPanels = evaluateBSpline(newPoints, state.bsplineDegree, state.nPanels + 1);
-      return { bsplineControlPoints: newPoints, panels: newPanels, coordinates: newPanels };
-    }
-    return { bsplineControlPoints: newPoints };
-  }),
-
-  addBSplineControlPoint: (point) => set((state) => ({
-    bsplineControlPoints: [...state.bsplineControlPoints, point],
-  })),
-
-  removeBSplineControlPoint: (id) => set((state) => ({
-    bsplineControlPoints: state.bsplineControlPoints.filter((p) => p.id !== id),
-  })),
-
-  setBSplineDegree: (degree) => set((state) => {
-    const newDegree = Math.max(1, Math.min(5, degree));
-    // Re-evaluate B-spline curve when degree changes
-    if (state.bsplineControlPoints.length >= 2) {
-      const newPanels = evaluateBSpline(state.bsplineControlPoints, newDegree, state.nPanels + 1);
-      return { bsplineDegree: newDegree, panels: newPanels, coordinates: newPanels };
-    }
-    return { bsplineDegree: newDegree };
-  }),
-
-  setSpacingKnots: (knots) => set({ spacingKnots: knots }),
+  const keysA = Object.keys(a as object);
+  const keysB = Object.keys(b as object);
+  if (keysA.length !== keysB.length) return false;
   
-  updateSpacingKnot: (index, knot) => set((state) => {
-    const newKnots = [...state.spacingKnots];
-    newKnots[index] = knot;
-    return { spacingKnots: newKnots };
-  }),
+  return keysA.every(key => 
+    deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])
+  );
+}
 
-  addSpacingKnot: (knot) => set((state) => {
-    const newKnots = [...state.spacingKnots, knot].sort((a, b) => a.S - b.S);
-    return { spacingKnots: newKnots };
-  }),
+export const useAirfoilStore = create<AirfoilStore>()(
+  temporal(
+    (set) => ({
+      // Initial state
+      name: 'NACA 0012',
+      coordinates: DEFAULT_NACA0012,
+      panels: DEFAULT_NACA0012,
+      controlMode: 'surface',
+      bezierHandles: [],
+      bsplineControlPoints: [],
+      bsplineDegree: 3,
+      spacingKnots: DEFAULT_SPACING_KNOTS,
+      nPanels: 160,  // XFOIL's default NPAN
+      curvatureWeight: 0,
+      displayAlpha: 0,
+      polarData: [],
+      spacingPanelMode: 'simple',  // Default to simple curvature-based
+      sspInterpolation: 'linear',  // Default to linear (Mark Drela's original)
+      sspVisualization: 'plot',    // Default to S-F plot view
 
-  removeSpacingKnot: (index) => set((state) => {
-    if (state.spacingKnots.length <= 2) return state;
-    if (index === 0 || index === state.spacingKnots.length - 1) return state;
-    return { spacingKnots: state.spacingKnots.filter((_, i) => i !== index) };
-  }),
+      // Actions
+      setCoordinates: (coords) => set({ coordinates: coords }),
+      setPanels: (panels) => set({ panels }),
+      setControlMode: (mode) => set({ controlMode: mode }),
+      setName: (name) => set({ name }),
+      setDisplayAlpha: (alpha) => set({ displayAlpha: alpha }),
 
-  setNPanels: (n) => set({ nPanels: Math.max(10, Math.min(500, n)) }),
+      updatePoint: (index, point) => set((state) => {
+        const newCoords = [...state.coordinates];
+        newCoords[index] = point;
+        // In surface mode, also update panels to show immediate feedback
+        return { coordinates: newCoords, panels: newCoords };
+      }),
 
-  setCurvatureWeight: (weight) => set({ curvatureWeight: Math.max(0, Math.min(1, weight)) }),
+      addPoint: (index, point) => set((state) => {
+        const newCoords = [...state.coordinates];
+        newCoords.splice(index, 0, point);
+        return { coordinates: newCoords };
+      }),
 
-  generateNaca4: (params) => {
-    const { m, p, t, nPoints } = params;
-    
-    // Generate name (params are already fractions: m=0.02, p=0.4, t=0.12)
-    const mInt = Math.round(m * 100);
-    const pInt = Math.round(p * 10);
-    const tInt = Math.round(t * 100);
-    const name = `NACA ${mInt}${pInt}${tInt.toString().padStart(2, '0')}`;
-    
-    // Use WASM if available, otherwise fallback to JS
-    if (isWasmReady()) {
-      try {
-        // XFOIL procedure:
-        // 1. NACA4 generates buffer coordinates (XB/YB)
-        // 2. SCALC + SEGSPL fit splines to buffer
-        // 3. PANGEN creates working coordinates (X/Y) from splined buffer
-        //
-        // We replicate this exactly:
-        // 1. Generate buffer with XFOIL's exact NACA generator
-        const designation = mInt * 1000 + pInt * 100 + tInt;  // e.g., 0012 -> 12, 2412 -> 2412
-        const bufferCoords = generateNaca4Xfoil(designation, 123);  // 245 buffer points
-        const buffer: AirfoilPoint[] = bufferCoords.map(pt => ({ x: pt.x, y: pt.y }));
+      removePoint: (index) => set((state) => {
+        if (state.coordinates.length <= 3) return state;
+        const newCoords = state.coordinates.filter((_, i) => i !== index);
+        return { coordinates: newCoords };
+      }),
+
+      setBezierHandles: (handles) => set(() => {
+        // When initially setting handles, don't re-evaluate - keep original shape
+        // The curve will only change when handles are explicitly moved
+        return { bezierHandles: handles };
+      }),
+      
+      updateBezierHandle: (index, handle) => set((state) => {
+        const newHandles = [...state.bezierHandles];
+        newHandles[index] = handle;
+        // Re-evaluate Bezier curve when handles change
+        if (state.coordinates.length > 0) {
+          const newPanels = evaluateBezierCurve(state.coordinates, newHandles, state.nPanels + 1);
+          return { bezierHandles: newHandles, panels: newPanels };
+        }
+        return { bezierHandles: newHandles };
+      }),
+
+      setBSplineControlPoints: (points) => set((state) => {
+        // When setting control points, also evaluate the B-spline curve
+        if (points.length >= 2) {
+          const newPanels = evaluateBSpline(points, state.bsplineDegree, state.nPanels + 1);
+          return { bsplineControlPoints: points, panels: newPanels, coordinates: newPanels };
+        }
+        return { bsplineControlPoints: points };
+      }),
+      
+      updateBSplineControlPoint: (id, point) => set((state) => {
+        const newPoints = state.bsplineControlPoints.map((p) =>
+          p.id === id ? { ...p, ...point } : p
+        );
+        // Re-evaluate B-spline curve when control points change
+        if (newPoints.length >= 2) {
+          const newPanels = evaluateBSpline(newPoints, state.bsplineDegree, state.nPanels + 1);
+          return { bsplineControlPoints: newPoints, panels: newPanels, coordinates: newPanels };
+        }
+        return { bsplineControlPoints: newPoints };
+      }),
+
+      addBSplineControlPoint: (point) => set((state) => ({
+        bsplineControlPoints: [...state.bsplineControlPoints, point],
+      })),
+
+      removeBSplineControlPoint: (id) => set((state) => ({
+        bsplineControlPoints: state.bsplineControlPoints.filter((p) => p.id !== id),
+      })),
+
+      setBSplineDegree: (degree) => set((state) => {
+        const newDegree = Math.max(1, Math.min(5, degree));
+        // Re-evaluate B-spline curve when degree changes
+        if (state.bsplineControlPoints.length >= 2) {
+          const newPanels = evaluateBSpline(state.bsplineControlPoints, newDegree, state.nPanels + 1);
+          return { bsplineDegree: newDegree, panels: newPanels, coordinates: newPanels };
+        }
+        return { bsplineDegree: newDegree };
+      }),
+
+      setSpacingKnots: (knots) => set({ spacingKnots: knots }),
+      
+      updateSpacingKnot: (index, knot) => set((state) => {
+        const newKnots = [...state.spacingKnots];
+        newKnots[index] = knot;
+        return { spacingKnots: newKnots };
+      }),
+
+      addSpacingKnot: (knot) => set((state) => {
+        const newKnots = [...state.spacingKnots, knot].sort((a, b) => a.S - b.S);
+        return { spacingKnots: newKnots };
+      }),
+
+      removeSpacingKnot: (index) => set((state) => {
+        if (state.spacingKnots.length <= 2) return state;
+        if (index === 0 || index === state.spacingKnots.length - 1) return state;
+        return { spacingKnots: state.spacingKnots.filter((_, i) => i !== index) };
+      }),
+
+      setNPanels: (n) => set({ nPanels: Math.max(10, Math.min(500, n)) }),
+
+      setCurvatureWeight: (weight) => set({ curvatureWeight: Math.max(0, Math.min(1, weight)) }),
+
+      setSpacingPanelMode: (mode) => set({ spacingPanelMode: mode }),
+      
+      setSSPInterpolation: (interp) => set({ sspInterpolation: interp }),
+      
+      setSSPVisualization: (viz) => set({ sspVisualization: viz }),
+
+      generateNaca4: (params) => {
+        const { m, p, t, nPoints } = params;
         
-        // 2. Apply XFOIL paneling (PANGEN) - fits spline and distributes panels
-        // Use nPanels from current state, defaulting to 160 (XFOIL's NPAN default)
-        const currentNPanels = useAirfoilStore.getState().nPanels || 160;
-        const paneledCoords = repanelXfoil(buffer, currentNPanels);
-        const panels: AirfoilPoint[] = paneledCoords.map(pt => ({ x: pt.x, y: pt.y }));
+        // Generate name (params are already fractions: m=0.02, p=0.4, t=0.12)
+        const mInt = Math.round(m * 100);
+        const pInt = Math.round(p * 10);
+        const tInt = Math.round(t * 100);
+        const name = `NACA ${mInt}${pInt}${tInt.toString().padStart(2, '0')}`;
+        
+        // Use WASM if available, otherwise fallback to JS
+        if (isWasmReady()) {
+          try {
+            // XFOIL procedure:
+            // 1. NACA4 generates buffer coordinates (XB/YB)
+            // 2. SCALC + SEGSPL fit splines to buffer
+            // 3. PANGEN creates working coordinates (X/Y) from splined buffer
+            //
+            // We replicate this exactly:
+            // 1. Generate buffer with XFOIL's exact NACA generator
+            const designation = mInt * 1000 + pInt * 100 + tInt;  // e.g., 0012 -> 12, 2412 -> 2412
+            const bufferCoords = generateNaca4Xfoil(designation, 123);  // 245 buffer points
+            const buffer: AirfoilPoint[] = bufferCoords.map(pt => ({ x: pt.x, y: pt.y }));
+            
+            // 2. Apply XFOIL paneling (PANGEN) - fits spline and distributes panels
+            // Use nPanels from current state, defaulting to 160 (XFOIL's NPAN default)
+            const currentNPanels = useAirfoilStore.getState().nPanels || 160;
+            const paneledCoords = repanelXfoil(buffer, currentNPanels);
+            const panels: AirfoilPoint[] = paneledCoords.map(pt => ({ x: pt.x, y: pt.y }));
+            
+            set({ 
+              coordinates: buffer,  // Store original buffer as "coordinates"
+              panels: panels,       // Store paneled result as "panels" for analysis
+              name,
+              bezierHandles: [],
+              bsplineControlPoints: [],
+            });
+            return;
+          } catch (e) {
+            console.warn('WASM XFOIL NACA generation failed, trying generic:', e);
+            try {
+              // Fallback to generic NACA generator (no auto-paneling)
+              const wasmCoords = wasmGenerateNaca4(mInt, pInt, tInt, nPoints);
+              const coords: AirfoilPoint[] = wasmCoords.map(pt => ({ x: pt.x, y: pt.y }));
+              
+              set({ 
+                coordinates: coords, 
+                panels: coords,
+                name,
+                bezierHandles: [],
+                bsplineControlPoints: [],
+              });
+              return;
+            } catch (e2) {
+              console.warn('WASM NACA generation failed, using JS fallback:', e2);
+            }
+          }
+        }
+        
+        // JavaScript fallback
+        const coords: AirfoilPoint[] = [];
+        const halfPoints = Math.floor(nPoints / 2);
+        
+        for (let i = 0; i <= halfPoints; i++) {
+          const beta = (Math.PI * i) / halfPoints;
+          const x = (1 - Math.cos(beta)) / 2;
+          
+          const yt = 5 * t * (
+            0.2969 * Math.sqrt(x) 
+            - 0.1260 * x 
+            - 0.3516 * x * x 
+            + 0.2843 * x * x * x 
+            - 0.1015 * x * x * x * x
+          );
+          
+          let yc = 0;
+          let dyc = 0;
+          if (m > 0 && p > 0) {
+            if (x < p) {
+              yc = (m / (p * p)) * (2 * p * x - x * x);
+              dyc = (2 * m / (p * p)) * (p - x);
+            } else {
+              yc = (m / ((1 - p) * (1 - p))) * ((1 - 2 * p) + 2 * p * x - x * x);
+              dyc = (2 * m / ((1 - p) * (1 - p))) * (p - x);
+            }
+          }
+          
+          const theta = Math.atan(dyc);
+          
+          if (i < halfPoints) {
+            const xu = x - yt * Math.sin(theta);
+            const yu = yc + yt * Math.cos(theta);
+            coords.unshift({ x: xu, y: yu, surface: 'upper' });
+          }
+          
+          if (i === halfPoints) {
+            coords.unshift({ x: 0, y: yc });
+          }
+          
+          if (i > 0) {
+            const xl = x + yt * Math.sin(theta);
+            const yl = yc - yt * Math.cos(theta);
+            coords.push({ x: xl, y: yl, surface: 'lower' });
+          }
+        }
         
         set({ 
-          coordinates: buffer,  // Store original buffer as "coordinates"
-          panels: panels,       // Store paneled result as "panels" for analysis
+          coordinates: coords, 
+          panels: coords,
           name,
           bezierHandles: [],
           bsplineControlPoints: [],
         });
-        return;
-      } catch (e) {
-        console.warn('WASM XFOIL NACA generation failed, trying generic:', e);
+      },
+
+      repanel: () => set((state) => {
+        if (!isWasmReady()) {
+          return state;
+        }
+        
         try {
-          // Fallback to generic NACA generator (no auto-paneling)
-          const wasmCoords = wasmGenerateNaca4(mInt, pInt, tInt, nPoints);
-          const coords: AirfoilPoint[] = wasmCoords.map(pt => ({ x: pt.x, y: pt.y }));
+          // Convert spacing knots to wasm format
+          const spacingKnots = state.spacingKnots.map(k => ({ s: k.S, f: k.F }));
+          const newPanels = repanelWithSpacingAndCurvature(
+            state.coordinates,
+            spacingKnots,
+            state.nPanels,
+            state.curvatureWeight
+          );
           
-          set({ 
-            coordinates: coords, 
-            panels: coords,
-            name,
-            bezierHandles: [],
-            bsplineControlPoints: [],
-          });
-          return;
-        } catch (e2) {
-          console.warn('WASM NACA generation failed, using JS fallback:', e2);
+          if (newPanels.length === 0) {
+            return state;
+          }
+          
+          return { panels: newPanels.map(pt => ({ x: pt.x, y: pt.y })) };
+        } catch (e) {
+          console.error('Repaneling failed:', e);
+          return state;
         }
-      }
-    }
-    
-    // JavaScript fallback
-    const coords: AirfoilPoint[] = [];
-    const halfPoints = Math.floor(nPoints / 2);
-    
-    for (let i = 0; i <= halfPoints; i++) {
-      const beta = (Math.PI * i) / halfPoints;
-      const x = (1 - Math.cos(beta)) / 2;
-      
-      const yt = 5 * t * (
-        0.2969 * Math.sqrt(x) 
-        - 0.1260 * x 
-        - 0.3516 * x * x 
-        + 0.2843 * x * x * x 
-        - 0.1015 * x * x * x * x
-      );
-      
-      let yc = 0;
-      let dyc = 0;
-      if (m > 0 && p > 0) {
-        if (x < p) {
-          yc = (m / (p * p)) * (2 * p * x - x * x);
-          dyc = (2 * m / (p * p)) * (p - x);
-        } else {
-          yc = (m / ((1 - p) * (1 - p))) * ((1 - 2 * p) + 2 * p * x - x * x);
-          dyc = (2 * m / ((1 - p) * (1 - p))) * (p - x);
+      }),
+
+      repanelWithXfoil: () => set((state) => {
+        if (!isWasmReady()) {
+          return state;
         }
-      }
+        
+        try {
+          // Use XFOIL's PANGEN algorithm with curvature-based paneling
+          const newPanels = repanelXfoil(state.coordinates, state.nPanels);
+          
+          if (newPanels.length === 0) {
+            return state;
+          }
+          
+          return { panels: newPanels.map(pt => ({ x: pt.x, y: pt.y })) };
+        } catch (e) {
+          console.error('XFOIL repaneling failed:', e);
+          return state;
+        }
+      }),
       
-      const theta = Math.atan(dyc);
-      
-      if (i < halfPoints) {
-        const xu = x - yt * Math.sin(theta);
-        const yu = yc + yt * Math.cos(theta);
-        coords.unshift({ x: xu, y: yu, surface: 'upper' });
-      }
-      
-      if (i === halfPoints) {
-        coords.unshift({ x: 0, y: yc });
-      }
-      
-      if (i > 0) {
-        const xl = x + yt * Math.sin(theta);
-        const yl = yc - yt * Math.cos(theta);
-        coords.push({ x: xl, y: yl, surface: 'lower' });
-      }
-    }
-    
-    set({ 
-      coordinates: coords, 
-      panels: coords,
-      name,
-      bezierHandles: [],
-      bsplineControlPoints: [],
-    });
-  },
+      // Polar data actions
+      setPolarData: (data) => set({ polarData: data }),
+      addPolarPoint: (point) => set((state) => ({
+        polarData: [...state.polarData, point]
+      })),
+      clearPolar: () => set({ polarData: [] }),
 
-  repanel: () => set((state) => {
-    if (!isWasmReady()) {
-      return state;
-    }
-    
-    try {
-      // Convert spacing knots to wasm format
-      const spacingKnots = state.spacingKnots.map(k => ({ s: k.S, f: k.F }));
-      const newPanels = repanelWithSpacingAndCurvature(
-        state.coordinates,
-        spacingKnots,
-        state.nPanels,
-        state.curvatureWeight
-      );
+      reset: () => set({
+        name: 'NACA 0012',
+        coordinates: DEFAULT_NACA0012,
+        panels: DEFAULT_NACA0012,
+        controlMode: 'surface',
+        bezierHandles: [],
+        bsplineControlPoints: [],
+        bsplineDegree: 3,
+        spacingKnots: DEFAULT_SPACING_KNOTS,
+        nPanels: 160,  // XFOIL's default NPAN
+        curvatureWeight: 0,
+        displayAlpha: 0,
+        polarData: [],
+        spacingPanelMode: 'simple',
+        sspInterpolation: 'linear',
+        sspVisualization: 'plot',
+      }),
+    }),
+    {
+      // Temporal middleware options
+      limit: 100, // Maximum history size
       
-      if (newPanels.length === 0) {
-        return state;
-      }
+      // Only track meaningful state changes (not UI state like displayAlpha, controlMode, polarData)
+      partialize: (state): TrackedState => ({
+        name: state.name,
+        coordinates: state.coordinates,
+        panels: state.panels,
+        bezierHandles: state.bezierHandles,
+        bsplineControlPoints: state.bsplineControlPoints,
+        bsplineDegree: state.bsplineDegree,
+        spacingKnots: state.spacingKnots,
+        nPanels: state.nPanels,
+        curvatureWeight: state.curvatureWeight,
+        spacingPanelMode: state.spacingPanelMode,
+        sspInterpolation: state.sspInterpolation,
+      }),
       
-      return { panels: newPanels.map(pt => ({ x: pt.x, y: pt.y })) };
-    } catch (e) {
-      console.error('Repaneling failed:', e);
-      return state;
+      // Deep equality check to avoid duplicate history entries
+      equality: (pastState, currentState) => deepEqual(pastState, currentState),
     }
-  }),
+  )
+);
 
-  repanelWithXfoil: () => set((state) => {
-    if (!isWasmReady()) {
-      return state;
-    }
-    
-    try {
-      // Use XFOIL's PANGEN algorithm with curvature-based paneling
-      const newPanels = repanelXfoil(state.coordinates, state.nPanels);
-      
-      if (newPanels.length === 0) {
-        return state;
-      }
-      
-      return { panels: newPanels.map(pt => ({ x: pt.x, y: pt.y })) };
-    } catch (e) {
-      console.error('XFOIL repaneling failed:', e);
-      return state;
-    }
-  }),
-  
-  // Polar data actions
-  setPolarData: (data) => set({ polarData: data }),
-  addPolarPoint: (point) => set((state) => ({
-    polarData: [...state.polarData, point]
-  })),
-  clearPolar: () => set({ polarData: [] }),
+/**
+ * Access the temporal store for undo/redo operations.
+ * 
+ * Usage:
+ *   const canUndo = useTemporalStore((state) => state.pastStates.length > 0);
+ *   const canRedo = useTemporalStore((state) => state.futureStates.length > 0);
+ */
+export const useTemporalStore = <T>(
+  selector: (state: TemporalState<TrackedState>) => T
+): T => {
+  return useStore(useAirfoilStore.temporal, selector);
+};
 
-  reset: () => set({
-    name: 'NACA 0012',
-    coordinates: DEFAULT_NACA0012,
-    panels: DEFAULT_NACA0012,
-    controlMode: 'surface',
-    bezierHandles: [],
-    bsplineControlPoints: [],
-    bsplineDegree: 3,
-    spacingKnots: DEFAULT_SPACING_KNOTS,
-    nPanels: 160,  // XFOIL's default NPAN
-    curvatureWeight: 0,
-    displayAlpha: 0,
-    polarData: [],
-  }),
-}));
+/**
+ * Pause history tracking (useful during drag operations).
+ * Call this at the START of a drag.
+ */
+export function pauseHistory(): void {
+  useAirfoilStore.temporal.getState().pause();
+}
+
+/**
+ * Resume history tracking and optionally create a single history entry.
+ * Call this at the END of a drag.
+ */
+export function resumeHistory(): void {
+  useAirfoilStore.temporal.getState().resume();
+}
+
+/**
+ * Perform undo operation.
+ */
+export function undo(): void {
+  useAirfoilStore.temporal.getState().undo();
+}
+
+/**
+ * Perform redo operation.
+ */
+export function redo(): void {
+  useAirfoilStore.temporal.getState().redo();
+}
+
+/**
+ * Clear all history (past and future states).
+ */
+export function clearHistory(): void {
+  useAirfoilStore.temporal.getState().clear();
+}
 
 /**
  * Get current state for URL encoding

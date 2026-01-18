@@ -14,7 +14,9 @@ import { SpacingPanel } from './panels/SpacingPanel';
 import { PropertiesPanel } from './panels/PropertiesPanel';
 import { SolvePanel } from './panels/SolvePanel';
 import { PolarPanel } from './panels/PolarPanel';
+import { VisualizationPanel } from './panels/VisualizationPanel';
 import { MenuBar } from './MenuBar';
+import { LayoutProvider } from '../contexts/LayoutContext';
 
 // Storage keys
 const LAYOUT_STORAGE_KEY = 'flexfoil-layout-v1';
@@ -28,6 +30,7 @@ export const PANELS = [
   { id: 'properties', name: 'Properties', component: 'properties' },
   { id: 'solve', name: 'Solve', component: 'solve' },
   { id: 'polar', name: 'Polar Plot', component: 'polar' },
+  { id: 'visualization', name: 'Visualization', component: 'visualization' },
 ];
 
 // Default layout configuration
@@ -222,6 +225,8 @@ export function DockingLayout({ wasmStatus }: DockingLayoutProps) {
         return <SolvePanel />;
       case 'polar':
         return <PolarPanel />;
+      case 'visualization':
+        return <VisualizationPanel />;
       default:
         return <div className="panel">Unknown panel: {component}</div>;
     }
@@ -255,26 +260,28 @@ export function DockingLayout({ wasmStatus }: DockingLayoutProps) {
   );
 
   return (
-    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* Menu bar */}
-      <MenuBar
-        panels={PANELS}
-        closedPanels={closedPanels}
-        onRestorePanel={handleRestorePanel}
-        onResetLayout={handleResetLayout}
-        wasmStatus={wasmStatus}
-      />
-
-      {/* FlexLayout container */}
-      <div style={{ flex: 1, position: 'relative' }}>
-        <Layout
-          ref={layoutRef}
-          model={model}
-          factory={factory}
-          onModelChange={handleModelChange}
-          onRenderTabSet={onRenderTabSet}
+    <LayoutProvider model={model} panels={PANELS}>
+      <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+        {/* Menu bar */}
+        <MenuBar
+          panels={PANELS}
+          closedPanels={closedPanels}
+          onRestorePanel={handleRestorePanel}
+          onResetLayout={handleResetLayout}
+          wasmStatus={wasmStatus}
         />
+
+        {/* FlexLayout container */}
+        <div style={{ flex: 1, position: 'relative' }}>
+          <Layout
+            ref={layoutRef}
+            model={model}
+            factory={factory}
+            onModelChange={handleModelChange}
+            onRenderTabSet={onRenderTabSet}
+          />
+        </div>
       </div>
-    </div>
+    </LayoutProvider>
   );
 }
