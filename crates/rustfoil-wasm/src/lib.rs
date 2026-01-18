@@ -753,14 +753,16 @@ fn compute_streamlines_impl(
     };
 
     // Build streamlines
+    // Seed points are placed upstream (at x = bounds[0])
+    // Integration domain extends slightly beyond bounds to allow streamlines to start
     let options = StreamlineOptions {
         seed_count: seed_count as usize,
-        seed_x: bounds[0] - 0.1, // Start slightly before x_min
+        seed_x: bounds[0],           // Start at left edge of domain
         y_min: bounds[2],
         y_max: bounds[3],
-        step_size: 0.008,
-        max_steps: 3000,
-        x_min: bounds[0],
+        step_size: 0.01,
+        max_steps: 2000,
+        x_min: bounds[0] - 0.5,      // Extend left to include seed points
         x_max: bounds[1],
     };
 
