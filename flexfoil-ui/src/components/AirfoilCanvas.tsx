@@ -244,7 +244,7 @@ export function AirfoilCanvas() {
     }
   }, [showStreamlines, panels, displayAlpha]);
   
-  // Initialize/update smoke system
+  // Initialize smoke system (only when toggled on or panels change)
   useEffect(() => {
     if (!showSmoke || !isWasmReady() || panels.length < 10) {
       if (smokeAnimationRef.current) {
@@ -258,12 +258,12 @@ export function AirfoilCanvas() {
     }
     
     // Create smoke system with spawn points
-    const spawnY = Array.from({ length: 15 }, (_, i) => -0.35 + (i * 0.7) / 14);
-    smokeSystemRef.current = createSmokeSystem(spawnY, -0.5, 15);
-    smokeSystemRef.current.set_spawn_interval(0.3);
-    smokeSystemRef.current.set_max_age(4.0);
+    const spawnY = Array.from({ length: 20 }, (_, i) => -0.4 + (i * 0.8) / 19);
+    smokeSystemRef.current = createSmokeSystem(spawnY, -0.5, 10);
+    smokeSystemRef.current.set_spawn_interval(0.15);
+    smokeSystemRef.current.set_max_age(3.0);
     
-    // Set flow
+    // Set initial flow
     smokeSystemRef.current.set_flow(
       new Float64Array(panels.flatMap(p => [p.x, p.y])),
       displayAlpha
@@ -272,7 +272,7 @@ export function AirfoilCanvas() {
     // Animation loop
     let lastTime = performance.now();
     const animate = (time: number) => {
-      const dt = Math.min((time - lastTime) / 1000, 0.1); // Cap dt at 100ms
+      const dt = Math.min((time - lastTime) / 1000, 0.05); // Cap dt at 50ms
       lastTime = time;
       
       if (smokeSystemRef.current) {
@@ -293,7 +293,17 @@ export function AirfoilCanvas() {
         cancelAnimationFrame(smokeAnimationRef.current);
       }
     };
-  }, [showSmoke, panels, displayAlpha]);
+  }, [showSmoke, panels]); // Only recreate when showSmoke or panels change
+  
+  // Update flow when alpha changes (without recreating the system)
+  useEffect(() => {
+    if (smokeSystemRef.current && panels.length >= 10) {
+      smokeSystemRef.current.set_flow(
+        new Float64Array(panels.flatMap(p => [p.x, p.y])),
+        displayAlpha
+      );
+    }
+  }, [displayAlpha, panels]);
 
   // Interaction state
   const [isDragging, setIsDragging] = useState(false);
@@ -520,10 +530,10 @@ export function AirfoilCanvas() {
       }
     }
 
-    // Draw surface points (if in surface mode and controls visible)
+    // Draw surface points (if in surface mode and controls visible) - rotated by alpha
     if (showControls && controlMode === 'surface') {
       for (let i = 0; i < coordinates.length; i++) {
-        const p = toCanvas(coordinates[i]);
+        const p = toCanvas(rotatePoint(coordinates[i]));
         const isHovered = hoveredPoint?.type === 'surface' && hoveredPoint.index === i;
         
         ctx.beginPath();
@@ -533,13 +543,13 @@ export function AirfoilCanvas() {
       }
     }
 
-    // Draw panel points (small white dots to show spacing distribution)
+    // Draw panel points (small white dots to show spacing distribution) - rotated by alpha
     if (showPoints) {
       ctx.fillStyle = '#ffffff';
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)';
       ctx.lineWidth = 1;
-      for (const p of panels) {
-        const pCanvas = toCanvas(p);
+      for (const pt of panels) {
+        const pCanvas = toCanvas(rotatePoint(pt));
         ctx.beginPath();
         ctx.arc(pCanvas.x, pCanvas.y, PANEL_POINT_RADIUS, 0, Math.PI * 2);
         ctx.fill();

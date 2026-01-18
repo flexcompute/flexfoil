@@ -76,31 +76,22 @@ pub fn velocity_at(
         // Log term
         let log_term = 0.5 * (r2_sq / r1_sq).ln();
         
-        // Linear vorticity distribution: γ(s) = γ_j * (1 - s/ds) + γ_{j+1} * (s/ds)
-        // Velocity influence from linear vortex panel (K&P eq. 11.99-11.100)
-        let gamma1 = gamma[j];
-        let gamma2 = gamma[jp];
+        // Constant-strength vortex panel approximation
+        // For a vortex panel, induced velocity is tangent to circles around the vortex
+        let gamma_avg = 0.5 * (gamma[j] + gamma[jp]);
         
         let inv_2pi = 1.0 / (2.0 * PI);
-        let inv_2pi_ds = inv_2pi / ds;
         
-        // Contribution from γ_j (linear from 1 to 0)
-        let u1_loc = inv_2pi_ds * (y_loc * log_term + (x1_loc - ds) * dtheta - x1_loc * dtheta + ds * dtheta);
-        let v1_loc = inv_2pi_ds * ((ds - y_loc * dtheta) + x1_loc * log_term - ds * log_term);
+        // K&P vortex panel formula:
+        // u_tangent = γ/(2π) * Δθ
+        // u_normal = -γ/(4π) * ln(r₂²/r₁²)
+        let u_t = inv_2pi * dtheta;
+        let u_n = -inv_2pi * log_term;
         
-        // Contribution from γ_{j+1} (linear from 0 to 1)
-        let u2_loc = inv_2pi_ds * (y_loc * log_term + x1_loc * dtheta);
-        let v2_loc = inv_2pi_ds * ((ds - y_loc * dtheta) + x1_loc * log_term);
-        
-        // Simplified: use constant strength approximation for stability
-        // This is the K&P constant-strength vortex panel formula
-        let gamma_avg = 0.5 * (gamma1 + gamma2);
-        let u_loc = -inv_2pi * dtheta;
-        let v_loc = inv_2pi * log_term;
-        
-        // Transform back to global coordinates
-        u += gamma_avg * (u_loc * tx - v_loc * ty);
-        v += gamma_avg * (u_loc * ty + v_loc * tx);
+        // Transform from panel-local (tangent, normal) to global (x, y)
+        // Normal direction is (-ty, tx) - 90° CCW from tangent
+        u += gamma_avg * (u_t * tx - u_n * ty);
+        v += gamma_avg * (u_t * ty + u_n * tx);
     }
 
     (u, v)

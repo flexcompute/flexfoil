@@ -3,7 +3,7 @@
 //! Provides a blob-based particle system for visualizing flow.
 //! Particles are spawned upstream and advected by the velocity field.
 
-use super::velocity::velocity_at;
+use super::velocity::{velocity_at, is_inside_airfoil};
 use rustfoil_core::Point;
 use std::f64::consts::PI;
 
@@ -111,20 +111,44 @@ impl SmokeSystem {
         for particle in &mut self.particles {
             particle.age += dt;
 
+            // Skip particles that are inside or very close to the airfoil
+            if is_inside_airfoil(particle.x, particle.y, nodes) {
+                particle.age = self.max_age; // Mark for removal
+                continue;
+            }
+
             // Get velocity at current position
             let (u1, v1) = velocity_at(particle.x, particle.y, nodes, gamma, alpha, v_inf);
             
-            // Skip if velocity is invalid
+            // Skip if velocity is invalid or too slow
             let speed1 = (u1 * u1 + v1 * v1).sqrt();
             if !speed1.is_finite() || speed1 < 1e-8 {
                 continue;
             }
+            
+            // Limit velocity to prevent instability near airfoil
+            let max_speed = v_inf * 5.0;
+            let (u1, v1) = if speed1 > max_speed {
+                let scale = max_speed / speed1;
+                (u1 * scale, v1 * scale)
+            } else {
+                (u1, v1)
+            };
 
             // RK2 midpoint
             let x_mid = particle.x + 0.5 * dt * u1;
             let y_mid = particle.y + 0.5 * dt * v1;
             
             let (u2, v2) = velocity_at(x_mid, y_mid, nodes, gamma, alpha, v_inf);
+            
+            // Limit midpoint velocity too
+            let speed2 = (u2 * u2 + v2 * v2).sqrt();
+            let (u2, v2) = if speed2 > max_speed {
+                let scale = max_speed / speed2;
+                (u2 * scale, v2 * scale)
+            } else {
+                (u2, v2)
+            };
             
             // Update position
             particle.x += dt * u2;
