@@ -19,8 +19,14 @@ export interface AirfoilPoint extends Point {
 /** Control modes for airfoil manipulation */
 export type ControlMode = 'surface' | 'bezier' | 'bspline';
 
-/** Spacing/paneling modes */
-export type SpacingMode = 'ssp' | 'xfoil';
+/** Spacing panel modes */
+export type SpacingPanelMode = 'simple' | 'advanced';
+
+/** SSP interpolation modes */
+export type SSPInterpolation = 'linear' | 'spline';
+
+/** Advanced SSP visualization modes */
+export type SSPVisualization = 'plot' | 'foil';
 
 /** A Bezier handle attached to an airfoil point */
 export interface BezierHandle {
@@ -86,6 +92,12 @@ export interface AirfoilState {
   displayAlpha: number;
   /** Polar sweep data */
   polarData: PolarPoint[];
+  /** Spacing panel mode: simple (curvature-based) or advanced (SSP) */
+  spacingPanelMode: SpacingPanelMode;
+  /** SSP interpolation mode: linear (piecewise) or spline */
+  sspInterpolation: SSPInterpolation;
+  /** Advanced SSP visualization: plot (F vs S) or foil (normal displacement) */
+  sspVisualization: SSPVisualization;
 }
 
 /** A polar data point */
@@ -112,4 +124,29 @@ export interface ViewportState {
   width: number;
   /** Canvas height in pixels */
   height: number;
+}
+
+/** Visualization settings state */
+export interface VisualizationState {
+  // Display toggles
+  showGrid: boolean;
+  showCurve: boolean;
+  showPanels: boolean;
+  showPoints: boolean;
+  showControls: boolean;
+  showStreamlines: boolean;
+  showSmoke: boolean;
+  
+  // Streamline options
+  streamlineDensity: number;
+  adaptiveStreamlines: boolean;
+  
+  // Smoke options
+  smokeDensity: number;
+  smokeParticlesPerBlob: number;
+  smokeSpawnInterval: number;
+  smokeMaxAge: number;
+  
+  // Flow speed multiplier
+  flowSpeed: number;
 }

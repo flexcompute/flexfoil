@@ -3,7 +3,7 @@ import { DockingLayout } from './components/DockingLayout';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { initWasm } from './lib/wasm';
 import { hydrateFromUrl, subscribeToUrlSync } from './stores/airfoilStore';
-import 'flexlayout-react/style/dark.css';
+import 'flexlayout-react/style/light.css';
 import './App.css';
 
 function AppContent() {

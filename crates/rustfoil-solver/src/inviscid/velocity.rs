@@ -3,13 +3,13 @@
 //! Provides functions to evaluate the velocity field from a panel solution
 //! and integrate streamlines using RK4.
 
-use rustfoil_core::{Body, Point};
+use rustfoil_core::Point;
 use std::f64::consts::PI;
 
 /// Evaluate velocity at a point (x, y) given the panel solution.
 ///
-/// Uses the linear vorticity panel method:
-/// V = V_freestream + sum of panel contributions
+/// Uses K&P VOR2DL linear vorticity panel method (Eq 11.99-11.100).
+/// Gamma values are at nodes, varying linearly across each panel.
 pub fn velocity_at(
     x: f64,
     y: f64,
@@ -27,71 +27,74 @@ pub fn velocity_at(
     let mut u = v_inf * alpha.cos();
     let mut v = v_inf * alpha.sin();
 
+    let two_pi = 2.0 * PI;
+
     // Add contribution from each panel
     // Panel j goes from node j to node (j+1) % n
     for j in 0..n {
         let jp = (j + 1) % n;
-        
+
         let x1 = nodes[j].x;
         let y1 = nodes[j].y;
         let x2 = nodes[jp].x;
         let y2 = nodes[jp].y;
-        
+
         let dx = x2 - x1;
         let dy = y2 - y1;
-        let ds = (dx * dx + dy * dy).sqrt();
-        
-        if ds < 1e-12 {
+        let panel_len = (dx * dx + dy * dy).sqrt();
+
+        if panel_len < 1e-12 {
             continue;
         }
 
-        // Panel tangent and normal
-        let tx = dx / ds;
-        let ty = dy / ds;
-        
-        // Vector from panel endpoints to field point
-        let r1x = x - x1;
-        let r1y = y - y1;
-        let r2x = x - x2;
-        let r2y = y - y2;
-        
-        // Transform to panel-local coordinates
-        let x1_loc = tx * r1x + ty * r1y;
-        let x2_loc = tx * r2x + ty * r2y;
-        let y_loc = tx * r1y - ty * r1x;
-        
-        let r1_sq = r1x * r1x + r1y * r1y;
-        let r2_sq = r2x * r2x + r2y * r2y;
-        
-        // Skip if too close to panel (avoid singularity)
-        if r1_sq < 1e-12 || r2_sq < 1e-12 {
+        // Panel angle and trig values
+        let theta = dy.atan2(dx);
+        let cos_t = theta.cos();
+        let sin_t = theta.sin();
+
+        // Transform field point to panel-local coordinates
+        // xp: along panel (0 at start, panel_len at end)
+        // yp: perpendicular (positive to LEFT of panel direction)
+        let xp = (x - x1) * cos_t + (y - y1) * sin_t;
+        let yp = -(x - x1) * sin_t + (y - y1) * cos_t;
+        let xp2 = xp - panel_len; // xp relative to panel end
+
+        // Squared distances from field point to panel endpoints
+        let r1_sq = xp * xp + yp * yp;
+        let r2_sq = xp2 * xp2 + yp * yp;
+
+        // Skip if too close to panel endpoints (singularity)
+        if r1_sq < 1e-10 || r2_sq < 1e-10 {
             continue;
         }
-        
+
         // Angles from field point to panel endpoints
-        let theta1 = x1_loc.atan2(y_loc);
-        let theta2 = x2_loc.atan2(y_loc);
-        let dtheta = theta2 - theta1;
-        
-        // Log term
-        let log_term = 0.5 * (r2_sq / r1_sq).ln();
-        
-        // Constant-strength vortex panel approximation
-        // For a vortex panel, induced velocity is tangent to circles around the vortex
-        let gamma_avg = 0.5 * (gamma[j] + gamma[jp]);
-        
-        let inv_2pi = 1.0 / (2.0 * PI);
-        
-        // K&P vortex panel formula:
-        // u_tangent = γ/(2π) * Δθ
-        // u_normal = -γ/(4π) * ln(r₂²/r₁²)
-        let u_t = inv_2pi * dtheta;
-        let u_n = -inv_2pi * log_term;
-        
-        // Transform from panel-local (tangent, normal) to global (x, y)
-        // Normal direction is (-ty, tx) - 90° CCW from tangent
-        u += gamma_avg * (u_t * tx - u_n * ty);
-        v += gamma_avg * (u_t * ty + u_n * tx);
+        let theta1 = yp.atan2(xp);
+        let theta2 = yp.atan2(xp2);
+        let beta = theta2 - theta1;
+
+        // Log term: ln(r₂/r₁) = 0.5 * ln(r₂²/r₁²)
+        let logterm = 0.5 * (r2_sq / r1_sq).ln();
+
+        let inv_2pi_l = 1.0 / (two_pi * panel_len);
+
+        // K&P VOR2DL (Eq 11.99-11.100): influence from γⱼ = 1, γⱼ₊₁ = 0
+        let u1_local = -(yp * logterm + xp * beta - panel_len * beta) * inv_2pi_l;
+        let w1_local = -((panel_len - yp * beta) + xp * logterm - panel_len * logterm) * inv_2pi_l;
+
+        // K&P VOR2DL (Eq 11.99-11.100): influence from γⱼ = 0, γⱼ₊₁ = 1
+        let u2_local = (yp * logterm + xp * beta) * inv_2pi_l;
+        let w2_local = ((panel_len - yp * beta) + xp * logterm) * inv_2pi_l;
+
+        // Transform velocities back to global coordinates
+        let u1 = u1_local * cos_t - w1_local * sin_t;
+        let v1 = u1_local * sin_t + w1_local * cos_t;
+        let u2 = u2_local * cos_t - w2_local * sin_t;
+        let v2 = u2_local * sin_t + w2_local * cos_t;
+
+        // Add weighted by gamma at each node
+        u += gamma[j] * u1 + gamma[jp] * u2;
+        v += gamma[j] * v1 + gamma[jp] * v2;
     }
 
     (u, v)
