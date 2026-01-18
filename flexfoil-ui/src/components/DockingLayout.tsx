@@ -1,6 +1,5 @@
 /**
  * DockingLayout - FlexLayout-based dockable panel system
- * Adapted from the flight project's DockingLayout
  */
 
 import { useCallback, useRef, useState } from 'react';
@@ -14,6 +13,7 @@ import { ControlModePanel } from './panels/ControlModePanel';
 import { SpacingPanel } from './panels/SpacingPanel';
 import { PropertiesPanel } from './panels/PropertiesPanel';
 import { SolvePanel } from './panels/SolvePanel';
+import { MenuBar } from './MenuBar';
 
 // Storage keys
 const LAYOUT_STORAGE_KEY = 'flexfoil-layout-v1';
@@ -93,7 +93,11 @@ const defaultLayoutJson: IJsonModel = {
   },
 };
 
-export function DockingLayout() {
+interface DockingLayoutProps {
+  wasmStatus: 'loading' | 'ready' | 'error';
+}
+
+export function DockingLayout({ wasmStatus }: DockingLayoutProps) {
   // Initialize model from localStorage or default
   const [model, setModel] = useState(() => {
     try {
@@ -249,52 +253,13 @@ export function DockingLayout() {
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* Menu bar */}
-      <div
-        style={{
-          height: '32px',
-          background: 'var(--bg-tertiary)',
-          borderBottom: '1px solid var(--border-color)',
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 12px',
-          gap: '12px',
-        }}
-      >
-        <span style={{ fontWeight: 600, color: 'var(--accent-primary)' }}>FlexFoil</span>
-        <div style={{ flex: 1 }} />
-        
-        {/* Closed panels dropdown */}
-        {closedPanels.size > 0 && (
-          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-            <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-              Restore:
-            </span>
-            {Array.from(closedPanels).map((panelId) => {
-              const panel = PANELS.find((p) => p.id === panelId);
-              return (
-                <button
-                  key={panelId}
-                  onClick={() => handleRestorePanel(panelId)}
-                  style={{
-                    padding: '2px 8px',
-                    fontSize: '11px',
-                    background: 'var(--bg-hover)',
-                  }}
-                >
-                  {panel?.name}
-                </button>
-              );
-            })}
-          </div>
-        )}
-        
-        <button
-          onClick={handleResetLayout}
-          style={{ padding: '4px 8px', fontSize: '11px' }}
-        >
-          Reset Layout
-        </button>
-      </div>
+      <MenuBar
+        panels={PANELS}
+        closedPanels={closedPanels}
+        onRestorePanel={handleRestorePanel}
+        onResetLayout={handleResetLayout}
+        wasmStatus={wasmStatus}
+      />
 
       {/* FlexLayout container */}
       <div style={{ flex: 1, position: 'relative' }}>

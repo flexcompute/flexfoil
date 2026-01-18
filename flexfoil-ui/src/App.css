@@ -1,7 +1,8 @@
-/* FlexFoil UI - Dark Theme */
+/* FlexFoil UI - Theme Variables */
 
-:root {
-  /* Colors */
+:root,
+[data-theme="dark"] {
+  /* Colors - Dark Theme */
   --bg-primary: #0f0f0f;
   --bg-secondary: #1a1a1a;
   --bg-tertiary: #242424;
@@ -36,6 +37,34 @@
   /* Typography */
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+[data-theme="light"] {
+  /* Colors - Light Theme */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8f9fa;
+  --bg-tertiary: #e9ecef;
+  --bg-hover: #dee2e6;
+  
+  --text-primary: #212529;
+  --text-secondary: #495057;
+  --text-muted: #868e96;
+  
+  --accent-primary: #00a88a;
+  --accent-secondary: #0077cc;
+  --accent-warning: #e69500;
+  --accent-danger: #dc3545;
+  
+  --border-color: #dee2e6;
+  --border-light: #ced4da;
+  
+  /* Airfoil colors - adjusted for light bg */
+  --foil-line: #00a88a;
+  --foil-point: #212529;
+  --foil-point-selected: #e69500;
+  --foil-control: #0077cc;
+  --foil-handle: #dc3545;
+  --foil-grid: #dee2e6;
 }
 
 * {
@@ -104,7 +133,7 @@ html, body, #root {
   min-height: 0;
 }
 
-/* FlexLayout overrides for dark theme */
+/* FlexLayout overrides */
 .flexlayout__layout {
   background: var(--bg-primary) !important;
 }

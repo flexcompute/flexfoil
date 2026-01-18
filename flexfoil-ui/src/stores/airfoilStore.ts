@@ -20,6 +20,12 @@ import {
   isWasmReady
 } from '../lib/wasm';
 import { evaluateBSpline, evaluateBezierCurve } from '../lib/bspline';
+import { 
+  syncToUrl, 
+  loadFromUrl, 
+  parseNacaFromName,
+  type UrlState 
+} from '../lib/urlState';
 
 // Default NACA 0012 coordinates (simplified)
 const DEFAULT_NACA0012: AirfoilPoint[] = [
@@ -393,3 +399,92 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
     curvatureWeight: 0,
   }),
 }));
+
+/**
+ * Get current state for URL encoding
+ */
+export function getUrlState(): UrlState {
+  const state = useAirfoilStore.getState();
+  const naca = parseNacaFromName(state.name);
+  
+  return {
+    naca: naca || undefined,
+    custom: !naca,
+    nPanels: state.nPanels,
+    spacing: state.spacingKnots,
+    mode: state.controlMode,
+  };
+}
+
+/**
+ * Hydrate store from URL state
+ */
+export function hydrateFromUrl(): boolean {
+  const urlState = loadFromUrl();
+  if (!urlState) return false;
+  
+  const store = useAirfoilStore.getState();
+  
+  // Apply NACA airfoil if specified
+  if (urlState.naca && !urlState.custom) {
+    const designation = parseInt(urlState.naca, 10);
+    const m = Math.floor(designation / 1000) / 100;
+    const p = Math.floor((designation % 1000) / 100) / 10;
+    const t = (designation % 100) / 100;
+    
+    // Generate after WASM is ready
+    setTimeout(() => {
+      if (isWasmReady()) {
+        store.generateNaca4({ m, p, t, nPoints: 100 });
+      }
+    }, 100);
+  }
+  
+  // Apply paneling settings
+  if (urlState.nPanels) {
+    store.setNPanels(urlState.nPanels);
+  }
+  if (urlState.spacing) {
+    store.setSpacingKnots(urlState.spacing);
+  }
+  
+  // Apply control mode
+  if (urlState.mode) {
+    store.setControlMode(urlState.mode);
+  }
+  
+  return true;
+}
+
+/**
+ * Sync store state to URL (debounced)
+ */
+let syncTimeout: ReturnType<typeof setTimeout> | null = null;
+
+export function syncStoreToUrl(): void {
+  if (syncTimeout) {
+    clearTimeout(syncTimeout);
+  }
+  
+  syncTimeout = setTimeout(() => {
+    const urlState = getUrlState();
+    syncToUrl(urlState);
+  }, 500); // Debounce 500ms
+}
+
+/**
+ * Subscribe to store changes and sync to URL
+ */
+export function subscribeToUrlSync(): () => void {
+  return useAirfoilStore.subscribe((state, prevState) => {
+    // Only sync on meaningful changes
+    if (
+      state.name !== prevState.name ||
+      state.nPanels !== prevState.nPanels ||
+      state.controlMode !== prevState.controlMode ||
+      state.spacingKnots !== prevState.spacingKnots
+    ) {
+      syncStoreToUrl();
+    }
+  });
+}
