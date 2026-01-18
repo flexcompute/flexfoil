@@ -10,26 +10,27 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
 import { analyzeAirfoil, isWasmReady, type AnalysisResult } from '../../lib/wasm';
+import type { PolarPoint } from '../../types';
 
 type SolverMode = 'inviscid' | 'viscous';
 type RunMode = 'alpha' | 'cl';
 
-interface PolarPoint {
-  alpha: number;
-  cl: number;
-  cm: number;
-}
-
 export function SolvePanel() {
-  const { panels, name } = useAirfoilStore();
+  const { panels, name, polarData, setDisplayAlpha, setPolarData, clearPolar } = useAirfoilStore();
   
   // Solver settings
   const [solverMode, setSolverMode] = useState<SolverMode>('inviscid');
   const [runMode, setRunMode] = useState<RunMode>('alpha');
   
   // Single-point inputs
-  const [targetAlpha, setTargetAlpha] = useState(5.0);
+  const [targetAlpha, setTargetAlphaLocal] = useState(5.0);
   const [targetCl, setTargetCl] = useState(0.5);
+  
+  // Wrapper to update both local state and store displayAlpha
+  const setTargetAlpha = useCallback((alpha: number) => {
+    setTargetAlphaLocal(alpha);
+    setDisplayAlpha(alpha);
+  }, [setDisplayAlpha]);
   
   // Polar settings
   const [alphaStart, setAlphaStart] = useState(-5);
@@ -38,9 +39,11 @@ export function SolvePanel() {
   
   // Results
   const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [polar, setPolar] = useState<PolarPoint[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // Use store's polarData instead of local state
+  const polar = polarData;
 
   // Run single-point analysis
   const runAnalysis = useCallback(() => {
@@ -116,7 +119,7 @@ export function SolvePanel() {
     
     setIsRunning(true);
     setError(null);
-    setPolar([]);
+    clearPolar();
     
     try {
       const points: PolarPoint[] = [];
@@ -132,7 +135,7 @@ export function SolvePanel() {
         }
       }
       
-      setPolar(points);
+      setPolarData(points);
       
       if (points.length === 0) {
         setError('No valid points in polar');
@@ -142,7 +145,7 @@ export function SolvePanel() {
     }
     
     setIsRunning(false);
-  }, [panels, alphaStart, alphaEnd, alphaStep]);
+  }, [panels, alphaStart, alphaEnd, alphaStep, clearPolar, setPolarData]);
 
   // Compute cl_alpha from polar
   const clAlpha = useMemo(() => {

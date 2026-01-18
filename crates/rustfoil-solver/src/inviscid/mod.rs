@@ -26,8 +26,12 @@
 
 mod error;
 mod influence;
+pub mod velocity;
+pub mod smoke;
 
 pub use error::SolverError;
+pub use velocity::{build_streamlines, velocity_at, is_inside_airfoil, StreamlineOptions};
+pub use smoke::SmokeSystem;
 
 use nalgebra::{DMatrix, DVector};
 use rustfoil_core::{Body, Point};

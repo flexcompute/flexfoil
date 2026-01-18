@@ -11,6 +11,8 @@ import init, {
     repanel_xfoil_with_params,
     compute_curvature_spacing,
     analyze_airfoil,
+    compute_streamlines,
+    WasmSmokeSystem,
     greet,
     RustFoil,
 } from 'rustfoil-wasm';
@@ -293,5 +295,55 @@ export function analyzeAirfoil(
     return analyze_airfoil(coordsFlat, alphaDeg) as AnalysisResult;
 }
 
-// Re-export the RustFoil class for advanced usage
-export { RustFoil };
+/**
+ * Streamline result from WASM.
+ */
+export interface StreamlineResult {
+    streamlines: [number, number][][];
+    success: boolean;
+    error?: string;
+}
+
+/**
+ * Compute streamlines for flow visualization.
+ * 
+ * @param coordinates - Airfoil coordinates
+ * @param alphaDeg - Angle of attack in degrees
+ * @param seedCount - Number of streamlines
+ * @param bounds - [xMin, xMax, yMin, yMax] for domain
+ */
+export function computeStreamlines(
+    coordinates: { x: number; y: number }[],
+    alphaDeg: number,
+    seedCount: number = 25,
+    bounds: [number, number, number, number] = [-0.5, 2.0, -0.5, 0.5]
+): StreamlineResult {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+    
+    const coordsFlat = pointsToFlat(coordinates);
+    return compute_streamlines(coordsFlat, alphaDeg, seedCount, new Float64Array(bounds)) as StreamlineResult;
+}
+
+/**
+ * Create a smoke visualization system.
+ * 
+ * @param spawnY - Y coordinates for spawn points
+ * @param spawnX - X coordinate for spawn points
+ * @param particlesPerBlob - Particles per blob (default 20)
+ */
+export function createSmokeSystem(
+    spawnY: number[],
+    spawnX: number = -0.5,
+    particlesPerBlob: number = 20
+): WasmSmokeSystem {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+    
+    return new WasmSmokeSystem(new Float64Array(spawnY), spawnX, particlesPerBlob);
+}
+
+// Re-export the RustFoil class and WasmSmokeSystem for advanced usage
+export { RustFoil, WasmSmokeSystem };

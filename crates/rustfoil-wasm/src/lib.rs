@@ -23,7 +23,10 @@
 //! ```
 
 use rustfoil_core::{naca, point, Body, CubicSpline, Point};
-use rustfoil_solver::inviscid::{FlowConditions, InviscidSolver};
+use rustfoil_solver::inviscid::{
+    FlowConditions, InviscidSolver, 
+    build_streamlines, StreamlineOptions, SmokeSystem
+};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use std::f64::consts::PI;
@@ -658,6 +661,228 @@ fn analyze_airfoil_impl(coords: &[f64], alpha_deg: f64) -> AnalysisResult {
             success: false,
             error: Some(format!("Solver error: {}", e)),
         },
+    }
+}
+
+// ============================================================================
+// Streamline Visualization
+// ============================================================================
+
+/// Streamline result for JS.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamlineResult {
+    /// Array of streamlines, each is array of [x, y] points
+    pub streamlines: Vec<Vec<[f64; 2]>>,
+    /// Whether computation succeeded
+    pub success: bool,
+    /// Error message if any
+    pub error: Option<String>,
+}
+
+/// Compute streamlines for visualization.
+///
+/// # Arguments
+/// * `coords` - Airfoil coordinates as flat array [x0, y0, x1, y1, ...]
+/// * `alpha_deg` - Angle of attack in degrees
+/// * `seed_count` - Number of streamlines (seeds)
+/// * `bounds` - [x_min, x_max, y_min, y_max] for seed and integration bounds
+///
+/// # Returns
+/// StreamlineResult with array of streamline point arrays.
+#[wasm_bindgen]
+pub fn compute_streamlines(
+    coords: &[f64],
+    alpha_deg: f64,
+    seed_count: u32,
+    bounds: &[f64],
+) -> JsValue {
+    let result = compute_streamlines_impl(coords, alpha_deg, seed_count, bounds);
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+fn compute_streamlines_impl(
+    coords: &[f64],
+    alpha_deg: f64,
+    seed_count: u32,
+    bounds: &[f64],
+) -> StreamlineResult {
+    // Parse coordinates
+    if coords.len() < 6 || coords.len() % 2 != 0 {
+        return StreamlineResult {
+            streamlines: vec![],
+            success: false,
+            error: Some("Invalid coordinates".to_string()),
+        };
+    }
+
+    // Parse bounds
+    if bounds.len() != 4 {
+        return StreamlineResult {
+            streamlines: vec![],
+            success: false,
+            error: Some("bounds must have 4 values: [x_min, x_max, y_min, y_max]".to_string()),
+        };
+    }
+
+    let points: Vec<Point> = coords.chunks(2).map(|c| point(c[0], c[1])).collect();
+
+    // Build body and solve
+    let body = match Body::from_points("airfoil", &points) {
+        Ok(b) => b,
+        Err(e) => {
+            return StreamlineResult {
+                streamlines: vec![],
+                success: false,
+                error: Some(format!("Geometry error: {}", e)),
+            };
+        }
+    };
+
+    let solver = InviscidSolver::new();
+    let flow = FlowConditions::with_alpha_deg(alpha_deg);
+
+    let solution = match solver.solve(&[body], &flow) {
+        Ok(s) => s,
+        Err(e) => {
+            return StreamlineResult {
+                streamlines: vec![],
+                success: false,
+                error: Some(format!("Solver error: {}", e)),
+            };
+        }
+    };
+
+    // Build streamlines
+    let options = StreamlineOptions {
+        seed_count: seed_count as usize,
+        seed_x: bounds[0] - 0.1, // Start slightly before x_min
+        y_min: bounds[2],
+        y_max: bounds[3],
+        step_size: 0.008,
+        max_steps: 3000,
+        x_min: bounds[0],
+        x_max: bounds[1],
+    };
+
+    let streamlines_raw = build_streamlines(
+        &points,
+        &solution.gamma,
+        flow.alpha,
+        flow.v_inf,
+        &options,
+    );
+
+    // Convert to JS-friendly format
+    let streamlines: Vec<Vec<[f64; 2]>> = streamlines_raw
+        .into_iter()
+        .map(|line| line.into_iter().map(|(x, y)| [x, y]).collect())
+        .collect();
+
+    StreamlineResult {
+        streamlines,
+        success: true,
+        error: None,
+    }
+}
+
+// ============================================================================
+// Smoke Visualization
+// ============================================================================
+
+/// Smoke particle system for flow visualization.
+///
+/// This is a stateful object that maintains particle positions
+/// and should be updated each frame.
+#[wasm_bindgen]
+pub struct WasmSmokeSystem {
+    inner: SmokeSystem,
+    coords: Vec<Point>,
+    gamma: Vec<f64>,
+    alpha: f64,
+    v_inf: f64,
+}
+
+#[wasm_bindgen]
+impl WasmSmokeSystem {
+    /// Create a new smoke system.
+    ///
+    /// # Arguments
+    /// * `spawn_y_values` - Y coordinates for spawn points
+    /// * `spawn_x` - X coordinate for spawn points
+    /// * `particles_per_blob` - Number of particles per blob (default 20)
+    #[wasm_bindgen(constructor)]
+    pub fn new(spawn_y_values: &[f64], spawn_x: f64, particles_per_blob: u32) -> Self {
+        Self {
+            inner: SmokeSystem::new(spawn_y_values, spawn_x, particles_per_blob as usize),
+            coords: Vec::new(),
+            gamma: Vec::new(),
+            alpha: 0.0,
+            v_inf: 1.0,
+        }
+    }
+
+    /// Set the airfoil geometry and flow solution.
+    /// Call this when the airfoil or alpha changes.
+    pub fn set_flow(&mut self, coords: &[f64], alpha_deg: f64) {
+        // Parse coordinates
+        if coords.len() < 6 || coords.len() % 2 != 0 {
+            return;
+        }
+
+        self.coords = coords.chunks(2).map(|c| point(c[0], c[1])).collect();
+        self.alpha = alpha_deg.to_radians();
+        self.v_inf = 1.0;
+
+        // Solve to get gamma
+        let body = match Body::from_points("airfoil", &self.coords) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+
+        let solver = InviscidSolver::new();
+        let flow = FlowConditions::with_alpha_deg(alpha_deg);
+
+        if let Ok(solution) = solver.solve(&[body], &flow) {
+            self.gamma = solution.gamma;
+        }
+    }
+
+    /// Update particles by one time step.
+    ///
+    /// # Arguments
+    /// * `dt` - Time step in seconds (typically 1/60 for 60 FPS)
+    pub fn update(&mut self, dt: f64) {
+        self.inner.update(&self.coords, &self.gamma, self.alpha, self.v_inf, dt);
+    }
+
+    /// Get particle positions as flat array [x0, y0, x1, y1, ...].
+    pub fn get_positions(&self) -> Vec<f64> {
+        self.inner.get_positions()
+    }
+
+    /// Get particle alpha (opacity) values.
+    pub fn get_alphas(&self) -> Vec<f64> {
+        self.inner.get_alphas()
+    }
+
+    /// Get number of active particles.
+    pub fn particle_count(&self) -> usize {
+        self.inner.particle_count()
+    }
+
+    /// Reset (remove all particles).
+    pub fn reset(&mut self) {
+        self.inner.reset();
+    }
+
+    /// Set spawn interval in seconds.
+    pub fn set_spawn_interval(&mut self, interval: f64) {
+        self.inner.set_spawn_interval(interval);
+    }
+
+    /// Set maximum particle age in seconds.
+    pub fn set_max_age(&mut self, max_age: f64) {
+        self.inner.set_max_age(max_age);
     }
 }
 

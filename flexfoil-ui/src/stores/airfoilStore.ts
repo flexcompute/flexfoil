@@ -10,7 +10,8 @@ import type {
   BezierHandle, 
   BSplineControlPoint,
   SpacingKnot,
-  Naca4Params 
+  Naca4Params,
+  PolarPoint
 } from '../types';
 import {
   generateNaca4 as wasmGenerateNaca4,
@@ -73,6 +74,7 @@ interface AirfoilStore extends AirfoilState {
   setPanels: (panels: AirfoilPoint[]) => void;
   setControlMode: (mode: ControlMode) => void;
   setName: (name: string) => void;
+  setDisplayAlpha: (alpha: number) => void;
   
   // Point manipulation
   updatePoint: (index: number, point: AirfoilPoint) => void;
@@ -105,6 +107,11 @@ interface AirfoilStore extends AirfoilState {
   repanel: () => void;
   repanelWithXfoil: () => void;
   
+  // Polar data
+  setPolarData: (data: PolarPoint[]) => void;
+  addPolarPoint: (point: PolarPoint) => void;
+  clearPolar: () => void;
+  
   // Reset
   reset: () => void;
 }
@@ -121,12 +128,15 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
   spacingKnots: DEFAULT_SPACING_KNOTS,
   nPanels: 160,  // XFOIL's default NPAN
   curvatureWeight: 0,
+  displayAlpha: 0,
+  polarData: [],
 
   // Actions
   setCoordinates: (coords) => set({ coordinates: coords }),
   setPanels: (panels) => set({ panels }),
   setControlMode: (mode) => set({ controlMode: mode }),
   setName: (name) => set({ name }),
+  setDisplayAlpha: (alpha) => set({ displayAlpha: alpha }),
 
   updatePoint: (index, point) => set((state) => {
     const newCoords = [...state.coordinates];
@@ -385,6 +395,13 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
       return state;
     }
   }),
+  
+  // Polar data actions
+  setPolarData: (data) => set({ polarData: data }),
+  addPolarPoint: (point) => set((state) => ({
+    polarData: [...state.polarData, point]
+  })),
+  clearPolar: () => set({ polarData: [] }),
 
   reset: () => set({
     name: 'NACA 0012',
@@ -397,6 +414,8 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
     spacingKnots: DEFAULT_SPACING_KNOTS,
     nPanels: 160,  // XFOIL's default NPAN
     curvatureWeight: 0,
+    displayAlpha: 0,
+    polarData: [],
   }),
 }));
 

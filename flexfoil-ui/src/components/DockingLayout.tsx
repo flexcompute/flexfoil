@@ -13,6 +13,7 @@ import { ControlModePanel } from './panels/ControlModePanel';
 import { SpacingPanel } from './panels/SpacingPanel';
 import { PropertiesPanel } from './panels/PropertiesPanel';
 import { SolvePanel } from './panels/SolvePanel';
+import { PolarPanel } from './panels/PolarPanel';
 import { MenuBar } from './MenuBar';
 
 // Storage keys
@@ -26,6 +27,7 @@ export const PANELS = [
   { id: 'spacing', name: 'Spacing', component: 'spacing' },
   { id: 'properties', name: 'Properties', component: 'properties' },
   { id: 'solve', name: 'Solve', component: 'solve' },
+  { id: 'polar', name: 'Polar Plot', component: 'polar' },
 ];
 
 // Default layout configuration
@@ -218,6 +220,8 @@ export function DockingLayout({ wasmStatus }: DockingLayoutProps) {
         return <PropertiesPanel />;
       case 'solve':
         return <SolvePanel />;
+      case 'polar':
+        return <PolarPanel />;
       default:
         return <div className="panel">Unknown panel: {component}</div>;
     }

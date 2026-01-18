@@ -82,6 +82,17 @@ export interface AirfoilState {
   nPanels: number;
   /** Curvature weight for blending SSP and curvature-based spacing (0-1) */
   curvatureWeight: number;
+  /** Current angle of attack for visualization (degrees) */
+  displayAlpha: number;
+  /** Polar sweep data */
+  polarData: PolarPoint[];
+}
+
+/** A polar data point */
+export interface PolarPoint {
+  alpha: number;
+  cl: number;
+  cm: number;
 }
 
 /** Panel configuration for FlexLayout */

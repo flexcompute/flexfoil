@@ -18,6 +18,7 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { useAirfoilStore } from '../stores/airfoilStore';
 import type { Point, ViewportState, AirfoilPoint } from '../types';
+import { computeStreamlines, createSmokeSystem, isWasmReady, WasmSmokeSystem } from '../lib/wasm';
 
 /**
  * Compute cumulative arc lengths for a sequence of points.
@@ -189,6 +190,7 @@ export function AirfoilCanvas() {
     controlMode,
     bezierHandles,
     bsplineControlPoints,
+    displayAlpha,
     updatePoint,
     updateBSplineControlPoint,
     updateBezierHandle,
@@ -208,11 +210,90 @@ export function AirfoilCanvas() {
   const [showPanels, setShowPanels] = useState(false); // Linear panel connections
   const [showPoints, setShowPoints] = useState(true);
   const [showControls, setShowControls] = useState(true);
+  const [showStreamlines, setShowStreamlines] = useState(false);
+  const [showSmoke, setShowSmoke] = useState(false);
+  
+  // Streamlines cache
+  const [streamlines, setStreamlines] = useState<[number, number][][]>([]);
+  
+  // Smoke system
+  const smokeSystemRef = useRef<WasmSmokeSystem | null>(null);
+  const smokeAnimationRef = useRef<number | null>(null);
+  const [smokePositions, setSmokePositions] = useState<Float64Array | null>(null);
+  const [smokeAlphas, setSmokeAlphas] = useState<Float64Array | null>(null);
   
   // Memoize the spline curve to avoid recomputing on every render
   const splineCurve = useMemo(() => {
     return generateSplineCurve(coordinates, 300);
   }, [coordinates]);
+
+  // Compute streamlines when enabled and alpha/panels change
+  useEffect(() => {
+    if (!showStreamlines || !isWasmReady() || panels.length < 10) {
+      setStreamlines([]);
+      return;
+    }
+    
+    try {
+      const result = computeStreamlines(panels, displayAlpha, 30, [-0.5, 2.0, -0.5, 0.5]);
+      if (result.success) {
+        setStreamlines(result.streamlines);
+      }
+    } catch (e) {
+      console.error('Streamline computation failed:', e);
+    }
+  }, [showStreamlines, panels, displayAlpha]);
+  
+  // Initialize/update smoke system
+  useEffect(() => {
+    if (!showSmoke || !isWasmReady() || panels.length < 10) {
+      if (smokeAnimationRef.current) {
+        cancelAnimationFrame(smokeAnimationRef.current);
+        smokeAnimationRef.current = null;
+      }
+      smokeSystemRef.current = null;
+      setSmokePositions(null);
+      setSmokeAlphas(null);
+      return;
+    }
+    
+    // Create smoke system with spawn points
+    const spawnY = Array.from({ length: 15 }, (_, i) => -0.35 + (i * 0.7) / 14);
+    smokeSystemRef.current = createSmokeSystem(spawnY, -0.5, 15);
+    smokeSystemRef.current.set_spawn_interval(0.3);
+    smokeSystemRef.current.set_max_age(4.0);
+    
+    // Set flow
+    smokeSystemRef.current.set_flow(
+      new Float64Array(panels.flatMap(p => [p.x, p.y])),
+      displayAlpha
+    );
+    
+    // Animation loop
+    let lastTime = performance.now();
+    const animate = (time: number) => {
+      const dt = Math.min((time - lastTime) / 1000, 0.1); // Cap dt at 100ms
+      lastTime = time;
+      
+      if (smokeSystemRef.current) {
+        smokeSystemRef.current.update(dt);
+        const pos = smokeSystemRef.current.get_positions();
+        const alphas = smokeSystemRef.current.get_alphas();
+        setSmokePositions(new Float64Array(pos));
+        setSmokeAlphas(new Float64Array(alphas));
+      }
+      
+      smokeAnimationRef.current = requestAnimationFrame(animate);
+    };
+    
+    smokeAnimationRef.current = requestAnimationFrame(animate);
+    
+    return () => {
+      if (smokeAnimationRef.current) {
+        cancelAnimationFrame(smokeAnimationRef.current);
+      }
+    };
+  }, [showSmoke, panels, displayAlpha]);
 
   // Interaction state
   const [isDragging, setIsDragging] = useState(false);
@@ -296,6 +377,59 @@ export function AirfoilCanvas() {
       drawGrid(ctx);
       drawAxes(ctx);
     }
+    
+    // Helper to rotate a point around quarter chord by alpha
+    const rotatePoint = (p: Point): Point => {
+      if (displayAlpha === 0) return p;
+      const cx = 0.25; // Rotation center at quarter chord
+      const cy = 0;
+      const rad = -displayAlpha * Math.PI / 180; // Negative for visual convention
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      const dx = p.x - cx;
+      const dy = p.y - cy;
+      return {
+        x: cx + dx * cos - dy * sin,
+        y: cy + dx * sin + dy * cos,
+      };
+    };
+    
+    // Draw streamlines (behind airfoil)
+    if (showStreamlines && streamlines.length > 0) {
+      ctx.strokeStyle = 'rgba(100, 180, 255, 0.5)';
+      ctx.lineWidth = 1;
+      
+      for (const line of streamlines) {
+        if (line.length < 2) continue;
+        ctx.beginPath();
+        const first = toCanvas({ x: line[0][0], y: line[0][1] });
+        ctx.moveTo(first.x, first.y);
+        
+        for (let i = 1; i < line.length; i++) {
+          const p = toCanvas({ x: line[i][0], y: line[i][1] });
+          ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+      }
+    }
+    
+    // Draw smoke particles (behind airfoil)
+    if (showSmoke && smokePositions && smokeAlphas) {
+      const count = smokePositions.length / 2;
+      for (let i = 0; i < count; i++) {
+        const x = smokePositions[i * 2];
+        const y = smokePositions[i * 2 + 1];
+        const alpha = smokeAlphas[i] || 0;
+        
+        if (alpha > 0.01) {
+          const pCanvas = toCanvas({ x, y });
+          ctx.beginPath();
+          ctx.fillStyle = `rgba(200, 220, 255, ${alpha * 0.6})`;
+          ctx.arc(pCanvas.x, pCanvas.y, 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
 
     // Draw B-spline control polygon (if in bspline mode and controls visible)
     if (showControls && controlMode === 'bspline' && bsplineControlPoints.length > 1) {
@@ -313,34 +447,34 @@ export function AirfoilCanvas() {
       ctx.setLineDash([]);
     }
 
-    // Draw smooth spline curve (if enabled)
+    // Draw smooth spline curve (if enabled) - rotated by alpha
     if (showCurve && splineCurve.length > 1) {
       ctx.beginPath();
       ctx.strokeStyle = getComputedStyle(document.documentElement)
         .getPropertyValue('--foil-line').trim() || '#00d4aa';
       ctx.lineWidth = 2;
       
-      const first = toCanvas(splineCurve[0]);
+      const first = toCanvas(rotatePoint(splineCurve[0]));
       ctx.moveTo(first.x, first.y);
       
       for (let i = 1; i < splineCurve.length; i++) {
-        const p = toCanvas(splineCurve[i]);
+        const p = toCanvas(rotatePoint(splineCurve[i]));
         ctx.lineTo(p.x, p.y);
       }
       ctx.stroke();
     }
     
-    // Draw panel lines (linear connections between panel points)
+    // Draw panel lines (linear connections between panel points) - rotated by alpha
     if (showPanels && panels.length > 1) {
       ctx.beginPath();
       ctx.strokeStyle = 'rgba(255, 200, 100, 0.6)'; // Orange/yellow for panels
       ctx.lineWidth = 1;
       
-      const first = toCanvas(panels[0]);
+      const first = toCanvas(rotatePoint(panels[0]));
       ctx.moveTo(first.x, first.y);
       
       for (let i = 1; i < panels.length; i++) {
-        const p = toCanvas(panels[i]);
+        const p = toCanvas(rotatePoint(panels[i]));
         ctx.lineTo(p.x, p.y);
       }
       ctx.stroke();
@@ -413,7 +547,7 @@ export function AirfoilCanvas() {
       }
     }
 
-  }, [viewport, panels, coordinates, splineCurve, controlMode, bezierHandles, bsplineControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, toCanvas]);
+  }, [viewport, panels, coordinates, splineCurve, controlMode, bezierHandles, bsplineControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showSmoke, streamlines, smokePositions, smokeAlphas, displayAlpha, toCanvas]);
 
   // Draw grid
   const drawGrid = useCallback((ctx: CanvasRenderingContext2D) => {
@@ -720,6 +854,41 @@ export function AirfoilCanvas() {
             style={{ width: '12px', height: '12px' }}
           />
           Controls
+        </label>
+        
+        <div style={{ width: '1px', height: '16px', background: 'var(--border-color)' }} />
+        
+        <label style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: '4px',
+          fontSize: '11px',
+          color: 'var(--text-secondary)',
+          cursor: 'pointer',
+        }}>
+          <input 
+            type="checkbox" 
+            checked={showStreamlines} 
+            onChange={(e) => setShowStreamlines(e.target.checked)}
+            style={{ width: '12px', height: '12px' }}
+          />
+          Streamlines
+        </label>
+        <label style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: '4px',
+          fontSize: '11px',
+          color: 'var(--text-secondary)',
+          cursor: 'pointer',
+        }}>
+          <input 
+            type="checkbox" 
+            checked={showSmoke} 
+            onChange={(e) => setShowSmoke(e.target.checked)}
+            style={{ width: '12px', height: '12px' }}
+          />
+          Smoke
         </label>
         
         <div style={{ width: '1px', height: '16px', background: 'var(--border-color)' }} />

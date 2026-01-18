@@ -3,3 +3,4 @@ export { ControlModePanel } from './ControlModePanel';
 export { SpacingPanel } from './SpacingPanel';
 export { PropertiesPanel } from './PropertiesPanel';
 export { SolvePanel } from './SolvePanel';
+export { PolarPanel } from './PolarPanel';
