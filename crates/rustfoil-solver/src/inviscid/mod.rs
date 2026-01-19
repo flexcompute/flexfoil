@@ -28,8 +28,10 @@ mod error;
 mod influence;
 pub mod velocity;
 pub mod smoke;
+pub mod wake_panels;
 
 pub use error::SolverError;
+pub use wake_panels::{WakePanels, WakeConfig, create_wake_from_body};
 pub use velocity::{build_streamlines, velocity_at, is_inside_airfoil, StreamlineOptions};
 pub use smoke::SmokeSystem;
 
