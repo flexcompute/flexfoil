@@ -534,46 +534,34 @@ export function useMorphingAnimation(
 
 /**
  * Get color for Cp value visualization.
- * Blue = low pressure (suction), Red = high pressure (stagnation)
+ * Blue = negative Cp (suction), Red = positive Cp (pressure)
+ * Color intensity increases with magnitude (similar to stream function)
  */
 export function getCpColor(cp: number, isDark: boolean): string {
-  // Clamp Cp to reasonable range
-  const cpClamped = Math.max(-3, Math.min(1, cp));
+  // Typical range: Cp from -3 (strong suction) to +1 (stagnation)
+  const cpClamped = Math.max(-4, Math.min(1.5, cp));
   
-  // Normalize to 0-1 (where -3 -> 0, 1 -> 1)
-  const normalized = (cpClamped + 3) / 4;
-  
-  if (isDark) {
-    // Dark theme: Blue (low Cp) -> White (Cp=0) -> Red (high Cp)
-    if (normalized < 0.5) {
-      // Blue to white
-      const t = normalized * 2;
-      const r = Math.round(100 + 155 * t);
-      const g = Math.round(150 + 105 * t);
-      const b = 255;
-      return `rgb(${r}, ${g}, ${b})`;
+  if (cpClamped < 0) {
+    // Negative Cp (suction) -> Blue
+    // Intensity increases with magnitude
+    const t = Math.min(1, Math.abs(cpClamped) / 3); // Normalize to ~0-1 for Cp in [-3, 0]
+    const intensity = Math.pow(t, 0.5); // Emphasize variation
+    
+    if (isDark) {
+      return `rgb(${Math.round(220 - intensity * 150)}, ${Math.round(230 - intensity * 130)}, ${Math.round(255 - intensity * 30)})`;
     } else {
-      // White to red
-      const t = (normalized - 0.5) * 2;
-      const r = 255;
-      const g = Math.round(255 - 155 * t);
-      const b = Math.round(255 - 155 * t);
-      return `rgb(${r}, ${g}, ${b})`;
+      return `rgb(${Math.round(200 - intensity * 160)}, ${Math.round(210 - intensity * 140)}, ${Math.round(255 - intensity * 55)})`;
     }
   } else {
-    // Light theme: similar but darker
-    if (normalized < 0.5) {
-      const t = normalized * 2;
-      const r = Math.round(50 + 150 * t);
-      const g = Math.round(100 + 100 * t);
-      const b = Math.round(200 + 55 * t);
-      return `rgb(${r}, ${g}, ${b})`;
+    // Positive Cp (pressure/stagnation) -> Red
+    // Intensity increases with magnitude
+    const t = Math.min(1, cpClamped / 1.0); // Normalize to ~0-1 for Cp in [0, 1]
+    const intensity = Math.pow(t, 0.5); // Emphasize variation
+    
+    if (isDark) {
+      return `rgb(${Math.round(255 - intensity * 30)}, ${Math.round(220 - intensity * 140)}, ${Math.round(210 - intensity * 130)})`;
     } else {
-      const t = (normalized - 0.5) * 2;
-      const r = Math.round(200 + 55 * t);
-      const g = Math.round(200 - 100 * t);
-      const b = Math.round(255 - 155 * t);
-      return `rgb(${r}, ${g}, ${b})`;
+      return `rgb(${Math.round(255 - intensity * 55)}, ${Math.round(200 - intensity * 140)}, ${Math.round(190 - intensity * 130)})`;
     }
   }
 }
