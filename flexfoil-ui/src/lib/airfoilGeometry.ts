@@ -365,6 +365,10 @@ export function reconstructFromCamberThickness(
  * Reconstruct airfoil coordinates from sparse camber and thickness control points.
  * Uses cubic spline interpolation for smooth C2-continuous curves.
  * 
+ * Special handling for leading edge:
+ * - Thickness is forced to 0 at x=0 to ensure upper/lower surfaces meet
+ * - Near the LE, thickness blends smoothly to maintain roundness
+ * 
  * @param camber - Camber control points (x, y) - typically 5-10 points
  * @param thickness - Thickness control points (x, t) - typically 5-10 points  
  * @param nPoints - Number of output points (default 161 for 160 panels)
@@ -383,10 +387,41 @@ export function reconstructFromCamberThicknessSpline(
   const sortedCamber = [...camber].sort((a, b) => a.x - b.x);
   const sortedThickness = [...thickness].sort((a, b) => a.x - b.x);
   
+  // Ensure we have anchor points at x=0 and x=1 for camber
+  // This prevents spline extrapolation issues at the leading/trailing edges
+  const camberWithAnchors = [...sortedCamber];
+  if (sortedCamber[0].x > 0.001) {
+    // Add LE anchor - use linear extrapolation from first two points
+    const slope = sortedCamber.length >= 2 
+      ? (sortedCamber[1].y - sortedCamber[0].y) / (sortedCamber[1].x - sortedCamber[0].x)
+      : 0;
+    const y0 = sortedCamber[0].y - slope * sortedCamber[0].x;
+    camberWithAnchors.unshift({ x: 0, y: y0 });
+  }
+  if (sortedCamber[sortedCamber.length - 1].x < 0.999) {
+    // Add TE anchor
+    const n = sortedCamber.length;
+    const slope = n >= 2
+      ? (sortedCamber[n-1].y - sortedCamber[n-2].y) / (sortedCamber[n-1].x - sortedCamber[n-2].x)
+      : 0;
+    const y1 = sortedCamber[n-1].y + slope * (1 - sortedCamber[n-1].x);
+    camberWithAnchors.push({ x: 1, y: y1 });
+  }
+  
+  // For thickness, ensure we have t=0 at x=0 (LE must close)
+  const thicknessWithAnchors = [...sortedThickness];
+  if (sortedThickness[0].x > 0.001 || sortedThickness[0].t > 0.001) {
+    // Add LE anchor with t=0
+    thicknessWithAnchors.unshift({ x: 0, t: 0 });
+  } else if (sortedThickness[0].x <= 0.001) {
+    // Force existing LE point to have t=0
+    thicknessWithAnchors[0] = { x: 0, t: 0 };
+  }
+  
   // Build spline coefficients for camber and thickness
-  const camberCoeffs = buildCubicSplineCoeffs(sortedCamber);
+  const camberCoeffs = buildCubicSplineCoeffs(camberWithAnchors);
   const thicknessCoeffs = buildCubicSplineCoeffs(
-    sortedThickness.map(p => ({ x: p.x, y: p.t }))
+    thicknessWithAnchors.map(p => ({ x: p.x, y: p.t }))
   );
   
   if (!camberCoeffs || !thicknessCoeffs) {
@@ -398,15 +433,42 @@ export function reconstructFromCamberThicknessSpline(
   const upper: AirfoilPoint[] = [];
   const lower: AirfoilPoint[] = [];
   
+  // Get a reference thickness value at x=0.2 for LE radius calculation
+  // This is used to create proper NACA-style rounded LE
+  const tRef = Math.max(0.01, evaluateCubicSpline(thicknessCoeffs, 0.2));
+  
+  // NACA-style leading edge radius coefficient
+  // The sqrt(x) term creates the characteristic rounded LE
+  // For NACA 0012: t(x) ≈ 0.2969 * sqrt(x) near LE
+  // We scale this to match our thickness at x=0.2
+  const leCoeff = tRef / (0.2969 * Math.sqrt(0.2)); // ≈ tRef / 0.133
+  
   // Generate points using cosine spacing for better LE resolution
   // x goes from 1 (TE) to 0 (LE) as i goes from 0 to halfPoints
   for (let i = 0; i <= halfPoints; i++) {
     const beta = (Math.PI * i) / halfPoints;
     const x = (1 + Math.cos(beta)) / 2;  // TE (x=1) to LE (x=0)
     
-    // Interpolate camber and thickness using cubic spline
+    // Interpolate camber using cubic spline
     const yc = evaluateCubicSpline(camberCoeffs, x);
-    const t = Math.max(0, evaluateCubicSpline(thicknessCoeffs, x)); // Ensure non-negative thickness
+    
+    // Interpolate thickness using cubic spline
+    let tSpline = Math.max(0, evaluateCubicSpline(thicknessCoeffs, x));
+    
+    // For proper rounded LE, blend between user's spline and NACA-style sqrt(x) near LE
+    // The NACA formula has t ∝ sqrt(x) near x=0, which gives infinite slope (rounded LE)
+    let t: number;
+    if (x < 0.15) {
+      // Near LE: use NACA-style sqrt(x) thickness for roundness
+      const tNaca = leCoeff * 0.2969 * Math.sqrt(x);
+      // Smooth blend: at x=0 use pure NACA, at x=0.15 use pure spline
+      const blend = x / 0.15;
+      // Use smooth cubic blend for C1 continuity
+      const smoothBlend = blend * blend * (3 - 2 * blend);
+      t = tNaca * (1 - smoothBlend) + tSpline * smoothBlend;
+    } else {
+      t = tSpline;
+    }
     
     const yUpper = yc + t;
     const yLower = yc - t;
@@ -415,7 +477,7 @@ export function reconstructFromCamberThicknessSpline(
       // Trailing edge - single point (x=1)
       upper.push({ x: 1, y: yUpper, surface: 'upper' });
     } else if (i === halfPoints) {
-      // Leading edge - single point (x=0, thickness is ~0)
+      // Leading edge - single point (x=0, thickness is 0)
       upper.push({ x: 0, y: yc, surface: 'upper' });
     } else {
       upper.push({ x, y: yUpper, surface: 'upper' });
@@ -558,6 +620,9 @@ export function createCamberControlPoints(
 /**
  * Create initial thickness control points from airfoil decomposition.
  * 
+ * Note: The first point (x=0, leading edge) always has t=0 to ensure
+ * the upper and lower surfaces meet properly at the LE.
+ * 
  * @param coords - Airfoil coordinates
  * @param numPoints - Number of control points (default 5)
  * @returns Array of thickness control points
@@ -573,12 +638,13 @@ export function createThicknessControlPoints(
     const t = 0.12;
     return Array.from({ length: numPoints }, (_, i) => {
       const x = i / (numPoints - 1);
-      // Simplified NACA thickness formula
+      // Simplified NACA thickness formula (note: gives t=0 at x=0)
       const halfT = 5 * t * (0.2969 * Math.sqrt(x) - 0.126 * x - 0.3516 * x * x + 0.2843 * x * x * x - 0.1015 * x * x * x * x);
       return {
         id: `thickness-${i}`,
         x,
-        t: Math.max(0, halfT),
+        // Force t=0 at LE (x=0) to ensure proper closure
+        t: i === 0 ? 0 : Math.max(0, halfT),
       };
     });
   }
@@ -591,7 +657,8 @@ export function createThicknessControlPoints(
     points.push({
       id: `thickness-${i}`,
       x,
-      t: Math.max(0, t),
+      // Force t=0 at LE (x=0) to ensure proper closure
+      t: i === 0 ? 0 : Math.max(0, t),
     });
   }
   

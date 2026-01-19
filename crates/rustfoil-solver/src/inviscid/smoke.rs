@@ -31,19 +31,19 @@ struct Particle {
     time_offset: f64,
 }
 
-/// A blob of particles following a reference streamline.
+/// A blob of particles following reference streamlines.
 #[derive(Debug, Clone)]
 struct Blob {
     /// Which spawn point this blob originates from
     spawn_idx: usize,
     /// When this blob was created (simulation time)
     spawn_time: f64,
+    /// Which streamline each particle follows (index into spawn_streamlines[spawn_idx].streamlines)
+    particle_streamline_idx: Vec<usize>,
     /// Indices into the reference streamline for each particle
     particle_indices: Vec<usize>,
     /// Random time offsets for each particle (creates visual spread)
     time_offsets: Vec<f64>,
-    /// Unique ID for this blob
-    id: usize,
 }
 
 /// Pre-computed reference streamline for a spawn point.
@@ -52,8 +52,13 @@ struct ReferenceStreamline {
     /// Points along the streamline: (x, y, time)
     /// Time is the cumulative integration time to reach this point
     points: Vec<(f64, f64, f64)>,
-    /// Total time to traverse the streamline
-    total_time: f64,
+}
+
+/// Multiple reference streamlines for a single spawn point (for blob spread).
+#[derive(Debug, Clone)]
+struct SpawnPointStreamlines {
+    /// Multiple streamlines with slight y-offsets for visual variety
+    streamlines: Vec<ReferenceStreamline>,
 }
 
 /// Smoke blob system for flow visualization.
@@ -62,14 +67,16 @@ struct ReferenceStreamline {
 pub struct SmokeSystem {
     /// Active blobs
     blobs: Vec<Blob>,
-    /// Pre-computed reference streamlines (one per spawn point)
-    reference_streamlines: Vec<ReferenceStreamline>,
+    /// Pre-computed reference streamlines (multiple per spawn point for blob spread)
+    spawn_streamlines: Vec<SpawnPointStreamlines>,
     /// Spawn point positions
     spawn_points: Vec<(f64, f64)>,
     /// Number of particles per blob
     particles_per_blob: usize,
-    /// Oversampling factor - reference has N times more points than particles use
-    oversampling_factor: usize,
+    /// Number of streamlines per spawn point (for blob spread)
+    streamlines_per_spawn: usize,
+    /// Y-offset for spread streamlines
+    spread_offset: f64,
     /// Maximum particle age in seconds
     max_age: f64,
     /// Time between blob spawns in seconds
@@ -101,17 +108,18 @@ impl SmokeSystem {
 
         Self {
             blobs: Vec::new(),
-            reference_streamlines: Vec::new(),
+            spawn_streamlines: Vec::new(),
             spawn_points,
             particles_per_blob,
-            oversampling_factor: 5, // Reference has 5x more points
+            streamlines_per_spawn: 5, // 5 streamlines per spawn point for blob spread
+            spread_offset: 0.015, // Y-offset between streamlines (creates ~0.06 total spread)
             max_age: 5.0,
             spawn_interval: 0.1, // Faster default
             time_since_spawn: 0.0,
             current_time: 0.0,
             next_blob_id: 0,
             cached_alpha: f64::NAN,
-            ref_points_count: 2000, // Points per reference streamline
+            ref_points_count: 1500, // Points per reference streamline
         }
     }
 
@@ -127,6 +135,9 @@ impl SmokeSystem {
 
     /// Compute reference streamlines for all spawn points.
     /// Called when flow field changes (geometry or alpha).
+    /// 
+    /// For each spawn point, computes multiple streamlines with small y-offsets
+    /// to provide visual spread for the blob effect.
     fn compute_reference_streamlines(
         &mut self,
         nodes: &[Point],
@@ -134,61 +145,72 @@ impl SmokeSystem {
         alpha: f64,
         v_inf: f64,
     ) {
-        self.reference_streamlines.clear();
+        self.spawn_streamlines.clear();
         
         // Integration parameters
         let dt_target = 0.005; // Target time step
         let x_max = 3.0; // Stop when particle exits domain
         
+        // Y-offsets for multiple streamlines per spawn point
+        let half_n = self.streamlines_per_spawn / 2;
+        let offsets: Vec<f64> = (0..self.streamlines_per_spawn)
+            .map(|i| (i as f64 - half_n as f64) * self.spread_offset)
+            .collect();
+        
         for &(sx, sy) in &self.spawn_points {
-            let mut points = Vec::with_capacity(self.ref_points_count);
-            let mut x = sx;
-            let mut y = sy;
-            let mut t = 0.0;
+            let mut spawn_streamlines = SpawnPointStreamlines {
+                streamlines: Vec::with_capacity(self.streamlines_per_spawn),
+            };
             
-            points.push((x, y, t));
-            
-            // Integrate streamline using RK4
-            for _ in 0..self.ref_points_count {
-                // Check if inside airfoil
-                if is_inside_airfoil(x, y, nodes) {
-                    break;
+            // Compute multiple streamlines with y-offsets
+            for &y_offset in &offsets {
+                let mut points = Vec::with_capacity(self.ref_points_count);
+                let mut x = sx;
+                let mut y = sy + y_offset;
+                let mut t = 0.0;
+                
+                points.push((x, y, t));
+                
+                // Integrate streamline using RK4
+                for _ in 0..self.ref_points_count {
+                    // Check if inside airfoil
+                    if is_inside_airfoil(x, y, nodes) {
+                        break;
+                    }
+                    
+                    // Check if exited domain
+                    if x > x_max {
+                        break;
+                    }
+                    
+                    // Get velocity
+                    let (u, vv) = velocity_at(x, y, nodes, gamma, alpha, v_inf);
+                    let speed = (u * u + vv * vv).sqrt();
+                    
+                    if !speed.is_finite() || speed < 1e-8 {
+                        break;
+                    }
+                    
+                    // Adaptive time step based on velocity
+                    let dt = (dt_target * v_inf / speed).clamp(0.001, 0.02);
+                    
+                    // RK4 step
+                    if let Some((new_x, new_y)) = rk4_step_velocity(
+                        x, y, dt, nodes, gamma, alpha, v_inf
+                    ) {
+                        x = new_x;
+                        y = new_y;
+                        t += dt;
+                        points.push((x, y, t));
+                    } else {
+                        break;
+                    }
                 }
                 
-                // Check if exited domain
-                if x > x_max {
-                    break;
-                }
-                
-                // Get velocity
-                let (u, vv) = velocity_at(x, y, nodes, gamma, alpha, v_inf);
-                let speed = (u * u + vv * vv).sqrt();
-                
-                if !speed.is_finite() || speed < 1e-8 {
-                    break;
-                }
-                
-                // Adaptive time step based on velocity
-                let dt = (dt_target * v_inf / speed).clamp(0.001, 0.02);
-                
-                // RK4 step
-                if let Some((new_x, new_y)) = rk4_step_velocity(
-                    x, y, dt, nodes, gamma, alpha, v_inf
-                ) {
-                    x = new_x;
-                    y = new_y;
-                    t += dt;
-                    points.push((x, y, t));
-                } else {
-                    break;
-                }
+                spawn_streamlines.streamlines.push(ReferenceStreamline { points });
             }
             
-            let total_time = t;
-            self.reference_streamlines.push(ReferenceStreamline {
-                points,
-                total_time,
-            });
+            self.spawn_streamlines.push(spawn_streamlines);
         }
         
         self.cached_alpha = alpha;
@@ -196,36 +218,50 @@ impl SmokeSystem {
 
     /// Spawn new blobs at all spawn points.
     fn spawn_blobs(&mut self) {
-        for (spawn_idx, ref_streamline) in self.reference_streamlines.iter().enumerate() {
-            if ref_streamline.points.len() < 10 {
-                continue; // Skip invalid streamlines
+        for (spawn_idx, spawn_streamlines) in self.spawn_streamlines.iter().enumerate() {
+            // Check that we have valid streamlines
+            let valid_streamlines: Vec<usize> = spawn_streamlines.streamlines.iter()
+                .enumerate()
+                .filter(|(_, s)| s.points.len() >= 10)
+                .map(|(i, _)| i)
+                .collect();
+            
+            if valid_streamlines.is_empty() {
+                continue;
             }
             
-            let blob_id = self.next_blob_id;
             self.next_blob_id += 1;
             
-            // Randomly sample indices from the reference streamline
-            let max_idx = ref_streamline.points.len();
+            let mut particle_streamline_idx = Vec::with_capacity(self.particles_per_blob);
             let mut particle_indices = Vec::with_capacity(self.particles_per_blob);
             let mut time_offsets = Vec::with_capacity(self.particles_per_blob);
             
             for _ in 0..self.particles_per_blob {
+                // Randomly pick which streamline this particle follows
+                let streamline_idx = valid_streamlines[
+                    (rand_float() * valid_streamlines.len() as f64) as usize % valid_streamlines.len()
+                ];
+                particle_streamline_idx.push(streamline_idx);
+                
+                // Get the selected streamline's length
+                let max_idx = spawn_streamlines.streamlines[streamline_idx].points.len();
+                
                 // Random index weighted toward the front (where particles start)
                 let rand_val = rand_float();
                 // Use sqrt to bias toward lower indices (front of streamline)
                 let idx = ((rand_val * rand_val) * max_idx as f64) as usize;
                 particle_indices.push(idx.min(max_idx - 1));
                 
-                // Small random time offset for visual spread
-                time_offsets.push(rand_float() * 0.1 - 0.05);
+                // Small random time offset for additional visual spread
+                time_offsets.push(rand_float() * 0.08 - 0.04);
             }
             
             self.blobs.push(Blob {
                 spawn_idx,
                 spawn_time: self.current_time,
+                particle_streamline_idx,
                 particle_indices,
                 time_offsets,
-                id: blob_id,
             });
         }
     }
@@ -249,7 +285,7 @@ impl SmokeSystem {
     ) {
         // Check if we need to recompute reference streamlines
         // (This happens when set_flow is called, which updates alpha)
-        if self.reference_streamlines.is_empty() {
+        if self.spawn_streamlines.is_empty() {
             self.compute_reference_streamlines(nodes, gamma, alpha, v_inf);
         }
         
@@ -269,15 +305,18 @@ impl SmokeSystem {
             let age = self.current_time - blob.spawn_time;
             
             // Update particle indices based on elapsed time
-            if let Some(ref_streamline) = self.reference_streamlines.get(blob.spawn_idx) {
+            if let Some(spawn_streamlines) = self.spawn_streamlines.get(blob.spawn_idx) {
                 let time_scale = v_inf; // Particles move faster with higher v_inf
                 
                 for (i, idx) in blob.particle_indices.iter_mut().enumerate() {
-                    let particle_time = age * time_scale + blob.time_offsets[i];
-                    
-                    // Find the reference point at this time
-                    let new_idx = find_index_at_time(&ref_streamline.points, particle_time);
-                    *idx = new_idx;
+                    let streamline_idx = blob.particle_streamline_idx[i];
+                    if let Some(ref_streamline) = spawn_streamlines.streamlines.get(streamline_idx) {
+                        let particle_time = age * time_scale + blob.time_offsets[i];
+                        
+                        // Find the reference point at this time
+                        let new_idx = find_index_at_time(&ref_streamline.points, particle_time);
+                        *idx = new_idx;
+                    }
                 }
             }
         }
@@ -298,11 +337,14 @@ impl SmokeSystem {
         let mut positions = Vec::with_capacity(total_particles * 2);
         
         for blob in &self.blobs {
-            if let Some(ref_streamline) = self.reference_streamlines.get(blob.spawn_idx) {
-                for &idx in &blob.particle_indices {
-                    if let Some(&(x, y, _)) = ref_streamline.points.get(idx) {
-                        positions.push(x);
-                        positions.push(y);
+            if let Some(spawn_streamlines) = self.spawn_streamlines.get(blob.spawn_idx) {
+                for (i, &idx) in blob.particle_indices.iter().enumerate() {
+                    let streamline_idx = blob.particle_streamline_idx[i];
+                    if let Some(ref_streamline) = spawn_streamlines.streamlines.get(streamline_idx) {
+                        if let Some(&(x, y, _)) = ref_streamline.points.get(idx) {
+                            positions.push(x);
+                            positions.push(y);
+                        }
                     }
                 }
             }
@@ -349,7 +391,7 @@ impl SmokeSystem {
     /// Reset the system (remove all particles and cached streamlines).
     pub fn reset(&mut self) {
         self.blobs.clear();
-        self.reference_streamlines.clear();
+        self.spawn_streamlines.clear();
         self.time_since_spawn = 0.0;
         self.current_time = 0.0;
         self.cached_alpha = f64::NAN;
@@ -358,7 +400,7 @@ impl SmokeSystem {
     /// Force recomputation of reference streamlines.
     /// Call this when flow field changes (alpha or geometry).
     pub fn invalidate_cache(&mut self) {
-        self.reference_streamlines.clear();
+        self.spawn_streamlines.clear();
     }
 }
 
