@@ -120,6 +120,12 @@ pub struct BLConfig {
     
     /// Force transition at this x/c location (None = natural)
     pub forced_transition_lower: Option<f64>,
+    
+    /// Surface arc-length in chord units (typically ~2.0-2.1 for airfoils)
+    /// Used to scale normalized s_coords to physical arc-length for Thwaites.
+    /// If 0 or unset, defaults to 2.0.
+    #[serde(default)]
+    pub surface_length: f64,
 }
 
 impl Default for BLConfig {
@@ -133,6 +139,7 @@ impl Default for BLConfig {
             tolerance: 1e-6,
             forced_transition_upper: None,
             forced_transition_lower: None,
+            surface_length: 2.0, // Typical airfoil surface length in chord units
         }
     }
 }
@@ -322,17 +329,23 @@ impl BLSolver {
             let forced = force_tr.map(|x_tr| x >= x_tr).unwrap_or(false);
             
             if !is_turbulent && !forced {
-                // Laminar: use Thwaites method
+                // Scale s by surface_length to convert normalized coords to physical
+                // This is critical for correct Thwaites BL growth and transition
+                let surf_len = self.config.surface_length.max(1.0);
+                let s_physical = s * surf_len;
+                
+                // Laminar: use Thwaites method with physical arc-length
                 let theta_sq_times_6 = thwaites_solve(
-                    s,
+                    s_physical,
                     ue_local,
                     self.config.reynolds,
                 );
                 
                 state.theta = (theta_sq_times_6 / 6.0).sqrt().max(1e-10);
                 
-                // Thwaites pressure gradient parameter
-                let lambda = state.theta.powi(2) * due_ds * self.config.reynolds / ue_local;
+                // Thwaites pressure gradient parameter (dUe/ds needs scaling too)
+                let due_ds_physical = due_ds / surf_len;
+                let lambda = state.theta.powi(2) * due_ds_physical * self.config.reynolds / ue_local;
                 
                 // Shape factor from Thwaites correlation
                 state.h = closure::thwaites_h(lambda);
@@ -345,10 +358,11 @@ impl BLSolver {
                 let re_theta = ue_local * state.theta * self.config.reynolds;
                 
                 // Compute step size (ds) for amplification calculation
+                // Scale by surface_length to get physical ds
                 let ds_step = if step > 0 {
                     let idx_prev = indices[step - 1];
                     if idx_prev < s_coords.len() {
-                        (s_coords[idx] - s_coords[idx_prev]).abs()
+                        (s_coords[idx] - s_coords[idx_prev]).abs() * surf_len
                     } else {
                         0.01
                     }
