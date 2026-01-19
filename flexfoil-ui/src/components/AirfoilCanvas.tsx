@@ -714,7 +714,7 @@ export function AirfoilCanvas() {
   
   // Compute stream function (ψ) contours when enabled
   // Uses marching squares to extract iso-lines from the psi grid
-  // Uses adaptive bounds based on viewport (same as streamlines)
+  // Uses FIXED bounds to avoid expensive recomputation on zoom/pan
   // NOTE: The dividing streamline (ψ = ψ₀) is extrapolated to hit the airfoil surface
   useEffect(() => {
     if (!showPsiContours || !isWasmReady() || panels.length < 10 || isDraggingPoint) {
@@ -725,16 +725,11 @@ export function AirfoilCanvas() {
     }
     
     try {
-      // Use adaptive bounds (same as streamlines) for consistent visualization
-      const bounds = streamlineBounds;
-      // Scale resolution based on bounds size for consistent density
-      const xRange = bounds[1] - bounds[0];
-      const yRange = bounds[3] - bounds[2];
-      const baseRes = 60; // points per unit
-      const resolution: [number, number] = [
-        Math.round(xRange * baseRes),
-        Math.round(yRange * baseRes)
-      ];
+      // Use FIXED bounds - large enough to cover typical viewing area
+      // This prevents expensive recomputation on zoom/pan
+      const bounds: [number, number, number, number] = [-1.5, 2.5, -1.2, 1.2];
+      // Fixed resolution - good balance of quality vs performance
+      const resolution: [number, number] = [160, 96];
       const result = computePsiGrid(panels, displayAlpha, bounds, resolution);
       
       if (!result.success) {
@@ -828,7 +823,7 @@ export function AirfoilCanvas() {
     } catch (e) {
       console.error('Psi contour computation failed:', e);
     }
-  }, [showPsiContours, panels, displayAlpha, streamlineBounds, isDraggingPoint]);
+  }, [showPsiContours, panels, displayAlpha, isDraggingPoint]);
   
   // Compute aerodynamic analysis (Cp, Cl, Cm)
   // SKIP during drag to prevent freezing - recalculate on drag end
@@ -1162,48 +1157,11 @@ export function AirfoilCanvas() {
         return inside;
       };
       
-      // Bicubic (Catmull-Rom) spline interpolation for smooth gradients
-      // Uses 4x4 neighborhood of grid points around each evaluation point
-      const subDiv = 4; // 4x4 sub-cells with bicubic interpolation
-      const subDx = dx / subDiv;
-      const subDy = dy / subDiv;
-      
-      // Helper to safely get grid value with clamping at boundaries
-      const getGridValue = (ix: number, iy: number): number => {
-        const clampedIx = Math.max(0, Math.min(nx - 1, ix));
-        const clampedIy = Math.max(0, Math.min(ny - 1, iy));
-        return grid[clampedIy * nx + clampedIx];
-      };
-      
-      // Catmull-Rom basis function
-      const catmullRom = (t: number, p0: number, p1: number, p2: number, p3: number): number => {
-        const t2 = t * t;
-        const t3 = t2 * t;
-        return 0.5 * (
-          (2 * p1) +
-          (-p0 + p2) * t +
-          (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
-          (-p0 + 3 * p1 - 3 * p2 + p3) * t3
-        );
-      };
-      
-      // Bicubic interpolation using Catmull-Rom splines
-      const bicubicInterpolate = (ix: number, iy: number, u: number, v: number): number => {
-        // Get 4x4 grid of values around the cell
-        const rows: number[] = [];
-        for (let j = -1; j <= 2; j++) {
-          const p0 = getGridValue(ix - 1, iy + j);
-          const p1 = getGridValue(ix, iy + j);
-          const p2 = getGridValue(ix + 1, iy + j);
-          const p3 = getGridValue(ix + 2, iy + j);
-          rows.push(catmullRom(u, p0, p1, p2, p3));
-        }
-        return catmullRom(v, rows[0], rows[1], rows[2], rows[3]);
-      };
-      
+      // Draw cells directly with bilinear interpolation (faster than bicubic)
+      // No subdivision needed - grid resolution is sufficient
       for (let iy = 0; iy < ny - 1; iy++) {
         for (let ix = 0; ix < nx - 1; ix++) {
-          // Check if cell has finite values
+          // Get corner values
           const v00 = grid[iy * nx + ix];
           const v10 = grid[iy * nx + ix + 1];
           const v01 = grid[(iy + 1) * nx + ix];
@@ -1213,48 +1171,39 @@ export function AirfoilCanvas() {
             continue;
           }
           
-          // Draw sub-cells with bicubic interpolated values
-          for (let sy = 0; sy < subDiv; sy++) {
-            for (let sx = 0; sx < subDiv; sx++) {
-              // Sub-cell center in world coordinates
-              const centerX = xMin + ix * dx + (sx + 0.5) * subDx;
-              const centerY = yMin + iy * dy + (sy + 0.5) * subDy;
-              
-              // Skip cells inside the airfoil
-              if (isInsideAirfoil(centerX, centerY)) {
-                continue;
-              }
-              
-              // Sub-cell center in normalized coordinates (0-1)
-              const u = (sx + 0.5) / subDiv;
-              const v_param = (sy + 0.5) / subDiv;
-              
-              // Bicubic interpolation for smooth color
-              const psi = bicubicInterpolate(ix, iy, u, v_param);
-              const color = getPsiColor(psi, psiMin, psiMax, psi0, isDark);
-              
-              // Sub-cell corners in world coordinates
-              const x0 = xMin + ix * dx + sx * subDx;
-              const y0 = yMin + iy * dy + sy * subDy;
-              const x1 = x0 + subDx;
-              const y1 = y0 + subDy;
-              
-              // Transform to canvas coordinates (with rotation)
-              const p00 = toCanvas(rotatePoint({ x: x0, y: y0 }));
-              const p10 = toCanvas(rotatePoint({ x: x1, y: y0 }));
-              const p01 = toCanvas(rotatePoint({ x: x0, y: y1 }));
-              const p11 = toCanvas(rotatePoint({ x: x1, y: y1 }));
-              
-              ctx.fillStyle = color;
-              ctx.beginPath();
-              ctx.moveTo(p00.x, p00.y);
-              ctx.lineTo(p10.x, p10.y);
-              ctx.lineTo(p11.x, p11.y);
-              ctx.lineTo(p01.x, p01.y);
-              ctx.closePath();
-              ctx.fill();
-            }
+          // Cell center in world coordinates
+          const centerX = xMin + (ix + 0.5) * dx;
+          const centerY = yMin + (iy + 0.5) * dy;
+          
+          // Skip cells inside the airfoil
+          if (isInsideAirfoil(centerX, centerY)) {
+            continue;
           }
+          
+          // Use average of corner values for cell color
+          const avgPsi = (v00 + v10 + v01 + v11) / 4;
+          const color = getPsiColor(avgPsi, psiMin, psiMax, psi0, isDark);
+          
+          // Cell corners in world coordinates
+          const x0 = xMin + ix * dx;
+          const y0 = yMin + iy * dy;
+          const x1 = x0 + dx;
+          const y1 = y0 + dy;
+          
+          // Transform to canvas coordinates (with rotation)
+          const p00 = toCanvas(rotatePoint({ x: x0, y: y0 }));
+          const p10 = toCanvas(rotatePoint({ x: x1, y: y0 }));
+          const p01 = toCanvas(rotatePoint({ x: x0, y: y1 }));
+          const p11 = toCanvas(rotatePoint({ x: x1, y: y1 }));
+          
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.moveTo(p00.x, p00.y);
+          ctx.lineTo(p10.x, p10.y);
+          ctx.lineTo(p11.x, p11.y);
+          ctx.lineTo(p01.x, p01.y);
+          ctx.closePath();
+          ctx.fill();
         }
       }
       
@@ -1853,7 +1802,8 @@ export function AirfoilCanvas() {
     setDragTarget(null);
   }, [isDragging]);
 
-  const handleWheel = useCallback((e: React.WheelEvent) => {
+  // Handle wheel events with native listener for proper preventDefault
+  const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
     
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -1882,6 +1832,15 @@ export function AirfoilCanvas() {
       };
     });
   }, [viewport, toAirfoil]);
+
+  // Attach wheel listener with passive: false to allow preventDefault
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', handleWheel);
+  }, [handleWheel]);
 
   // Double-click to add control point
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
@@ -2004,7 +1963,6 @@ export function AirfoilCanvas() {
         onMouseLeave={handleMouseUp}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
-        onWheel={handleWheel}
         style={{ cursor: isDragging ? 'grabbing' : isPanning ? 'grabbing' : hoveredPoint ? 'pointer' : 'crosshair' }}
       />
       
