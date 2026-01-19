@@ -483,32 +483,34 @@ function extrapolateDividingStreamline(
 
 /**
  * Generate a color for a stream function value using a diverging colormap.
- * Blue for negative, white for zero (relative to psi_0), red for positive.
+ * Blue for flow below ψ₀ (going under), red for flow above ψ₀ (going over).
+ * Uses smooth gradient interpolation within each region.
  */
 function getPsiColor(psi: number, psiMin: number, psiMax: number, psi0: number, isDark: boolean): string {
-  // Normalize relative to psi_0 (dividing streamline)
-  const range = Math.max(psiMax - psi0, psi0 - psiMin);
-  if (range < 1e-10) return isDark ? 'rgba(50, 50, 50, 0.3)' : 'rgba(200, 200, 200, 0.3)';
+  const totalRange = psiMax - psiMin;
+  if (totalRange < 1e-10) return isDark ? 'rgba(50, 50, 50, 0.3)' : 'rgba(200, 200, 200, 0.3)';
   
-  const normalized = (psi - psi0) / range; // -1 to +1
+  const alpha = isDark ? 0.4 : 0.5;
   
-  // Diverging colormap: blue (below) -> white (at psi0) -> red (above)
-  // In terms of flow: blue = going under, red = going over
-  const alpha = isDark ? 0.25 : 0.35;
-  
-  if (normalized < 0) {
+  if (psi < psi0) {
     // Below psi_0 - blue tones (flow going under)
-    const intensity = Math.min(1, Math.abs(normalized));
-    const r = Math.round(30 + (1 - intensity) * 100);
-    const g = Math.round(60 + (1 - intensity) * 120);
-    const b = Math.round(150 + (1 - intensity) * 50);
+    // Map from psiMin -> psi0 to intensity 1 -> 0 (darker blue far from psi0, lighter near)
+    const rangeBelow = psi0 - psiMin;
+    const t = rangeBelow > 1e-10 ? (psi0 - psi) / rangeBelow : 0; // 0 at psi0, 1 at psiMin
+    // Gradient from light blue (t=0) to deep blue (t=1)
+    const r = Math.round(180 - t * 140);  // 180 -> 40
+    const g = Math.round(200 - t * 120);  // 200 -> 80
+    const b = Math.round(240 - t * 40);   // 240 -> 200
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   } else {
-    // Above psi_0 - red/orange tones (flow going over)
-    const intensity = Math.min(1, normalized);
-    const r = Math.round(180 + (1 - intensity) * 50);
-    const g = Math.round(80 + (1 - intensity) * 100);
-    const b = Math.round(60 + (1 - intensity) * 100);
+    // Above psi_0 - red/salmon tones (flow going over)
+    // Map from psi0 -> psiMax to intensity 0 -> 1 (lighter near psi0, darker far)
+    const rangeAbove = psiMax - psi0;
+    const t = rangeAbove > 1e-10 ? (psi - psi0) / rangeAbove : 0; // 0 at psi0, 1 at psiMax
+    // Gradient from light salmon (t=0) to deep red (t=1)
+    const r = Math.round(255 - t * 55);   // 255 -> 200
+    const g = Math.round(210 - t * 130);  // 210 -> 80
+    const b = Math.round(200 - t * 140);  // 200 -> 60
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 }
@@ -712,6 +714,7 @@ export function AirfoilCanvas() {
   
   // Compute stream function (ψ) contours when enabled
   // Uses marching squares to extract iso-lines from the psi grid
+  // Uses adaptive bounds based on viewport (same as streamlines)
   // NOTE: The dividing streamline (ψ = ψ₀) is extrapolated to hit the airfoil surface
   useEffect(() => {
     if (!showPsiContours || !isWasmReady() || panels.length < 10 || isDraggingPoint) {
@@ -722,10 +725,16 @@ export function AirfoilCanvas() {
     }
     
     try {
-      // Compute psi grid with high resolution for smooth contours
-      // Higher resolution near the airfoil gives better definition
-      const bounds: [number, number, number, number] = [-1.0, 2.0, -0.8, 0.8];
-      const resolution: [number, number] = [200, 120];  // Higher resolution for smooth gradients
+      // Use adaptive bounds (same as streamlines) for consistent visualization
+      const bounds = streamlineBounds;
+      // Scale resolution based on bounds size for consistent density
+      const xRange = bounds[1] - bounds[0];
+      const yRange = bounds[3] - bounds[2];
+      const baseRes = 60; // points per unit
+      const resolution: [number, number] = [
+        Math.round(xRange * baseRes),
+        Math.round(yRange * baseRes)
+      ];
       const result = computePsiGrid(panels, displayAlpha, bounds, resolution);
       
       if (!result.success) {
@@ -737,6 +746,20 @@ export function AirfoilCanvas() {
       const { grid, psi_0, psi_min, psi_max, nx, ny } = result;
       const dx = (bounds[1] - bounds[0]) / (nx - 1);
       const dy = (bounds[3] - bounds[2]) / (ny - 1);
+      
+      // Point-in-polygon test for filtering interior points
+      const isInsideAirfoil = (x: number, y: number): boolean => {
+        if (panels.length < 3) return false;
+        let inside = false;
+        for (let i = 0, j = panels.length - 1; i < panels.length; j = i++) {
+          const xi = panels[i].x, yi = panels[i].y;
+          const xj = panels[j].x, yj = panels[j].y;
+          if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+            inside = !inside;
+          }
+        }
+        return inside;
+      };
       
       // Choose contour levels - evenly spaced
       const nLevels = 20;
@@ -765,6 +788,28 @@ export function AirfoilCanvas() {
       const psi0Segments = marchingSquares(grid, nx, ny, psi_0, bounds[0], bounds[2], dx, dy);
       let psi0Lines = connectSegments(psi0Segments).filter(line => line.length >= 2);
       
+      // Filter out parts of dividing streamline that are inside the airfoil
+      // Split lines at airfoil boundary and keep only exterior segments
+      const filteredPsi0Lines: [number, number][][] = [];
+      for (const line of psi0Lines) {
+        let currentSegment: [number, number][] = [];
+        for (const point of line) {
+          const inside = isInsideAirfoil(point[0], point[1]);
+          if (!inside) {
+            currentSegment.push(point);
+          } else if (currentSegment.length >= 2) {
+            filteredPsi0Lines.push(currentSegment);
+            currentSegment = [];
+          } else {
+            currentSegment = [];
+          }
+        }
+        if (currentSegment.length >= 2) {
+          filteredPsi0Lines.push(currentSegment);
+        }
+      }
+      psi0Lines = filteredPsi0Lines;
+      
       // Extrapolate dividing streamline (ψ₀) to hit the airfoil surface
       // This extends the line segments to the airfoil boundary for a complete visualization
       psi0Lines = extrapolateDividingStreamline(psi0Lines, panels);
@@ -783,7 +828,7 @@ export function AirfoilCanvas() {
     } catch (e) {
       console.error('Psi contour computation failed:', e);
     }
-  }, [showPsiContours, panels, displayAlpha, isDraggingPoint]);
+  }, [showPsiContours, panels, displayAlpha, streamlineBounds, isDraggingPoint]);
   
   // Compute aerodynamic analysis (Cp, Cl, Cm)
   // SKIP during drag to prevent freezing - recalculate on drag end
