@@ -534,7 +534,8 @@ export function useMorphingAnimation(
 
 /**
  * Get color for Cp value visualization.
- * Blue = negative Cp (suction), Red = positive Cp (pressure)
+ * Blue = negative Cp (suction) - upper surface typically
+ * Red = positive Cp (pressure) - stagnation point, lower surface
  * Color intensity increases with magnitude (similar to stream function)
  */
 export function getCpColor(cp: number, isDark: boolean): string {
@@ -542,26 +543,24 @@ export function getCpColor(cp: number, isDark: boolean): string {
   const cpClamped = Math.max(-4, Math.min(1.5, cp));
   
   if (cpClamped < 0) {
-    // Negative Cp (suction) -> Blue
-    // Intensity increases with magnitude
+    // Negative Cp (suction) -> Blue (upper surface typically)
     const t = Math.min(1, Math.abs(cpClamped) / 3); // Normalize to ~0-1 for Cp in [-3, 0]
-    const intensity = Math.pow(t, 0.5); // Emphasize variation
+    const intensity = Math.pow(t, 0.5);
     
     if (isDark) {
-      return `rgb(${Math.round(220 - intensity * 150)}, ${Math.round(230 - intensity * 130)}, ${Math.round(255 - intensity * 30)})`;
+      return `rgb(${Math.round(180 - intensity * 140)}, ${Math.round(200 - intensity * 130)}, ${Math.round(255 - intensity * 25)})`;
     } else {
-      return `rgb(${Math.round(200 - intensity * 160)}, ${Math.round(210 - intensity * 140)}, ${Math.round(255 - intensity * 55)})`;
+      return `rgb(${Math.round(150 - intensity * 120)}, ${Math.round(180 - intensity * 130)}, ${Math.round(255 - intensity * 55)})`;
     }
   } else {
-    // Positive Cp (pressure/stagnation) -> Red
-    // Intensity increases with magnitude
+    // Positive Cp (pressure/stagnation) -> Red (stagnation, lower surface)
     const t = Math.min(1, cpClamped / 1.0); // Normalize to ~0-1 for Cp in [0, 1]
-    const intensity = Math.pow(t, 0.5); // Emphasize variation
+    const intensity = Math.pow(t, 0.5);
     
     if (isDark) {
-      return `rgb(${Math.round(255 - intensity * 30)}, ${Math.round(220 - intensity * 140)}, ${Math.round(210 - intensity * 130)})`;
+      return `rgb(${Math.round(255 - intensity * 25)}, ${Math.round(180 - intensity * 120)}, ${Math.round(170 - intensity * 110)})`;
     } else {
-      return `rgb(${Math.round(255 - intensity * 55)}, ${Math.round(200 - intensity * 140)}, ${Math.round(190 - intensity * 130)})`;
+      return `rgb(${Math.round(255 - intensity * 35)}, ${Math.round(160 - intensity * 120)}, ${Math.round(150 - intensity * 110)})`;
     }
   }
 }

@@ -619,6 +619,8 @@ export function AirfoilCanvas() {
   const smokeAnimationRef = useRef<number | null>(null);
   const [smokePositions, setSmokePositions] = useState<Float64Array | null>(null);
   const [smokeAlphas, setSmokeAlphas] = useState<Float64Array | null>(null);
+  const [smokePsiValues, setSmokePsiValues] = useState<Float64Array | null>(null);
+  const [smokePsi0, setSmokePsi0] = useState<number>(0);
   
   // Compute adaptive streamline count based on stable zoom (not live zoom)
   // This avoids recreating the function on every scroll tick
@@ -961,6 +963,15 @@ export function AirfoilCanvas() {
         const alphas = smokeSystemRef.current.get_alphas();
         setSmokePositions(new Float64Array(pos));
         setSmokeAlphas(new Float64Array(alphas));
+        
+        // Get psi values for coloring particles by dividing streamline
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const smokeSystem = smokeSystemRef.current as any;
+        if (typeof smokeSystem.get_psi_values === 'function') {
+          const psiVals = smokeSystem.get_psi_values();
+          setSmokePsiValues(new Float64Array(psiVals));
+          setSmokePsi0(smokeSystem.get_psi_0());
+        }
       }
       
       smokeAnimationRef.current = requestAnimationFrame(animate);
@@ -1451,8 +1462,17 @@ export function AirfoilCanvas() {
     }
     
     // Draw smoke particles (behind airfoil) - rotated by alpha to match airfoil
+    // Color by whether particle is above or below the dividing streamline
     if (showSmoke && smokePositions && smokeAlphas) {
       const count = smokePositions.length / 2;
+      const hasPsiData = smokePsiValues && smokePsiValues.length === count;
+      
+      // Colors for above/below dividing streamline
+      // Upper surface (psi > psi0): warm red/orange
+      // Lower surface (psi < psi0): cool blue
+      const colorAbove = isDark ? '#ff6b6b' : '#e63946';  // Red for upper surface
+      const colorBelow = isDark ? '#4dabf7' : '#1971c2';  // Blue for lower surface
+      
       for (let i = 0; i < count; i++) {
         const x = smokePositions[i * 2];
         const y = smokePositions[i * 2 + 1];
@@ -1461,7 +1481,17 @@ export function AirfoilCanvas() {
         if (alpha > 0.01) {
           const pCanvas = toCanvas(rotatePoint({ x, y }));
           ctx.beginPath();
-          ctx.fillStyle = colors.accentSecondary;
+          
+          // Choose color based on psi value relative to psi0
+          if (hasPsiData) {
+            const psi = smokePsiValues[i];
+            // psi > psi0 means above dividing streamline (upper surface path)
+            // psi < psi0 means below dividing streamline (lower surface path)
+            ctx.fillStyle = psi > smokePsi0 ? colorAbove : colorBelow;
+          } else {
+            ctx.fillStyle = colors.accentSecondary;
+          }
+          
           ctx.globalAlpha = alpha * 0.6;
           ctx.arc(pCanvas.x, pCanvas.y, 2, 0, Math.PI * 2);
           ctx.fill();
@@ -1656,25 +1686,15 @@ export function AirfoilCanvas() {
     }
     
     // Draw Cp (pressure coefficient) visualization
-    if (showCp && morphState.cp.length > 0 && morphState.cpX.length > 0) {
-      const cpLen = Math.min(morphState.cp.length, morphState.cpX.length);
+    // Cp values are ordered by panel index, so use panel points directly
+    if (showCp && morphState.cp.length > 0) {
+      const cpLen = Math.min(morphState.cp.length, morphedPanels.length);
       
-      // Find corresponding y values on the airfoil for each Cp point
-      // cpX are x positions along the chord
       for (let i = 0; i < cpLen; i++) {
-        const cpX = morphState.cpX[i];
         const cpVal = morphState.cp[i];
+        const closestPt = morphedPanels[i];
         
-        // Find the closest panel point to get y
-        let closestPt = morphedPanels[0] || { x: 0, y: 0 };
-        let minDist = Infinity;
-        for (const pt of morphedPanels) {
-          const dist = Math.abs(pt.x - cpX);
-          if (dist < minDist) {
-            minDist = dist;
-            closestPt = pt;
-          }
-        }
+        if (!closestPt) continue;
         
         const cpColor = getCpColor(cpVal, isDark);
         
@@ -1684,43 +1704,33 @@ export function AirfoilCanvas() {
           const barLength = Math.abs(cpVal) * cpBarScale * viewport.zoom;
           const pCanvas = toCanvas(rotatePoint(closestPt));
           
-          // Find closest panel index
-          let closestIdx = 0;
-          let minDistSq = Infinity;
-          for (let j = 0; j < morphedPanels.length; j++) {
-            const dxp = morphedPanels[j].x - closestPt.x;
-            const dyp = morphedPanels[j].y - closestPt.y;
-            const distSq = dxp * dxp + dyp * dyp;
-            if (distSq < minDistSq) {
-              minDistSq = distSq;
-              closestIdx = j;
-            }
-          }
-          
-          // Compute tangent from neighboring points
-          const prevIdx = Math.max(closestIdx - 1, 0);
-          const nextIdx = Math.min(closestIdx + 1, morphedPanels.length - 1);
+          // Use panel index directly (i is already the panel index)
+          const prevIdx = Math.max(i - 1, 0);
+          const nextIdx = Math.min(i + 1, morphedPanels.length - 1);
           const dx = morphedPanels[nextIdx].x - morphedPanels[prevIdx].x;
           const dy = morphedPanels[nextIdx].y - morphedPanels[prevIdx].y;
           const len = Math.sqrt(dx * dx + dy * dy) || 1;
           
-          // Normal perpendicular to tangent (rotate tangent 90 degrees)
-          // Convention: rotate CCW for outward normal on a CCW-wound airfoil
+          // Normal perpendicular to tangent
           let nx = -dy / len;
           let ny = dx / len;
           
-          // Determine if we're on upper or lower surface based on panel index
-          // Panels typically go: TE (upper) -> LE -> TE (lower)
-          // So first half is upper surface, second half is lower
-          const nPanels = morphedPanels.length;
-          const isUpperSurface = closestIdx < nPanels / 2;
+          // Compute airfoil centroid (approximate center)
+          let cx = 0, cy = 0;
+          for (const pt of morphedPanels) {
+            cx += pt.x;
+            cy += pt.y;
+          }
+          cx /= morphedPanels.length;
+          cy /= morphedPanels.length;
           
-          // For upper surface, normal should point up (ny > 0)
-          // For lower surface, normal should point down (ny < 0)
-          if (isUpperSurface && ny < 0) {
-            nx = -nx;
-            ny = -ny;
-          } else if (!isUpperSurface && ny > 0) {
+          // Vector from centroid to surface point
+          const toCentroidX = cx - closestPt.x;
+          const toCentroidY = cy - closestPt.y;
+          
+          // If normal points toward centroid, flip it
+          const dotProduct = nx * toCentroidX + ny * toCentroidY;
+          if (dotProduct > 0) {
             nx = -nx;
             ny = -ny;
           }
@@ -1794,7 +1804,7 @@ export function AirfoilCanvas() {
       ctx.globalAlpha = 1;
     }
 
-  }, [viewport, morphState, splineCurve, controlMode, camberControlPoints, thicknessControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showPsiContours, psiContours, showSmoke, smokePositions, smokeAlphas, displayAlpha, toCanvas, isDark, showCp, showForces, cpDisplayMode, cpBarScale, forceScale]);
+  }, [viewport, morphState, splineCurve, controlMode, camberControlPoints, thicknessControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showPsiContours, psiContours, showSmoke, smokePositions, smokeAlphas, smokePsiValues, smokePsi0, displayAlpha, toCanvas, isDark, showCp, showForces, cpDisplayMode, cpBarScale, forceScale]);
 
   // Draw grid
   const drawGrid = useCallback((ctx: CanvasRenderingContext2D) => {
