@@ -1678,19 +1678,45 @@ export function AirfoilCanvas() {
         
         const cpColor = getCpColor(cpVal, isDark);
         
-        // Draw Cp bar (perpendicular to surface)
+        // Draw Cp bar (always pointing outward, length = |Cp|, color indicates sign)
         if (cpDisplayMode === 'bars' || cpDisplayMode === 'both') {
-          const barLength = -cpVal * cpBarScale * viewport.zoom; // Negative Cp = suction = outward
+          // Bar length proportional to |Cp|, always pointing outward
+          const barLength = Math.abs(cpVal) * cpBarScale * viewport.zoom;
           const pCanvas = toCanvas(rotatePoint(closestPt));
           
-          // Compute normal direction (approximate)
-          const nextIdx = Math.min(i + 1, morphedPanels.length - 1);
-          const prevIdx = Math.max(i - 1, 0);
+          // Compute normal direction (pointing outward from surface)
+          // Use panel index to find local tangent
+          let closestIdx = 0;
+          let minDistSq = Infinity;
+          for (let j = 0; j < morphedPanels.length; j++) {
+            const dxp = morphedPanels[j].x - closestPt.x;
+            const dyp = morphedPanels[j].y - closestPt.y;
+            const distSq = dxp * dxp + dyp * dyp;
+            if (distSq < minDistSq) {
+              minDistSq = distSq;
+              closestIdx = j;
+            }
+          }
+          
+          const prevIdx = Math.max(closestIdx - 1, 0);
+          const nextIdx = Math.min(closestIdx + 1, morphedPanels.length - 1);
           const dx = morphedPanels[nextIdx].x - morphedPanels[prevIdx].x;
           const dy = morphedPanels[nextIdx].y - morphedPanels[prevIdx].y;
           const len = Math.sqrt(dx * dx + dy * dy) || 1;
-          const nx = -dy / len; // Normal points outward
-          const ny = dx / len;
+          
+          // Normal perpendicular to tangent - determine correct outward direction
+          // For upper surface (y > 0 typically), normal points up; for lower, down
+          let nx = -dy / len;
+          let ny = dx / len;
+          
+          // Ensure normal points outward (away from chord line at y=0)
+          if (closestPt.y > 0 && ny < 0) {
+            nx = -nx;
+            ny = -ny;
+          } else if (closestPt.y < 0 && ny > 0) {
+            nx = -nx;
+            ny = -ny;
+          }
           
           ctx.beginPath();
           ctx.strokeStyle = cpColor;
