@@ -355,6 +355,164 @@ function connectSegments(
   return polylines;
 }
 
+/**
+ * Extrapolate the dividing streamline (ψ = ψ₀) to hit the airfoil surface.
+ * This extends each line segment towards the airfoil until it intersects the boundary.
+ * 
+ * NOTE: We use a simple extrapolation approach - extending the line in the direction
+ * of its endpoint until it gets close to the airfoil. This gives a good visual
+ * approximation of where the stagnation streamline meets the body.
+ */
+function extrapolateDividingStreamline(
+  psi0Lines: [number, number][][],
+  airfoilPoints: { x: number; y: number }[]
+): [number, number][][] {
+  if (psi0Lines.length === 0 || airfoilPoints.length < 3) {
+    return psi0Lines;
+  }
+  
+  // Find closest point on airfoil to a given point
+  const closestPointOnAirfoil = (px: number, py: number): { x: number; y: number; dist: number } => {
+    let minDist = Infinity;
+    let closest = { x: airfoilPoints[0].x, y: airfoilPoints[0].y };
+    
+    for (let i = 0; i < airfoilPoints.length; i++) {
+      const p1 = airfoilPoints[i];
+      const p2 = airfoilPoints[(i + 1) % airfoilPoints.length];
+      
+      // Find closest point on line segment p1-p2
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+      const lenSq = dx * dx + dy * dy;
+      
+      if (lenSq < 1e-10) continue;
+      
+      // Project point onto line
+      const t = Math.max(0, Math.min(1, ((px - p1.x) * dx + (py - p1.y) * dy) / lenSq));
+      const projX = p1.x + t * dx;
+      const projY = p1.y + t * dy;
+      
+      const dist = Math.sqrt((px - projX) ** 2 + (py - projY) ** 2);
+      if (dist < minDist) {
+        minDist = dist;
+        closest = { x: projX, y: projY };
+      }
+    }
+    
+    return { ...closest, dist: minDist };
+  };
+  
+  // Extrapolate each polyline
+  return psi0Lines.map(line => {
+    if (line.length < 2) return line;
+    
+    const result: [number, number][] = [...line];
+    
+    // Extrapolate from the end (towards airfoil)
+    const lastIdx = line.length - 1;
+    const endPt = line[lastIdx];
+    const prevPt = line[lastIdx - 1];
+    
+    // Direction of the line at the end
+    const dirX = endPt[0] - prevPt[0];
+    const dirY = endPt[1] - prevPt[1];
+    const dirLen = Math.sqrt(dirX * dirX + dirY * dirY);
+    
+    if (dirLen > 1e-8) {
+      const unitX = dirX / dirLen;
+      const unitY = dirY / dirLen;
+      
+      // Step along the direction until we get close to the airfoil
+      let stepSize = 0.01;
+      let x = endPt[0];
+      let y = endPt[1];
+      
+      for (let step = 0; step < 200; step++) {
+        x += unitX * stepSize;
+        y += unitY * stepSize;
+        
+        const { dist } = closestPointOnAirfoil(x, y);
+        
+        // Stop when we're close to the airfoil
+        if (dist < 0.02) {
+          const closest = closestPointOnAirfoil(x, y);
+          result.push([closest.x, closest.y]);
+          break;
+        }
+        
+        // Stop if we've gone too far (outside reasonable bounds)
+        if (x < -2 || x > 3 || y < -2 || y > 2) break;
+      }
+    }
+    
+    // Also extrapolate from the start if needed (for the other stagnation point)
+    const startPt = line[0];
+    const nextPt = line[1];
+    
+    const startDirX = startPt[0] - nextPt[0];
+    const startDirY = startPt[1] - nextPt[1];
+    const startDirLen = Math.sqrt(startDirX * startDirX + startDirY * startDirY);
+    
+    if (startDirLen > 1e-8) {
+      const unitX = startDirX / startDirLen;
+      const unitY = startDirY / startDirLen;
+      
+      let stepSize = 0.01;
+      let x = startPt[0];
+      let y = startPt[1];
+      
+      for (let step = 0; step < 200; step++) {
+        x += unitX * stepSize;
+        y += unitY * stepSize;
+        
+        const { dist } = closestPointOnAirfoil(x, y);
+        
+        if (dist < 0.02) {
+          const closest = closestPointOnAirfoil(x, y);
+          result.unshift([closest.x, closest.y]);
+          break;
+        }
+        
+        if (x < -2 || x > 3 || y < -2 || y > 2) break;
+      }
+    }
+    
+    return result;
+  });
+}
+
+/**
+ * Generate a color for a stream function value using a diverging colormap.
+ * Blue for negative, white for zero (relative to psi_0), red for positive.
+ */
+function getPsiColor(psi: number, psiMin: number, psiMax: number, psi0: number, isDark: boolean): string {
+  // Normalize relative to psi_0 (dividing streamline)
+  const range = Math.max(psiMax - psi0, psi0 - psiMin);
+  if (range < 1e-10) return isDark ? 'rgba(50, 50, 50, 0.3)' : 'rgba(200, 200, 200, 0.3)';
+  
+  const normalized = (psi - psi0) / range; // -1 to +1
+  
+  // Diverging colormap: blue (below) -> white (at psi0) -> red (above)
+  // In terms of flow: blue = going under, red = going over
+  const alpha = isDark ? 0.25 : 0.35;
+  
+  if (normalized < 0) {
+    // Below psi_0 - blue tones (flow going under)
+    const intensity = Math.min(1, Math.abs(normalized));
+    const r = Math.round(30 + (1 - intensity) * 100);
+    const g = Math.round(60 + (1 - intensity) * 120);
+    const b = Math.round(150 + (1 - intensity) * 50);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  } else {
+    // Above psi_0 - red/orange tones (flow going over)
+    const intensity = Math.min(1, normalized);
+    const r = Math.round(180 + (1 - intensity) * 50);
+    const g = Math.round(80 + (1 - intensity) * 100);
+    const b = Math.round(60 + (1 - intensity) * 100);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+}
+
 // Constants
 const PANEL_POINT_RADIUS = 2.5;
 const CONTROL_RADIUS = 6;
@@ -424,11 +582,21 @@ export function AirfoilCanvas() {
   // Streamlines cache
   const [streamlines, setStreamlines] = useState<[number, number][][]>([]);
   
-  // Psi contour cache - stores extracted contour lines for ψ values
+  // Psi contour cache - stores grid data and extracted contour lines for ψ values
+  // NOTE: The dividing streamline (ψ = ψ₀) is extrapolated to intersect the airfoil surface
+  // by extending the line segments until they meet the airfoil boundary. This provides a
+  // complete visualization of the stagnation streamline from upstream to the body.
   const [psiContours, setPsiContours] = useState<{
+    grid: number[];           // Grid values for filled contours
+    bounds: [number, number, number, number];  // [xMin, xMax, yMin, yMax]
+    nx: number;
+    ny: number;
+    psiMin: number;
+    psiMax: number;
+    psi0: number;             // Dividing streamline value
     lines: [number, number][][];  // All contour lines
-    psi0Lines: [number, number][][];  // Dividing streamline (ψ = ψ₀)
-  }>({ lines: [], psi0Lines: [] });
+    psi0Lines: [number, number][][];  // Dividing streamline (ψ = ψ₀), extrapolated to airfoil
+  }>({ grid: [], bounds: [0, 0, 0, 0], nx: 0, ny: 0, psiMin: 0, psiMax: 0, psi0: 0, lines: [], psi0Lines: [] });
   
   // Analysis results (Cp, Cl, Cm)
   const [analysisResult, setAnalysisResult] = useState<{
@@ -544,10 +712,11 @@ export function AirfoilCanvas() {
   
   // Compute stream function (ψ) contours when enabled
   // Uses marching squares to extract iso-lines from the psi grid
+  // NOTE: The dividing streamline (ψ = ψ₀) is extrapolated to hit the airfoil surface
   useEffect(() => {
     if (!showPsiContours || !isWasmReady() || panels.length < 10 || isDraggingPoint) {
       if (!isDraggingPoint) {
-        setPsiContours({ lines: [], psi0Lines: [] });
+        setPsiContours({ grid: [], bounds: [0, 0, 0, 0], nx: 0, ny: 0, psiMin: 0, psiMax: 0, psi0: 0, lines: [], psi0Lines: [] });
       }
       return;
     }
@@ -555,7 +724,7 @@ export function AirfoilCanvas() {
     try {
       // Compute psi grid with reasonable resolution
       const bounds: [number, number, number, number] = [-1.5, 2.5, -1.2, 1.2];
-      const resolution: [number, number] = [100, 80];
+      const resolution: [number, number] = [120, 100];
       const result = computePsiGrid(panels, displayAlpha, bounds, resolution);
       
       if (!result.success) {
@@ -569,7 +738,7 @@ export function AirfoilCanvas() {
       const dy = (bounds[3] - bounds[2]) / (ny - 1);
       
       // Choose contour levels - evenly spaced plus psi_0 for dividing streamline
-      const nLevels = 25;
+      const nLevels = 20;
       const range = psi_max - psi_min;
       const levels: number[] = [];
       for (let i = 0; i <= nLevels; i++) {
@@ -584,7 +753,7 @@ export function AirfoilCanvas() {
       
       // Marching squares implementation
       const allLines: [number, number][][] = [];
-      const psi0Lines: [number, number][][] = [];
+      let psi0Lines: [number, number][][] = [];
       
       for (const level of levels) {
         const isPsi0 = Math.abs(level - psi_0) < range / (nLevels * 4);
@@ -603,7 +772,21 @@ export function AirfoilCanvas() {
         }
       }
       
-      setPsiContours({ lines: allLines, psi0Lines });
+      // Extrapolate dividing streamline (ψ₀) to hit the airfoil surface
+      // This extends the line segments to the airfoil boundary for a complete visualization
+      psi0Lines = extrapolateDividingStreamline(psi0Lines, panels);
+      
+      setPsiContours({ 
+        grid, 
+        bounds, 
+        nx, 
+        ny, 
+        psiMin: psi_min, 
+        psiMax: psi_max, 
+        psi0: psi_0,
+        lines: allLines, 
+        psi0Lines 
+      });
     } catch (e) {
       console.error('Psi contour computation failed:', e);
     }
@@ -914,10 +1097,60 @@ export function AirfoilCanvas() {
       };
     };
     
-    // Draw stream function contours (ψ iso-lines) behind everything else
-    if (showPsiContours && psiContours.lines.length > 0) {
-      // Draw regular contours (faint)
-      ctx.strokeStyle = isDark ? 'rgba(100, 149, 237, 0.25)' : 'rgba(65, 105, 225, 0.25)'; // Cornflower blue
+    // Draw stream function visualization (filled contours + iso-lines) behind everything else
+    // NOTE: The filled contours show the stream function field with a diverging colormap:
+    // - Blue tones: flow going under the airfoil (ψ < ψ₀)
+    // - Red tones: flow going over the airfoil (ψ > ψ₀)
+    // The dividing streamline (ψ = ψ₀) is extrapolated to intersect the airfoil surface.
+    if (showPsiContours && psiContours.grid.length > 0) {
+      const { grid, bounds, nx, ny, psiMin, psiMax, psi0 } = psiContours;
+      const [xMin, xMax, yMin, yMax] = bounds;
+      const dx = (xMax - xMin) / (nx - 1);
+      const dy = (yMax - yMin) / (ny - 1);
+      
+      // Draw filled cells colored by stream function value
+      for (let iy = 0; iy < ny - 1; iy++) {
+        for (let ix = 0; ix < nx - 1; ix++) {
+          // Get corner values
+          const v00 = grid[iy * nx + ix];
+          const v10 = grid[iy * nx + ix + 1];
+          const v01 = grid[(iy + 1) * nx + ix];
+          const v11 = grid[(iy + 1) * nx + ix + 1];
+          
+          // Skip cells with NaN (inside airfoil)
+          if (!isFinite(v00) || !isFinite(v10) || !isFinite(v01) || !isFinite(v11)) {
+            continue;
+          }
+          
+          // Average value for cell color
+          const avgPsi = (v00 + v10 + v01 + v11) / 4;
+          const color = getPsiColor(avgPsi, psiMin, psiMax, psi0, isDark);
+          
+          // Cell corners in world coordinates
+          const x0 = xMin + ix * dx;
+          const y0 = yMin + iy * dy;
+          const x1 = x0 + dx;
+          const y1 = y0 + dy;
+          
+          // Transform to canvas coordinates (with rotation)
+          const p00 = toCanvas(rotatePoint({ x: x0, y: y0 }));
+          const p10 = toCanvas(rotatePoint({ x: x1, y: y0 }));
+          const p01 = toCanvas(rotatePoint({ x: x0, y: y1 }));
+          const p11 = toCanvas(rotatePoint({ x: x1, y: y1 }));
+          
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.moveTo(p00.x, p00.y);
+          ctx.lineTo(p10.x, p10.y);
+          ctx.lineTo(p11.x, p11.y);
+          ctx.lineTo(p01.x, p01.y);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+      
+      // Draw contour lines on top of filled regions (faint)
+      ctx.strokeStyle = isDark ? 'rgba(100, 149, 237, 0.3)' : 'rgba(65, 105, 225, 0.3)';
       ctx.lineWidth = 0.5;
       
       for (const line of psiContours.lines) {
@@ -933,10 +1166,11 @@ export function AirfoilCanvas() {
         ctx.stroke();
       }
       
-      // Draw dividing streamline (ψ = ψ₀) prominently
+      // Draw dividing streamline (ψ = ψ₀) prominently - extrapolated to hit the airfoil
       if (psiContours.psi0Lines.length > 0) {
-        ctx.strokeStyle = isDark ? 'rgba(255, 99, 71, 0.9)' : 'rgba(220, 20, 60, 0.9)'; // Tomato/Crimson
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.95)' : 'rgba(0, 0, 0, 0.9)';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([]);
         
         for (const line of psiContours.psi0Lines) {
           if (line.length < 2) continue;

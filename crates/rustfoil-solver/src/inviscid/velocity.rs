@@ -178,11 +178,16 @@ pub fn psi_at(
         let rs1 = x1 * x1 + yy * yy;
         let rs2 = x2 * x2 + yy * yy;
 
+        // XFOIL's reflection correction for atan2 branch cuts
+        // When YY < 0, reflect arguments and add π offset
+        let sgn = if yy >= 0.0 { 1.0 } else { -1.0 };
+        let pi_offset = (0.5 - 0.5 * sgn) * PI;
+
         // Log and arctangent terms, with singularity handling
         let g1 = if rs1 > 1e-20 { rs1.ln() } else { 0.0 };
         let g2 = if rs2 > 1e-20 { rs2.ln() } else { 0.0 };
-        let t1 = x1.atan2(yy);
-        let t2 = x2.atan2(yy);
+        let t1 = (sgn * x1).atan2(sgn * yy) + pi_offset;
+        let t2 = (sgn * x2).atan2(sgn * yy) + pi_offset;
 
         // XFOIL's PSIS/PSID formulation (xpanel.f lines 350-351)
         // PSIS = coefficient for (γ_JP + γ_JO) / 2
