@@ -3,17 +3,19 @@
 //! This module implements the viscous-inviscid interaction (VII) solver
 //! that couples the inviscid panel method with the boundary layer equations.
 //!
-//! The coupling supports multiple methods:
-//! - **SemiDirect**: Sequential iteration without transpiration feedback
-//! - **Transpiration**: Sequential with transpiration velocity correction
-//! - **FullNewton**: Global Newton-Raphson simultaneous solution
+//! ## Coupling Methods
 //!
-//! ## Algorithm (Newton)
-//! 1. Assemble residuals from panel and BL equations
-//! 2. Build Jacobian matrix
-//! 3. Solve Newton step: J·Δx = -R
-//! 4. Apply line search for robustness
-//! 5. Iterate until residual converges
+//! - **Transpiration** (RECOMMENDED, default): Sequential with transpiration velocity
+//!   correction. Achieves <3% accuracy for both Cl and Cd. Use this for all cases.
+//! - **FullNewton**: Global Newton-Raphson simultaneous solution. Experimental.
+//! - **SemiDirect**: DEPRECATED - has ~180% Cd error due to missing feedback.
+//!
+//! ## Algorithm (Transpiration)
+//! 1. Solve inviscid flow for initial Ue(s)
+//! 2. March boundary layer with current Ue → get δ*(s)
+//! 3. Compute transpiration velocity: Vn = d(Ue·δ*)/ds
+//! 4. Re-solve inviscid with transpiration BC → get new Ue
+//! 5. Iterate until δ* converges
 //!
 //! Reference: Drela, M. "XFOIL: An Analysis and Design System for Low Reynolds
 //! Number Airfoils", MIT, 1989.
