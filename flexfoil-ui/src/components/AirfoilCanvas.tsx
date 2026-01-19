@@ -1110,12 +1110,16 @@ export function AirfoilCanvas() {
       const { grid, bounds, nx, ny, psiMin, psiMax, psi0 } = psiContours;
       const [xMin, xMax, yMin, yMax] = bounds;
       
+      // Replace NaN (interior) with value far below psiMin so d3-contour ignores it
+      // This avoids rectangular holes from NaN handling
+      const interiorValue = psiMin - 1000;
+      const cleanGrid = grid.map(v => isFinite(v) ? v : interiorValue);
+      
       // Create d3-contour generator with ψ₀ as exact threshold
-      // Interior points are NaN so d3-contour will correctly find only the exterior ψ₀ contour
       const nLevels = 12;
       const thresholds: number[] = [];
       
-      // Add levels below ψ₀ (blue region)
+      // Add levels below ψ₀ (blue region) - starting from psiMin (not interiorValue)
       for (let i = 0; i < nLevels; i++) {
         thresholds.push(psiMin + (psi0 - psiMin) * (i / nLevels));
       }
@@ -1126,12 +1130,12 @@ export function AirfoilCanvas() {
         thresholds.push(psi0 + (psiMax - psi0) * (i / nLevels));
       }
       
-      // Generate filled contour polygons
+      // Generate filled contour polygons using cleaned grid
       const contourGenerator = contours()
         .size([nx, ny])
         .thresholds(thresholds);
       
-      const contourData = contourGenerator(grid as number[]);
+      const contourData = contourGenerator(cleanGrid as number[]);
       
       // Create a custom projection that transforms grid coordinates to canvas
       const gridToWorld = (gridX: number, gridY: number) => {
