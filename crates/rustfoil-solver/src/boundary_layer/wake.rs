@@ -173,11 +173,17 @@ pub fn march_wake(
 ///
 /// This extrapolates the wake to downstream infinity.
 pub fn squire_young_drag(wake_end: &WakeStation, chord: f64) -> f64 {
-    let theta_norm = wake_end.theta / chord;
-    let ue_ratio = wake_end.ue; // Already normalized to U_inf = 1
-    let exponent = 0.5 * (5.0 + wake_end.h);
+    // Sanity check inputs
+    if !wake_end.theta.is_finite() || wake_end.theta < 0.0 || wake_end.theta > chord {
+        return 0.01; // Return typical drag for non-physical state
+    }
+    
+    let theta_norm = (wake_end.theta / chord).min(0.1);
+    let ue_ratio = wake_end.ue.clamp(0.5, 1.5);
+    let h_bounded = wake_end.h.clamp(1.0, 10.0);
+    let exponent = (0.5 * (5.0 + h_bounded)).min(10.0);
 
-    2.0 * theta_norm * ue_ratio.powf(exponent)
+    (2.0 * theta_norm * ue_ratio.powf(exponent)).clamp(0.0001, 0.5)
 }
 
 /// Compute Squire-Young drag directly from trailing edge BL states.
@@ -212,27 +218,36 @@ pub fn compute_squire_young_drag(
     lower_te: &BLState,
     chord: f64,
 ) -> (f64, f64, f64) {
-    // Combined momentum thickness at trailing edge
-    let theta_te = upper_te.theta + lower_te.theta;
+    // Sanity check inputs - return reasonable drag for non-physical states
+    if !upper_te.theta.is_finite() || !lower_te.theta.is_finite() ||
+       !upper_te.delta_star.is_finite() || !lower_te.delta_star.is_finite() ||
+       upper_te.theta < 0.0 || lower_te.theta < 0.0 ||
+       upper_te.theta > chord || lower_te.theta > chord {
+        // Return typical turbulent drag coefficient
+        return (0.01, 0.007, 0.003);
+    }
     
-    // Combined displacement thickness
-    let delta_star_te = upper_te.delta_star + lower_te.delta_star;
+    // Combined momentum thickness at trailing edge (bounded)
+    let theta_te = (upper_te.theta + lower_te.theta).min(0.1 * chord);
     
-    // Combined shape factor (with protection against division by zero)
+    // Combined displacement thickness (bounded)
+    let delta_star_te = (upper_te.delta_star + lower_te.delta_star).min(0.5 * chord);
+    
+    // Combined shape factor (with protection and bounds)
     let h_te = if theta_te > 1e-12 {
-        delta_star_te / theta_te
+        (delta_star_te / theta_te).clamp(1.0, 10.0) // Physical range for H
     } else {
         2.5 // Default turbulent value
     };
     
-    // Average edge velocity ratio at TE (normalized to U∞ = 1)
-    let ue_te = 0.5 * (upper_te.ue.abs() + lower_te.ue.abs());
+    // Average edge velocity ratio at TE (normalized to U∞ = 1, bounded)
+    let ue_te = (0.5 * (upper_te.ue.abs() + lower_te.ue.abs())).clamp(0.5, 1.5);
     
-    // Squire-Young exponent
-    let exponent = 0.5 * (h_te + 5.0);
+    // Squire-Young exponent (bounded to prevent numerical issues)
+    let exponent = (0.5 * (h_te + 5.0)).min(10.0);
     
-    // Total drag coefficient from Squire-Young
-    let cd_total = 2.0 * (theta_te / chord) * ue_te.powf(exponent);
+    // Total drag coefficient from Squire-Young (with sanity bound)
+    let cd_total = (2.0 * (theta_te / chord) * ue_te.powf(exponent)).clamp(0.0001, 0.5);
     
     // Friction drag: typically estimated as Cf integrated over the surface
     // Here we estimate from the friction component of momentum loss

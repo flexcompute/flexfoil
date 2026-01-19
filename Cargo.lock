@@ -430,6 +430,7 @@ dependencies = [
  "nalgebra",
  "rustfoil-core",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

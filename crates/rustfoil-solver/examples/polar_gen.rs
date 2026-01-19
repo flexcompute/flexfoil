@@ -7,7 +7,15 @@
 use rustfoil_core::{naca::naca4, Body, CubicSpline, PanelingParams};
 use rustfoil_solver::inviscid::FlowConditions;
 use rustfoil_solver::viscous::{ViscousSolver, ViscousConfig};
+use serde_json::json;
 use std::env;
+
+fn sanitize(values: &[f64]) -> Vec<Option<f64>> {
+    values
+        .iter()
+        .map(|v| if v.is_finite() { Some(*v) } else { None })
+        .collect()
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -30,12 +38,10 @@ fn main() {
     let paneled = spline.resample_xfoil(160, &params);
     let airfoil = Body::from_points("test", &paneled).expect("Failed to create body");
     
-    // Setup viscous solver
-    let config = ViscousConfig {
-        reynolds,
-        n_crit: 9.0,
-        ..Default::default()
-    };
+    // Setup viscous solver (Full Newton, XFOIL-style)
+    let mut config = ViscousConfig::newton_xfoil(reynolds, 9.0);
+    config.max_iterations = 30;
+    config.tolerance = 1e-5;
     let solver = ViscousSolver::new(config);
     
     // Run polar
@@ -62,12 +68,13 @@ fn main() {
     }
     
     // Output JSON
-    println!("{{");
-    println!("  \"alpha\": {:?},", alphas);
-    println!("  \"cl\": {:?},", cls);
-    println!("  \"cd\": {:?},", cds);
-    println!("  \"cm\": {:?},", cms);
-    println!("  \"xtr_top\": {:?},", xtr_tops);
-    println!("  \"xtr_bot\": {:?}", xtr_bots);
-    println!("}}");
+    let output = json!({
+        "alpha": sanitize(&alphas),
+        "cl": sanitize(&cls),
+        "cd": sanitize(&cds),
+        "cm": sanitize(&cms),
+        "xtr_top": sanitize(&xtr_tops),
+        "xtr_bot": sanitize(&xtr_bots),
+    });
+    println!("{}", serde_json::to_string_pretty(&output).expect("Failed to serialize JSON"));
 }

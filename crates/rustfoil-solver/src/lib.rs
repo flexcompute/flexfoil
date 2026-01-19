@@ -53,6 +53,8 @@
 pub mod inviscid;
 pub mod boundary_layer;
 pub mod viscous;
+/// Mfoil-style global Newton boundary layer solver.
+pub mod mfoil_bl;
 
 // Re-exports for convenience
 pub use boundary_layer::{
@@ -62,4 +64,7 @@ pub use boundary_layer::{
 pub use viscous::{
     ViscousSolver, ViscousSolution, ViscousConfig, CouplingMethod,
     NewtonConfig, NewtonGeometry, NewtonState, NewtonResult, NewtonVIISolver,
+};
+pub use mfoil_bl::{
+    MfoilSolver, MfoilConfig, MfoilSolution,
 };

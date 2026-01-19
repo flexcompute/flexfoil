@@ -1856,9 +1856,10 @@ impl NewtonVIISolver {
             // Update state
             let state_new = state.apply_step(&step, alpha);
             
-            // Apply DIJ-based edge velocity correction
+            // Apply inverse mode gamma update (XFOIL-style: solve for Ue from prescribed Hk)
+            // Note: DIJ coupling is now fully in the Jacobian, so no separate post-step correction
             let mut state_corrected = state_new;
-            self.apply_dij_velocity_correction(&mut state_corrected, &step, alpha, geometry, dij);
+            self.apply_inverse_mode_gamma_update(&mut state_corrected, geometry);
             
             // Recompute residuals
             let residuals_new = self.compute_residuals_with_dij(&state_corrected, factorized, flow, geometry, dij);
@@ -1954,8 +1955,8 @@ impl NewtonVIISolver {
         // dUe from DIJ: dUe[i] = sum_j DIJ[i][j] * m[j]
         let due_from_dij: Vec<f64> = crate::inviscid::compute_ue_change_from_mass(dij, &dm_panels);
         
-        // 4. Effective edge velocity includes DIJ correction
-        let _ue_effective: Vec<f64> = ue_base.iter()
+        // 4. Effective edge velocity includes DIJ correction (XFOIL-style: Ue = Uinv + DIJ*m)
+        let ue_effective: Vec<f64> = ue_base.iter()
             .zip(due_from_dij.iter())
             .map(|(&ue, &due)| (ue + due).max(1e-10))
             .collect();
@@ -1963,8 +1964,8 @@ impl NewtonVIISolver {
         // 5. Map delta_star to panel nodes for transpiration
         let delta_star_nodes = self.map_bl_to_nodes(&delta_star, geometry);
         
-        // 6. Compute transpiration Vn = d(Ue*δ*)/ds
-        let vn = compute_transpiration(&ue_base, &delta_star_nodes, &geometry.s_coords);
+        // 6. Compute transpiration Vn = d(Ue*δ*)/ds using DIJ-corrected Ue
+        let vn = compute_transpiration(&ue_effective, &delta_star_nodes, &geometry.s_coords);
         
         // 7. Inviscid residuals with transpiration
         let inviscid_with_vn = factorized.solve_with_transpiration(flow, &vn, &geometry.s_coords);
@@ -1972,10 +1973,10 @@ impl NewtonVIISolver {
             residuals.r_inviscid[i] = state.gamma[i] - inviscid_with_vn.gamma[i];
         }
         
-        // 8. BL residuals (momentum and shape equations)
+        // 8. BL residuals (momentum and shape equations) using DIJ-corrected Ue
         self.compute_bl_residuals(
             state,
-            &ue_base,
+            &ue_effective,
             geometry,
             &mut residuals.r_momentum,
             &mut residuals.r_shape,
@@ -2029,9 +2030,10 @@ impl NewtonVIISolver {
                 if col_h < jacobian.ncols() {
                     // dR_i/dH_j = -DIJ[i][panel_j] * dδ*/dH * Ue
                     // dδ*/dH = θ (since δ* = θ*H)
+                    // Use moderate coupling (0.5) for stability with line search
                     let theta_j = state.theta[j].max(1e-10);
                     let ue_j = state.gamma[panel_j].abs().max(1e-10);
-                    jacobian[(i, col_h)] += -dij_val * theta_j * ue_j * 0.1; // Damped influence
+                    jacobian[(i, col_h)] += -dij_val * theta_j * ue_j * 0.5;
                 }
             }
         }
@@ -2105,12 +2107,66 @@ impl NewtonVIISolver {
         // Compute Ue correction from DIJ
         let due = crate::inviscid::compute_ue_change_from_mass(dij, &dm_panels);
         
-        // Apply correction to gamma (gamma ≈ Ue for attached flow)
-        // Only apply to nodes where both arrays have values
+        // Apply full correction to gamma (gamma ≈ Ue for attached flow)
+        // XFOIL-style: full DIJ coupling, stability from Newton damping
         let n_apply = n_panels.min(due.len()).min(state.gamma.len());
         for i in 0..n_apply {
             let sign = state.gamma[i].signum();
-            state.gamma[i] += sign * due[i] * 0.1; // Damped to avoid instability
+            state.gamma[i] += sign * due[i];
+        }
+    }
+    
+    /// Update gamma for inverse mode stations (XFOIL-style MRCHUE/QVFUE coupling).
+    /// 
+    /// When in inverse mode, the shape factor Hk is prescribed. We compute the
+    /// edge velocity Ue that gives this Hk and update gamma accordingly.
+    /// 
+    /// From H = mass / (Ue * theta) and H = Hk_target:
+    ///   Ue = mass / (theta * Hk_target)
+    fn apply_inverse_mode_gamma_update(
+        &self,
+        state: &mut NewtonState,
+        geometry: &NewtonGeometry,
+    ) {
+        let n_upper = geometry.upper_indices.len();
+        let n_lower = geometry.lower_indices.len();
+        let n_bl = n_upper + n_lower;
+        
+        for j in 0..n_bl {
+            if !state.inverse_mode[j] {
+                continue;
+            }
+            
+            // Get panel index for this BL station
+            let panel_idx = if j < n_upper {
+                geometry.upper_indices[j]
+            } else {
+                geometry.lower_indices[j - n_upper]
+            };
+            
+            if panel_idx >= state.gamma.len() {
+                continue;
+            }
+            
+            // Compute Ue that gives the target Hk
+            // H = mass / (Ue * theta), so Ue = mass / (theta * Hk_target)
+            let theta = state.theta[j].max(1e-10);
+            let mass = state.mass[j].max(1e-12);
+            let hk_target = state.hk_target[j].max(1.05);
+            
+            let ue_from_inverse = mass / (theta * hk_target);
+            let ue_bounded = ue_from_inverse.clamp(0.01, 3.0); // Physical bounds
+            
+            // Update gamma to reflect the inverse mode Ue
+            // Preserve sign of gamma
+            let sign = state.gamma[panel_idx].signum();
+            let current_ue = state.gamma[panel_idx].abs();
+            
+            // Blend toward inverse mode Ue (relaxed update for stability)
+            let relaxation = 0.5;
+            let new_ue = current_ue * (1.0 - relaxation) + ue_bounded * relaxation;
+            
+            state.gamma[panel_idx] = sign * new_ue;
         }
     }
     
@@ -2231,6 +2287,12 @@ impl NewtonVIISolver {
             
             let panel_idx = surface_indices[j];
             let panel_idx_prev = surface_indices[j - 1];
+            
+            // Bounds check
+            if panel_idx >= ue.len() || panel_idx_prev >= ue.len() ||
+               panel_idx >= geometry.s_coords.len() || panel_idx_prev >= geometry.s_coords.len() {
+                continue;
+            }
             
             // Get local values
             let s = geometry.s_coords[panel_idx];
