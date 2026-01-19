@@ -273,14 +273,155 @@ pub fn compute_upwind_factor(hk1: f64, hk2: f64) -> f64 {
 }
 
 /// Residuals and Jacobian blocks for BL equations.
+/// 
+/// # Variables (XFOIL convention)
+/// - var[0]: Ctau^(1/2) (turbulent) or N-factor (laminar)
+/// - var[1]: θ (momentum thickness)
+/// - var[2]: m = Ue × δ* (mass defect)
+/// 
+/// Using mass defect m instead of δ* enables direct V-I coupling:
+/// - Source strength σ = dm/ds (transpiration velocity)
+/// - DIJ matrix gives dUe/dm for Newton coupling
 #[derive(Debug, Clone)]
 pub struct BLSystemResiduals {
     /// Residual for first equation (Ampl for laminar, Ctau for turbulent)
     pub res_1: f64,
     /// Residual for momentum equation
     pub res_momentum: f64,
-    /// Residual for shape equation
+    /// Residual for shape/mass equation
+    /// 
+    /// For mass defect coupling, this becomes:
+    /// R_mass = (m2 - m1)/ds - Ue_avg * dδ*/ds - δ*_avg * dUe/ds
     pub res_shape: f64,
+}
+
+/// Compute mass defect residual for V-I coupling.
+/// 
+/// The mass defect equation relates m = Ue*δ* between stations:
+/// ```text
+/// dm/ds = d(Ue*δ*)/ds = Ue*(dδ*/ds) + δ**(dUe/ds)
+/// ```
+/// 
+/// This is the "third equation" in XFOIL's formulation that directly
+/// couples to the inviscid solution through transpiration.
+/// 
+/// # Arguments
+/// * `state1`, `state2` - BL states at upstream and downstream stations
+/// * `closures1`, `closures2` - Closure values at stations
+/// 
+/// # Returns
+/// Mass defect residual (should be ~0 when converged)
+pub fn compute_mass_defect_residual(
+    state1: &StationState,
+    state2: &StationState,
+    _closures1: &BLClosures,
+    _closures2: &BLClosures,
+) -> f64 {
+    let ds = (state2.s - state1.s).abs().max(1e-12);
+    
+    // Mass defect at each station
+    let m1 = state1.mass;
+    let m2 = state2.mass;
+    
+    // Edge velocity
+    let ue1 = state1.ue.max(1e-10);
+    let ue2 = state2.ue.max(1e-10);
+    
+    // Displacement thickness
+    let ds1 = state1.delta_star();
+    let ds2 = state2.delta_star();
+    
+    // Averaged values
+    let ue_avg = 0.5 * (ue1 + ue2);
+    let ds_avg = 0.5 * (ds1 + ds2);
+    
+    // Gradients (using central difference)
+    let d_ds_ds = (ds2 - ds1) / ds;
+    let d_ue_ds = (ue2 - ue1) / ds;
+    
+    // Mass defect change should match dm/ds = Ue*d(δ*)/ds + δ**d(Ue)/ds
+    let dm_ds_expected = ue_avg * d_ds_ds + ds_avg * d_ue_ds;
+    let dm_ds_actual = (m2 - m1) / ds;
+    
+    // Residual: difference between actual and expected mass defect rate
+    dm_ds_actual - dm_ds_expected
+}
+
+/// Derivatives of mass defect residual with respect to BL variables.
+/// 
+/// For the Newton iteration, we need:
+/// - dR_m/d(ctau): 0 (no direct dependence)
+/// - dR_m/d(theta): Through δ* = θ*H
+/// - dR_m/d(m): Direct dependence
+/// - dR_m/d(Ue): Through both Ue and δ*
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MassDefectDerivs {
+    /// dR/d(ctau) at station 1
+    pub d_ctau1: f64,
+    /// dR/d(theta) at station 1
+    pub d_theta1: f64,
+    /// dR/d(m) at station 1
+    pub d_m1: f64,
+    /// dR/d(ctau) at station 2
+    pub d_ctau2: f64,
+    /// dR/d(theta) at station 2
+    pub d_theta2: f64,
+    /// dR/d(m) at station 2
+    pub d_m2: f64,
+    /// dR/d(Ue) at station 1 (for V-I coupling)
+    pub d_ue1: f64,
+    /// dR/d(Ue) at station 2 (for V-I coupling)
+    pub d_ue2: f64,
+}
+
+impl MassDefectDerivs {
+    /// Compute derivatives of mass defect residual.
+    pub fn compute(
+        state1: &StationState,
+        state2: &StationState,
+        _closures1: &BLClosures,
+        _closures2: &BLClosures,
+    ) -> Self {
+        let ds = (state2.s - state1.s).abs().max(1e-12);
+        let inv_ds = 1.0 / ds;
+        
+        let ue1 = state1.ue.max(1e-10);
+        let ue2 = state2.ue.max(1e-10);
+        let ds1 = state1.delta_star();
+        let ds2 = state2.delta_star();
+        let h1 = state1.h;
+        let h2 = state2.h;
+        
+        let ue_avg = 0.5 * (ue1 + ue2);
+        let ds_avg = 0.5 * (ds1 + ds2);
+        
+        // dm/ds = (m2 - m1)/ds
+        // dR/dm1 = -1/ds
+        // dR/dm2 = +1/ds
+        let d_m1 = -inv_ds;
+        let d_m2 = inv_ds;
+        
+        // Through δ* = m/Ue, and θ doesn't appear directly in m
+        // But shape equation uses H = δ*/θ, so dH/dθ = -δ*/θ² = -H/θ
+        // dδ*/dθ comes from closure relation
+        let d_theta1 = -0.5 * ue_avg * h1 * inv_ds; // d(δ*1)/dθ1 * Ue_avg
+        let d_theta2 = 0.5 * ue_avg * h2 * inv_ds;
+        
+        // dR/dUe through ue_avg and ds_avg terms
+        let d_ue1 = -0.5 * (ds2 - ds1) * inv_ds - ds_avg * 0.5 * inv_ds;
+        let d_ue2 = -0.5 * (ds2 - ds1) * inv_ds + ds_avg * 0.5 * inv_ds;
+        
+        Self {
+            d_ctau1: 0.0,
+            d_theta1,
+            d_m1,
+            d_ctau2: 0.0,
+            d_theta2,
+            d_m2,
+            d_ue1,
+            d_ue2,
+        }
+    }
 }
 
 /// Compute BL residuals between stations 1 and 2.
@@ -912,5 +1053,68 @@ mod tests {
         
         assert_eq!(jacobian.n_stations, 2);
         assert!(jacobian.rhs_norm().is_finite());
+    }
+    
+    #[test]
+    fn test_mass_defect_residual() {
+        // Two stations with consistent mass defect growth
+        let state1 = StationState::new(0.0, 0.001, 2.5, 1.0, 0.0, false);
+        let state2 = StationState::new(0.0, 0.0012, 2.4, 1.02, 0.01, false);
+        
+        let closures1 = BLClosures::compute(state1.theta, state1.h, state1.ue, 1e6, false);
+        let closures2 = BLClosures::compute(state2.theta, state2.h, state2.ue, 1e6, false);
+        
+        let res = compute_mass_defect_residual(&state1, &state2, &closures1, &closures2);
+        
+        // Residual should be finite
+        assert!(res.is_finite(), "mass defect residual = {}", res);
+        
+        // For consistent BL growth, residual should be small
+        // (not exactly zero due to discrete differences)
+        assert!(res.abs() < 0.1, "mass defect residual = {} (expected small)", res);
+    }
+    
+    #[test]
+    fn test_mass_defect_derivatives() {
+        let state1 = StationState::new(0.0, 0.001, 2.5, 1.0, 0.0, false);
+        let state2 = StationState::new(0.0, 0.0012, 2.4, 1.02, 0.01, false);
+        
+        let closures1 = BLClosures::compute(state1.theta, state1.h, state1.ue, 1e6, false);
+        let closures2 = BLClosures::compute(state2.theta, state2.h, state2.ue, 1e6, false);
+        
+        let derivs = MassDefectDerivs::compute(&state1, &state2, &closures1, &closures2);
+        
+        // All derivatives should be finite
+        assert!(derivs.d_m1.is_finite());
+        assert!(derivs.d_m2.is_finite());
+        assert!(derivs.d_theta1.is_finite());
+        assert!(derivs.d_theta2.is_finite());
+        assert!(derivs.d_ue1.is_finite());
+        assert!(derivs.d_ue2.is_finite());
+        
+        // Mass derivatives should have opposite signs (upstream negative, downstream positive)
+        assert!(derivs.d_m1 < 0.0, "d_m1 should be negative");
+        assert!(derivs.d_m2 > 0.0, "d_m2 should be positive");
+    }
+    
+    #[test]
+    fn test_mass_defect_variable_in_state() {
+        // Verify StationState correctly handles mass defect m = Ue*δ*
+        let theta = 0.001;
+        let h = 2.5;
+        let ue = 1.2;
+        
+        let state = StationState::new(0.03, theta, h, ue, 0.5, true);
+        
+        // Expected: m = Ue * δ* = Ue * θ * H
+        let expected_delta_star = theta * h;
+        let expected_mass = ue * expected_delta_star;
+        
+        assert!((state.mass - expected_mass).abs() < 1e-12,
+            "mass = {}, expected {}", state.mass, expected_mass);
+        
+        // delta_star() should recover δ* from m/Ue
+        assert!((state.delta_star() - expected_delta_star).abs() < 1e-12,
+            "delta_star = {}, expected {}", state.delta_star(), expected_delta_star);
     }
 }
