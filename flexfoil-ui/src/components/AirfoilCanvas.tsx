@@ -1158,69 +1158,144 @@ export function AirfoilCanvas() {
       for (let i = 0; i <= nLevels; i++) {
         thresholds.push(psiMin + (psi0 - psiMin) * (i / nLevels));
       }
-      // Levels above ψ₀ (skip psi0 itself to avoid duplicate)
+      // Levels above ψ₀
       for (let i = 1; i <= nLevels; i++) {
         thresholds.push(psi0 + (psiMax - psi0) * (i / nLevels));
       }
       thresholds.sort((a, b) => a - b);
       
-      const alpha = isDark ? 0.55 : 0.65;
+      const alpha = isDark ? 0.6 : 0.7;
       
-      // For each threshold, generate filled contour
-      // Use painter's algorithm: draw from lowest to highest
+      // Get color for a threshold value
+      const getColor = (threshold: number): [number, number, number] => {
+        if (threshold < psi0) {
+          const t = Math.min(1, (psi0 - threshold) / (psi0 - psiMin + 1e-10));
+          return [
+            Math.round(180 - t * 100),
+            Math.round(200 - t * 80),
+            Math.round(240 - t * 20)
+          ];
+        } else {
+          const t = Math.min(1, (threshold - psi0) / (psiMax - psi0 + 1e-10));
+          return [
+            Math.round(255 - t * 30),
+            Math.round(200 - t * 100),
+            Math.round(190 - t * 100)
+          ];
+        }
+      };
+      
+      // For each pair of adjacent thresholds, fill the band between them
+      for (let i = 0; i < thresholds.length - 1; i++) {
+        const tLow = thresholds[i];
+        const tHigh = thresholds[i + 1];
+        const tMid = (tLow + tHigh) / 2;
+        
+        // Get contour polylines at both thresholds
+        const segmentsLow = marchingSquares(grid, nx, ny, tLow, xMin, yMin, dx, dy);
+        const segmentsHigh = marchingSquares(grid, nx, ny, tHigh, xMin, yMin, dx, dy);
+        const polylinesLow = connectSegments(segmentsLow);
+        const polylinesHigh = connectSegments(segmentsHigh);
+        
+        // Color for this band (use midpoint)
+        const [r, g, b] = getColor(tMid);
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        
+        // Simple case: one polyline each, both open (hitting boundary)
+        // Build band polygon: low contour -> boundary -> high contour (reversed) -> boundary
+        if (polylinesLow.length === 1 && polylinesHigh.length === 1) {
+          const low = polylinesLow[0];
+          const high = polylinesHigh[0];
+          
+          if (low.length >= 2 && high.length >= 2) {
+            const lowStart = low[0];
+            const lowEnd = low[low.length - 1];
+            const highStart = high[0];
+            const highEnd = high[high.length - 1];
+            
+            const tLowEnd = getBoundaryParam(lowEnd[0], lowEnd[1]);
+            const tHighStart = getBoundaryParam(highStart[0], highStart[1]);
+            const tHighEnd = getBoundaryParam(highEnd[0], highEnd[1]);
+            const tLowStart = getBoundaryParam(lowStart[0], lowStart[1]);
+            
+            // Build polygon: low -> boundary to high start -> high reversed -> boundary to low start
+            const polygon: [number, number][] = [...low];
+            
+            if (tLowEnd >= 0 && tHighStart >= 0) {
+              polygon.push(...traceBoundary(tLowEnd, tHighStart));
+            }
+            
+            // Add high contour in reverse
+            for (let j = high.length - 1; j >= 0; j--) {
+              polygon.push(high[j]);
+            }
+            
+            if (tHighEnd >= 0 && tLowStart >= 0) {
+              polygon.push(...traceBoundary(tHighEnd, tLowStart));
+            }
+            
+            if (polygon.length >= 3) {
+              ctx.beginPath();
+              const first = toCanvas(rotatePoint({ x: polygon[0][0], y: polygon[0][1] }));
+              ctx.moveTo(first.x, first.y);
+              for (let j = 1; j < polygon.length; j++) {
+                const p = toCanvas(rotatePoint({ x: polygon[j][0], y: polygon[j][1] }));
+                ctx.lineTo(p.x, p.y);
+              }
+              ctx.closePath();
+              ctx.fill();
+            }
+          }
+        } else {
+          // Multiple polylines - fill each low polyline closed with boundary
+          for (const polyline of polylinesLow) {
+            if (polyline.length < 2) continue;
+            
+            const start = polyline[0];
+            const end = polyline[polyline.length - 1];
+            const isClosed = Math.abs(start[0] - end[0]) < 0.01 && Math.abs(start[1] - end[1]) < 0.01;
+            
+            let polygon: [number, number][] = [...polyline];
+            
+            if (!isClosed) {
+              const t1 = getBoundaryParam(end[0], end[1]);
+              const t2 = getBoundaryParam(start[0], start[1]);
+              if (t1 >= 0 && t2 >= 0) {
+                polygon.push(...traceBoundary(t1, t2));
+              }
+            }
+            
+            if (polygon.length >= 3) {
+              ctx.beginPath();
+              const first = toCanvas(rotatePoint({ x: polygon[0][0], y: polygon[0][1] }));
+              ctx.moveTo(first.x, first.y);
+              for (let j = 1; j < polygon.length; j++) {
+                const p = toCanvas(rotatePoint({ x: polygon[j][0], y: polygon[j][1] }));
+                ctx.lineTo(p.x, p.y);
+              }
+              ctx.closePath();
+              ctx.fill();
+            }
+          }
+        }
+      }
+      
+      // Draw contour lines on top
+      ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.25)' : 'rgba(0, 0, 0, 0.2)';
+      ctx.lineWidth = 0.8;
       for (const threshold of thresholds) {
         const segments = marchingSquares(grid, nx, ny, threshold, xMin, yMin, dx, dy);
         const polylines = connectSegments(segments);
-        
-        // Color based on threshold value relative to ψ₀
-        let r: number, g: number, b: number;
-        if (threshold < psi0) {
-          const t = Math.min(1, (psi0 - threshold) / (psi0 - psiMin + 1e-10));
-          r = Math.round(180 - t * 100);
-          g = Math.round(200 - t * 80);
-          b = Math.round(240 - t * 20);
-        } else {
-          const t = Math.min(1, (threshold - psi0) / (psiMax - psi0 + 1e-10));
-          r = Math.round(255 - t * 30);
-          g = Math.round(200 - t * 100);
-          b = Math.round(190 - t * 100);
-        }
-        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
-        
         for (const polyline of polylines) {
           if (polyline.length < 2) continue;
-          
-          const start = polyline[0];
-          const end = polyline[polyline.length - 1];
-          const isClosed = Math.abs(start[0] - end[0]) < 0.01 && Math.abs(start[1] - end[1]) < 0.01;
-          
-          // Build the full polygon
-          let polygon: [number, number][] = [...polyline];
-          
-          if (!isClosed) {
-            // Close by tracing along boundary
-            const t1 = getBoundaryParam(end[0], end[1]);
-            const t2 = getBoundaryParam(start[0], start[1]);
-            
-            if (t1 >= 0 && t2 >= 0) {
-              // Trace boundary from end to start
-              const boundaryPts = traceBoundary(t1, t2);
-              polygon = [...polyline, ...boundaryPts];
-            }
-          }
-          
-          if (polygon.length < 3) continue;
-          
           ctx.beginPath();
-          const first = toCanvas(rotatePoint({ x: polygon[0][0], y: polygon[0][1] }));
+          const first = toCanvas(rotatePoint({ x: polyline[0][0], y: polyline[0][1] }));
           ctx.moveTo(first.x, first.y);
-          
-          for (let i = 1; i < polygon.length; i++) {
-            const p = toCanvas(rotatePoint({ x: polygon[i][0], y: polygon[i][1] }));
+          for (let j = 1; j < polyline.length; j++) {
+            const p = toCanvas(rotatePoint({ x: polyline[j][0], y: polyline[j][1] }));
             ctx.lineTo(p.x, p.y);
           }
-          ctx.closePath();
-          ctx.fill();
+          ctx.stroke();
         }
       }
       
