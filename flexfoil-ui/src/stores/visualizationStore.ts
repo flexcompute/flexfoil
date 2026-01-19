@@ -69,9 +69,9 @@ const DEFAULT_STATE: VisualizationState = {
   
   // Smoke options
   smokeDensity: 30,          // Number of spawn points
-  smokeParticlesPerBlob: 15, // Particles per blob (increased for better visuals)
-  smokeSpawnInterval: 0.05,  // Seconds between spawns (much faster now that it's cheap)
-  smokeMaxAge: 6.0,          // Particle lifetime in seconds (longer for larger domain)
+  smokeParticlesPerBlob: 15, // Particles per blob
+  smokeSpawnInterval: 0.5,   // Seconds between blob spawns (for visible separation)
+  smokeMaxAge: 6.0,          // Particle lifetime in seconds
   
   // Flow speed
   flowSpeed: 1.0,

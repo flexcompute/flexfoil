@@ -51,7 +51,7 @@ impl SmokeSystem {
             particles_per_blob,
             blob_radius: 0.02,
             max_age: 5.0,
-            spawn_interval: 0.1,
+            spawn_interval: 0.5, // Spawn every 0.5 seconds for visible separation
             time_since_spawn: 0.0,
         }
     }
