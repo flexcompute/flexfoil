@@ -423,7 +423,10 @@ use rustfoil_solver::CouplingMethod;
 /// 
 /// Transpiration coupling should generally produce more accurate drag
 /// by feeding the displacement effect back to the inviscid solver.
+/// 
+/// Note: Semi-Direct is deprecated but kept here for comparison purposes.
 #[test]
+#[allow(deprecated)]
 fn test_transpiration_coupling_comparison() {
     let naca: Vec<Point> = naca4(12, Some(160));
     let airfoil = Body::from_points("NACA0012", &naca).unwrap();
@@ -625,7 +628,10 @@ fn test_newton_solver_naca0012() {
 }
 
 /// Compare all three coupling methods on NACA 0012.
+/// 
+/// Note: Semi-Direct is deprecated but kept here for comparison purposes.
 #[test]
+#[allow(deprecated)]
 fn test_coupling_method_comparison() {
     let naca: Vec<Point> = naca4(12, Some(160));
     let airfoil = Body::from_points("NACA0012", &naca).unwrap();
