@@ -1146,23 +1146,8 @@ export function AirfoilCanvas() {
       const dx = (xMax - xMin) / (nx - 1);
       const dy = (yMax - yMin) / (ny - 1);
       
-      // Point-in-polygon test using ray casting algorithm
-      // Returns true if point (x, y) is inside the airfoil
-      const isInsideAirfoil = (x: number, y: number): boolean => {
-        if (panels.length < 3) return false;
-        let inside = false;
-        for (let i = 0, j = panels.length - 1; i < panels.length; j = i++) {
-          const xi = panels[i].x, yi = panels[i].y;
-          const xj = panels[j].x, yj = panels[j].y;
-          if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
-            inside = !inside;
-          }
-        }
-        return inside;
-      };
-      
-      // Draw cells directly with bilinear interpolation (faster than bicubic)
-      // No subdivision needed - grid resolution is sufficient
+      // Draw all cells - interior values are already ψ₀ from the solver
+      // We'll mask out the airfoil shape after drawing
       for (let iy = 0; iy < ny - 1; iy++) {
         for (let ix = 0; ix < nx - 1; ix++) {
           // Get corner values
@@ -1172,15 +1157,6 @@ export function AirfoilCanvas() {
           const v11 = grid[(iy + 1) * nx + ix + 1];
           
           if (!isFinite(v00) || !isFinite(v10) || !isFinite(v01) || !isFinite(v11)) {
-            continue;
-          }
-          
-          // Cell center in world coordinates
-          const centerX = xMin + (ix + 0.5) * dx;
-          const centerY = yMin + (iy + 0.5) * dy;
-          
-          // Skip cells inside the airfoil
-          if (isInsideAirfoil(centerX, centerY)) {
             continue;
           }
           
@@ -1209,6 +1185,21 @@ export function AirfoilCanvas() {
           ctx.closePath();
           ctx.fill();
         }
+      }
+      
+      // Mask out the airfoil interior by drawing filled airfoil shape
+      // This cleanly clips the stream function at any zoom level
+      if (panels.length > 2) {
+        ctx.fillStyle = isDark ? '#1a1a2e' : '#ffffff';
+        ctx.beginPath();
+        const firstPanel = toCanvas(rotatePoint(panels[0]));
+        ctx.moveTo(firstPanel.x, firstPanel.y);
+        for (let i = 1; i < panels.length; i++) {
+          const p = toCanvas(rotatePoint(panels[i]));
+          ctx.lineTo(p.x, p.y);
+        }
+        ctx.closePath();
+        ctx.fill();
       }
       
       // Draw contour lines on top of filled regions (faint)
