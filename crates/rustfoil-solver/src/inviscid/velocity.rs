@@ -235,6 +235,35 @@ pub fn compute_psi_grid(
     nx: usize,
     ny: usize,
 ) -> Vec<f64> {
+    compute_psi_grid_with_interior(nodes, gamma, alpha, v_inf, x_min, x_max, y_min, y_max, nx, ny, None)
+}
+
+/// Compute stream function values on a rectangular grid, with optional interior value.
+///
+/// # Arguments
+/// * `nodes` - Airfoil node positions
+/// * `gamma` - Vorticity at each node
+/// * `alpha` - Angle of attack (radians)
+/// * `v_inf` - Freestream velocity magnitude
+/// * `x_min`, `x_max`, `y_min`, `y_max` - Grid bounds
+/// * `nx`, `ny` - Grid resolution
+/// * `interior_value` - Value to use inside the airfoil (typically ψ₀). If None, uses NaN.
+///
+/// # Returns
+/// Row-major array of stream function values: psi[iy * nx + ix].
+pub fn compute_psi_grid_with_interior(
+    nodes: &[Point],
+    gamma: &[f64],
+    alpha: f64,
+    v_inf: f64,
+    x_min: f64,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
+    nx: usize,
+    ny: usize,
+    interior_value: Option<f64>,
+) -> Vec<f64> {
     let mut grid = vec![0.0; nx * ny];
 
     let dx = if nx > 1 {
@@ -252,7 +281,13 @@ pub fn compute_psi_grid(
         let y = y_min + iy as f64 * dy;
         for ix in 0..nx {
             let x = x_min + ix as f64 * dx;
-            grid[iy * nx + ix] = psi_at(x, y, nodes, gamma, alpha, v_inf);
+            let psi = psi_at(x, y, nodes, gamma, alpha, v_inf);
+            // If inside airfoil (NaN) and we have an interior value, use it
+            grid[iy * nx + ix] = if psi.is_nan() {
+                interior_value.unwrap_or(f64::NAN)
+            } else {
+                psi
+            };
         }
     }
 

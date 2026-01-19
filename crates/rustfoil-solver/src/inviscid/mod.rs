@@ -30,7 +30,7 @@ pub mod velocity;
 pub mod smoke;
 
 pub use error::SolverError;
-pub use velocity::{build_streamlines, velocity_at, is_inside_airfoil, psi_at, compute_psi_grid, StreamlineOptions};
+pub use velocity::{build_streamlines, velocity_at, is_inside_airfoil, psi_at, compute_psi_grid, compute_psi_grid_with_interior, StreamlineOptions};
 pub use smoke::SmokeSystem;
 
 use nalgebra::{DMatrix, DVector};

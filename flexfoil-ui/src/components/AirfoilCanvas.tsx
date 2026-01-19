@@ -722,9 +722,10 @@ export function AirfoilCanvas() {
     }
     
     try {
-      // Compute psi grid with reasonable resolution
-      const bounds: [number, number, number, number] = [-1.5, 2.5, -1.2, 1.2];
-      const resolution: [number, number] = [120, 100];
+      // Compute psi grid with high resolution for smooth contours
+      // Higher resolution near the airfoil gives better definition
+      const bounds: [number, number, number, number] = [-1.0, 2.0, -0.8, 0.8];
+      const resolution: [number, number] = [200, 120];  // Higher resolution for smooth gradients
       const result = computePsiGrid(panels, displayAlpha, bounds, resolution);
       
       if (!result.success) {
@@ -1101,6 +1102,7 @@ export function AirfoilCanvas() {
     // NOTE: The filled contours show the stream function field with a diverging colormap:
     // - Blue tones: flow going under the airfoil (ψ < ψ₀)
     // - Red tones: flow going over the airfoil (ψ > ψ₀)
+    // The interior of the airfoil is shown with the body stream function value (ψ₀).
     // The dividing streamline (ψ = ψ₀) is extrapolated to intersect the airfoil surface.
     if (showPsiContours && psiContours.grid.length > 0) {
       const { grid, bounds, nx, ny, psiMin, psiMax, psi0 } = psiContours;
@@ -1108,44 +1110,62 @@ export function AirfoilCanvas() {
       const dx = (xMax - xMin) / (nx - 1);
       const dy = (yMax - yMin) / (ny - 1);
       
-      // Draw filled cells colored by stream function value
+      // Draw filled cells colored by stream function value with sub-cell interpolation
+      // This creates smoother gradients by subdividing each cell
+      const subDiv = 2; // 2x2 sub-cells for smoother appearance
+      const subDx = dx / subDiv;
+      const subDy = dy / subDiv;
+      
       for (let iy = 0; iy < ny - 1; iy++) {
         for (let ix = 0; ix < nx - 1; ix++) {
-          // Get corner values
+          // Get corner values for bilinear interpolation
           const v00 = grid[iy * nx + ix];
           const v10 = grid[iy * nx + ix + 1];
           const v01 = grid[(iy + 1) * nx + ix];
           const v11 = grid[(iy + 1) * nx + ix + 1];
           
-          // Skip cells with NaN (inside airfoil)
+          // All values should be finite now (interior = ψ₀)
           if (!isFinite(v00) || !isFinite(v10) || !isFinite(v01) || !isFinite(v11)) {
             continue;
           }
           
-          // Average value for cell color
-          const avgPsi = (v00 + v10 + v01 + v11) / 4;
-          const color = getPsiColor(avgPsi, psiMin, psiMax, psi0, isDark);
-          
-          // Cell corners in world coordinates
-          const x0 = xMin + ix * dx;
-          const y0 = yMin + iy * dy;
-          const x1 = x0 + dx;
-          const y1 = y0 + dy;
-          
-          // Transform to canvas coordinates (with rotation)
-          const p00 = toCanvas(rotatePoint({ x: x0, y: y0 }));
-          const p10 = toCanvas(rotatePoint({ x: x1, y: y0 }));
-          const p01 = toCanvas(rotatePoint({ x: x0, y: y1 }));
-          const p11 = toCanvas(rotatePoint({ x: x1, y: y1 }));
-          
-          ctx.fillStyle = color;
-          ctx.beginPath();
-          ctx.moveTo(p00.x, p00.y);
-          ctx.lineTo(p10.x, p10.y);
-          ctx.lineTo(p11.x, p11.y);
-          ctx.lineTo(p01.x, p01.y);
-          ctx.closePath();
-          ctx.fill();
+          // Draw sub-cells with bilinearly interpolated values
+          for (let sy = 0; sy < subDiv; sy++) {
+            for (let sx = 0; sx < subDiv; sx++) {
+              // Sub-cell center in normalized coordinates (0-1)
+              const u = (sx + 0.5) / subDiv;
+              const v = (sy + 0.5) / subDiv;
+              
+              // Bilinear interpolation for smooth color
+              const psi = (1 - u) * (1 - v) * v00 + 
+                          u * (1 - v) * v10 + 
+                          (1 - u) * v * v01 + 
+                          u * v * v11;
+              
+              const color = getPsiColor(psi, psiMin, psiMax, psi0, isDark);
+              
+              // Sub-cell corners in world coordinates
+              const x0 = xMin + ix * dx + sx * subDx;
+              const y0 = yMin + iy * dy + sy * subDy;
+              const x1 = x0 + subDx;
+              const y1 = y0 + subDy;
+              
+              // Transform to canvas coordinates (with rotation)
+              const p00 = toCanvas(rotatePoint({ x: x0, y: y0 }));
+              const p10 = toCanvas(rotatePoint({ x: x1, y: y0 }));
+              const p01 = toCanvas(rotatePoint({ x: x0, y: y1 }));
+              const p11 = toCanvas(rotatePoint({ x: x1, y: y1 }));
+              
+              ctx.fillStyle = color;
+              ctx.beginPath();
+              ctx.moveTo(p00.x, p00.y);
+              ctx.lineTo(p10.x, p10.y);
+              ctx.lineTo(p11.x, p11.y);
+              ctx.lineTo(p01.x, p01.y);
+              ctx.closePath();
+              ctx.fill();
+            }
+          }
         }
       }
       
