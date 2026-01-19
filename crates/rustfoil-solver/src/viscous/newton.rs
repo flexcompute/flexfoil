@@ -941,6 +941,127 @@ impl BlockTridiagJacobian {
         }
         sum.sqrt()
     }
+    
+    /// Set up mass influence from DIJ source influence matrix.
+    /// 
+    /// This is the key V-I coupling: DIJ tells us how source strength (mass defect)
+    /// at station J affects surface velocity at station I.
+    /// 
+    /// The mass influence VM is:
+    ///   VM[iv][jv][k] = d(residual[iv][k]) / d(Ue[jv]) * dUe[jv]/dm[jv]
+    /// 
+    /// where dUe[jv]/dm[jv] comes from DIJ:
+    ///   dUe[i] = Σ_j DIJ[panel_i][panel_j] * dm[j]
+    /// 
+    /// For BL equations, dR/dUe appears in the momentum and shape equations.
+    /// 
+    /// # Arguments
+    /// * `dij` - Source influence matrix (N x N) where N is panel count
+    /// * `bl_to_panel` - Maps BL station index to panel node index
+    /// * `ue` - Current edge velocity at each BL station
+    /// * `theta` - Current momentum thickness at each BL station
+    /// * `h` - Current shape factor at each BL station
+    /// * `reynolds` - Reynolds number
+    pub fn set_mass_influence_from_dij(
+        &mut self,
+        dij: &[Vec<f64>],
+        bl_to_panel: &[usize],
+        ue: &[f64],
+        theta: &[f64],
+        h: &[f64],
+        reynolds: f64,
+    ) {
+        let n_bl = self.n_stations;
+        
+        for iv in 0..n_bl {
+            // Panel index for this BL station
+            let panel_i = bl_to_panel.get(iv).copied().unwrap_or(iv);
+            let ue_i = ue.get(iv).copied().unwrap_or(1.0).max(1e-10);
+            let theta_i = theta.get(iv).copied().unwrap_or(1e-4);
+            let h_i = h.get(iv).copied().unwrap_or(2.0);
+            
+            for jv in 0..n_bl {
+                // Panel index for source station
+                let panel_j = bl_to_panel.get(jv).copied().unwrap_or(jv);
+                
+                // Get DIJ influence: dGamma/dSigma
+                let dij_val = dij.get(panel_i)
+                    .and_then(|row| row.get(panel_j))
+                    .copied()
+                    .unwrap_or(0.0);
+                
+                // dUe/dm ≈ DIJ / Ue_j (since sigma = dm/ds, and gamma ≈ Ue)
+                let ue_j = ue.get(jv).copied().unwrap_or(1.0).max(1e-10);
+                let due_dm = dij_val / ue_j;
+                
+                // Now compute dR/dUe for each BL equation at station iv
+                // 
+                // Momentum equation: dθ/ds + (H+2)(θ/Ue)(dUe/ds) = Cf/2
+                // Residual form: R_mom = θ_2 - θ_1 - [(H+2)(θ/Ue)(dUe)] - [Cf/2 * ds]
+                // dR_mom/dUe has contributions from:
+                //   - the (θ/Ue)(dUe/ds) term
+                //   - Cf depends on Re_θ = Ue*θ*Re, so dCf/dUe exists
+                //
+                // Shape equation: similar dependencies
+                //
+                // For now, use simplified linearization: dR/dUe ≈ scaling factor
+                
+                // Equation 0: Ctau/Amplification - weak Ue dependence
+                let dr0_due = 0.0; // Ctau equation has minimal direct Ue dependence
+                
+                // Equation 1: Momentum - strong Ue dependence
+                // dR_mom/dUe ≈ -(H+2)*θ/Ue² * dUe approximation
+                let dr1_due = -(h_i + 2.0) * theta_i / (ue_i * ue_i);
+                
+                // Equation 2: Mass defect m = Ue*δ* 
+                // dm/dUe = δ* = θ*H
+                let dr2_due = theta_i * h_i;
+                
+                // Combined: d(R)/d(m_j) = d(R)/d(Ue_i) * d(Ue_i)/d(m_j)
+                self.mass_influence[iv][jv][0] = dr0_due * due_dm;
+                self.mass_influence[iv][jv][1] = dr1_due * due_dm;
+                self.mass_influence[iv][jv][2] = dr2_due * due_dm;
+            }
+        }
+    }
+    
+    /// Update edge velocities from mass defect changes using DIJ.
+    /// 
+    /// After solving the Newton system, the mass defect changes dm need to
+    /// feed back to update Ue through the inviscid coupling.
+    /// 
+    /// # Arguments
+    /// * `dij` - Source influence matrix
+    /// * `bl_to_panel` - Maps BL station to panel node
+    /// 
+    /// # Returns
+    /// Change in edge velocity at each BL station
+    pub fn compute_ue_update(&self, dij: &[Vec<f64>], bl_to_panel: &[usize]) -> Vec<f64> {
+        let n_bl = self.n_stations;
+        let mut due = vec![0.0; n_bl];
+        
+        for iv in 0..n_bl {
+            let panel_i = bl_to_panel.get(iv).copied().unwrap_or(iv);
+            
+            for jv in 0..n_bl {
+                let panel_j = bl_to_panel.get(jv).copied().unwrap_or(jv);
+                
+                // Get DIJ influence
+                let dij_val = dij.get(panel_i)
+                    .and_then(|row| row.get(panel_j))
+                    .copied()
+                    .unwrap_or(0.0);
+                
+                // Get mass defect change from solution (third component)
+                let dm_j = self.solution[jv][2];
+                
+                // Accumulate Ue change: dUe[i] += DIJ[i][j] * dm[j]
+                due[iv] += dij_val * dm_j;
+            }
+        }
+        
+        due
+    }
 }
 
 /// State at a single BL station for local Newton iteration.
@@ -1534,5 +1655,77 @@ mod tests {
         // Mass should be Ue * delta*
         let expected_mass = 1.0 * expected_delta_star;
         assert!((state.mass - expected_mass).abs() < 1e-10);
+    }
+    
+    #[test]
+    fn test_mass_influence_from_dij() {
+        // Create a simple 4-station system
+        let n_stations = 4;
+        let mut jacobian = BlockTridiagJacobian::new(n_stations, n_stations);
+        
+        // Simple DIJ matrix (4x4)
+        let dij = vec![
+            vec![0.0, 0.1, 0.05, 0.02],
+            vec![0.1, 0.0, 0.1, 0.05],
+            vec![0.05, 0.1, 0.0, 0.1],
+            vec![0.02, 0.05, 0.1, 0.0],
+        ];
+        
+        // BL-to-panel mapping (identity in this case)
+        let bl_to_panel: Vec<usize> = (0..n_stations).collect();
+        
+        // Mock BL data
+        let ue = vec![1.0, 1.1, 1.05, 0.95];
+        let theta = vec![0.001, 0.0012, 0.0015, 0.002];
+        let h = vec![2.5, 2.3, 2.2, 2.0];
+        let reynolds = 1e6;
+        
+        // Set mass influence from DIJ
+        jacobian.set_mass_influence_from_dij(&dij, &bl_to_panel, &ue, &theta, &h, reynolds);
+        
+        // Check that mass influence was set
+        // The off-diagonal entries should be non-zero where DIJ is non-zero
+        for iv in 0..n_stations {
+            for jv in 0..n_stations {
+                if iv != jv && dij[iv][jv].abs() > 1e-10 {
+                    // At least equation 1 (momentum) should have influence
+                    let vm = jacobian.mass_influence[iv][jv];
+                    // Equation 1 has strongest Ue dependence
+                    assert!(vm[1].abs() > 0.0 || vm[2].abs() > 0.0,
+                        "Mass influence VM[{}][{}] should be non-zero", iv, jv);
+                }
+            }
+        }
+    }
+    
+    #[test]
+    fn test_compute_ue_update() {
+        let n_stations = 4;
+        let mut jacobian = BlockTridiagJacobian::new(n_stations, n_stations);
+        
+        // Set solution (third component is mass defect change)
+        jacobian.solution[0] = [0.0, 0.0, 0.001];
+        jacobian.solution[1] = [0.0, 0.0, 0.002];
+        jacobian.solution[2] = [0.0, 0.0, 0.001];
+        jacobian.solution[3] = [0.0, 0.0, 0.0005];
+        
+        // Simple DIJ matrix
+        let dij = vec![
+            vec![0.0, 0.1, 0.05, 0.02],
+            vec![0.1, 0.0, 0.1, 0.05],
+            vec![0.05, 0.1, 0.0, 0.1],
+            vec![0.02, 0.05, 0.1, 0.0],
+        ];
+        
+        let bl_to_panel: Vec<usize> = (0..n_stations).collect();
+        
+        let due = jacobian.compute_ue_update(&dij, &bl_to_panel);
+        
+        assert_eq!(due.len(), n_stations);
+        
+        // dUe[0] = 0.1*0.002 + 0.05*0.001 + 0.02*0.0005 = 0.00026
+        let expected_due_0 = 0.1 * 0.002 + 0.05 * 0.001 + 0.02 * 0.0005;
+        assert!((due[0] - expected_due_0).abs() < 1e-10,
+            "dUe[0] = {} expected {}", due[0], expected_due_0);
     }
 }
