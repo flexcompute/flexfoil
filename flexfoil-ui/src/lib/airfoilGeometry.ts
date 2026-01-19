@@ -387,41 +387,11 @@ export function reconstructFromCamberThicknessSpline(
   const sortedCamber = [...camber].sort((a, b) => a.x - b.x);
   const sortedThickness = [...thickness].sort((a, b) => a.x - b.x);
   
-  // Ensure we have anchor points at x=0 and x=1 for camber
-  // This prevents spline extrapolation issues at the leading/trailing edges
-  const camberWithAnchors = [...sortedCamber];
-  if (sortedCamber[0].x > 0.001) {
-    // Add LE anchor - use linear extrapolation from first two points
-    const slope = sortedCamber.length >= 2 
-      ? (sortedCamber[1].y - sortedCamber[0].y) / (sortedCamber[1].x - sortedCamber[0].x)
-      : 0;
-    const y0 = sortedCamber[0].y - slope * sortedCamber[0].x;
-    camberWithAnchors.unshift({ x: 0, y: y0 });
-  }
-  if (sortedCamber[sortedCamber.length - 1].x < 0.999) {
-    // Add TE anchor
-    const n = sortedCamber.length;
-    const slope = n >= 2
-      ? (sortedCamber[n-1].y - sortedCamber[n-2].y) / (sortedCamber[n-1].x - sortedCamber[n-2].x)
-      : 0;
-    const y1 = sortedCamber[n-1].y + slope * (1 - sortedCamber[n-1].x);
-    camberWithAnchors.push({ x: 1, y: y1 });
-  }
-  
-  // For thickness, ensure we have t=0 at x=0 (LE must close)
-  const thicknessWithAnchors = [...sortedThickness];
-  if (sortedThickness[0].x > 0.001 || sortedThickness[0].t > 0.001) {
-    // Add LE anchor with t=0
-    thicknessWithAnchors.unshift({ x: 0, t: 0 });
-  } else if (sortedThickness[0].x <= 0.001) {
-    // Force existing LE point to have t=0
-    thicknessWithAnchors[0] = { x: 0, t: 0 };
-  }
-  
-  // Build spline coefficients for camber and thickness
-  const camberCoeffs = buildCubicSplineCoeffs(camberWithAnchors);
+  // Build splines directly from user's control points
+  // No anchor modification - let the user's points define the shape
+  const camberCoeffs = buildCubicSplineCoeffs(sortedCamber);
   const thicknessCoeffs = buildCubicSplineCoeffs(
-    thicknessWithAnchors.map(p => ({ x: p.x, y: p.t }))
+    sortedThickness.map(p => ({ x: p.x, y: p.t }))
   );
   
   if (!camberCoeffs || !thicknessCoeffs) {
@@ -433,15 +403,9 @@ export function reconstructFromCamberThicknessSpline(
   const upper: AirfoilPoint[] = [];
   const lower: AirfoilPoint[] = [];
   
-  // Get a reference thickness value at x=0.2 for LE radius calculation
-  // This is used to create proper NACA-style rounded LE
-  const tRef = Math.max(0.01, evaluateCubicSpline(thicknessCoeffs, 0.2));
-  
-  // NACA-style leading edge radius coefficient
-  // The sqrt(x) term creates the characteristic rounded LE
-  // For NACA 0012: t(x) ≈ 0.2969 * sqrt(x) near LE
-  // We scale this to match our thickness at x=0.2
-  const leCoeff = tRef / (0.2969 * Math.sqrt(0.2)); // ≈ tRef / 0.133
+  // Pre-calculate thickness at the LE tip boundary for sqrt scaling
+  const LE_TIP = 0.03;
+  const tAtTip = Math.max(0, evaluateCubicSpline(thicknessCoeffs, LE_TIP));
   
   // Generate points using cosine spacing for better LE resolution
   // x goes from 1 (TE) to 0 (LE) as i goes from 0 to halfPoints
@@ -449,25 +413,19 @@ export function reconstructFromCamberThicknessSpline(
     const beta = (Math.PI * i) / halfPoints;
     const x = (1 + Math.cos(beta)) / 2;  // TE (x=1) to LE (x=0)
     
-    // Interpolate camber using cubic spline
+    // Camber: directly from spline (no modification)
     const yc = evaluateCubicSpline(camberCoeffs, x);
     
-    // Interpolate thickness using cubic spline
-    let tSpline = Math.max(0, evaluateCubicSpline(thicknessCoeffs, x));
-    
-    // For proper rounded LE, blend between user's spline and NACA-style sqrt(x) near LE
-    // The NACA formula has t ∝ sqrt(x) near x=0, which gives infinite slope (rounded LE)
+    // Thickness: from spline, but ensure LE closure with sqrt profile
+    // Only the very tip (x < 0.03) uses sqrt scaling for roundness
     let t: number;
-    if (x < 0.15) {
-      // Near LE: use NACA-style sqrt(x) thickness for roundness
-      const tNaca = leCoeff * 0.2969 * Math.sqrt(x);
-      // Smooth blend: at x=0 use pure NACA, at x=0.15 use pure spline
-      const blend = x / 0.15;
-      // Use smooth cubic blend for C1 continuity
-      const smoothBlend = blend * blend * (3 - 2 * blend);
-      t = tNaca * (1 - smoothBlend) + tSpline * smoothBlend;
+    
+    if (x < LE_TIP) {
+      // Very tip: use sqrt profile scaled to match thickness at LE_TIP
+      t = tAtTip * Math.sqrt(x / LE_TIP);
     } else {
-      t = tSpline;
+      // Rest of airfoil: use spline directly
+      t = Math.max(0, evaluateCubicSpline(thicknessCoeffs, x));
     }
     
     const yUpper = yc + t;
@@ -693,6 +651,183 @@ export function reconstructFromControlPoints(
   
   // Use spline interpolation for smooth curves through sparse control points
   return reconstructFromCamberThicknessSpline(camber, thickness, nPoints);
+}
+
+/**
+ * Reconstruct airfoil using original thickness distribution with modified camber.
+ * This is the correct approach: the NACA thickness formula is preserved exactly,
+ * only the camber line is modified via the control points.
+ * 
+ * @param camberPoints - Sparse camber control points defining the new camber line
+ * @param originalCoords - Original airfoil coordinates (with original thickness)
+ * @param nPoints - Number of output points
+ * @returns Modified airfoil coordinates
+ */
+export function reconstructWithOriginalThickness(
+  camberPoints: CamberControlPoint[],
+  originalCoords: AirfoilPoint[],
+  nPoints: number = 161
+): AirfoilPoint[] {
+  if (camberPoints.length < 2 || originalCoords.length < 5) {
+    return originalCoords;
+  }
+  
+  // Decompose original airfoil to get the EXACT thickness distribution
+  const { thickness: originalThickness } = decomposeToCamberThickness(originalCoords);
+  
+  if (originalThickness.length === 0) {
+    return originalCoords;
+  }
+  
+  // Build camber spline from control points
+  const sortedCamber = [...camberPoints].sort((a, b) => a.x - b.x);
+  const camberCoeffs = buildCubicSplineCoeffs(sortedCamber);
+  
+  if (!camberCoeffs) {
+    return originalCoords;
+  }
+  
+  const halfPoints = Math.floor(nPoints / 2);
+  const upper: AirfoilPoint[] = [];
+  const lower: AirfoilPoint[] = [];
+  
+  // Generate points using cosine spacing
+  for (let i = 0; i <= halfPoints; i++) {
+    const beta = (Math.PI * i) / halfPoints;
+    const x = (1 + Math.cos(beta)) / 2;  // TE (x=1) to LE (x=0)
+    
+    // Camber: from user's spline
+    const yc = evaluateCubicSpline(camberCoeffs, x);
+    
+    // Thickness: from ORIGINAL airfoil (preserves exact NACA formula)
+    const t = interpolateYLinear(
+      originalThickness.map(p => ({ x: p.x, y: p.t })), 
+      x
+    );
+    
+    const yUpper = yc + t;
+    const yLower = yc - t;
+    
+    if (i === 0) {
+      upper.push({ x: 1, y: yUpper, surface: 'upper' });
+    } else if (i === halfPoints) {
+      upper.push({ x: 0, y: yc, surface: 'upper' });
+    } else {
+      upper.push({ x, y: yUpper, surface: 'upper' });
+      lower.unshift({ x, y: yLower, surface: 'lower' });
+    }
+  }
+  
+  const result: AirfoilPoint[] = [...upper];
+  for (let i = 0; i < lower.length; i++) {
+    result.push(lower[i]);
+  }
+  
+  if (result.length > 0 && result[result.length - 1].x < 0.99) {
+    result.push({ x: 1, y: result[0].y, surface: 'lower' });
+  }
+  
+  return result;
+}
+
+/**
+ * Reconstruct airfoil using original camber distribution with modified thickness.
+ * This preserves the original camber line exactly, only modifying thickness.
+ * The nose region (x < 0.1) uses the ORIGINAL thickness to preserve the LE shape.
+ * 
+ * @param thicknessPoints - Sparse thickness control points defining the new thickness
+ * @param originalCoords - Original airfoil coordinates (with original camber)
+ * @param nPoints - Number of output points
+ * @returns Modified airfoil coordinates
+ */
+export function reconstructWithOriginalCamber(
+  thicknessPoints: ThicknessControlPoint[],
+  originalCoords: AirfoilPoint[],
+  nPoints: number = 161
+): AirfoilPoint[] {
+  if (thicknessPoints.length < 2 || originalCoords.length < 5) {
+    return originalCoords;
+  }
+  
+  // Decompose original airfoil to get the EXACT camber and thickness distributions
+  const { camber: originalCamber, thickness: originalThickness } = decomposeToCamberThickness(originalCoords);
+  
+  if (originalCamber.length === 0 || originalThickness.length === 0) {
+    return originalCoords;
+  }
+  
+  // Build thickness spline from control points
+  const sortedThickness = [...thicknessPoints].sort((a, b) => a.x - b.x);
+  const thicknessCoeffs = buildCubicSplineCoeffs(
+    sortedThickness.map(p => ({ x: p.x, y: p.t }))
+  );
+  
+  if (!thicknessCoeffs) {
+    return originalCoords;
+  }
+  
+  const halfPoints = Math.floor(nPoints / 2);
+  const upper: AirfoilPoint[] = [];
+  const lower: AirfoilPoint[] = [];
+  
+  // Boundary where we transition from original thickness to user's spline
+  const LE_PRESERVE = 0.1;
+  
+  // Get values at boundary for smooth blending
+  const originalTAtBoundary = interpolateYLinear(
+    originalThickness.map(p => ({ x: p.x, y: p.t })), 
+    LE_PRESERVE
+  );
+  const splineTAtBoundary = Math.max(0, evaluateCubicSpline(thicknessCoeffs, LE_PRESERVE));
+  
+  // Generate points using cosine spacing
+  for (let i = 0; i <= halfPoints; i++) {
+    const beta = (Math.PI * i) / halfPoints;
+    const x = (1 + Math.cos(beta)) / 2;  // TE (x=1) to LE (x=0)
+    
+    // Camber: from ORIGINAL airfoil (preserves exact shape)
+    const yc = interpolateYLinear(originalCamber, x);
+    
+    // Thickness: blend from original (at nose) to user's spline (at body)
+    let t: number;
+    if (x < LE_PRESERVE) {
+      // Nose region: use ORIGINAL thickness (preserves NACA LE shape)
+      const originalT = interpolateYLinear(
+        originalThickness.map(p => ({ x: p.x, y: p.t })), 
+        x
+      );
+      // Scale by ratio of user's thickness to original at boundary
+      // This lets user control overall thickness while preserving nose SHAPE
+      const scale = splineTAtBoundary / Math.max(0.001, originalTAtBoundary);
+      t = originalT * scale;
+    } else {
+      // Body: use user's spline directly
+      t = Math.max(0, evaluateCubicSpline(thicknessCoeffs, x));
+    }
+    
+    const yUpper = yc + t;
+    const yLower = yc - t;
+    
+    if (i === 0) {
+      upper.push({ x: 1, y: yUpper, surface: 'upper' });
+    } else if (i === halfPoints) {
+      upper.push({ x: 0, y: yc, surface: 'upper' });
+    } else {
+      upper.push({ x, y: yUpper, surface: 'upper' });
+      lower.unshift({ x, y: yLower, surface: 'lower' });
+    }
+  }
+  
+  const result: AirfoilPoint[] = [...upper];
+  for (let i = 0; i < lower.length; i++) {
+    result.push(lower[i]);
+  }
+  
+  if (result.length > 0 && result[result.length - 1].x < 0.99) {
+    result.push({ x: 1, y: result[0].y, surface: 'lower' });
+  }
+  
+  return result;
 }
 
 /**

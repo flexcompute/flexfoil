@@ -34,6 +34,8 @@ import {
   createCamberControlPoints,
   createThicknessControlPoints,
   reconstructFromControlPoints,
+  reconstructWithOriginalThickness,
+  reconstructWithOriginalCamber,
 } from '../lib/airfoilGeometry';
 import { 
   syncToUrl, 
@@ -384,11 +386,12 @@ export const useAirfoilStore = create<AirfoilStore>()(
         const newPoints = state.camberControlPoints.map((p) =>
           p.id === id ? { ...p, ...point } : p
         );
-        // Reconstruct airfoil from control points
-        if (newPoints.length >= 2 && state.thicknessControlPoints.length >= 2) {
-          const newCoords = reconstructFromControlPoints(
+        // Reconstruct airfoil using ORIGINAL thickness distribution
+        // This preserves the exact NACA formula for thickness
+        if (newPoints.length >= 2 && state.baseCoordinates.length >= 5) {
+          const newCoords = reconstructWithOriginalThickness(
             newPoints,
-            state.thicknessControlPoints,
+            state.baseCoordinates,
             state.nPanels + 1
           );
           return { 
@@ -402,11 +405,11 @@ export const useAirfoilStore = create<AirfoilStore>()(
       
       addCamberControlPoint: (point) => set((state) => {
         const newPoints = [...state.camberControlPoints, point].sort((a, b) => a.x - b.x);
-        // Reconstruct airfoil
-        if (newPoints.length >= 2 && state.thicknessControlPoints.length >= 2) {
-          const newCoords = reconstructFromControlPoints(
+        // Reconstruct using original thickness
+        if (newPoints.length >= 2 && state.baseCoordinates.length >= 5) {
+          const newCoords = reconstructWithOriginalThickness(
             newPoints,
-            state.thicknessControlPoints,
+            state.baseCoordinates,
             state.nPanels + 1
           );
           return { 
@@ -421,11 +424,11 @@ export const useAirfoilStore = create<AirfoilStore>()(
       removeCamberControlPoint: (id) => set((state) => {
         if (state.camberControlPoints.length <= 2) return state;
         const newPoints = state.camberControlPoints.filter((p) => p.id !== id);
-        // Reconstruct airfoil
-        if (newPoints.length >= 2 && state.thicknessControlPoints.length >= 2) {
-          const newCoords = reconstructFromControlPoints(
+        // Reconstruct using original thickness
+        if (newPoints.length >= 2 && state.baseCoordinates.length >= 5) {
+          const newCoords = reconstructWithOriginalThickness(
             newPoints,
-            state.thicknessControlPoints,
+            state.baseCoordinates,
             state.nPanels + 1
           );
           return { 
@@ -449,11 +452,12 @@ export const useAirfoilStore = create<AirfoilStore>()(
         const newPoints = state.thicknessControlPoints.map((p) =>
           p.id === id ? { ...p, ...point } : p
         );
-        // Reconstruct airfoil from control points
-        if (state.camberControlPoints.length >= 2 && newPoints.length >= 2) {
-          const newCoords = reconstructFromControlPoints(
-            state.camberControlPoints,
+        // Reconstruct airfoil using ORIGINAL camber distribution
+        // This preserves the exact camber line, only modifying thickness
+        if (newPoints.length >= 2 && state.baseCoordinates.length >= 5) {
+          const newCoords = reconstructWithOriginalCamber(
             newPoints,
+            state.baseCoordinates,
             state.nPanels + 1
           );
           return { 
@@ -467,11 +471,11 @@ export const useAirfoilStore = create<AirfoilStore>()(
       
       addThicknessControlPoint: (point) => set((state) => {
         const newPoints = [...state.thicknessControlPoints, point].sort((a, b) => a.x - b.x);
-        // Reconstruct airfoil
-        if (state.camberControlPoints.length >= 2 && newPoints.length >= 2) {
-          const newCoords = reconstructFromControlPoints(
-            state.camberControlPoints,
+        // Reconstruct using original camber
+        if (newPoints.length >= 2 && state.baseCoordinates.length >= 5) {
+          const newCoords = reconstructWithOriginalCamber(
             newPoints,
+            state.baseCoordinates,
             state.nPanels + 1
           );
           return { 
@@ -486,11 +490,11 @@ export const useAirfoilStore = create<AirfoilStore>()(
       removeThicknessControlPoint: (id) => set((state) => {
         if (state.thicknessControlPoints.length <= 2) return state;
         const newPoints = state.thicknessControlPoints.filter((p) => p.id !== id);
-        // Reconstruct airfoil
-        if (state.camberControlPoints.length >= 2 && newPoints.length >= 2) {
-          const newCoords = reconstructFromControlPoints(
-            state.camberControlPoints,
+        // Reconstruct using original camber
+        if (newPoints.length >= 2 && state.baseCoordinates.length >= 5) {
+          const newCoords = reconstructWithOriginalCamber(
             newPoints,
+            state.baseCoordinates,
             state.nPanels + 1
           );
           return { 
