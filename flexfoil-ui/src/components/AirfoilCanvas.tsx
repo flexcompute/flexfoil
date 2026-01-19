@@ -738,40 +738,32 @@ export function AirfoilCanvas() {
       const dx = (bounds[1] - bounds[0]) / (nx - 1);
       const dy = (bounds[3] - bounds[2]) / (ny - 1);
       
-      // Choose contour levels - evenly spaced plus psi_0 for dividing streamline
+      // Choose contour levels - evenly spaced
       const nLevels = 20;
       const range = psi_max - psi_min;
       const levels: number[] = [];
       for (let i = 0; i <= nLevels; i++) {
         levels.push(psi_min + (range * i) / nLevels);
       }
-      // Add psi_0 if not already close to a level
-      const psi0InLevels = levels.some(l => Math.abs(l - psi_0) < range / (nLevels * 4));
-      if (!psi0InLevels) {
-        levels.push(psi_0);
-        levels.sort((a, b) => a - b);
-      }
       
-      // Marching squares implementation
+      // Marching squares for regular contour lines
       const allLines: [number, number][][] = [];
-      let psi0Lines: [number, number][][] = [];
       
       for (const level of levels) {
-        const isPsi0 = Math.abs(level - psi_0) < range / (nLevels * 4);
         const contourSegments = marchingSquares(grid, nx, ny, level, bounds[0], bounds[2], dx, dy);
-        
-        // Connect segments into polylines
         const polylines = connectSegments(contourSegments);
         
         for (const line of polylines) {
           if (line.length >= 2) {
-            if (isPsi0) {
-              psi0Lines.push(line);
-            }
             allLines.push(line);
           }
         }
       }
+      
+      // ALWAYS compute the dividing streamline (ψ = ψ₀) separately
+      // This ensures we get exactly the right contour regardless of level spacing
+      const psi0Segments = marchingSquares(grid, nx, ny, psi_0, bounds[0], bounds[2], dx, dy);
+      let psi0Lines = connectSegments(psi0Segments).filter(line => line.length >= 2);
       
       // Extrapolate dividing streamline (ψ₀) to hit the airfoil surface
       // This extends the line segments to the airfoil boundary for a complete visualization
@@ -1110,38 +1102,66 @@ export function AirfoilCanvas() {
       const dx = (xMax - xMin) / (nx - 1);
       const dy = (yMax - yMin) / (ny - 1);
       
-      // Draw filled cells colored by stream function value with sub-cell interpolation
-      // This creates smoother gradients by subdividing each cell
-      const subDiv = 2; // 2x2 sub-cells for smoother appearance
+      // Bicubic (Catmull-Rom) spline interpolation for smooth gradients
+      // Uses 4x4 neighborhood of grid points around each evaluation point
+      const subDiv = 4; // 4x4 sub-cells with bicubic interpolation
       const subDx = dx / subDiv;
       const subDy = dy / subDiv;
       
+      // Helper to safely get grid value with clamping at boundaries
+      const getGridValue = (ix: number, iy: number): number => {
+        const clampedIx = Math.max(0, Math.min(nx - 1, ix));
+        const clampedIy = Math.max(0, Math.min(ny - 1, iy));
+        return grid[clampedIy * nx + clampedIx];
+      };
+      
+      // Catmull-Rom basis function
+      const catmullRom = (t: number, p0: number, p1: number, p2: number, p3: number): number => {
+        const t2 = t * t;
+        const t3 = t2 * t;
+        return 0.5 * (
+          (2 * p1) +
+          (-p0 + p2) * t +
+          (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+          (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+        );
+      };
+      
+      // Bicubic interpolation using Catmull-Rom splines
+      const bicubicInterpolate = (ix: number, iy: number, u: number, v: number): number => {
+        // Get 4x4 grid of values around the cell
+        const rows: number[] = [];
+        for (let j = -1; j <= 2; j++) {
+          const p0 = getGridValue(ix - 1, iy + j);
+          const p1 = getGridValue(ix, iy + j);
+          const p2 = getGridValue(ix + 1, iy + j);
+          const p3 = getGridValue(ix + 2, iy + j);
+          rows.push(catmullRom(u, p0, p1, p2, p3));
+        }
+        return catmullRom(v, rows[0], rows[1], rows[2], rows[3]);
+      };
+      
       for (let iy = 0; iy < ny - 1; iy++) {
         for (let ix = 0; ix < nx - 1; ix++) {
-          // Get corner values for bilinear interpolation
+          // Check if cell has finite values
           const v00 = grid[iy * nx + ix];
           const v10 = grid[iy * nx + ix + 1];
           const v01 = grid[(iy + 1) * nx + ix];
           const v11 = grid[(iy + 1) * nx + ix + 1];
           
-          // All values should be finite now (interior = ψ₀)
           if (!isFinite(v00) || !isFinite(v10) || !isFinite(v01) || !isFinite(v11)) {
             continue;
           }
           
-          // Draw sub-cells with bilinearly interpolated values
+          // Draw sub-cells with bicubic interpolated values
           for (let sy = 0; sy < subDiv; sy++) {
             for (let sx = 0; sx < subDiv; sx++) {
               // Sub-cell center in normalized coordinates (0-1)
               const u = (sx + 0.5) / subDiv;
-              const v = (sy + 0.5) / subDiv;
+              const v_param = (sy + 0.5) / subDiv;
               
-              // Bilinear interpolation for smooth color
-              const psi = (1 - u) * (1 - v) * v00 + 
-                          u * (1 - v) * v10 + 
-                          (1 - u) * v * v01 + 
-                          u * v * v11;
-              
+              // Bicubic interpolation for smooth color
+              const psi = bicubicInterpolate(ix, iy, u, v_param);
               const color = getPsiColor(psi, psiMin, psiMax, psi0, isDark);
               
               // Sub-cell corners in world coordinates
