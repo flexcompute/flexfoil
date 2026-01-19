@@ -111,8 +111,8 @@ impl SmokeSystem {
             spawn_streamlines: Vec::new(),
             spawn_points,
             particles_per_blob,
-            streamlines_per_spawn: 5, // 5 streamlines per spawn point for blob spread
-            spread_offset: 0.015, // Y-offset between streamlines (creates ~0.06 total spread)
+            streamlines_per_spawn: 7, // 7 streamlines per spawn point for blob spread
+            spread_offset: 0.008, // Y-offset between streamlines (creates ~0.048 total spread)
             max_age: 5.0,
             spawn_interval: 0.1, // Faster default
             time_since_spawn: 0.0,
@@ -217,6 +217,10 @@ impl SmokeSystem {
     }
 
     /// Spawn new blobs at all spawn points.
+    /// 
+    /// Each blob is a cluster of particles that start together and move as a group.
+    /// Particles are spread across different streamlines for visual width,
+    /// but all start at the same time (with small offsets for natural variation).
     fn spawn_blobs(&mut self) {
         for (spawn_idx, spawn_streamlines) in self.spawn_streamlines.iter().enumerate() {
             // Check that we have valid streamlines
@@ -243,17 +247,12 @@ impl SmokeSystem {
                 ];
                 particle_streamline_idx.push(streamline_idx);
                 
-                // Get the selected streamline's length
-                let max_idx = spawn_streamlines.streamlines[streamline_idx].points.len();
+                // ALL particles start at the beginning (index 0) - they move together as a blob
+                particle_indices.push(0);
                 
-                // Random index weighted toward the front (where particles start)
-                let rand_val = rand_float();
-                // Use sqrt to bias toward lower indices (front of streamline)
-                let idx = ((rand_val * rand_val) * max_idx as f64) as usize;
-                particle_indices.push(idx.min(max_idx - 1));
-                
-                // Small random time offset for additional visual spread
-                time_offsets.push(rand_float() * 0.08 - 0.04);
+                // Small random time offset creates natural spread within the blob
+                // This makes particles slightly ahead/behind each other
+                time_offsets.push(rand_float() * 0.06 - 0.03);
             }
             
             self.blobs.push(Blob {
