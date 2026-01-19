@@ -1163,15 +1163,9 @@ export function AirfoilCanvas() {
       // Draw filled contours from lowest to highest (painter's algorithm)
       // d3-contour creates regions where ψ >= threshold
       const alpha = isDark ? 0.5 : 0.6;
-      let psi0Contour: typeof contourData[0] | null = null;
       
       for (const c of contourData) {
         const value = c.value;
-        
-        // Save the ψ₀ contour for drawing the dividing line
-        if (Math.abs(value - psi0) < 1e-10) {
-          psi0Contour = c;
-        }
         
         // Color based on whether above or below ψ₀
         // Note: contour at value T shows region where ψ >= T
@@ -1192,29 +1186,6 @@ export function AirfoilCanvas() {
         }
         
         renderContourPath(c as unknown as { type: string; coordinates: number[][][] | number[][][][] });
-      }
-      
-      // Draw the ψ₀ contour line prominently within the filled contours
-      // This shows exactly where the dividing streamline is
-      if (psi0Contour) {
-        ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.9)' : 'rgba(0, 0, 0, 0.8)';
-        ctx.lineWidth = 2;
-        const geom = psi0Contour as unknown as { type: string; coordinates: number[][][] | number[][][][] };
-        if (geom.type === 'MultiPolygon') {
-          for (const polygon of geom.coordinates as number[][][][]) {
-            for (const ring of polygon) {
-              ctx.beginPath();
-              for (let i = 0; i < ring.length; i++) {
-                const [gx, gy] = ring[i];
-                const world = gridToWorld(gx, gy);
-                const canvas = toCanvas(world);
-                if (i === 0) ctx.moveTo(canvas.x, canvas.y);
-                else ctx.lineTo(canvas.x, canvas.y);
-              }
-              ctx.stroke();
-            }
-          }
-        }
       }
       
       // Mask out the airfoil interior
