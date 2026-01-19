@@ -281,13 +281,16 @@ impl ViscousSolver {
         let nodes: Vec<Point> = panels.iter().map(|p| p.p1).collect();
         let _n = nodes.len();
 
-        // Compute arc-length coordinates
+        // Compute arc-length coordinates (normalized to [0,1])
         let s_coords = compute_arc_lengths(&nodes);
         let x_coords: Vec<f64> = nodes.iter().map(|p| p.x).collect();
         let y_coords: Vec<f64> = nodes.iter().map(|p| p.y).collect();
 
         // Chord length
         let chord = body.chord();
+        
+        // Compute physical surface length (for BL scaling)
+        let surface_length = compute_physical_surface_length(&nodes) / chord.max(1e-10);
 
         // Dispatch based on coupling method
         match self.config.coupling_method {
@@ -296,6 +299,7 @@ impl ViscousSolver {
                 let bl_config = BLConfig {
                     reynolds: self.config.reynolds,
                     n_crit: self.config.n_crit,
+                    surface_length,
                     ..Default::default()
                 };
                 let bl_solver = BLSolver::new(bl_config);
@@ -345,10 +349,15 @@ impl ViscousSolver {
         chord: f64,
     ) -> ViscousSolution {
         // First, run a preliminary BL solve to get good initial values
+        // Compute surface length for BL scaling
+        let nodes: Vec<Point> = body.panels().iter().map(|p| p.p1).collect();
+        let surface_length = compute_physical_surface_length(&nodes) / chord.max(1e-10);
+        
         let bl_config = BLConfig {
             reynolds: self.config.reynolds,
             n_crit: self.config.n_crit,
             turbulent_model: self.config.turbulent_model,
+            surface_length,
             ..Default::default()
         };
         let bl_solver = BLSolver::new(bl_config);
@@ -871,10 +880,15 @@ impl ViscousSolver {
         solution.reynolds = self.config.reynolds;
         solution.alpha = flow.alpha.to_degrees();
 
+        // Compute surface length for BL scaling
+        let nodes: Vec<Point> = body.panels().iter().map(|p| p.p1).collect();
+        let surface_length = compute_physical_surface_length(&nodes) / chord.max(1e-10);
+        
         let bl_config = BLConfig {
             reynolds: self.config.reynolds,
             n_crit: self.config.n_crit,
             turbulent_model: self.config.turbulent_model,
+            surface_length,
             ..Default::default()
         };
         let bl_solver = BLSolver::new(bl_config);
@@ -1078,6 +1092,10 @@ fn compute_residual(
 }
 
 /// Compute arc-length coordinates along the airfoil.
+/// 
+/// Returns normalized arc-length [0, 1] for the total surface.
+/// Note: The BL solver scales these by surface_length internally for
+/// correct Thwaites BL growth and transition prediction.
 fn compute_arc_lengths(nodes: &[Point]) -> Vec<f64> {
     let mut s = vec![0.0];
     let mut total = 0.0;
@@ -1097,6 +1115,18 @@ fn compute_arc_lengths(nodes: &[Point]) -> Vec<f64> {
     }
 
     s
+}
+
+/// Compute the physical surface length (not normalized).
+/// This is used for scaling in the BL solver.
+fn compute_physical_surface_length(nodes: &[Point]) -> f64 {
+    let mut total = 0.0;
+    for i in 1..nodes.len() {
+        let dx = nodes[i].x - nodes[i - 1].x;
+        let dy = nodes[i].y - nodes[i - 1].y;
+        total += (dx * dx + dy * dy).sqrt();
+    }
+    total
 }
 
 /// Extract δ* distribution from BL solution.
