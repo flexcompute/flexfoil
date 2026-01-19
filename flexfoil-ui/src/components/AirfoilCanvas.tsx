@@ -1120,7 +1120,7 @@ export function AirfoilCanvas() {
       const dy = (yMax - yMin) / (ny - 1);
       
       // Generate all thresholds including psi0
-      const nLevels = 10;
+      const nLevels = 12;
       const allThresholds: number[] = [];
       
       // Levels below ψ₀ (from psiMin to psi0)
@@ -1133,23 +1133,28 @@ export function AirfoilCanvas() {
       }
       allThresholds.sort((a, b) => a - b);
       
-      const alpha = isDark ? 0.6 : 0.7;
+      const alpha = isDark ? 0.65 : 0.75;
       
-      // Get color for a threshold (midpoint of band)
+      // Get color based on stream function strength (distance from psi0)
+      // Color intensity increases with distance from dividing streamline
       const getColor = (psiValue: number): [number, number, number] => {
         if (psiValue < psi0) {
+          // Blue gradient: stronger blue for more negative (further from psi0)
           const t = Math.min(1, Math.max(0, (psi0 - psiValue) / (psi0 - psiMin + 1e-10)));
+          const intensity = Math.pow(t, 0.7); // Emphasize variation
           return [
-            Math.round(180 - t * 100),
-            Math.round(200 - t * 80),
-            Math.round(240 - t * 20)
+            Math.round(200 - intensity * 120),
+            Math.round(210 - intensity * 90),
+            Math.round(255 - intensity * 35)
           ];
         } else {
+          // Red gradient: stronger red for more positive (further from psi0)
           const t = Math.min(1, Math.max(0, (psiValue - psi0) / (psiMax - psi0 + 1e-10)));
+          const intensity = Math.pow(t, 0.7); // Emphasize variation
           return [
-            Math.round(255 - t * 30),
-            Math.round(200 - t * 100),
-            Math.round(190 - t * 100)
+            Math.round(255 - intensity * 25),
+            Math.round(210 - intensity * 110),
+            Math.round(200 - intensity * 110)
           ];
         }
       };
@@ -1163,6 +1168,65 @@ export function AirfoilCanvas() {
           return [...polyline].reverse();
         }
         return polyline;
+      };
+      
+      // Find closest point on airfoil boundary
+      const closestPointOnAirfoil = (x: number, y: number): { x: number; y: number; idx: number } => {
+        let minDist = Infinity;
+        let closest = { x: panels[0]?.x || 0, y: panels[0]?.y || 0, idx: 0 };
+        for (let i = 0; i < panels.length; i++) {
+          const dx = panels[i].x - x;
+          const dy = panels[i].y - y;
+          const dist = dx * dx + dy * dy;
+          if (dist < minDist) {
+            minDist = dist;
+            closest = { x: panels[i].x, y: panels[i].y, idx: i };
+          }
+        }
+        return closest;
+      };
+      
+      // Trace along airfoil from index i1 to i2 (shortest path)
+      const traceAirfoil = (i1: number, i2: number): [number, number][] => {
+        const n = panels.length;
+        const points: [number, number][] = [];
+        
+        // Determine direction (shorter path around the airfoil)
+        const fwdDist = (i2 - i1 + n) % n;
+        const bwdDist = (i1 - i2 + n) % n;
+        
+        if (fwdDist <= bwdDist) {
+          // Go forward
+          let i = i1;
+          while (i !== i2) {
+            points.push([panels[i].x, panels[i].y]);
+            i = (i + 1) % n;
+          }
+          points.push([panels[i2].x, panels[i2].y]);
+        } else {
+          // Go backward
+          let i = i1;
+          while (i !== i2) {
+            points.push([panels[i].x, panels[i].y]);
+            i = (i - 1 + n) % n;
+          }
+          points.push([panels[i2].x, panels[i2].y]);
+        }
+        return points;
+      };
+      
+      // Check if a point is near the airfoil (not on grid boundary)
+      const isNearAirfoil = (x: number, y: number): boolean => {
+        const tol = dx * 1.5;
+        // Not on grid boundary
+        if (Math.abs(x - xMin) < tol || Math.abs(x - xMax) < tol ||
+            Math.abs(y - yMin) < tol || Math.abs(y - yMax) < tol) {
+          return false;
+        }
+        // Check if close to airfoil
+        const closest = closestPointOnAirfoil(x, y);
+        const dist = Math.sqrt((x - closest.x) ** 2 + (y - closest.y) ** 2);
+        return dist < 0.15;
       };
       
       // Get the primary (longest) polyline for a threshold
@@ -1179,7 +1243,6 @@ export function AirfoilCanvas() {
       };
       
       // Build filled bands between adjacent contours
-      // For each pair: contour1 L→R, connect to contour2 end, contour2 R→L, connect back
       for (let i = 0; i < allThresholds.length - 1; i++) {
         const t1 = allThresholds[i];
         const t2 = allThresholds[i + 1];
@@ -1192,11 +1255,6 @@ export function AirfoilCanvas() {
           continue;
         }
         
-        // Build polygon:
-        // 1. Follow contour1 L→R
-        // 2. Line from contour1 end to contour2 end (they should be on same side)
-        // 3. Follow contour2 R→L (reversed)
-        // 4. Line from contour2 start back to contour1 start
         const polygon: [number, number][] = [];
         
         // Add contour1 (already L→R)
@@ -1204,14 +1262,42 @@ export function AirfoilCanvas() {
           polygon.push(pt);
         }
         
+        // Check if we need to trace along airfoil between contour1 end and contour2 end
+        const c1End = contour1[contour1.length - 1];
+        const c2End = contour2[contour2.length - 1];
+        
+        if (isNearAirfoil(c1End[0], c1End[1]) && isNearAirfoil(c2End[0], c2End[1])) {
+          // Both ends near airfoil - trace along it
+          const p1 = closestPointOnAirfoil(c1End[0], c1End[1]);
+          const p2 = closestPointOnAirfoil(c2End[0], c2End[1]);
+          const airfoilPath = traceAirfoil(p1.idx, p2.idx);
+          for (const pt of airfoilPath) {
+            polygon.push(pt);
+          }
+        }
+        
         // Add contour2 reversed (R→L)
         for (let j = contour2.length - 1; j >= 0; j--) {
           polygon.push(contour2[j]);
         }
         
+        // Check if we need to trace along airfoil between contour2 start and contour1 start
+        const c2Start = contour2[0];
+        const c1Start = contour1[0];
+        
+        if (isNearAirfoil(c2Start[0], c2Start[1]) && isNearAirfoil(c1Start[0], c1Start[1])) {
+          // Both starts near airfoil - trace along it
+          const p2 = closestPointOnAirfoil(c2Start[0], c2Start[1]);
+          const p1 = closestPointOnAirfoil(c1Start[0], c1Start[1]);
+          const airfoilPath = traceAirfoil(p2.idx, p1.idx);
+          for (const pt of airfoilPath) {
+            polygon.push(pt);
+          }
+        }
+        
         if (polygon.length < 3) continue;
         
-        // Color based on midpoint
+        // Color based on stream function strength (distance from psi0)
         const [r, g, b] = getColor(tMid);
         ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
         
@@ -1227,7 +1313,7 @@ export function AirfoilCanvas() {
       }
       
       // Draw contour lines on top
-      ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.35)' : 'rgba(0, 0, 0, 0.25)';
+      ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.2)';
       ctx.lineWidth = 0.8;
       for (const threshold of allThresholds) {
         const contour = getPrimaryContour(threshold);
