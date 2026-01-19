@@ -50,6 +50,11 @@ pub struct NewtonConfig {
     pub line_search_max_iter: usize,
     /// Armijo condition parameter
     pub armijo_c: f64,
+    /// Initial damping factor (0 < damping <= 1)
+    /// Start conservative and increase on success
+    pub initial_damping: f64,
+    /// Minimum damping factor
+    pub min_damping: f64,
 }
 
 impl Default for NewtonConfig {
@@ -63,6 +68,8 @@ impl Default for NewtonConfig {
             fd_epsilon: 1e-7,
             line_search_max_iter: 10,
             armijo_c: 1e-4,
+            initial_damping: 0.3,  // Start conservative
+            min_damping: 0.05,     // Minimum step size
         }
     }
 }
@@ -1219,6 +1226,7 @@ impl NewtonVIISolver {
     /// - DIJ[i][j] = dGamma(i)/dSigma(j) (source influence on surface velocity)
     /// - Mass defect changes dm affect edge velocity: dUe = DIJ * dm
     /// - Newton iteration includes this coupling in the Jacobian
+    /// - Uses adaptive damping: start conservative, increase on success
     pub fn solve_with_dij(
         &self,
         initial_state: NewtonState,
@@ -1231,6 +1239,11 @@ impl NewtonVIISolver {
         let mut residual_history = Vec::new();
         let mut converged = false;
         let mut iteration = 0;
+        
+        // Adaptive damping: start conservative, increase on success
+        let mut damping = self.config.initial_damping;
+        let mut prev_r_norm = f64::MAX;
+        let mut stall_count = 0;
         
         // Initial residual (using DIJ for mass influence)
         let mut residuals = self.compute_residuals_with_dij(&state, factorized, flow, geometry, dij);
@@ -1257,31 +1270,62 @@ impl NewtonVIISolver {
                 None => {
                     #[cfg(debug_assertions)]
                     eprintln!("Newton iter {}: Singular Jacobian (DIJ)", iter);
-                    break;
+                    // Reduce damping and try again
+                    damping = (damping * 0.5).max(self.config.min_damping);
+                    stall_count += 1;
+                    if stall_count > 5 {
+                        break;
+                    }
+                    continue;
                 }
             };
             
-            // Line search with DIJ residuals
-            let alpha = self.line_search_with_dij(&state, &step, &residuals, factorized, flow, geometry, dij);
+            // Line search with DIJ residuals, scaled by damping
+            let alpha_ls = self.line_search_with_dij(&state, &step, &residuals, factorized, flow, geometry, dij);
+            let alpha = alpha_ls * damping;
             
             // Update state
-            state = state.apply_step(&step, alpha);
+            let state_new = state.apply_step(&step, alpha);
             
             // Apply DIJ-based edge velocity correction
-            // The mass defect changes propagate to edge velocity
-            self.apply_dij_velocity_correction(&mut state, &step, alpha, geometry, dij);
+            let mut state_corrected = state_new;
+            self.apply_dij_velocity_correction(&mut state_corrected, &step, alpha, geometry, dij);
             
             // Recompute residuals
-            residuals = self.compute_residuals_with_dij(&state, factorized, flow, geometry, dij);
-            r_norm = residuals.norm();
+            let residuals_new = self.compute_residuals_with_dij(&state_corrected, factorized, flow, geometry, dij);
+            let r_norm_new = residuals_new.norm();
+            
+            // Adaptive damping update
+            if r_norm_new < r_norm * 0.99 {
+                // Making progress: increase damping
+                damping = (damping * 1.2).min(1.0);
+                stall_count = 0;
+            } else if r_norm_new > prev_r_norm * 1.1 {
+                // Diverging: decrease damping
+                damping = (damping * 0.5).max(self.config.min_damping);
+                stall_count += 1;
+            }
+            
+            // Accept step
+            state = state_corrected;
+            residuals = residuals_new;
+            prev_r_norm = r_norm;
+            r_norm = r_norm_new;
             residual_history.push(r_norm);
             
             #[cfg(debug_assertions)]
             if iter % 5 == 0 {
                 eprintln!(
-                    "Newton (DIJ) iter {}: ||R||={:.2e}, α={:.3}, ||dx||={:.2e}",
-                    iter, r_norm, alpha, step.norm()
+                    "Newton (DIJ) iter {}: ||R||={:.2e}, α={:.3}, damp={:.2}, ||dx||={:.2e}",
+                    iter, r_norm, alpha, damping, step.norm()
                 );
+            }
+            
+            // Check for stalled convergence
+            if stall_count > 10 {
+                #[cfg(debug_assertions)]
+                eprintln!("Newton (DIJ): Stalled after {} iterations", iter);
+                break;
             }
         }
         
@@ -1730,6 +1774,9 @@ impl NewtonVIISolver {
     }
     
     /// Solve Newton step: J * dx = -R
+    /// 
+    /// Uses Tikhonov regularization to improve conditioning when the
+    /// Jacobian is ill-conditioned or near-singular.
     fn solve_newton_step(
         &self,
         jacobian: &DMatrix<f64>,
@@ -1738,14 +1785,39 @@ impl NewtonVIISolver {
         let r_vec = DVector::from_vec(residuals.to_vec());
         let neg_r = -&r_vec;
         
-        // Use LU decomposition
-        let lu = jacobian.clone().lu();
-        let dx = lu.solve(&neg_r)?;
+        // Tikhonov regularization: J_reg = J + λI
+        // Start with small λ and increase if needed
+        let n = jacobian.nrows();
+        let mut jacobian_reg = jacobian.clone();
         
-        let n_gamma = residuals.r_inviscid.len();
-        let n_bl = residuals.r_momentum.len();
+        // Compute adaptive regularization parameter based on diagonal magnitude
+        let diag_mean = (0..n)
+            .map(|i| jacobian[(i, i)].abs())
+            .sum::<f64>() / n as f64;
+        let mut lambda = 1e-8 * diag_mean.max(1e-10);
         
-        Some(NewtonStep::from_vec(dx.as_slice(), n_gamma, n_bl))
+        // Try increasing regularization until solve succeeds
+        for attempt in 0..5 {
+            // Add regularization to diagonal
+            if attempt > 0 {
+                for i in 0..n {
+                    jacobian_reg[(i, i)] = jacobian[(i, i)] + lambda;
+                }
+            }
+            
+            // Use LU decomposition
+            let lu = jacobian_reg.clone().lu();
+            if let Some(dx) = lu.solve(&neg_r) {
+                let n_gamma = residuals.r_inviscid.len();
+                let n_bl = residuals.r_momentum.len();
+                return Some(NewtonStep::from_vec(dx.as_slice(), n_gamma, n_bl));
+            }
+            
+            // Increase regularization for next attempt
+            lambda *= 10.0;
+        }
+        
+        None // Failed even with regularization
     }
     
     /// Backtracking line search to ensure residual reduction.
