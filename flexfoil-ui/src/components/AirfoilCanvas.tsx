@@ -21,7 +21,8 @@ import { useVisualizationStore } from '../stores/visualizationStore';
 import { useTheme } from '../contexts/ThemeContext';
 import { useLayout } from '../contexts/LayoutContext';
 import type { Point, ViewportState, AirfoilPoint } from '../types';
-import { computeStreamlines, createSmokeSystem, isWasmReady, WasmSmokeSystem } from '../lib/wasm';
+import { computeStreamlines, createSmokeSystem, isWasmReady, WasmSmokeSystem, analyzeAirfoil } from '../lib/wasm';
+import { useMorphingAnimation, getCpColor, computeForceVectors } from '../hooks/useMorphingAnimation';
 
 /**
  * Compute cumulative arc lengths for a sequence of points.
@@ -176,9 +177,7 @@ function generateSplineCurve(coordinates: AirfoilPoint[], numPoints: number = 20
 }
 
 // Constants
-const POINT_RADIUS = 5;
 const PANEL_POINT_RADIUS = 2.5;
-const HANDLE_RADIUS = 4;
 const CONTROL_RADIUS = 6;
 const HIT_RADIUS = 10;
 
@@ -197,12 +196,12 @@ export function AirfoilCanvas() {
     coordinates, 
     panels, 
     controlMode,
-    bezierHandles,
-    bsplineControlPoints,
     displayAlpha,
-    updatePoint,
-    updateBSplineControlPoint,
-    updateBezierHandle,
+    // Camber/thickness control
+    camberControlPoints,
+    thicknessControlPoints,
+    updateCamberControlPoint,
+    updateThicknessControlPoint,
   } = useAirfoilStore();
 
   // Viewport state
@@ -222,6 +221,10 @@ export function AirfoilCanvas() {
     showControls,
     showStreamlines,
     showSmoke,
+    showCp,
+    showForces,
+    enableMorphing,
+    morphDuration,
     streamlineDensity,
     adaptiveStreamlines,
     smokeDensity,
@@ -229,10 +232,21 @@ export function AirfoilCanvas() {
     smokeSpawnInterval,
     smokeMaxAge,
     flowSpeed,
+    cpDisplayMode,
+    cpBarScale,
+    forceScale,
   } = useVisualizationStore();
   
   // Streamlines cache
   const [streamlines, setStreamlines] = useState<[number, number][][]>([]);
+  
+  // Analysis results (Cp, Cl, Cm)
+  const [analysisResult, setAnalysisResult] = useState<{
+    cp: number[];
+    cpX: number[];
+    cl: number;
+    cm: number;
+  }>({ cp: [], cpX: [], cl: 0, cm: 0 });
   
   // Track last zoom for adaptive streamlines
   const lastZoomRef = useRef(viewport.zoom);
@@ -243,11 +257,6 @@ export function AirfoilCanvas() {
   const [smokePositions, setSmokePositions] = useState<Float64Array | null>(null);
   const [smokeAlphas, setSmokeAlphas] = useState<Float64Array | null>(null);
   
-  // Memoize the spline curve to avoid recomputing on every render
-  const splineCurve = useMemo(() => {
-    return generateSplineCurve(coordinates, 300);
-  }, [coordinates]);
-
   // Compute adaptive streamline count based on zoom
   const getAdaptiveStreamlineCount = useCallback(() => {
     if (!adaptiveStreamlines) {
@@ -291,6 +300,53 @@ export function AirfoilCanvas() {
       console.error('Streamline computation failed:', e);
     }
   }, [showStreamlines, panels, displayAlpha, streamlineDensity, adaptiveStreamlines, viewport.zoom, getAdaptiveStreamlineCount, getVisibleBounds]);
+  
+  // Compute aerodynamic analysis (Cp, Cl, Cm) - always run for proper updates
+  useEffect(() => {
+    if (!isWasmReady() || panels.length < 10) {
+      return;
+    }
+    
+    try {
+      const result = analyzeAirfoil(panels, displayAlpha);
+      if (result.success) {
+        setAnalysisResult({
+          cp: result.cp,
+          cpX: result.cp_x,
+          cl: result.cl,
+          cm: result.cm,
+        });
+      }
+    } catch (e) {
+      console.error('Analysis failed:', e);
+    }
+  }, [panels, displayAlpha]);
+  
+  // Track if we're actively dragging (for disabling morph animation during drag)
+  const [isDraggingPoint, setIsDraggingPoint] = useState(false);
+  
+  // Morphing animation integration
+  const morphTarget = useMemo(() => ({
+    coordinates,
+    panels,
+    streamlines,
+    cp: analysisResult.cp,
+    cpX: analysisResult.cpX,
+    cl: analysisResult.cl,
+    cm: analysisResult.cm,
+  }), [coordinates, panels, streamlines, analysisResult]);
+  
+  const morphState = useMorphingAnimation(morphTarget, {
+    duration: morphDuration,
+    // Disable morphing during drag for immediate feedback
+    enabled: enableMorphing && !isDraggingPoint,
+  });
+  
+  // Memoize the spline curve to avoid recomputing on every render
+  // Use morphed coordinates for smooth animation
+  const splineCurve = useMemo(() => {
+    return generateSplineCurve(morphState.coordinates, 300);
+  }, [morphState.coordinates]);
   
   // Get setSmokeDensity for adaptive performance
   const { setSmokeDensity } = useVisualizationStore();
@@ -421,42 +477,32 @@ export function AirfoilCanvas() {
 
   // Find point at canvas position
   const findPointAt = useCallback((canvasPos: Point): { type: string; index: number | string } | null => {
-    // Check B-spline control points first (on top)
-    if (controlMode === 'bspline') {
-      for (const cp of bsplineControlPoints) {
-        const cpCanvas = toCanvas(cp);
+    // Check camber control points
+    if (controlMode === 'camber-spline') {
+      for (const cp of camberControlPoints) {
+        const cpCanvas = toCanvas({ x: cp.x, y: cp.y });
         const dist = Math.hypot(canvasPos.x - cpCanvas.x, canvasPos.y - cpCanvas.y);
         if (dist < HIT_RADIUS) {
-          return { type: 'bspline', index: cp.id };
+          return { type: 'camber', index: cp.id };
         }
       }
     }
 
-    // Check bezier handles
-    if (controlMode === 'bezier') {
-      for (let i = 0; i < bezierHandles.length; i++) {
-        const handle = bezierHandles[i];
-        const hCanvas = toCanvas(handle.position);
-        const dist = Math.hypot(canvasPos.x - hCanvas.x, canvasPos.y - hCanvas.y);
+    // Check thickness control points  
+    if (controlMode === 'thickness-spline') {
+      for (const cp of thicknessControlPoints) {
+        // Thickness points are shown on the upper surface at y = camber + t
+        // For simplicity, we show them at y = t (assuming flat camber for visualization)
+        const cpCanvas = toCanvas({ x: cp.x, y: cp.t });
+        const dist = Math.hypot(canvasPos.x - cpCanvas.x, canvasPos.y - cpCanvas.y);
         if (dist < HIT_RADIUS) {
-          return { type: 'bezier', index: i };
-        }
-      }
-    }
-
-    // Check surface points
-    if (controlMode === 'surface') {
-      for (let i = 0; i < coordinates.length; i++) {
-        const pCanvas = toCanvas(coordinates[i]);
-        const dist = Math.hypot(canvasPos.x - pCanvas.x, canvasPos.y - pCanvas.y);
-        if (dist < HIT_RADIUS) {
-          return { type: 'surface', index: i };
+          return { type: 'thickness', index: cp.id };
         }
       }
     }
 
     return null;
-  }, [controlMode, coordinates, bezierHandles, bsplineControlPoints, toCanvas]);
+  }, [controlMode, camberControlPoints, thicknessControlPoints, toCanvas]);
 
   // Draw the canvas
   const draw = useCallback(() => {
@@ -510,12 +556,13 @@ export function AirfoilCanvas() {
     };
     
     // Draw streamlines (behind airfoil) - rotated by alpha to match airfoil
-    if (showStreamlines && streamlines.length > 0) {
+    // Uses morphed streamlines for smooth animation
+    if (showStreamlines && morphState.streamlines.length > 0) {
       ctx.strokeStyle = colors.accentSecondary;
       ctx.globalAlpha = 0.5;
       ctx.lineWidth = 1;
       
-      for (const line of streamlines) {
+      for (const line of morphState.streamlines) {
         if (line.length < 2) continue;
         ctx.beginPath();
         const first = toCanvas(rotatePoint({ x: line[0][0], y: line[0][1] }));
@@ -550,23 +597,6 @@ export function AirfoilCanvas() {
       ctx.globalAlpha = 1; // Reset alpha
     }
 
-    // Draw B-spline control polygon (if in bspline mode and controls visible)
-    if (showControls && controlMode === 'bspline' && bsplineControlPoints.length > 1) {
-      ctx.beginPath();
-      ctx.strokeStyle = colors.foilControl;
-      ctx.globalAlpha = 0.3;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-      const firstCP = toCanvas(bsplineControlPoints[0]);
-      ctx.moveTo(firstCP.x, firstCP.y);
-      for (let i = 1; i < bsplineControlPoints.length; i++) {
-        const cp = toCanvas(bsplineControlPoints[i]);
-        ctx.lineTo(cp.x, cp.y);
-      }
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 1; // Reset alpha
-    }
 
     // Draw smooth spline curve (if enabled) - rotated by alpha
     if (showCurve && splineCurve.length > 1) {
@@ -585,54 +615,52 @@ export function AirfoilCanvas() {
     }
     
     // Draw panel lines (linear connections between panel points) - rotated by alpha
-    if (showPanels && panels.length > 1) {
+    // Uses morphed panels for smooth animation
+    const morphedPanels = morphState.panels;
+    if (showPanels && morphedPanels.length > 1) {
       ctx.beginPath();
       ctx.strokeStyle = colors.accentWarning;
       ctx.globalAlpha = 0.6;
       ctx.lineWidth = 1;
       
-      const first = toCanvas(rotatePoint(panels[0]));
+      const first = toCanvas(rotatePoint(morphedPanels[0]));
       ctx.moveTo(first.x, first.y);
       
-      for (let i = 1; i < panels.length; i++) {
-        const p = toCanvas(rotatePoint(panels[i]));
+      for (let i = 1; i < morphedPanels.length; i++) {
+        const p = toCanvas(rotatePoint(morphedPanels[i]));
         ctx.lineTo(p.x, p.y);
       }
       ctx.stroke();
       ctx.globalAlpha = 1; // Reset alpha
     }
 
-    // Draw bezier handles (if in bezier mode and controls visible)
-    if (showControls && controlMode === 'bezier') {
-      for (let i = 0; i < bezierHandles.length; i++) {
-        const handle = bezierHandles[i];
-        const hCanvas = toCanvas(handle.position);
-        const pCanvas = toCanvas(coordinates[handle.pointIndex]);
-        
-        // Draw handle line
-        ctx.beginPath();
-        ctx.strokeStyle = colors.foilHandle;
-        ctx.globalAlpha = 0.5;
-        ctx.lineWidth = 1;
-        ctx.moveTo(pCanvas.x, pCanvas.y);
-        ctx.lineTo(hCanvas.x, hCanvas.y);
-        ctx.stroke();
-        ctx.globalAlpha = 1; // Reset alpha
-        
-        // Draw handle point
-        const isHovered = hoveredPoint?.type === 'bezier' && hoveredPoint.index === i;
-        ctx.beginPath();
-        ctx.fillStyle = isHovered ? colors.foilPointSelected : colors.foilHandle;
-        ctx.arc(hCanvas.x, hCanvas.y, HANDLE_RADIUS, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
 
-    // Draw B-spline control points (if in bspline mode and controls visible)
-    if (showControls && controlMode === 'bspline') {
-      for (const cp of bsplineControlPoints) {
-        const cpCanvas = toCanvas(cp);
-        const isHovered = hoveredPoint?.type === 'bspline' && hoveredPoint.index === cp.id;
+    // Draw camber line and control points (if in camber-spline mode)
+    if (showControls && controlMode === 'camber-spline' && camberControlPoints.length > 0) {
+      // Draw camber line through control points
+      const sortedCamber = [...camberControlPoints].sort((a, b) => a.x - b.x);
+      
+      ctx.beginPath();
+      ctx.strokeStyle = colors.foilControl;
+      ctx.globalAlpha = 0.7;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      
+      const firstCamber = toCanvas(rotatePoint({ x: sortedCamber[0].x, y: sortedCamber[0].y }));
+      ctx.moveTo(firstCamber.x, firstCamber.y);
+      
+      for (let i = 1; i < sortedCamber.length; i++) {
+        const p = toCanvas(rotatePoint({ x: sortedCamber[i].x, y: sortedCamber[i].y }));
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      
+      // Draw camber control points
+      for (const cp of camberControlPoints) {
+        const cpCanvas = toCanvas(rotatePoint({ x: cp.x, y: cp.y }));
+        const isHovered = hoveredPoint?.type === 'camber' && hoveredPoint.index === cp.id;
         
         ctx.beginPath();
         ctx.fillStyle = isHovered ? colors.foilPointSelected : colors.foilControl;
@@ -644,16 +672,82 @@ export function AirfoilCanvas() {
       }
     }
 
-    // Draw surface points (if in surface mode and controls visible) - rotated by alpha
-    if (showControls && controlMode === 'surface') {
-      for (let i = 0; i < coordinates.length; i++) {
-        const p = toCanvas(rotatePoint(coordinates[i]));
-        const isHovered = hoveredPoint?.type === 'surface' && hoveredPoint.index === i;
+    // Draw thickness envelope and control points (if in thickness-spline mode)
+    if (showControls && controlMode === 'thickness-spline' && thicknessControlPoints.length > 0) {
+      // Draw thickness envelope (upper and lower bounds)
+      const sortedThickness = [...thicknessControlPoints].sort((a, b) => a.x - b.x);
+      
+      // Get camber values for each x position (default to 0 if no camber points)
+      const getCamberAt = (x: number): number => {
+        if (camberControlPoints.length === 0) return 0;
+        const sorted = [...camberControlPoints].sort((a, b) => a.x - b.x);
+        // Linear interpolation
+        for (let i = 0; i < sorted.length - 1; i++) {
+          if (x >= sorted[i].x && x <= sorted[i + 1].x) {
+            const t = (x - sorted[i].x) / (sorted[i + 1].x - sorted[i].x);
+            return sorted[i].y + t * (sorted[i + 1].y - sorted[i].y);
+          }
+        }
+        if (x <= sorted[0].x) return sorted[0].y;
+        return sorted[sorted.length - 1].y;
+      };
+      
+      // Draw upper thickness envelope
+      ctx.beginPath();
+      ctx.strokeStyle = colors.accentWarning;
+      ctx.globalAlpha = 0.5;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      
+      const firstUpper = toCanvas(rotatePoint({ 
+        x: sortedThickness[0].x, 
+        y: getCamberAt(sortedThickness[0].x) + sortedThickness[0].t 
+      }));
+      ctx.moveTo(firstUpper.x, firstUpper.y);
+      
+      for (let i = 1; i < sortedThickness.length; i++) {
+        const camber = getCamberAt(sortedThickness[i].x);
+        const p = toCanvas(rotatePoint({ 
+          x: sortedThickness[i].x, 
+          y: camber + sortedThickness[i].t 
+        }));
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+      
+      // Draw lower thickness envelope
+      ctx.beginPath();
+      const firstLower = toCanvas(rotatePoint({ 
+        x: sortedThickness[0].x, 
+        y: getCamberAt(sortedThickness[0].x) - sortedThickness[0].t 
+      }));
+      ctx.moveTo(firstLower.x, firstLower.y);
+      
+      for (let i = 1; i < sortedThickness.length; i++) {
+        const camber = getCamberAt(sortedThickness[i].x);
+        const p = toCanvas(rotatePoint({ 
+          x: sortedThickness[i].x, 
+          y: camber - sortedThickness[i].t 
+        }));
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      
+      // Draw thickness control points (shown at upper surface)
+      for (const cp of thicknessControlPoints) {
+        const camber = getCamberAt(cp.x);
+        const cpCanvas = toCanvas(rotatePoint({ x: cp.x, y: camber + cp.t }));
+        const isHovered = hoveredPoint?.type === 'thickness' && hoveredPoint.index === cp.id;
         
         ctx.beginPath();
-        ctx.fillStyle = isHovered ? colors.foilPointSelected : colors.foilPoint;
-        ctx.arc(p.x, p.y, POINT_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = isHovered ? colors.foilPointSelected : colors.accentWarning;
+        ctx.strokeStyle = colors.foilPoint;
+        ctx.lineWidth = 2;
+        ctx.arc(cpCanvas.x, cpCanvas.y, CONTROL_RADIUS, 0, Math.PI * 2);
         ctx.fill();
+        ctx.stroke();
       }
     }
 
@@ -663,7 +757,7 @@ export function AirfoilCanvas() {
       ctx.strokeStyle = colors.textPrimary;
       ctx.globalAlpha = 0.6;
       ctx.lineWidth = 1;
-      for (const pt of panels) {
+      for (const pt of morphedPanels) {
         const pCanvas = toCanvas(rotatePoint(pt));
         ctx.beginPath();
         ctx.arc(pCanvas.x, pCanvas.y, PANEL_POINT_RADIUS, 0, Math.PI * 2);
@@ -672,8 +766,114 @@ export function AirfoilCanvas() {
       }
       ctx.globalAlpha = 1; // Reset alpha
     }
+    
+    // Draw Cp (pressure coefficient) visualization
+    if (showCp && morphState.cp.length > 0 && morphState.cpX.length > 0) {
+      const cpLen = Math.min(morphState.cp.length, morphState.cpX.length);
+      
+      // Find corresponding y values on the airfoil for each Cp point
+      // cpX are x positions along the chord
+      for (let i = 0; i < cpLen; i++) {
+        const cpX = morphState.cpX[i];
+        const cpVal = morphState.cp[i];
+        
+        // Find the closest panel point to get y
+        let closestPt = morphedPanels[0] || { x: 0, y: 0 };
+        let minDist = Infinity;
+        for (const pt of morphedPanels) {
+          const dist = Math.abs(pt.x - cpX);
+          if (dist < minDist) {
+            minDist = dist;
+            closestPt = pt;
+          }
+        }
+        
+        const cpColor = getCpColor(cpVal, isDark);
+        
+        // Draw Cp bar (perpendicular to surface)
+        if (cpDisplayMode === 'bars' || cpDisplayMode === 'both') {
+          const barLength = -cpVal * cpBarScale * viewport.zoom; // Negative Cp = suction = outward
+          const pCanvas = toCanvas(rotatePoint(closestPt));
+          
+          // Compute normal direction (approximate)
+          const nextIdx = Math.min(i + 1, morphedPanels.length - 1);
+          const prevIdx = Math.max(i - 1, 0);
+          const dx = morphedPanels[nextIdx].x - morphedPanels[prevIdx].x;
+          const dy = morphedPanels[nextIdx].y - morphedPanels[prevIdx].y;
+          const len = Math.sqrt(dx * dx + dy * dy) || 1;
+          const nx = -dy / len; // Normal points outward
+          const ny = dx / len;
+          
+          ctx.beginPath();
+          ctx.strokeStyle = cpColor;
+          ctx.lineWidth = 2;
+          ctx.globalAlpha = 0.8;
+          ctx.moveTo(pCanvas.x, pCanvas.y);
+          ctx.lineTo(pCanvas.x + nx * barLength, pCanvas.y - ny * barLength);
+          ctx.stroke();
+        }
+        
+        // Draw colored point on surface
+        if (cpDisplayMode === 'color' || cpDisplayMode === 'both') {
+          const pCanvas = toCanvas(rotatePoint(closestPt));
+          ctx.beginPath();
+          ctx.fillStyle = cpColor;
+          ctx.globalAlpha = 0.9;
+          ctx.arc(pCanvas.x, pCanvas.y, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+    
+    // Draw force vectors (lift and drag)
+    if (showForces && Math.abs(morphState.cl) > 0.001) {
+      const forces = computeForceVectors(morphState.cl, displayAlpha, forceScale);
+      
+      // Draw at quarter chord
+      const quarterChord = toCanvas(rotatePoint({ x: 0.25, y: 0 }));
+      
+      // Lift vector (perpendicular to flow, usually up)
+      const liftEnd = {
+        x: quarterChord.x + forces.lift.x * viewport.zoom,
+        y: quarterChord.y - forces.lift.y * viewport.zoom, // Canvas y is inverted
+      };
+      
+      ctx.beginPath();
+      ctx.strokeStyle = isDark ? '#00ff88' : '#00aa55';
+      ctx.lineWidth = 3;
+      ctx.globalAlpha = 0.9;
+      ctx.moveTo(quarterChord.x, quarterChord.y);
+      ctx.lineTo(liftEnd.x, liftEnd.y);
+      ctx.stroke();
+      
+      // Draw arrowhead for lift
+      const liftAngle = Math.atan2(quarterChord.y - liftEnd.y, liftEnd.x - quarterChord.x);
+      const arrowLen = 10;
+      ctx.beginPath();
+      ctx.moveTo(liftEnd.x, liftEnd.y);
+      ctx.lineTo(
+        liftEnd.x - arrowLen * Math.cos(liftAngle - Math.PI / 6),
+        liftEnd.y + arrowLen * Math.sin(liftAngle - Math.PI / 6)
+      );
+      ctx.moveTo(liftEnd.x, liftEnd.y);
+      ctx.lineTo(
+        liftEnd.x - arrowLen * Math.cos(liftAngle + Math.PI / 6),
+        liftEnd.y + arrowLen * Math.sin(liftAngle + Math.PI / 6)
+      );
+      ctx.stroke();
+      
+      // Label for Cl
+      ctx.fillStyle = isDark ? '#00ff88' : '#00aa55';
+      ctx.font = '12px sans-serif';
+      ctx.fillText(`Cl = ${morphState.cl.toFixed(3)}`, liftEnd.x + 10, liftEnd.y);
+      
+      // Drag would go here if we had Cd (inviscid method doesn't compute drag)
+      
+      ctx.globalAlpha = 1;
+    }
 
-  }, [viewport, panels, coordinates, splineCurve, controlMode, bezierHandles, bsplineControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showSmoke, streamlines, smokePositions, smokeAlphas, displayAlpha, toCanvas, isDark]);
+  }, [viewport, morphState, splineCurve, controlMode, camberControlPoints, thicknessControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showSmoke, smokePositions, smokeAlphas, displayAlpha, toCanvas, isDark, showCp, showForces, cpDisplayMode, cpBarScale, forceScale]);
 
   // Draw grid
   const drawGrid = useCallback((ctx: CanvasRenderingContext2D) => {
@@ -781,6 +981,7 @@ export function AirfoilCanvas() {
     if (hit) {
       pauseHistory(); // Pause history tracking during drag
       setIsDragging(true);
+      setIsDraggingPoint(true); // Disable morph animation during drag
       setDragTarget(hit);
     } else {
       // Start panning
@@ -797,16 +998,74 @@ export function AirfoilCanvas() {
 
     if (isDragging && dragTarget) {
       // Update point position
-      if (dragTarget.type === 'surface' && typeof dragTarget.index === 'number') {
-        updatePoint(dragTarget.index, { x: airfoilPos.x, y: airfoilPos.y });
-      } else if (dragTarget.type === 'bspline' && typeof dragTarget.index === 'string') {
-        updateBSplineControlPoint(dragTarget.index, { x: airfoilPos.x, y: airfoilPos.y });
-      } else if (dragTarget.type === 'bezier' && typeof dragTarget.index === 'number') {
-        const handle = bezierHandles[dragTarget.index];
-        updateBezierHandle(dragTarget.index, {
-          ...handle,
-          position: { x: airfoilPos.x, y: airfoilPos.y },
-        });
+      if (dragTarget.type === 'camber' && typeof dragTarget.index === 'string') {
+        // For camber points, only allow y to change (x is fixed to chord position)
+        const cp = camberControlPoints.find(p => p.id === dragTarget.index);
+        if (cp) {
+          updateCamberControlPoint(dragTarget.index, { y: airfoilPos.y });
+        }
+      } else if (dragTarget.type === 'thickness' && typeof dragTarget.index === 'string') {
+        // For thickness points, only allow t to change (derived from y position)
+        const cp = thicknessControlPoints.find(p => p.id === dragTarget.index);
+        if (cp) {
+          // Get camber at this x position
+          const getCamberAt = (x: number): number => {
+            if (camberControlPoints.length === 0) return 0;
+            const sorted = [...camberControlPoints].sort((a, b) => a.x - b.x);
+            for (let i = 0; i < sorted.length - 1; i++) {
+              if (x >= sorted[i].x && x <= sorted[i + 1].x) {
+                const t = (x - sorted[i].x) / (sorted[i + 1].x - sorted[i].x);
+                return sorted[i].y + t * (sorted[i + 1].y - sorted[i].y);
+              }
+            }
+            if (x <= sorted[0].x) return sorted[0].y;
+            return sorted[sorted.length - 1].y;
+          };
+          const camber = getCamberAt(cp.x);
+          // Thickness is the distance from camber line (positive only)
+          const newT = Math.max(0, airfoilPos.y - camber);
+          updateThicknessControlPoint(dragTarget.index, { t: newT });
+        }
+      }
+      
+      // Auto-zoom when dragging near edge of viewport
+      // Define margin (in pixels) where we start zooming out
+      const edgeMargin = 50;
+      const { width, height } = viewport;
+      
+      // Check if canvas position is near edge
+      const nearLeftEdge = canvasPos.x < edgeMargin;
+      const nearRightEdge = canvasPos.x > width - edgeMargin;
+      const nearTopEdge = canvasPos.y < edgeMargin;
+      const nearBottomEdge = canvasPos.y > height - edgeMargin;
+      
+      if (nearLeftEdge || nearRightEdge || nearTopEdge || nearBottomEdge) {
+        // Calculate how far into the margin we are (0 = at edge, 1 = at margin boundary)
+        let maxOverlap = 0;
+        
+        if (nearLeftEdge) maxOverlap = Math.max(maxOverlap, 1 - canvasPos.x / edgeMargin);
+        if (nearRightEdge) maxOverlap = Math.max(maxOverlap, 1 - (width - canvasPos.x) / edgeMargin);
+        if (nearTopEdge) maxOverlap = Math.max(maxOverlap, 1 - canvasPos.y / edgeMargin);
+        if (nearBottomEdge) maxOverlap = Math.max(maxOverlap, 1 - (height - canvasPos.y) / edgeMargin);
+        
+        // Zoom out proportionally (more aggressive near edge)
+        // Zoom factor ranges from 0.99 (at margin) to 0.95 (at edge)
+        const zoomFactor = 1 - (0.01 + maxOverlap * 0.04);
+        const newZoom = Math.max(50, viewport.zoom * zoomFactor);
+        
+        // Also pan slightly toward the dragged point to keep it visible
+        const panSpeed = 0.002;
+        const panX = nearRightEdge ? panSpeed : (nearLeftEdge ? -panSpeed : 0);
+        const panY = nearBottomEdge ? -panSpeed : (nearTopEdge ? panSpeed : 0);
+        
+        setViewport((v) => ({
+          ...v,
+          zoom: newZoom,
+          center: {
+            x: v.center.x + panX,
+            y: v.center.y + panY,
+          },
+        }));
       }
     } else if (isPanning) {
       // Pan viewport
@@ -823,13 +1082,14 @@ export function AirfoilCanvas() {
     }
 
     lastMousePos.current = canvasPos;
-  }, [isDragging, isPanning, dragTarget, viewport.zoom, toAirfoil, findPointAt, updatePoint, updateBSplineControlPoint, updateBezierHandle, bezierHandles]);
+  }, [isDragging, isPanning, dragTarget, viewport, toAirfoil, findPointAt, camberControlPoints, thicknessControlPoints, updateCamberControlPoint, updateThicknessControlPoint]);
 
   const handleMouseUp = useCallback(() => {
     if (isDragging) {
       resumeHistory(); // Resume history tracking after drag
     }
     setIsDragging(false);
+    setIsDraggingPoint(false); // Re-enable morph animation
     setIsPanning(false);
     setDragTarget(null);
   }, [isDragging]);

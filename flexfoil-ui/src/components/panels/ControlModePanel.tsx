@@ -1,55 +1,80 @@
 /**
- * ControlModePanel - Switch between surface, bezier, and b-spline modes
+ * ControlModePanel - Switch between parameters, camber-spline, and thickness-spline modes
  */
 
 import { useCallback } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
 import type { ControlMode } from '../../types';
-import { createBSplineControlPointsFromAirfoil, createBezierHandlesFromAirfoil } from '../../lib/bspline';
 
 export function ControlModePanel() {
   const { 
     controlMode, 
     setControlMode,
     coordinates,
-    bsplineControlPoints,
-    setBSplineControlPoints,
-    bsplineDegree,
-    setBSplineDegree,
-    addBSplineControlPoint,
+    // Parameters mode
+    thicknessScale,
+    camberScale,
+    setThicknessScale,
+    setCamberScale,
+    applyScaling,
+    // Camber spline mode
+    camberControlPoints,
+    addCamberControlPoint,
+    initializeCamberControlPoints,
+    // Thickness spline mode
+    thicknessControlPoints,
+    addThicknessControlPoint,
+    initializeThicknessControlPoints,
   } = useAirfoilStore();
 
-  const { setBezierHandles } = useAirfoilStore();
-  
   const handleModeChange = useCallback((mode: ControlMode) => {
     setControlMode(mode);
     
-    // Initialize B-spline control points if switching to bspline mode
-    if (mode === 'bspline' && bsplineControlPoints.length === 0 && coordinates.length > 0) {
-      // Use least-squares fitting to find control points that approximate the airfoil
-      // Use more control points for better approximation
-      const numCP = Math.min(20, Math.max(8, Math.floor(coordinates.length / 3)));
-      const newControlPoints = createBSplineControlPointsFromAirfoil(coordinates, numCP, bsplineDegree);
-      setBSplineControlPoints(newControlPoints);
+    // Initialize camber control points if switching to camber-spline mode
+    if (mode === 'camber-spline' && camberControlPoints.length === 0 && coordinates.length > 0) {
+      initializeCamberControlPoints();
+      // Also initialize thickness points if not already done
+      if (thicknessControlPoints.length === 0) {
+        initializeThicknessControlPoints();
+      }
     }
     
-    // Initialize Bezier handles if switching to bezier mode
-    if (mode === 'bezier' && coordinates.length > 0) {
-      const newHandles = createBezierHandlesFromAirfoil(coordinates, 10);
-      setBezierHandles(newHandles);
+    // Initialize thickness control points if switching to thickness-spline mode
+    if (mode === 'thickness-spline' && thicknessControlPoints.length === 0 && coordinates.length > 0) {
+      initializeThicknessControlPoints();
+      // Also initialize camber points if not already done
+      if (camberControlPoints.length === 0) {
+        initializeCamberControlPoints();
+      }
     }
-  }, [setControlMode, coordinates, bsplineControlPoints.length, setBSplineControlPoints, setBezierHandles, bsplineDegree]);
+  }, [
+    setControlMode, 
+    coordinates, 
+    camberControlPoints.length, 
+    thicknessControlPoints.length,
+    initializeCamberControlPoints,
+    initializeThicknessControlPoints,
+  ]);
 
-  const handleAddControlPoint = useCallback(() => {
-    const id = `cp-${Date.now()}`;
-    // Add at center
-    addBSplineControlPoint({
+  const handleAddCamberPoint = useCallback(() => {
+    const id = `camber-${Date.now()}`;
+    // Add at center with zero camber
+    addCamberControlPoint({
       id,
       x: 0.5,
-      y: 0.1,
-      weight: 1,
+      y: 0,
     });
-  }, [addBSplineControlPoint]);
+  }, [addCamberControlPoint]);
+
+  const handleAddThicknessPoint = useCallback(() => {
+    const id = `thickness-${Date.now()}`;
+    // Add at center with average thickness
+    addThicknessControlPoint({
+      id,
+      x: 0.5,
+      t: 0.06, // Typical half-thickness
+    });
+  }, [addThicknessControlPoint]);
 
   return (
     <div className="panel">
@@ -60,22 +85,22 @@ export function ControlModePanel() {
           <div className="form-label">Edit Mode</div>
           <div className="control-mode-group">
             <button
-              className={`control-mode-btn ${controlMode === 'surface' ? 'active' : ''}`}
-              onClick={() => handleModeChange('surface')}
+              className={`control-mode-btn ${controlMode === 'parameters' ? 'active' : ''}`}
+              onClick={() => handleModeChange('parameters')}
             >
-              Surface
+              Parameters
             </button>
             <button
-              className={`control-mode-btn ${controlMode === 'bezier' ? 'active' : ''}`}
-              onClick={() => handleModeChange('bezier')}
+              className={`control-mode-btn ${controlMode === 'camber-spline' ? 'active' : ''}`}
+              onClick={() => handleModeChange('camber-spline')}
             >
-              Bezier
+              Camber
             </button>
             <button
-              className={`control-mode-btn ${controlMode === 'bspline' ? 'active' : ''}`}
-              onClick={() => handleModeChange('bspline')}
+              className={`control-mode-btn ${controlMode === 'thickness-spline' ? 'active' : ''}`}
+              onClick={() => handleModeChange('thickness-spline')}
             >
-              B-Spline
+              Thickness
             </button>
           </div>
         </div>
@@ -89,64 +114,109 @@ export function ControlModePanel() {
           color: 'var(--text-secondary)',
           marginBottom: '12px',
         }}>
-          {controlMode === 'surface' && (
+          {controlMode === 'parameters' && (
             <>
-              <strong style={{ color: 'var(--text-primary)' }}>Surface Points</strong>
+              <strong style={{ color: 'var(--text-primary)' }}>Parameter Scaling</strong>
               <p style={{ margin: '4px 0 0' }}>
-                Drag points directly on the airfoil surface. 
-                Best for fine adjustments and manual edits.
+                Adjust thickness and camber using sliders.
+                Scales the current airfoil proportionally.
               </p>
             </>
           )}
-          {controlMode === 'bezier' && (
+          {controlMode === 'camber-spline' && (
             <>
-              <strong style={{ color: 'var(--text-primary)' }}>Bezier Handles</strong>
+              <strong style={{ color: 'var(--text-primary)' }}>Camber Line Editor</strong>
               <p style={{ margin: '4px 0 0' }}>
-                Control tangent directions at each point.
-                Useful for smooth curve shaping.
+                Drag control points to reshape the camber line.
+                Click to add, shift+click to remove points.
               </p>
             </>
           )}
-          {controlMode === 'bspline' && (
+          {controlMode === 'thickness-spline' && (
             <>
-              <strong style={{ color: 'var(--text-primary)' }}>B-Spline Control</strong>
+              <strong style={{ color: 'var(--text-primary)' }}>Thickness Editor</strong>
               <p style={{ margin: '4px 0 0' }}>
-                Off-surface control polygon. The curve is attracted 
-                to control points but doesn't pass through them.
+                Drag control points to reshape the thickness distribution.
+                Click to add, shift+click to remove points.
               </p>
             </>
           )}
         </div>
 
-        {/* B-spline specific controls */}
-        {controlMode === 'bspline' && (
+        {/* Parameters mode controls */}
+        {controlMode === 'parameters' && (
           <>
             <div className="form-group">
-              <div className="form-label">Degree</div>
+              <div className="form-label">Thickness Scale</div>
               <div className="form-row">
                 <input
                   type="range"
-                  min={1}
-                  max={5}
-                  value={bsplineDegree}
-                  onChange={(e) => setBSplineDegree(parseInt(e.target.value))}
+                  min={0.1}
+                  max={3.0}
+                  step={0.01}
+                  value={thicknessScale}
+                  onChange={(e) => setThicknessScale(parseFloat(e.target.value))}
                   style={{ flex: 1 }}
                 />
                 <span style={{ 
-                  width: '30px', 
+                  width: '50px', 
                   textAlign: 'right',
                   fontFamily: 'var(--font-mono)',
                 }}>
-                  {bsplineDegree}
+                  {(thicknessScale * 100).toFixed(0)}%
                 </span>
               </div>
             </div>
 
             <div className="form-group">
-              <div className="form-label">
-                Control Points ({bsplineControlPoints.length})
+              <div className="form-label">Camber Scale</div>
+              <div className="form-row">
+                <input
+                  type="range"
+                  min={0}
+                  max={3.0}
+                  step={0.01}
+                  value={camberScale}
+                  onChange={(e) => setCamberScale(parseFloat(e.target.value))}
+                  style={{ flex: 1 }}
+                />
+                <span style={{ 
+                  width: '50px', 
+                  textAlign: 'right',
+                  fontFamily: 'var(--font-mono)',
+                }}>
+                  {(camberScale * 100).toFixed(0)}%
+                </span>
               </div>
-              <button onClick={handleAddControlPoint} style={{ width: '100%' }}>
+            </div>
+
+            <button 
+              onClick={applyScaling} 
+              style={{ width: '100%', marginTop: '8px' }}
+              disabled={thicknessScale === 1.0 && camberScale === 1.0}
+            >
+              Apply & Reset Sliders
+            </button>
+            
+            <p style={{ 
+              fontSize: '11px', 
+              color: 'var(--text-muted)', 
+              marginTop: '8px',
+              textAlign: 'center',
+            }}>
+              Apply saves the scaled shape as the new base.
+            </p>
+          </>
+        )}
+
+        {/* Camber spline mode controls */}
+        {controlMode === 'camber-spline' && (
+          <>
+            <div className="form-group">
+              <div className="form-label">
+                Camber Points ({camberControlPoints.length})
+              </div>
+              <button onClick={handleAddCamberPoint} style={{ width: '100%' }}>
                 + Add Control Point
               </button>
             </div>
@@ -157,7 +227,7 @@ export function ControlModePanel() {
               border: '1px solid var(--border-color)',
               borderRadius: '4px',
             }}>
-              {bsplineControlPoints.map((cp, i) => (
+              {camberControlPoints.map((cp, i) => (
                 <div
                   key={cp.id}
                   style={{
@@ -169,9 +239,48 @@ export function ControlModePanel() {
                     justifyContent: 'space-between',
                   }}
                 >
-                  <span style={{ color: 'var(--accent-secondary)' }}>CP{i}</span>
+                  <span style={{ color: 'var(--accent-primary)' }}>C{i}</span>
                   <span>x: {cp.x.toFixed(3)}</span>
-                  <span>y: {cp.y.toFixed(3)}</span>
+                  <span>y: {(cp.y * 100).toFixed(2)}%</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Thickness spline mode controls */}
+        {controlMode === 'thickness-spline' && (
+          <>
+            <div className="form-group">
+              <div className="form-label">
+                Thickness Points ({thicknessControlPoints.length})
+              </div>
+              <button onClick={handleAddThicknessPoint} style={{ width: '100%' }}>
+                + Add Control Point
+              </button>
+            </div>
+
+            <div style={{ 
+              maxHeight: '200px', 
+              overflow: 'auto',
+              border: '1px solid var(--border-color)',
+              borderRadius: '4px',
+            }}>
+              {thicknessControlPoints.map((cp, i) => (
+                <div
+                  key={cp.id}
+                  style={{
+                    padding: '6px 8px',
+                    borderBottom: '1px solid var(--border-color)',
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-mono)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <span style={{ color: 'var(--accent-warning)' }}>T{i}</span>
+                  <span>x: {cp.x.toFixed(3)}</span>
+                  <span>t: {(cp.t * 100).toFixed(2)}%</span>
                 </div>
               ))}
             </div>
@@ -188,8 +297,18 @@ export function ControlModePanel() {
           color: 'var(--text-muted)',
         }}>
           <div><strong>Controls:</strong></div>
-          <div>• Click + drag to move points</div>
-          <div>• Scroll to zoom</div>
+          {controlMode === 'parameters' ? (
+            <>
+              <div>• Drag sliders to scale</div>
+              <div>• Apply to save changes</div>
+            </>
+          ) : (
+            <>
+              <div>• Click + drag to move points</div>
+              <div>• Shift+click to remove</div>
+            </>
+          )}
+          <div>• Scroll to zoom canvas</div>
           <div>• Drag canvas to pan</div>
         </div>
       </div>
