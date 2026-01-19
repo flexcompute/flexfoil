@@ -1167,9 +1167,15 @@ export function AirfoilCanvas() {
       // Draw filled contours from lowest to highest (painter's algorithm)
       // d3-contour creates regions where ψ >= threshold
       const alpha = isDark ? 0.5 : 0.6;
+      let psi0Contour: typeof contourData[0] | null = null;
       
       for (const c of contourData) {
         const value = c.value;
+        
+        // Save the ψ₀ contour for drawing dividing streamline
+        if (Math.abs(value - psi0) < 1e-10) {
+          psi0Contour = c;
+        }
         
         // Color based on whether above or below ψ₀
         // Note: contour at value T shows region where ψ >= T
@@ -1206,23 +1212,28 @@ export function AirfoilCanvas() {
         ctx.fill();
       }
       
-      // Draw dividing streamline (ψ = ψ₀) prominently - extrapolated to hit the airfoil
-      if (psiContours.psi0Lines.length > 0) {
+      // Draw dividing streamline from d3-contour's ψ₀ boundary
+      // This ensures consistency between filled regions and the line
+      if (psi0Contour) {
         ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.95)' : 'rgba(0, 0, 0, 0.9)';
         ctx.lineWidth = 2.5;
         ctx.setLineDash([]);
         
-        for (const line of psiContours.psi0Lines) {
-          if (line.length < 2) continue;
-          ctx.beginPath();
-          const first = toCanvas(rotatePoint({ x: line[0][0], y: line[0][1] }));
-          ctx.moveTo(first.x, first.y);
-          
-          for (let i = 1; i < line.length; i++) {
-            const p = toCanvas(rotatePoint({ x: line[i][0], y: line[i][1] }));
-            ctx.lineTo(p.x, p.y);
+        const geom = psi0Contour as unknown as { type: string; coordinates: number[][][] | number[][][][] };
+        if (geom.type === 'MultiPolygon') {
+          for (const polygon of geom.coordinates as number[][][][]) {
+            for (const ring of polygon) {
+              ctx.beginPath();
+              for (let i = 0; i < ring.length; i++) {
+                const [gx, gy] = ring[i];
+                const world = gridToWorld(gx, gy);
+                const canvas = toCanvas(world);
+                if (i === 0) ctx.moveTo(canvas.x, canvas.y);
+                else ctx.lineTo(canvas.x, canvas.y);
+              }
+              ctx.stroke();
+            }
           }
-          ctx.stroke();
         }
       }
     }
