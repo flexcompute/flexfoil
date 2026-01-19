@@ -21,7 +21,7 @@ import { useVisualizationStore } from '../stores/visualizationStore';
 import { useTheme } from '../contexts/ThemeContext';
 import { useLayout } from '../contexts/LayoutContext';
 import type { Point, ViewportState, AirfoilPoint } from '../types';
-import { computeStreamlines, createSmokeSystem, isWasmReady, WasmSmokeSystem, analyzeAirfoil } from '../lib/wasm';
+import { computeStreamlines, computePsiGrid, createSmokeSystem, isWasmReady, WasmSmokeSystem, analyzeAirfoil } from '../lib/wasm';
 import { useMorphingAnimation, getCpColor, computeForceVectors } from '../hooks/useMorphingAnimation';
 import { generateCamberSplineCurve } from '../lib/airfoilGeometry';
 
@@ -177,6 +177,184 @@ function generateSplineCurve(coordinates: AirfoilPoint[], numPoints: number = 20
   return result;
 }
 
+/**
+ * Marching squares algorithm to extract iso-contour line segments from a 2D grid.
+ * Returns an array of line segments, each defined by two [x, y] points.
+ */
+function marchingSquares(
+  grid: number[],
+  nx: number,
+  ny: number,
+  level: number,
+  x0: number,
+  y0: number,
+  dx: number,
+  dy: number
+): [[number, number], [number, number]][] {
+  const segments: [[number, number], [number, number]][] = [];
+  
+  // Lookup table for marching squares cases (16 cases)
+  // Each case maps to a list of edge pairs to connect
+  // Edges: 0=bottom, 1=right, 2=top, 3=left
+  
+  const getValue = (ix: number, iy: number): number => {
+    const idx = iy * nx + ix;
+    return grid[idx];
+  };
+  
+  const lerp = (v0: number, v1: number, t: number): number => v0 + t * (v1 - v0);
+  
+  const getEdgePoint = (edge: number, x: number, y: number, v: number[]): [number, number] => {
+    // v = [bottom-left, bottom-right, top-right, top-left] values
+    switch (edge) {
+      case 0: { // bottom edge
+        const t = (level - v[0]) / (v[1] - v[0]);
+        return [lerp(x, x + dx, t), y];
+      }
+      case 1: { // right edge
+        const t = (level - v[1]) / (v[2] - v[1]);
+        return [x + dx, lerp(y, y + dy, t)];
+      }
+      case 2: { // top edge
+        const t = (level - v[3]) / (v[2] - v[3]);
+        return [lerp(x, x + dx, t), y + dy];
+      }
+      case 3: { // left edge
+        const t = (level - v[0]) / (v[3] - v[0]);
+        return [x, lerp(y, y + dy, t)];
+      }
+      default:
+        return [x, y];
+    }
+  };
+  
+  // Process each cell
+  for (let iy = 0; iy < ny - 1; iy++) {
+    for (let ix = 0; ix < nx - 1; ix++) {
+      // Get corner values (bottom-left, bottom-right, top-right, top-left)
+      const v0 = getValue(ix, iy);
+      const v1 = getValue(ix + 1, iy);
+      const v2 = getValue(ix + 1, iy + 1);
+      const v3 = getValue(ix, iy + 1);
+      const v = [v0, v1, v2, v3];
+      
+      // Skip cells with NaN values (inside airfoil)
+      if (!isFinite(v0) || !isFinite(v1) || !isFinite(v2) || !isFinite(v3)) {
+        continue;
+      }
+      
+      // Compute case index (4-bit binary: each bit is 1 if corner >= level)
+      let caseIndex = 0;
+      if (v0 >= level) caseIndex |= 1;
+      if (v1 >= level) caseIndex |= 2;
+      if (v2 >= level) caseIndex |= 4;
+      if (v3 >= level) caseIndex |= 8;
+      
+      // Cell position
+      const cellX = x0 + ix * dx;
+      const cellY = y0 + iy * dy;
+      
+      // Generate segments based on case
+      // Edges to connect for each case (saddle cases use midpoint heuristic)
+      // Lookup table: 16 cases, each maps to array of edge pairs
+      const edgePairs: [number, number][][] = [
+        [],                   // 0: all below
+        [[0, 3]],             // 1
+        [[0, 1]],             // 2
+        [[1, 3]],             // 3
+        [[1, 2]],             // 4
+        [[0, 1], [2, 3]],     // 5 (saddle - two segments)
+        [[0, 2]],             // 6
+        [[2, 3]],             // 7
+        [[2, 3]],             // 8
+        [[0, 2]],             // 9
+        [[0, 3], [1, 2]],     // 10 (saddle - two segments)
+        [[1, 2]],             // 11
+        [[1, 3]],             // 12
+        [[0, 1]],             // 13
+        [[0, 3]],             // 14
+        [],                   // 15: all above
+      ];
+      
+      for (const pair of edgePairs[caseIndex]) {
+        const e1 = pair[0];
+        const e2 = pair[1];
+        const p1 = getEdgePoint(e1, cellX, cellY, v);
+        const p2 = getEdgePoint(e2, cellX, cellY, v);
+        segments.push([p1, p2]);
+      }
+    }
+  }
+  
+  return segments;
+}
+
+/**
+ * Connect contour segments into polylines.
+ * Segments that share endpoints are connected into longer polylines.
+ */
+function connectSegments(
+  segments: [[number, number], [number, number]][]
+): [number, number][][] {
+  if (segments.length === 0) return [];
+  
+  const tolerance = 1e-8;
+  const pointsClose = (a: [number, number], b: [number, number]): boolean => {
+    return Math.abs(a[0] - b[0]) < tolerance && Math.abs(a[1] - b[1]) < tolerance;
+  };
+  
+  // Track which segments have been used
+  const used = new Array(segments.length).fill(false);
+  const polylines: [number, number][][] = [];
+  
+  for (let i = 0; i < segments.length; i++) {
+    if (used[i]) continue;
+    
+    // Start a new polyline
+    const polyline: [number, number][] = [segments[i][0], segments[i][1]];
+    used[i] = true;
+    
+    // Try to extend in both directions
+    let extended = true;
+    while (extended) {
+      extended = false;
+      const head = polyline[0];
+      const tail = polyline[polyline.length - 1];
+      
+      for (let j = 0; j < segments.length; j++) {
+        if (used[j]) continue;
+        
+        const [p0, p1] = segments[j];
+        
+        // Try to connect to tail
+        if (pointsClose(tail, p0)) {
+          polyline.push(p1);
+          used[j] = true;
+          extended = true;
+        } else if (pointsClose(tail, p1)) {
+          polyline.push(p0);
+          used[j] = true;
+          extended = true;
+        }
+        // Try to connect to head
+        else if (pointsClose(head, p0)) {
+          polyline.unshift(p1);
+          used[j] = true;
+          extended = true;
+        } else if (pointsClose(head, p1)) {
+          polyline.unshift(p0);
+          used[j] = true;
+          extended = true;
+        }
+      }
+    }
+    
+    polylines.push(polyline);
+  }
+  
+  return polylines;
+}
+
 // Constants
 const PANEL_POINT_RADIUS = 2.5;
 const CONTROL_RADIUS = 6;
@@ -226,6 +404,7 @@ export function AirfoilCanvas() {
     showControls,
     showStreamlines,
     showSmoke,
+    showPsiContours,
     showCp,
     showForces,
     enableMorphing,
@@ -244,6 +423,12 @@ export function AirfoilCanvas() {
   
   // Streamlines cache
   const [streamlines, setStreamlines] = useState<[number, number][][]>([]);
+  
+  // Psi contour cache - stores extracted contour lines for ψ values
+  const [psiContours, setPsiContours] = useState<{
+    lines: [number, number][][];  // All contour lines
+    psi0Lines: [number, number][][];  // Dividing streamline (ψ = ψ₀)
+  }>({ lines: [], psi0Lines: [] });
   
   // Analysis results (Cp, Cl, Cm)
   const [analysisResult, setAnalysisResult] = useState<{
@@ -356,6 +541,73 @@ export function AirfoilCanvas() {
       console.error('Streamline computation failed:', e);
     }
   }, [showStreamlines, panels, displayAlpha, adaptiveStreamlineCount, streamlineBounds, isDraggingPoint]);
+  
+  // Compute stream function (ψ) contours when enabled
+  // Uses marching squares to extract iso-lines from the psi grid
+  useEffect(() => {
+    if (!showPsiContours || !isWasmReady() || panels.length < 10 || isDraggingPoint) {
+      if (!isDraggingPoint) {
+        setPsiContours({ lines: [], psi0Lines: [] });
+      }
+      return;
+    }
+    
+    try {
+      // Compute psi grid with reasonable resolution
+      const bounds: [number, number, number, number] = [-1.5, 2.5, -1.2, 1.2];
+      const resolution: [number, number] = [100, 80];
+      const result = computePsiGrid(panels, displayAlpha, bounds, resolution);
+      
+      if (!result.success) {
+        console.error('Psi grid computation failed:', result.error);
+        return;
+      }
+      
+      // Extract contours using marching squares
+      const { grid, psi_0, psi_min, psi_max, nx, ny } = result;
+      const dx = (bounds[1] - bounds[0]) / (nx - 1);
+      const dy = (bounds[3] - bounds[2]) / (ny - 1);
+      
+      // Choose contour levels - evenly spaced plus psi_0 for dividing streamline
+      const nLevels = 25;
+      const range = psi_max - psi_min;
+      const levels: number[] = [];
+      for (let i = 0; i <= nLevels; i++) {
+        levels.push(psi_min + (range * i) / nLevels);
+      }
+      // Add psi_0 if not already close to a level
+      const psi0InLevels = levels.some(l => Math.abs(l - psi_0) < range / (nLevels * 4));
+      if (!psi0InLevels) {
+        levels.push(psi_0);
+        levels.sort((a, b) => a - b);
+      }
+      
+      // Marching squares implementation
+      const allLines: [number, number][][] = [];
+      const psi0Lines: [number, number][][] = [];
+      
+      for (const level of levels) {
+        const isPsi0 = Math.abs(level - psi_0) < range / (nLevels * 4);
+        const contourSegments = marchingSquares(grid, nx, ny, level, bounds[0], bounds[2], dx, dy);
+        
+        // Connect segments into polylines
+        const polylines = connectSegments(contourSegments);
+        
+        for (const line of polylines) {
+          if (line.length >= 2) {
+            if (isPsi0) {
+              psi0Lines.push(line);
+            }
+            allLines.push(line);
+          }
+        }
+      }
+      
+      setPsiContours({ lines: allLines, psi0Lines });
+    } catch (e) {
+      console.error('Psi contour computation failed:', e);
+    }
+  }, [showPsiContours, panels, displayAlpha, isDraggingPoint]);
   
   // Compute aerodynamic analysis (Cp, Cl, Cm)
   // SKIP during drag to prevent freezing - recalculate on drag end
@@ -661,6 +913,45 @@ export function AirfoilCanvas() {
         y: cy + dx * sin + dy * cos,
       };
     };
+    
+    // Draw stream function contours (ψ iso-lines) behind everything else
+    if (showPsiContours && psiContours.lines.length > 0) {
+      // Draw regular contours (faint)
+      ctx.strokeStyle = isDark ? 'rgba(100, 149, 237, 0.25)' : 'rgba(65, 105, 225, 0.25)'; // Cornflower blue
+      ctx.lineWidth = 0.5;
+      
+      for (const line of psiContours.lines) {
+        if (line.length < 2) continue;
+        ctx.beginPath();
+        const first = toCanvas(rotatePoint({ x: line[0][0], y: line[0][1] }));
+        ctx.moveTo(first.x, first.y);
+        
+        for (let i = 1; i < line.length; i++) {
+          const p = toCanvas(rotatePoint({ x: line[i][0], y: line[i][1] }));
+          ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+      }
+      
+      // Draw dividing streamline (ψ = ψ₀) prominently
+      if (psiContours.psi0Lines.length > 0) {
+        ctx.strokeStyle = isDark ? 'rgba(255, 99, 71, 0.9)' : 'rgba(220, 20, 60, 0.9)'; // Tomato/Crimson
+        ctx.lineWidth = 2;
+        
+        for (const line of psiContours.psi0Lines) {
+          if (line.length < 2) continue;
+          ctx.beginPath();
+          const first = toCanvas(rotatePoint({ x: line[0][0], y: line[0][1] }));
+          ctx.moveTo(first.x, first.y);
+          
+          for (let i = 1; i < line.length; i++) {
+            const p = toCanvas(rotatePoint({ x: line[i][0], y: line[i][1] }));
+            ctx.lineTo(p.x, p.y);
+          }
+          ctx.stroke();
+        }
+      }
+    }
     
     // Draw streamlines (behind airfoil) - rotated by alpha to match airfoil
     // Uses morphed streamlines for smooth animation
@@ -995,7 +1286,7 @@ export function AirfoilCanvas() {
       ctx.globalAlpha = 1;
     }
 
-  }, [viewport, morphState, splineCurve, controlMode, camberControlPoints, thicknessControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showSmoke, smokePositions, smokeAlphas, displayAlpha, toCanvas, isDark, showCp, showForces, cpDisplayMode, cpBarScale, forceScale]);
+  }, [viewport, morphState, splineCurve, controlMode, camberControlPoints, thicknessControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showPsiContours, psiContours, showSmoke, smokePositions, smokeAlphas, displayAlpha, toCanvas, isDark, showCp, showForces, cpDisplayMode, cpBarScale, forceScale]);
 
   // Draw grid
   const drawGrid = useCallback((ctx: CanvasRenderingContext2D) => {

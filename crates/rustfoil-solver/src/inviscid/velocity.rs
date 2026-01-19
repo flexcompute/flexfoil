@@ -1,10 +1,13 @@
-//! Velocity field evaluation and streamline integration.
+//! Velocity field evaluation, stream function computation, and streamline integration.
 //!
-//! Provides functions to evaluate the velocity field from a panel solution
+//! Provides functions to evaluate the velocity field and stream function from a panel solution
 //! and integrate streamlines using RK4.
 
 use rustfoil_core::Point;
 use std::f64::consts::PI;
+
+/// 1/(4π) - used for stream function influence coefficients (matches XFOIL's QOPI)
+const QOPI: f64 = 0.25 / PI;
 
 /// Evaluate velocity at a point (x, y) given the panel solution.
 ///
@@ -98,6 +101,157 @@ pub fn velocity_at(
     }
 
     (u, v)
+}
+
+/// Evaluate the stream function at a point (x, y) given the panel solution.
+///
+/// Uses XFOIL's PSILIN formulation with linear vorticity panels.
+/// The stream function ψ is constant along streamlines; the body surface is at ψ = ψ₀.
+///
+/// # Arguments
+/// * `x`, `y` - Field point coordinates
+/// * `nodes` - Airfoil node positions (closed contour)
+/// * `gamma` - Vorticity at each node
+/// * `alpha` - Angle of attack (radians)
+/// * `v_inf` - Freestream velocity magnitude
+///
+/// # Returns
+/// Stream function value at (x, y). Returns NaN if inside the airfoil.
+pub fn psi_at(
+    x: f64,
+    y: f64,
+    nodes: &[Point],
+    gamma: &[f64],
+    alpha: f64,
+    v_inf: f64,
+) -> f64 {
+    let n = nodes.len();
+    if n < 2 || gamma.len() != n {
+        // Just freestream
+        return v_inf * (alpha.cos() * y - alpha.sin() * x);
+    }
+
+    // Return NaN for points inside the airfoil
+    if is_inside_airfoil(x, y, nodes) {
+        return f64::NAN;
+    }
+
+    let mut psi = 0.0;
+
+    // Add contribution from each vortex panel
+    // Panel j goes from node j to node (j+1) % n
+    for jo in 0..n {
+        let jp = (jo + 1) % n;
+
+        // Panel endpoints
+        let x_jo = nodes[jo].x;
+        let y_jo = nodes[jo].y;
+        let x_jp = nodes[jp].x;
+        let y_jp = nodes[jp].y;
+
+        // Panel geometry
+        let dx = x_jp - x_jo;
+        let dy = y_jp - y_jo;
+        let ds_sq = dx * dx + dy * dy;
+
+        if ds_sq < 1e-24 {
+            continue;
+        }
+
+        let ds = ds_sq.sqrt();
+        let sx = dx / ds; // Panel tangent x
+        let sy = dy / ds; // Panel tangent y
+
+        // Vector from panel endpoints to field point
+        let rx1 = x - x_jo;
+        let ry1 = y - y_jo;
+
+        // Transform to panel-local coordinates (XFOIL convention)
+        // X1: tangential distance from field point to node JO
+        // X2: tangential distance from field point to node JP
+        // YY: normal distance from field point to panel
+        let x1 = sx * rx1 + sy * ry1;
+        let x2 = x1 - ds; // = sx*(x-x_jp) + sy*(y-y_jp)
+        let yy = sx * ry1 - sy * rx1;
+
+        // Squared distances to panel endpoints
+        let rs1 = x1 * x1 + yy * yy;
+        let rs2 = x2 * x2 + yy * yy;
+
+        // Log and arctangent terms, with singularity handling
+        let g1 = if rs1 > 1e-20 { rs1.ln() } else { 0.0 };
+        let g2 = if rs2 > 1e-20 { rs2.ln() } else { 0.0 };
+        let t1 = x1.atan2(yy);
+        let t2 = x2.atan2(yy);
+
+        // XFOIL's PSIS/PSID formulation (xpanel.f lines 350-351)
+        // PSIS = coefficient for (γ_JP + γ_JO) / 2
+        // PSID = coefficient for (γ_JP - γ_JO) / 2
+        let dxinv = 1.0 / (x1 - x2);
+        let psis = 0.5 * x1 * g1 - 0.5 * x2 * g2 + x2 - x1 + yy * (t1 - t2);
+        let psid = ((x1 + x2) * psis + 0.5 * (rs2 * g2 - rs1 * g1 + x1 * x1 - x2 * x2)) * dxinv;
+
+        // Sum and difference of gamma at endpoints
+        let gsum = gamma[jp] + gamma[jo];
+        let gdif = gamma[jp] - gamma[jo];
+
+        // Accumulate stream function contribution
+        psi += QOPI * (psis * gsum + psid * gdif);
+    }
+
+    // Freestream contribution: ψ∞ = V∞(cos(α)·y - sin(α)·x)
+    psi += v_inf * (alpha.cos() * y - alpha.sin() * x);
+
+    psi
+}
+
+/// Compute stream function values on a rectangular grid.
+///
+/// # Arguments
+/// * `nodes` - Airfoil node positions
+/// * `gamma` - Vorticity at each node
+/// * `alpha` - Angle of attack (radians)
+/// * `v_inf` - Freestream velocity magnitude
+/// * `x_min`, `x_max`, `y_min`, `y_max` - Grid bounds
+/// * `nx`, `ny` - Grid resolution
+///
+/// # Returns
+/// Row-major array of stream function values: psi[iy * nx + ix].
+/// Points inside the airfoil have value NaN.
+pub fn compute_psi_grid(
+    nodes: &[Point],
+    gamma: &[f64],
+    alpha: f64,
+    v_inf: f64,
+    x_min: f64,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
+    nx: usize,
+    ny: usize,
+) -> Vec<f64> {
+    let mut grid = vec![0.0; nx * ny];
+
+    let dx = if nx > 1 {
+        (x_max - x_min) / (nx - 1) as f64
+    } else {
+        0.0
+    };
+    let dy = if ny > 1 {
+        (y_max - y_min) / (ny - 1) as f64
+    } else {
+        0.0
+    };
+
+    for iy in 0..ny {
+        let y = y_min + iy as f64 * dy;
+        for ix in 0..nx {
+            let x = x_min + ix as f64 * dx;
+            grid[iy * nx + ix] = psi_at(x, y, nodes, gamma, alpha, v_inf);
+        }
+    }
+
+    grid
 }
 
 /// Check if a point is inside the airfoil.
@@ -323,5 +477,57 @@ mod tests {
         let (u, v) = velocity_at(0.0, 0.0, &nodes, &gamma, alpha, 1.0);
         assert!((u - alpha.cos()).abs() < 1e-10);
         assert!((v - alpha.sin()).abs() < 1e-10);
+    }
+    
+    #[test]
+    fn test_psi_freestream() {
+        // Test freestream-only stream function
+        let nodes: Vec<Point> = vec![];
+        let gamma: Vec<f64> = vec![];
+        
+        // For α=0, ψ = V∞ * y
+        let psi = psi_at(0.5, 0.3, &nodes, &gamma, 0.0, 1.0);
+        assert!((psi - 0.3).abs() < 1e-10, "ψ = y for freestream at α=0");
+        
+        // For α=90°, ψ = -V∞ * x
+        let alpha = std::f64::consts::FRAC_PI_2;
+        let psi = psi_at(0.5, 0.3, &nodes, &gamma, alpha, 1.0);
+        assert!((psi - (-0.5)).abs() < 1e-10, "ψ = -x for freestream at α=90°");
+    }
+    
+    #[test]
+    fn test_psi_inside_airfoil() {
+        let circle = make_circle(32, 0.5);
+        let gamma = vec![0.0; 32];
+        
+        // Inside should return NaN
+        let psi = psi_at(0.0, 0.0, &circle, &gamma, 0.0, 1.0);
+        assert!(psi.is_nan(), "ψ should be NaN inside airfoil");
+        
+        // Outside should return finite value
+        let psi = psi_at(1.0, 0.0, &circle, &gamma, 0.0, 1.0);
+        assert!(psi.is_finite(), "ψ should be finite outside airfoil");
+    }
+    
+    #[test]
+    fn test_psi_grid() {
+        let circle = make_circle(32, 0.3);
+        let gamma = vec![0.0; 32];
+        
+        let grid = compute_psi_grid(
+            &circle, &gamma, 0.0, 1.0,
+            -1.0, 2.0, -1.0, 1.0,
+            10, 8
+        );
+        
+        assert_eq!(grid.len(), 80);  // 10 * 8
+        
+        // Check that some interior points are NaN
+        let nan_count = grid.iter().filter(|&&v| v.is_nan()).count();
+        assert!(nan_count > 0, "Should have some NaN values inside airfoil");
+        
+        // Check that most exterior points are finite
+        let finite_count = grid.iter().filter(|&&v| v.is_finite()).count();
+        assert!(finite_count > 50, "Should have many finite values outside airfoil");
     }
 }

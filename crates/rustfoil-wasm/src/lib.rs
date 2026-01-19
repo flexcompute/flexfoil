@@ -788,6 +788,173 @@ fn compute_streamlines_impl(
 }
 
 // ============================================================================
+// Stream Function Grid
+// ============================================================================
+
+/// Result of stream function grid computation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PsiGridResult {
+    /// Stream function values in row-major order (ny rows, nx columns)
+    /// Values inside the airfoil are NaN
+    pub grid: Vec<f64>,
+    /// Internal stream function value (contour at this value = body + dividing streamline)
+    pub psi_0: f64,
+    /// Grid width (number of columns)
+    pub nx: usize,
+    /// Grid height (number of rows)
+    pub ny: usize,
+    /// Minimum psi value in grid (excluding NaN)
+    pub psi_min: f64,
+    /// Maximum psi value in grid (excluding NaN)
+    pub psi_max: f64,
+    /// Whether computation succeeded
+    pub success: bool,
+    /// Error message if any
+    pub error: Option<String>,
+}
+
+/// Compute stream function values on a grid.
+///
+/// The stream function ψ is constant along streamlines. The contour ψ = psi_0
+/// represents the dividing streamline that passes through the stagnation point.
+///
+/// # Arguments
+/// * `coords` - Airfoil coordinates as flat array [x0, y0, x1, y1, ...]
+/// * `alpha_deg` - Angle of attack in degrees
+/// * `bounds` - [x_min, x_max, y_min, y_max] for the grid
+/// * `resolution` - [nx, ny] grid resolution
+///
+/// # Returns
+/// PsiGridResult with grid values and metadata.
+#[wasm_bindgen]
+pub fn compute_psi_grid(
+    coords: &[f64],
+    alpha_deg: f64,
+    bounds: &[f64],
+    resolution: &[u32],
+) -> JsValue {
+    let result = compute_psi_grid_impl(coords, alpha_deg, bounds, resolution);
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+fn compute_psi_grid_impl(
+    coords: &[f64],
+    alpha_deg: f64,
+    bounds: &[f64],
+    resolution: &[u32],
+) -> PsiGridResult {
+    use rustfoil_solver::inviscid::compute_psi_grid as compute_grid;
+    
+    // Validate inputs
+    if coords.len() < 6 || coords.len() % 2 != 0 {
+        return PsiGridResult {
+            grid: vec![],
+            psi_0: 0.0,
+            nx: 0,
+            ny: 0,
+            psi_min: 0.0,
+            psi_max: 0.0,
+            success: false,
+            error: Some("Invalid coordinates".to_string()),
+        };
+    }
+
+    if bounds.len() != 4 {
+        return PsiGridResult {
+            grid: vec![],
+            psi_0: 0.0,
+            nx: 0,
+            ny: 0,
+            psi_min: 0.0,
+            psi_max: 0.0,
+            success: false,
+            error: Some("bounds must have 4 values: [x_min, x_max, y_min, y_max]".to_string()),
+        };
+    }
+
+    if resolution.len() != 2 {
+        return PsiGridResult {
+            grid: vec![],
+            psi_0: 0.0,
+            nx: 0,
+            ny: 0,
+            psi_min: 0.0,
+            psi_max: 0.0,
+            success: false,
+            error: Some("resolution must have 2 values: [nx, ny]".to_string()),
+        };
+    }
+
+    let points: Vec<Point> = coords.chunks(2).map(|c| point(c[0], c[1])).collect();
+    let nx = resolution[0] as usize;
+    let ny = resolution[1] as usize;
+
+    // Build body and solve
+    let body = match Body::from_points("airfoil", &points) {
+        Ok(b) => b,
+        Err(e) => {
+            return PsiGridResult {
+                grid: vec![],
+                psi_0: 0.0,
+                nx: 0,
+                ny: 0,
+                psi_min: 0.0,
+                psi_max: 0.0,
+                success: false,
+                error: Some(format!("Geometry error: {}", e)),
+            };
+        }
+    };
+
+    let solver = InviscidSolver::new();
+    let flow = FlowConditions::with_alpha_deg(alpha_deg);
+
+    let solution = match solver.solve(&[body], &flow) {
+        Ok(s) => s,
+        Err(e) => {
+            return PsiGridResult {
+                grid: vec![],
+                psi_0: 0.0,
+                nx: 0,
+                ny: 0,
+                psi_min: 0.0,
+                psi_max: 0.0,
+                success: false,
+                error: Some(format!("Solver error: {}", e)),
+            };
+        }
+    };
+
+    // Compute grid
+    let grid = compute_grid(
+        &points,
+        &solution.gamma,
+        flow.alpha,
+        flow.v_inf,
+        bounds[0], bounds[1], bounds[2], bounds[3],
+        nx, ny,
+    );
+
+    // Find min/max excluding NaN
+    let (psi_min, psi_max) = grid.iter()
+        .filter(|v| v.is_finite())
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), &v| {
+            (min.min(v), max.max(v))
+        });
+
+    PsiGridResult {
+        grid,
+        psi_0: solution.psi_0,
+        nx,
+        ny,
+        psi_min,
+        psi_max,
+        success: true,
+        error: None,
+    }
+}
+
+// ============================================================================
 // Smoke Visualization
 // ============================================================================
 

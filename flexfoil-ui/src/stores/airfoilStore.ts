@@ -33,7 +33,6 @@ import {
   scaleAirfoil,
   createCamberControlPoints,
   createThicknessControlPoints,
-  reconstructFromControlPoints,
   reconstructWithOriginalThickness,
   reconstructWithOriginalCamber,
 } from '../lib/airfoilGeometry';

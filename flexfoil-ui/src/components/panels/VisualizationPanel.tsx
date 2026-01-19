@@ -22,6 +22,7 @@ export function VisualizationPanel() {
     showControls,
     showStreamlines,
     showSmoke,
+    showPsiContours,
     showCp,
     showForces,
     setShowGrid,
@@ -31,6 +32,7 @@ export function VisualizationPanel() {
     setShowControls,
     setShowStreamlines,
     setShowSmoke,
+    setShowPsiContours,
     setShowCp,
     setShowForces,
     
@@ -122,6 +124,7 @@ export function VisualizationPanel() {
         </h4>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <ToggleItem label="Streamlines" checked={showStreamlines} onChange={setShowStreamlines} />
+          <ToggleItem label="Stream Function (ψ)" checked={showPsiContours} onChange={setShowPsiContours} />
           <ToggleItem label="Smoke" checked={showSmoke} onChange={setShowSmoke} />
         </div>
       </section>
