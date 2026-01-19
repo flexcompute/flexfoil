@@ -132,13 +132,12 @@ export const FoilSpacingPlot: React.FC<FoilSpacingPlotProps> = ({
   const draggingRef = useRef<{ index: number; isEndpoint: boolean } | null>(null);
 
   // Precompute arc lengths and normals
-  const { arcLengths, normals, totalLength } = useMemo(() => {
+  const { arcLengths, normals } = useMemo(() => {
     const al = computeArcLengths(coordinates);
     const n = computeNormals(coordinates);
     return { 
       arcLengths: al, 
       normals: n, 
-      totalLength: al.length > 0 ? al[al.length - 1] : 1 
     };
   }, [coordinates]);
 

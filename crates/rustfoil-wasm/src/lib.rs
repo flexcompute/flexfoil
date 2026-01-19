@@ -825,6 +825,7 @@ impl WasmSmokeSystem {
 
     /// Set the airfoil geometry and flow solution.
     /// Call this when the airfoil or alpha changes.
+    /// This will invalidate cached streamlines, causing them to be recomputed on next update.
     pub fn set_flow(&mut self, coords: &[f64], alpha_deg: f64) {
         // Parse coordinates
         if coords.len() < 6 || coords.len() % 2 != 0 {
@@ -833,7 +834,6 @@ impl WasmSmokeSystem {
 
         self.coords = coords.chunks(2).map(|c| point(c[0], c[1])).collect();
         self.alpha = alpha_deg.to_radians();
-        self.v_inf = 1.0;
 
         // Solve to get gamma
         let body = match Body::from_points("airfoil", &self.coords) {
@@ -847,6 +847,9 @@ impl WasmSmokeSystem {
         if let Ok(solution) = solver.solve(&[body], &flow) {
             self.gamma = solution.gamma;
         }
+        
+        // Invalidate cached streamlines so they're recomputed with new flow
+        self.inner.invalidate_cache();
     }
 
     /// Update particles by one time step.
@@ -889,8 +892,13 @@ impl WasmSmokeSystem {
 
     /// Set freestream velocity magnitude (flow speed multiplier).
     /// Values are clamped to [0.1, 10.0].
+    /// This invalidates cached streamlines since velocity affects the paths.
     pub fn set_v_inf(&mut self, v_inf: f64) {
-        self.v_inf = v_inf.max(0.1).min(10.0);
+        let new_v_inf = v_inf.max(0.1).min(10.0);
+        if (new_v_inf - self.v_inf).abs() > 0.01 {
+            self.v_inf = new_v_inf;
+            self.inner.invalidate_cache();
+        }
     }
 
     /// Get current freestream velocity magnitude.

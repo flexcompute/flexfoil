@@ -62,8 +62,9 @@ function splitSurfaces(coords: AirfoilPoint[]): {
 
 /**
  * Linear interpolation to find y value at a given x on a curve.
+ * Used for decomposition where we have many sample points.
  */
-function interpolateY(curve: { x: number; y: number }[], targetX: number): number {
+function interpolateYLinear(curve: { x: number; y: number }[], targetX: number): number {
   // Handle edge cases
   if (curve.length === 0) return 0;
   if (curve.length === 1) return curve[0].y;
@@ -85,6 +86,173 @@ function interpolateY(curve: { x: number; y: number }[], targetX: number): numbe
   }
   return curve[0].x > curve[curve.length - 1].x ? curve[0].y : curve[curve.length - 1].y;
 }
+
+/**
+ * Build natural cubic spline coefficients for interpolation.
+ * Given points (x_i, y_i) sorted by x, computes coefficients for each interval.
+ * Returns coefficients a, b, c, d where:
+ *   S_i(x) = a_i + b_i*(x-x_i) + c_i*(x-x_i)^2 + d_i*(x-x_i)^3
+ */
+interface SplineCoefficients {
+  x: number[];  // x values at knots
+  a: number[];  // constant coefficients (= y values)
+  b: number[];  // linear coefficients
+  c: number[];  // quadratic coefficients
+  d: number[];  // cubic coefficients
+}
+
+function buildCubicSplineCoeffs(points: { x: number; y: number }[]): SplineCoefficients | null {
+  const n = points.length;
+  if (n < 2) return null;
+  
+  // Sort by x
+  const sorted = [...points].sort((a, b) => a.x - b.x);
+  
+  const x = sorted.map(p => p.x);
+  const y = sorted.map(p => p.y);
+  
+  if (n === 2) {
+    // Linear interpolation for 2 points
+    const h = x[1] - x[0];
+    const slope = h > 0 ? (y[1] - y[0]) / h : 0;
+    return {
+      x: [x[0]],
+      a: [y[0]],
+      b: [slope],
+      c: [0],
+      d: [0],
+    };
+  }
+  
+  const nSeg = n - 1;
+  
+  // Compute h_i = x_{i+1} - x_i
+  const h: number[] = [];
+  for (let i = 0; i < nSeg; i++) {
+    h.push(x[i + 1] - x[i]);
+  }
+  
+  // Build tridiagonal system for second derivatives (natural spline: c[0] = c[n-1] = 0)
+  const c = new Array(n).fill(0);
+  
+  if (n > 2) {
+    const nInterior = n - 2;
+    const lower = new Array(nInterior).fill(0);
+    const diag = new Array(nInterior).fill(0);
+    const upper = new Array(nInterior).fill(0);
+    const rhs = new Array(nInterior).fill(0);
+    
+    for (let i = 0; i < nInterior; i++) {
+      const j = i + 1; // Index in original arrays
+      lower[i] = h[j - 1];
+      diag[i] = 2 * (h[j - 1] + h[j]);
+      upper[i] = h[j];
+      rhs[i] = 3 * ((y[j + 1] - y[j]) / h[j] - (y[j] - y[j - 1]) / h[j - 1]);
+    }
+    
+    // Thomas algorithm for tridiagonal system
+    const cPrime = new Array(nInterior).fill(0);
+    const dPrime = new Array(nInterior).fill(0);
+    
+    cPrime[0] = upper[0] / diag[0];
+    dPrime[0] = rhs[0] / diag[0];
+    
+    for (let i = 1; i < nInterior; i++) {
+      const denom = diag[i] - lower[i] * cPrime[i - 1];
+      cPrime[i] = i < nInterior - 1 ? upper[i] / denom : 0;
+      dPrime[i] = (rhs[i] - lower[i] * dPrime[i - 1]) / denom;
+    }
+    
+    // Back substitution
+    const solution = new Array(nInterior).fill(0);
+    solution[nInterior - 1] = dPrime[nInterior - 1];
+    for (let i = nInterior - 2; i >= 0; i--) {
+      solution[i] = dPrime[i] - cPrime[i] * solution[i + 1];
+    }
+    
+    // Copy to c array (interior points)
+    for (let i = 0; i < nInterior; i++) {
+      c[i + 1] = solution[i];
+    }
+  }
+  
+  // Compute b and d coefficients
+  const a: number[] = [];
+  const b: number[] = [];
+  const d: number[] = [];
+  
+  for (let i = 0; i < nSeg; i++) {
+    a.push(y[i]);
+    b.push((y[i + 1] - y[i]) / h[i] - h[i] * (2 * c[i] + c[i + 1]) / 3);
+    d.push((c[i + 1] - c[i]) / (3 * h[i]));
+  }
+  
+  return {
+    x: x.slice(0, nSeg),
+    a,
+    b,
+    c: c.slice(0, nSeg),
+    d,
+  };
+}
+
+/**
+ * Evaluate cubic spline at a given x value using precomputed coefficients.
+ */
+function evaluateCubicSpline(coeffs: SplineCoefficients, targetX: number): number {
+  const { x, a, b, c, d } = coeffs;
+  const n = x.length;
+  
+  if (n === 0) return 0;
+  
+  // Find the appropriate interval
+  let i = 0;
+  for (let j = 0; j < n - 1; j++) {
+    if (targetX >= x[j] && targetX <= x[j + 1]) {
+      i = j;
+      break;
+    }
+    if (j === n - 2) {
+      i = j; // Use last segment for extrapolation
+    }
+  }
+  
+  // Handle points before first knot
+  if (targetX < x[0]) {
+    i = 0;
+  }
+  // Handle points after last knot  
+  if (n > 0 && targetX > x[n - 1]) {
+    i = n - 1;
+  }
+  
+  const dx = targetX - x[i];
+  return a[i] + b[i] * dx + c[i] * dx * dx + d[i] * dx * dx * dx;
+}
+
+/**
+ * Interpolate y values at given x positions using cubic spline.
+ * This provides smooth C2-continuous interpolation through the control points.
+ * Exported for use in other modules that need spline interpolation.
+ */
+export function interpolateYSpline(points: { x: number; y: number }[], targetX: number): number {
+  if (points.length === 0) return 0;
+  if (points.length === 1) return points[0].y;
+  if (points.length === 2) {
+    // Linear for 2 points
+    return interpolateYLinear(points, targetX);
+  }
+  
+  const coeffs = buildCubicSplineCoeffs(points);
+  if (!coeffs) return 0;
+  
+  return evaluateCubicSpline(coeffs, targetX);
+}
+
+/**
+ * Legacy alias for linear interpolation (used in decomposition).
+ */
+const interpolateY = interpolateYLinear;
 
 /**
  * Decompose an airfoil into camber line and thickness distribution.
@@ -129,6 +297,7 @@ export function decomposeToCamberThickness(coords: AirfoilPoint[]): CamberThickn
 
 /**
  * Reconstruct airfoil coordinates from camber line and thickness distribution.
+ * Uses linear interpolation - suitable for densely sampled camber/thickness.
  * 
  * @param camber - Camber line points (x, y) 
  * @param thickness - Thickness distribution (x, t)
@@ -149,11 +318,12 @@ export function reconstructFromCamberThickness(
   const lower: AirfoilPoint[] = [];
   
   // Generate points using cosine spacing for better LE resolution
+  // x goes from 1 (TE) to 0 (LE) as i goes from 0 to halfPoints
   for (let i = 0; i <= halfPoints; i++) {
     const beta = (Math.PI * i) / halfPoints;
-    const x = (1 - Math.cos(beta)) / 2;
+    const x = (1 + Math.cos(beta)) / 2;  // TE (x=1) to LE (x=0)
     
-    // Interpolate camber and thickness at this x
+    // Interpolate camber and thickness at this x (linear for dense samples)
     const yc = interpolateY(camber, x);
     const t = interpolateY(thickness.map(p => ({ x: p.x, y: p.t })), x);
     
@@ -164,11 +334,11 @@ export function reconstructFromCamberThickness(
     const yLower = yc - t;
     
     if (i === 0) {
-      // Trailing edge - single point
-      upper.push({ x: 1, y: yc + t, surface: 'upper' });
+      // Trailing edge - single point (x=1)
+      upper.push({ x: 1, y: yUpper, surface: 'upper' });
     } else if (i === halfPoints) {
-      // Leading edge - single point
-      upper.push({ x, y: yc, surface: 'upper' });
+      // Leading edge - single point (x=0, thickness is ~0)
+      upper.push({ x: 0, y: yc, surface: 'upper' });
     } else {
       upper.push({ x, y: yUpper, surface: 'upper' });
       lower.unshift({ x, y: yLower, surface: 'lower' });
@@ -178,7 +348,85 @@ export function reconstructFromCamberThickness(
   // Build final coordinates: upper (TE to LE) + lower (LE to TE)
   const result: AirfoilPoint[] = [...upper];
   
-  // Add lower surface (skip LE, already included)
+  // Add lower surface (goes from near-LE to near-TE)
+  for (let i = 0; i < lower.length; i++) {
+    result.push(lower[i]);
+  }
+  
+  // Close at TE
+  if (result.length > 0 && result[result.length - 1].x < 0.99) {
+    result.push({ x: 1, y: result[0].y, surface: 'lower' });
+  }
+  
+  return result;
+}
+
+/**
+ * Reconstruct airfoil coordinates from sparse camber and thickness control points.
+ * Uses cubic spline interpolation for smooth C2-continuous curves.
+ * 
+ * @param camber - Camber control points (x, y) - typically 5-10 points
+ * @param thickness - Thickness control points (x, t) - typically 5-10 points  
+ * @param nPoints - Number of output points (default 161 for 160 panels)
+ * @returns Airfoil coordinates in standard format
+ */
+export function reconstructFromCamberThicknessSpline(
+  camber: { x: number; y: number }[],
+  thickness: { x: number; t: number }[],
+  nPoints: number = 161
+): AirfoilPoint[] {
+  if (camber.length < 2 || thickness.length < 2) {
+    return [];
+  }
+  
+  // Sort control points by x
+  const sortedCamber = [...camber].sort((a, b) => a.x - b.x);
+  const sortedThickness = [...thickness].sort((a, b) => a.x - b.x);
+  
+  // Build spline coefficients for camber and thickness
+  const camberCoeffs = buildCubicSplineCoeffs(sortedCamber);
+  const thicknessCoeffs = buildCubicSplineCoeffs(
+    sortedThickness.map(p => ({ x: p.x, y: p.t }))
+  );
+  
+  if (!camberCoeffs || !thicknessCoeffs) {
+    // Fallback to linear if spline fails
+    return reconstructFromCamberThickness(camber, thickness, nPoints);
+  }
+  
+  const halfPoints = Math.floor(nPoints / 2);
+  const upper: AirfoilPoint[] = [];
+  const lower: AirfoilPoint[] = [];
+  
+  // Generate points using cosine spacing for better LE resolution
+  // x goes from 1 (TE) to 0 (LE) as i goes from 0 to halfPoints
+  for (let i = 0; i <= halfPoints; i++) {
+    const beta = (Math.PI * i) / halfPoints;
+    const x = (1 + Math.cos(beta)) / 2;  // TE (x=1) to LE (x=0)
+    
+    // Interpolate camber and thickness using cubic spline
+    const yc = evaluateCubicSpline(camberCoeffs, x);
+    const t = Math.max(0, evaluateCubicSpline(thicknessCoeffs, x)); // Ensure non-negative thickness
+    
+    const yUpper = yc + t;
+    const yLower = yc - t;
+    
+    if (i === 0) {
+      // Trailing edge - single point (x=1)
+      upper.push({ x: 1, y: yUpper, surface: 'upper' });
+    } else if (i === halfPoints) {
+      // Leading edge - single point (x=0, thickness is ~0)
+      upper.push({ x: 0, y: yc, surface: 'upper' });
+    } else {
+      upper.push({ x, y: yUpper, surface: 'upper' });
+      lower.unshift({ x, y: yLower, surface: 'lower' });
+    }
+  }
+  
+  // Build final coordinates: upper (TE to LE) + lower (LE to TE)
+  const result: AirfoilPoint[] = [...upper];
+  
+  // Add lower surface (goes from near-LE to near-TE)
   for (let i = 0; i < lower.length; i++) {
     result.push(lower[i]);
   }
@@ -352,7 +600,7 @@ export function createThicknessControlPoints(
 
 /**
  * Reconstruct airfoil from camber and thickness control points.
- * Uses spline interpolation through the control points.
+ * Uses cubic spline interpolation through the control points for smooth curves.
  * 
  * @param camberPoints - Camber control points
  * @param thicknessPoints - Thickness control points  
@@ -376,12 +624,13 @@ export function reconstructFromControlPoints(
   const camber = sortedCamber.map(p => ({ x: p.x, y: p.y }));
   const thickness = sortedThickness.map(p => ({ x: p.x, t: p.t }));
   
-  return reconstructFromCamberThickness(camber, thickness, nPoints);
+  // Use spline interpolation for smooth curves through sparse control points
+  return reconstructFromCamberThicknessSpline(camber, thickness, nPoints);
 }
 
 /**
  * Evaluate a cubic spline through control points at given x values.
- * Simple Catmull-Rom spline interpolation.
+ * Uses natural cubic spline interpolation for C2 continuity.
  */
 export function evaluateSpline(
   controlPoints: { x: number; y: number }[],
@@ -394,8 +643,55 @@ export function evaluateSpline(
   // Sort by x
   const sorted = [...controlPoints].sort((a, b) => a.x - b.x);
   
+  // Build spline coefficients once
+  const coeffs = buildCubicSplineCoeffs(sorted);
+  if (!coeffs) {
+    // Fallback to linear
+    return xValues.map(x => ({
+      x,
+      y: interpolateYLinear(sorted, x),
+    }));
+  }
+  
   return xValues.map(x => ({
     x,
-    y: interpolateY(sorted, x),
+    y: evaluateCubicSpline(coeffs, x),
   }));
+}
+
+/**
+ * Generate a smooth spline curve through camber control points.
+ * Returns densely sampled points for visualization.
+ * 
+ * @param controlPoints - Sparse camber control points
+ * @param nSamples - Number of output samples (default 100)
+ * @returns Densely sampled curve points
+ */
+export function generateCamberSplineCurve(
+  controlPoints: CamberControlPoint[],
+  nSamples: number = 100
+): { x: number; y: number }[] {
+  if (controlPoints.length < 2) {
+    return controlPoints.map(p => ({ x: p.x, y: p.y }));
+  }
+  
+  const sorted = [...controlPoints].sort((a, b) => a.x - b.x);
+  const points = sorted.map(p => ({ x: p.x, y: p.y }));
+  
+  const coeffs = buildCubicSplineCoeffs(points);
+  if (!coeffs) {
+    return points;
+  }
+  
+  const result: { x: number; y: number }[] = [];
+  const xMin = sorted[0].x;
+  const xMax = sorted[sorted.length - 1].x;
+  
+  for (let i = 0; i < nSamples; i++) {
+    const x = xMin + (i / (nSamples - 1)) * (xMax - xMin);
+    const y = evaluateCubicSpline(coeffs, x);
+    result.push({ x, y });
+  }
+  
+  return result;
 }

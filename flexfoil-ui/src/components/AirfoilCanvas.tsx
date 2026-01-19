@@ -23,6 +23,7 @@ import { useLayout } from '../contexts/LayoutContext';
 import type { Point, ViewportState, AirfoilPoint } from '../types';
 import { computeStreamlines, createSmokeSystem, isWasmReady, WasmSmokeSystem, analyzeAirfoil } from '../lib/wasm';
 import { useMorphingAnimation, getCpColor, computeForceVectors } from '../hooks/useMorphingAnimation';
+import { generateCamberSplineCurve } from '../lib/airfoilGeometry';
 
 /**
  * Compute cumulative arc lengths for a sequence of points.
@@ -202,6 +203,10 @@ export function AirfoilCanvas() {
     thicknessControlPoints,
     updateCamberControlPoint,
     updateThicknessControlPoint,
+    addCamberControlPoint,
+    removeCamberControlPoint,
+    addThicknessControlPoint,
+    removeThicknessControlPoint,
   } = useAirfoilStore();
 
   // Viewport state
@@ -267,6 +272,9 @@ export function AirfoilCanvas() {
     return Math.min(100, Math.floor(streamlineDensity * (1 + zoomFactor * 0.5)));
   }, [adaptiveStreamlines, streamlineDensity, viewport.zoom]);
   
+  // Track if we're actively dragging (for disabling expensive computations during drag)
+  const [isDraggingPoint, setIsDraggingPoint] = useState(false);
+  
   // Compute bounds for streamline domain - use large fixed bounds since Rust is fast
   const getVisibleBounds = useCallback((): [number, number, number, number] => {
     // Large domain that covers most reasonable viewing areas
@@ -275,9 +283,12 @@ export function AirfoilCanvas() {
   }, []);
 
   // Compute streamlines when enabled and alpha/panels/zoom change
+  // SKIP during drag to prevent freezing
   useEffect(() => {
-    if (!showStreamlines || !isWasmReady() || panels.length < 10) {
-      setStreamlines([]);
+    if (!showStreamlines || !isWasmReady() || panels.length < 10 || isDraggingPoint) {
+      if (!isDraggingPoint) {
+        setStreamlines([]);
+      }
       return;
     }
     
@@ -299,11 +310,12 @@ export function AirfoilCanvas() {
     } catch (e) {
       console.error('Streamline computation failed:', e);
     }
-  }, [showStreamlines, panels, displayAlpha, streamlineDensity, adaptiveStreamlines, viewport.zoom, getAdaptiveStreamlineCount, getVisibleBounds]);
+  }, [showStreamlines, panels, displayAlpha, streamlineDensity, adaptiveStreamlines, viewport.zoom, getAdaptiveStreamlineCount, getVisibleBounds, isDraggingPoint]);
   
-  // Compute aerodynamic analysis (Cp, Cl, Cm) - always run for proper updates
+  // Compute aerodynamic analysis (Cp, Cl, Cm)
+  // SKIP during drag to prevent freezing - recalculate on drag end
   useEffect(() => {
-    if (!isWasmReady() || panels.length < 10) {
+    if (!isWasmReady() || panels.length < 10 || isDraggingPoint) {
       return;
     }
     
@@ -320,10 +332,7 @@ export function AirfoilCanvas() {
     } catch (e) {
       console.error('Analysis failed:', e);
     }
-  }, [panels, displayAlpha]);
-  
-  // Track if we're actively dragging (for disabling morph animation during drag)
-  const [isDraggingPoint, setIsDraggingPoint] = useState(false);
+  }, [panels, displayAlpha, isDraggingPoint]);
   
   // Morphing animation integration
   const morphTarget = useMemo(() => ({
@@ -351,9 +360,18 @@ export function AirfoilCanvas() {
   // Get setSmokeDensity for adaptive performance
   const { setSmokeDensity } = useVisualizationStore();
   
-  // Initialize smoke system (only when toggled on or panels/settings change)
+  // Store panels for smoke system - only update when NOT dragging
+  const smokePanelsRef = useRef(panels);
   useEffect(() => {
-    if (!showSmoke || !isWasmReady() || panels.length < 10) {
+    if (!isDraggingPoint) {
+      smokePanelsRef.current = panels;
+    }
+  }, [panels, isDraggingPoint]);
+  
+  // Initialize smoke system (only when toggled on or settings change)
+  // SKIP recreation during drag - use cached panels
+  useEffect(() => {
+    if (!showSmoke || !isWasmReady() || smokePanelsRef.current.length < 10) {
       if (smokeAnimationRef.current) {
         cancelAnimationFrame(smokeAnimationRef.current);
         smokeAnimationRef.current = null;
@@ -361,6 +379,11 @@ export function AirfoilCanvas() {
       smokeSystemRef.current = null;
       setSmokePositions(null);
       setSmokeAlphas(null);
+      return;
+    }
+    
+    // Don't recreate smoke system during drag
+    if (isDraggingPoint && smokeSystemRef.current) {
       return;
     }
     
@@ -373,9 +396,9 @@ export function AirfoilCanvas() {
     smokeSystemRef.current.set_spawn_interval(smokeSpawnInterval);
     smokeSystemRef.current.set_max_age(smokeMaxAge);
     
-    // Set initial flow
+    // Set initial flow using cached panels
     smokeSystemRef.current.set_flow(
-      new Float64Array(panels.flatMap(p => [p.x, p.y])),
+      new Float64Array(smokePanelsRef.current.flatMap(p => [p.x, p.y])),
       displayAlpha
     );
     
@@ -440,17 +463,18 @@ export function AirfoilCanvas() {
         cancelAnimationFrame(smokeAnimationRef.current);
       }
     };
-  }, [showSmoke, panels, smokeDensity, smokeParticlesPerBlob, smokeSpawnInterval, smokeMaxAge, flowSpeed, setSmokeDensity]);
+  }, [showSmoke, smokeDensity, smokeParticlesPerBlob, smokeSpawnInterval, smokeMaxAge, flowSpeed, setSmokeDensity, isDraggingPoint, displayAlpha]);
   
   // Update flow when alpha changes (without recreating the system)
+  // SKIP during drag
   useEffect(() => {
-    if (smokeSystemRef.current && panels.length >= 10) {
+    if (smokeSystemRef.current && smokePanelsRef.current.length >= 10 && !isDraggingPoint) {
       smokeSystemRef.current.set_flow(
-        new Float64Array(panels.flatMap(p => [p.x, p.y])),
+        new Float64Array(smokePanelsRef.current.flatMap(p => [p.x, p.y])),
         displayAlpha
       );
     }
-  }, [displayAlpha, panels]);
+  }, [displayAlpha, isDraggingPoint]);
 
   // Interaction state
   const [isDragging, setIsDragging] = useState(false);
@@ -477,6 +501,22 @@ export function AirfoilCanvas() {
 
   // Find point at canvas position
   const findPointAt = useCallback((canvasPos: Point): { type: string; index: number | string } | null => {
+    // Helper to get camber at x position (same as in draw function)
+    const getCamberAt = (x: number): number => {
+      if (camberControlPoints.length === 0) return 0;
+      const camberSpline = generateCamberSplineCurve(camberControlPoints, 50);
+      for (let i = 0; i < camberSpline.length - 1; i++) {
+        if (x >= camberSpline[i].x && x <= camberSpline[i + 1].x) {
+          const t = (camberSpline[i + 1].x - camberSpline[i].x) > 0 
+            ? (x - camberSpline[i].x) / (camberSpline[i + 1].x - camberSpline[i].x)
+            : 0;
+          return camberSpline[i].y + t * (camberSpline[i + 1].y - camberSpline[i].y);
+        }
+      }
+      if (x <= camberSpline[0].x) return camberSpline[0].y;
+      return camberSpline[camberSpline.length - 1].y;
+    };
+    
     // Check camber control points
     if (controlMode === 'camber-spline') {
       for (const cp of camberControlPoints) {
@@ -492,8 +532,8 @@ export function AirfoilCanvas() {
     if (controlMode === 'thickness-spline') {
       for (const cp of thicknessControlPoints) {
         // Thickness points are shown on the upper surface at y = camber + t
-        // For simplicity, we show them at y = t (assuming flat camber for visualization)
-        const cpCanvas = toCanvas({ x: cp.x, y: cp.t });
+        const camber = getCamberAt(cp.x);
+        const cpCanvas = toCanvas({ x: cp.x, y: camber + cp.t });
         const dist = Math.hypot(canvasPos.x - cpCanvas.x, canvasPos.y - cpCanvas.y);
         if (dist < HIT_RADIUS) {
           return { type: 'thickness', index: cp.id };
@@ -637,8 +677,8 @@ export function AirfoilCanvas() {
 
     // Draw camber line and control points (if in camber-spline mode)
     if (showControls && controlMode === 'camber-spline' && camberControlPoints.length > 0) {
-      // Draw camber line through control points
-      const sortedCamber = [...camberControlPoints].sort((a, b) => a.x - b.x);
+      // Generate smooth spline curve through control points
+      const splineCurve = generateCamberSplineCurve(camberControlPoints, 100);
       
       ctx.beginPath();
       ctx.strokeStyle = colors.foilControl;
@@ -646,12 +686,14 @@ export function AirfoilCanvas() {
       ctx.lineWidth = 2;
       ctx.setLineDash([6, 4]);
       
-      const firstCamber = toCanvas(rotatePoint({ x: sortedCamber[0].x, y: sortedCamber[0].y }));
-      ctx.moveTo(firstCamber.x, firstCamber.y);
-      
-      for (let i = 1; i < sortedCamber.length; i++) {
-        const p = toCanvas(rotatePoint({ x: sortedCamber[i].x, y: sortedCamber[i].y }));
-        ctx.lineTo(p.x, p.y);
+      if (splineCurve.length > 0) {
+        const firstCamber = toCanvas(rotatePoint({ x: splineCurve[0].x, y: splineCurve[0].y }));
+        ctx.moveTo(firstCamber.x, firstCamber.y);
+        
+        for (let i = 1; i < splineCurve.length; i++) {
+          const p = toCanvas(rotatePoint({ x: splineCurve[i].x, y: splineCurve[i].y }));
+          ctx.lineTo(p.x, p.y);
+        }
       }
       ctx.stroke();
       ctx.setLineDash([]);
@@ -674,62 +716,75 @@ export function AirfoilCanvas() {
 
     // Draw thickness envelope and control points (if in thickness-spline mode)
     if (showControls && controlMode === 'thickness-spline' && thicknessControlPoints.length > 0) {
-      // Draw thickness envelope (upper and lower bounds)
-      const sortedThickness = [...thicknessControlPoints].sort((a, b) => a.x - b.x);
+      // Generate smooth spline curves for camber and thickness
+      const camberSpline = generateCamberSplineCurve(camberControlPoints, 100);
       
-      // Get camber values for each x position (default to 0 if no camber points)
+      // Get camber value at x using spline (with fallback)
       const getCamberAt = (x: number): number => {
-        if (camberControlPoints.length === 0) return 0;
-        const sorted = [...camberControlPoints].sort((a, b) => a.x - b.x);
-        // Linear interpolation
-        for (let i = 0; i < sorted.length - 1; i++) {
-          if (x >= sorted[i].x && x <= sorted[i + 1].x) {
-            const t = (x - sorted[i].x) / (sorted[i + 1].x - sorted[i].x);
-            return sorted[i].y + t * (sorted[i + 1].y - sorted[i].y);
+        if (camberSpline.length === 0) return 0;
+        // Find closest points and interpolate
+        for (let i = 0; i < camberSpline.length - 1; i++) {
+          if (x >= camberSpline[i].x && x <= camberSpline[i + 1].x) {
+            const t = (camberSpline[i + 1].x - camberSpline[i].x) > 0 
+              ? (x - camberSpline[i].x) / (camberSpline[i + 1].x - camberSpline[i].x)
+              : 0;
+            return camberSpline[i].y + t * (camberSpline[i + 1].y - camberSpline[i].y);
           }
         }
-        if (x <= sorted[0].x) return sorted[0].y;
-        return sorted[sorted.length - 1].y;
+        if (x <= camberSpline[0].x) return camberSpline[0].y;
+        return camberSpline[camberSpline.length - 1].y;
       };
       
-      // Draw upper thickness envelope
+      // Generate smooth thickness envelope using spline through thickness control points
+      const sortedThickness = [...thicknessControlPoints].sort((a, b) => a.x - b.x);
+      const thicknessPoints = sortedThickness.map(p => ({ x: p.x, y: p.t }));
+      const thicknessSpline = generateCamberSplineCurve(
+        thicknessPoints.map((p, i) => ({ id: `t-${i}`, x: p.x, y: p.y })),
+        100
+      );
+      
+      // Draw upper thickness envelope as smooth curve
       ctx.beginPath();
       ctx.strokeStyle = colors.accentWarning;
       ctx.globalAlpha = 0.5;
       ctx.lineWidth = 1.5;
       ctx.setLineDash([4, 4]);
       
-      const firstUpper = toCanvas(rotatePoint({ 
-        x: sortedThickness[0].x, 
-        y: getCamberAt(sortedThickness[0].x) + sortedThickness[0].t 
-      }));
-      ctx.moveTo(firstUpper.x, firstUpper.y);
-      
-      for (let i = 1; i < sortedThickness.length; i++) {
-        const camber = getCamberAt(sortedThickness[i].x);
-        const p = toCanvas(rotatePoint({ 
-          x: sortedThickness[i].x, 
-          y: camber + sortedThickness[i].t 
+      if (thicknessSpline.length > 0) {
+        const firstUpper = toCanvas(rotatePoint({ 
+          x: thicknessSpline[0].x, 
+          y: getCamberAt(thicknessSpline[0].x) + Math.max(0, thicknessSpline[0].y)
         }));
-        ctx.lineTo(p.x, p.y);
+        ctx.moveTo(firstUpper.x, firstUpper.y);
+        
+        for (let i = 1; i < thicknessSpline.length; i++) {
+          const camber = getCamberAt(thicknessSpline[i].x);
+          const p = toCanvas(rotatePoint({ 
+            x: thicknessSpline[i].x, 
+            y: camber + Math.max(0, thicknessSpline[i].y)
+          }));
+          ctx.lineTo(p.x, p.y);
+        }
       }
       ctx.stroke();
       
-      // Draw lower thickness envelope
+      // Draw lower thickness envelope as smooth curve
       ctx.beginPath();
-      const firstLower = toCanvas(rotatePoint({ 
-        x: sortedThickness[0].x, 
-        y: getCamberAt(sortedThickness[0].x) - sortedThickness[0].t 
-      }));
-      ctx.moveTo(firstLower.x, firstLower.y);
-      
-      for (let i = 1; i < sortedThickness.length; i++) {
-        const camber = getCamberAt(sortedThickness[i].x);
-        const p = toCanvas(rotatePoint({ 
-          x: sortedThickness[i].x, 
-          y: camber - sortedThickness[i].t 
+      if (thicknessSpline.length > 0) {
+        const firstLower = toCanvas(rotatePoint({ 
+          x: thicknessSpline[0].x, 
+          y: getCamberAt(thicknessSpline[0].x) - Math.max(0, thicknessSpline[0].y)
         }));
-        ctx.lineTo(p.x, p.y);
+        ctx.moveTo(firstLower.x, firstLower.y);
+        
+        for (let i = 1; i < thicknessSpline.length; i++) {
+          const camber = getCamberAt(thicknessSpline[i].x);
+          const p = toCanvas(rotatePoint({ 
+            x: thicknessSpline[i].x, 
+            y: camber - Math.max(0, thicknessSpline[i].y)
+          }));
+          ctx.lineTo(p.x, p.y);
+        }
       }
       ctx.stroke();
       ctx.setLineDash([]);
@@ -1008,18 +1063,21 @@ export function AirfoilCanvas() {
         // For thickness points, only allow t to change (derived from y position)
         const cp = thicknessControlPoints.find(p => p.id === dragTarget.index);
         if (cp) {
-          // Get camber at this x position
+          // Get camber at this x position using spline interpolation
           const getCamberAt = (x: number): number => {
             if (camberControlPoints.length === 0) return 0;
-            const sorted = [...camberControlPoints].sort((a, b) => a.x - b.x);
-            for (let i = 0; i < sorted.length - 1; i++) {
-              if (x >= sorted[i].x && x <= sorted[i + 1].x) {
-                const t = (x - sorted[i].x) / (sorted[i + 1].x - sorted[i].x);
-                return sorted[i].y + t * (sorted[i + 1].y - sorted[i].y);
+            const camberSpline = generateCamberSplineCurve(camberControlPoints, 50);
+            // Find closest points and interpolate
+            for (let i = 0; i < camberSpline.length - 1; i++) {
+              if (x >= camberSpline[i].x && x <= camberSpline[i + 1].x) {
+                const t = (camberSpline[i + 1].x - camberSpline[i].x) > 0 
+                  ? (x - camberSpline[i].x) / (camberSpline[i + 1].x - camberSpline[i].x)
+                  : 0;
+                return camberSpline[i].y + t * (camberSpline[i + 1].y - camberSpline[i].y);
               }
             }
-            if (x <= sorted[0].x) return sorted[0].y;
-            return sorted[sorted.length - 1].y;
+            if (x <= camberSpline[0].x) return camberSpline[0].y;
+            return camberSpline[camberSpline.length - 1].y;
           };
           const camber = getCamberAt(cp.x);
           // Thickness is the distance from camber line (positive only)
@@ -1124,6 +1182,102 @@ export function AirfoilCanvas() {
     });
   }, [viewport, toAirfoil]);
 
+  // Double-click to add control point
+  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const canvasPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const airfoilPos = toAirfoil(canvasPos);
+    
+    // Only add points in camber-spline or thickness-spline modes
+    if (controlMode === 'camber-spline') {
+      // Check if there's already a point too close (within 0.02 in x)
+      const MIN_GAP = 0.02;
+      const tooClose = camberControlPoints.some(p => Math.abs(p.x - airfoilPos.x) < MIN_GAP);
+      if (tooClose) return;
+      
+      // Don't allow points outside [0, 1] range
+      if (airfoilPos.x < 0 || airfoilPos.x > 1) return;
+      
+      // Add new camber control point
+      const newId = `camber-${Date.now()}`;
+      addCamberControlPoint({
+        id: newId,
+        x: airfoilPos.x,
+        y: airfoilPos.y,
+      });
+    } else if (controlMode === 'thickness-spline') {
+      // Check if there's already a point too close (within 0.02 in x)
+      const MIN_GAP = 0.02;
+      const tooClose = thicknessControlPoints.some(p => Math.abs(p.x - airfoilPos.x) < MIN_GAP);
+      if (tooClose) return;
+      
+      // Don't allow points outside [0, 1] range
+      if (airfoilPos.x < 0 || airfoilPos.x > 1) return;
+      
+      // Get camber at this x position to compute thickness
+      const getCamberAt = (x: number): number => {
+        if (camberControlPoints.length === 0) return 0;
+        const camberSpline = generateCamberSplineCurve(camberControlPoints, 50);
+        for (let i = 0; i < camberSpline.length - 1; i++) {
+          if (x >= camberSpline[i].x && x <= camberSpline[i + 1].x) {
+            const t = (camberSpline[i + 1].x - camberSpline[i].x) > 0 
+              ? (x - camberSpline[i].x) / (camberSpline[i + 1].x - camberSpline[i].x)
+              : 0;
+            return camberSpline[i].y + t * (camberSpline[i + 1].y - camberSpline[i].y);
+          }
+        }
+        if (x <= camberSpline[0].x) return camberSpline[0].y;
+        return camberSpline[camberSpline.length - 1].y;
+      };
+      
+      const camber = getCamberAt(airfoilPos.x);
+      // Thickness is the distance from camber line (positive only)
+      const newT = Math.max(0, airfoilPos.y - camber);
+      
+      // Add new thickness control point
+      const newId = `thickness-${Date.now()}`;
+      addThicknessControlPoint({
+        id: newId,
+        x: airfoilPos.x,
+        t: newT,
+      });
+    }
+  }, [controlMode, camberControlPoints, thicknessControlPoints, addCamberControlPoint, addThicknessControlPoint, toAirfoil]);
+
+  // Right-click to remove control point
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const canvasPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    
+    // Check if we clicked on a point
+    const hit = findPointAt(canvasPos);
+    if (!hit) return;
+    
+    if (hit.type === 'camber' && typeof hit.index === 'string') {
+      // Don't allow removing if only 2 points left
+      if (camberControlPoints.length <= 2) return;
+      // Don't allow removing endpoints (x=0 or x=1)
+      const point = camberControlPoints.find(p => p.id === hit.index);
+      if (point && (point.x <= 0.01 || point.x >= 0.99)) return;
+      
+      removeCamberControlPoint(hit.index);
+    } else if (hit.type === 'thickness' && typeof hit.index === 'string') {
+      // Don't allow removing if only 2 points left
+      if (thicknessControlPoints.length <= 2) return;
+      // Don't allow removing endpoints (x=0 or x=1)
+      const point = thicknessControlPoints.find(p => p.id === hit.index);
+      if (point && (point.x <= 0.01 || point.x >= 0.99)) return;
+      
+      removeThicknessControlPoint(hit.index);
+    }
+  }, [findPointAt, camberControlPoints, thicknessControlPoints, removeCamberControlPoint, removeThicknessControlPoint]);
+
   // Reset view
   const handleResetView = useCallback(() => {
     setViewport((v) => ({
@@ -1147,6 +1301,8 @@ export function AirfoilCanvas() {
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
+        onDoubleClick={handleDoubleClick}
+        onContextMenu={handleContextMenu}
         onWheel={handleWheel}
         style={{ cursor: isDragging ? 'grabbing' : isPanning ? 'grabbing' : hoveredPoint ? 'pointer' : 'crosshair' }}
       />
