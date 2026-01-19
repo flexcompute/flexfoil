@@ -7,6 +7,22 @@
 //! - Cf: skin friction coefficient
 //! - Ctau: maximum shear stress coefficient (for turbulent closure)
 
+// =============================================================================
+// XFOIL Separation Thresholds (from xbl.f lines 556-557)
+// =============================================================================
+
+/// Maximum kinematic shape factor for laminar boundary layers.
+/// When Hk exceeds this value, the flow is considered separated and
+/// the solver switches to inverse mode.
+/// From XFOIL: HLMAX = 3.8
+pub const HK_MAX_LAMINAR: f64 = 3.8;
+
+/// Maximum kinematic shape factor for turbulent boundary layers.
+/// When Hk exceeds this value, the flow is considered separated and
+/// the solver switches to inverse mode.
+/// From XFOIL: HTMAX = 2.5
+pub const HK_MAX_TURBULENT: f64 = 2.5;
+
 /// Which surface of the airfoil.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Surface {
@@ -113,6 +129,34 @@ impl BLState {
             0.0111 * (hk - 1.0).powi(2) / (hk - 1.0 + 0.0278) + 1.528 - 0.0002 * (hk.powi(2) - 1.0)
         }
     }
+    
+    /// Check if this station is in separated/inverse mode.
+    /// 
+    /// Separation is detected when the kinematic shape factor Hk exceeds
+    /// the threshold for the current flow regime:
+    /// - Laminar: Hk >= 3.8 (HK_MAX_LAMINAR)
+    /// - Turbulent: Hk >= 2.5 (HK_MAX_TURBULENT)
+    /// 
+    /// In separated regions, the BL solver should switch to inverse mode,
+    /// where Hk is prescribed and Ue is solved for.
+    pub fn is_separated(&self) -> bool {
+        let hk = self.hk();
+        let hk_max = if self.is_turbulent {
+            HK_MAX_TURBULENT
+        } else {
+            HK_MAX_LAMINAR
+        };
+        hk >= hk_max
+    }
+    
+    /// Get the maximum shape factor threshold for current flow state.
+    pub fn hk_max(&self) -> f64 {
+        if self.is_turbulent {
+            HK_MAX_TURBULENT
+        } else {
+            HK_MAX_LAMINAR
+        }
+    }
 }
 
 /// A boundary layer station with surface and index info.
@@ -146,5 +190,41 @@ mod tests {
         state.theta = 0.001;
         let re_theta = state.re_theta(1e6);
         assert!((re_theta - 1000.0).abs() < 0.1);
+    }
+    
+    #[test]
+    fn test_is_separated_laminar() {
+        let mut state = BLState::default();
+        state.is_turbulent = false;
+        
+        // Below threshold
+        state.h = 3.0;
+        assert!(!state.is_separated());
+        
+        // At threshold
+        state.h = HK_MAX_LAMINAR;
+        assert!(state.is_separated());
+        
+        // Above threshold
+        state.h = 4.5;
+        assert!(state.is_separated());
+    }
+    
+    #[test]
+    fn test_is_separated_turbulent() {
+        let mut state = BLState::default();
+        state.is_turbulent = true;
+        
+        // Below threshold
+        state.h = 2.0;
+        assert!(!state.is_separated());
+        
+        // At threshold
+        state.h = HK_MAX_TURBULENT;
+        assert!(state.is_separated());
+        
+        // Above threshold
+        state.h = 3.0;
+        assert!(state.is_separated());
     }
 }

@@ -481,19 +481,28 @@ pub fn compute_interval_residuals(
     let res_momentum = tlog + btmp * ulog - xlog * 0.5 * cfx;
     
     // === Shape equation ===
-    let hca = 0.5 * (closures1.hc + closures2.hc);
-    let hsa = 0.5 * (hs1 + hs2);
-    
-    // Dissipation with upwinding
-    let di1 = closures1.di;
-    let di2 = closures2.di;
-    let xot1 = x1 / t1;
-    let xot2 = x2 / t2;
-    let dix = (1.0 - upw) * di1 * xot1 + upw * di2 * xot2;
-    let cfx_shape = (1.0 - upw) * cf1 * xot1 + upw * cf2 * xot2;
-    
-    let btmp_shape = 2.0 * hca / hsa.max(0.1) + 1.0 - ha;
-    let res_shape = hlog + btmp_shape * ulog + xlog * (0.5 * cfx_shape - dix);
+    // In inverse mode, prescribe Hk and solve for Ue
+    // The shape equation becomes: Hk - Hk_target = 0
+    let res_shape = if state2.inverse_mode {
+        // Inverse mode: residual is simply Hk - Hk_target
+        // This drives the Newton solver to find Ue that produces target Hk
+        closures2.hk - state2.hk_target
+    } else {
+        // Direct mode: standard entrainment/energy equation
+        let hca = 0.5 * (closures1.hc + closures2.hc);
+        let hsa = 0.5 * (hs1 + hs2);
+        
+        // Dissipation with upwinding
+        let di1 = closures1.di;
+        let di2 = closures2.di;
+        let xot1 = x1 / t1;
+        let xot2 = x2 / t2;
+        let dix = (1.0 - upw) * di1 * xot1 + upw * di2 * xot2;
+        let cfx_shape = (1.0 - upw) * cf1 * xot1 + upw * cf2 * xot2;
+        
+        let btmp_shape = 2.0 * hca / hsa.max(0.1) + 1.0 - ha;
+        hlog + btmp_shape * ulog + xlog * (0.5 * cfx_shape - dix)
+    };
     
     // === First equation (Amplification or Shear lag) ===
     let res_1 = if state2.is_turbulent {
@@ -535,38 +544,88 @@ fn compute_amplification_residual(
     ampl2 - ampl1 - ax * ds
 }
 
-/// Compute amplification rate dN/dx (from XFOIL's DAMPL).
+/// Compute amplification rate dN/dx using XFOIL's DAMPL2 algorithm.
+/// 
+/// DAMPL2 is the 1996 version that includes:
+/// 1. Correct AF coefficient with exponential term for high H
+/// 2. Non-envelope max-amplification correction for separated profiles (H > 3.5)
+/// 
+/// Reference: Drela & Giles, "Viscous/Inviscid Analysis of Transonic and
+/// Low Reynolds Number Airfoils", AIAA Journal, Oct. 1987.
+/// Updated March 1991, November 1996.
+/// 
+/// # Arguments
+/// * `hk` - Kinematic shape factor
+/// * `theta` - Momentum thickness
+/// * `re_theta` - Momentum thickness Reynolds number
+/// 
+/// # Returns
+/// Spatial amplification rate dN/dx
 fn compute_amplification_rate(hk: f64, theta: f64, re_theta: f64) -> f64 {
+    const DGR: f64 = 0.08;  // Ramp half-width in log10(Re_theta) space
+    const HK1: f64 = 3.5;   // Start of separation profile blending
+    const HK2: f64 = 4.0;   // End of separation profile blending
+    
     let hmi = 1.0 / (hk - 1.0).max(0.01);
     
-    // Critical Re_theta correlation
+    // === Critical Re_theta correlation (Falkner-Skan profiles) ===
     let aa = 2.492 * hmi.powf(0.43);
     let bb = (14.0 * hmi - 9.24).tanh();
-    let grcrit = aa + 0.7 * (bb + 1.0);
+    let grc = aa + 0.7 * (bb + 1.0);  // log10(Re_theta_critical)
     
     let gr = re_theta.max(1.0).log10();
     
-    if gr < grcrit - 0.08 {
-        return 0.0; // Below critical
+    // Below critical: no amplification
+    if gr < grc - DGR {
+        return 0.0;
     }
     
-    // Ramp function for smooth turn-on
-    let rnorm = ((gr - (grcrit - 0.08)) / 0.16).clamp(0.0, 1.0);
+    // === Ramp function for smooth turn-on near Re_theta_critical ===
+    let rnorm = ((gr - (grc - DGR)) / (2.0 * DGR)).clamp(0.0, 1.0);
     let rfac = if rnorm >= 1.0 {
         1.0
     } else {
         3.0 * rnorm.powi(2) - 2.0 * rnorm.powi(3)
     };
     
-    // Amplification envelope slope
+    // === Amplification envelope slope dN/d(Re_theta) ===
     let arg = 3.87 * hmi - 2.52;
     let ex = (-arg * arg).exp();
     let dadr = 0.028 * (hk - 1.0) - 0.0345 * ex;
     
-    // Conversion factor
-    let af = -0.05 + 2.7 * hmi - 5.5 * hmi.powi(2) + 3.0 * hmi.powi(3);
+    // === Conversion factor: theta * d(Re_theta)/dx ===
+    // DAMPL2 adds exponential term for high H (separation bubble profiles)
+    let brg = -20.0 * hmi;
+    let af = -0.05 + 2.7 * hmi - 5.5 * hmi.powi(2) + 3.0 * hmi.powi(3) + 0.1 * brg.exp();
     
-    (af * dadr / theta.max(1e-10)) * rfac
+    // Base envelope amplification rate AX1
+    let ax1 = (af * dadr / theta.max(1e-10)) * rfac;
+    
+    // === Non-envelope correction for separated profiles (H > 3.5) ===
+    // This handles laminar separation bubbles where standard Falkner-Skan
+    // profiles are not representative. Uses Orr-Sommerfeld max ai(H, Re_theta).
+    if hk < HK1 {
+        return ax1;
+    }
+    
+    // Blending fraction: 0 at HK1, 1 at HK2
+    let hnorm = ((hk - HK1) / (HK2 - HK1)).clamp(0.0, 1.0);
+    let hfac = if hnorm >= 1.0 {
+        1.0
+    } else {
+        3.0 * hnorm.powi(2) - 2.0 * hnorm.powi(3)
+    };
+    
+    // Modified amplification rate AX2 for separated profiles
+    // Based on Orr-Sommerfeld stability calculations
+    let gr0 = 0.30 + 0.35 * (-0.15 * (hk - 5.0)).exp();
+    let tnr = (1.2 * (gr - gr0)).tanh();
+    
+    let ax2_raw = (0.086 * tnr - 0.25 / (hk - 1.0).powf(1.5)) / theta.max(1e-10);
+    let ax2 = ax2_raw.max(0.0);  // Clamp to non-negative
+    
+    // Blend between envelope (AX1) and Orr-Sommerfeld (AX2)
+    hfac * ax2 + (1.0 - hfac) * ax1
 }
 
 /// Compute shear lag equation residual (turbulent).
@@ -621,13 +680,255 @@ fn compute_shear_lag_residual(
     scc * (cqa - sa * ald) * ds - dea * 2.0 * slog + dea * 2.0 * (uq * ds - ulog) * duxcon
 }
 
+/// Analytical Jacobian blocks matching XFOIL's BLDIF.
+/// 
+/// This computes the analytical derivatives instead of finite differences
+/// for better accuracy and efficiency.
+/// 
+/// # Variables (XFOIL convention)
+/// - var[0]: Ctau^(1/2) (turbulent) or N-factor (laminar)
+/// - var[1]: θ (momentum thickness)  
+/// - var[2]: m = Ue × δ* (mass defect)
+/// 
+/// # Returns
+/// (VS1, VS2) where:
+/// - VS1[k][l] = ∂R_k / ∂(variable_l at station 1)
+/// - VS2[k][l] = ∂R_k / ∂(variable_l at station 2)
+pub fn compute_analytical_jacobian(
+    state1: &StationState,
+    state2: &StationState,
+    closures1: &BLClosures,
+    closures2: &BLClosures,
+    reynolds: f64,
+) -> (BLBlock, BLBlock) {
+    use super::newton::BLBlock;
+    
+    let mut vs1 = BLBlock::zero();
+    let mut vs2 = BLBlock::zero();
+    
+    // Geometric quantities
+    let x1 = state1.s.max(1e-12);
+    let x2 = state2.s.max(1e-12);
+    let ds = (x2 - x1).abs().max(1e-12);
+    
+    // Velocity quantities
+    let u1 = state1.ue.max(1e-10);
+    let u2 = state2.ue.max(1e-10);
+    
+    // Theta quantities
+    let t1 = state1.theta.max(1e-12);
+    let t2 = state2.theta.max(1e-12);
+    
+    // Shape factors
+    let h1 = closures1.h.max(1.05);
+    let h2 = closures2.h.max(1.05);
+    let hk1 = closures1.hk.max(1.05);
+    let hk2 = closures2.hk.max(1.05);
+    let hs1 = closures1.hs.max(0.1);
+    let hs2 = closures2.hs.max(0.1);
+    
+    // Skin friction
+    let cf1 = closures1.cf;
+    let cf2 = closures2.cf;
+    
+    // Dissipation
+    let di1 = closures1.di;
+    let di2 = closures2.di;
+    
+    // Upwinding factor
+    let upw = compute_upwind_factor(hk1, hk2);
+    
+    // Mass defect
+    let m1 = state1.mass.max(1e-12);
+    let m2 = state2.mass.max(1e-12);
+    
+    // === Derivatives of closure quantities wrt primary variables ===
+    
+    // dH/dm at constant theta and Ue: H = m/(Ue*θ)
+    let dh1_dm1 = 1.0 / (u1 * t1);
+    let dh2_dm2 = 1.0 / (u2 * t2);
+    
+    // dH/dθ at constant m and Ue: H = m/(Ue*θ) => dH/dθ = -m/(Ue*θ²) = -H/θ
+    let dh1_dt1 = -h1 / t1;
+    let dh2_dt2 = -h2 / t2;
+    
+    // dHk/dH (simplified: Hk ≈ H for incompressible)
+    let dhk1_dh1 = 1.0;
+    let dhk2_dh2 = 1.0;
+    
+    // dHs/dHk from closure relations
+    let (dhs1_dhk1, dhs2_dhk2) = if state2.is_turbulent {
+        // Turbulent Hs-Hk relation
+        let dhsk1 = -(hk1 - 4.35).signum() * 0.15;
+        let dhsk2 = -(hk2 - 4.35).signum() * 0.15;
+        (dhsk1, dhsk2)
+    } else {
+        // Laminar Hs-Hk relation (from Thwaites)
+        (0.5, 0.5)
+    };
+    
+    // dCf/dRe_θ and dCf/dHk (Ludwieg-Tillmann)
+    let re_t1 = closures1.re_theta.max(100.0);
+    let re_t2 = closures2.re_theta.max(100.0);
+    let dcf1_dret = -0.268 * cf1 / re_t1;
+    let dcf2_dret = -0.268 * cf2 / re_t2;
+    let dcf1_dhk = -cf1 * (0.678 * h1) / (h1 - 0.4).max(0.1).powi(2);
+    let dcf2_dhk = -cf2 * (0.678 * h2) / (h2 - 0.4).max(0.1).powi(2);
+    
+    // Chain rules: dRe_θ/dθ = Ue*Re, dRe_θ/dm involves dUe/dm through DIJ
+    let dret1_dt1 = u1 * reynolds;
+    let dret2_dt2 = u2 * reynolds;
+    
+    // === Momentum equation Jacobian ===
+    // REZT = log(θ2/θ1) + (H+2)*log(U2/U1) - 0.5*CFX*log(x2/x1)
+    
+    // Logarithmic terms
+    let tlog = (t2 / t1).ln();
+    let ulog = (u2 / u1).ln();
+    let xlog = (x2 / x1).ln();
+    
+    // Average shape factor
+    let ha = 0.5 * (h1 + h2);
+    let btmp = ha + 2.0;
+    
+    // CFX term
+    let xa = 0.5 * (x1 + x2);
+    let ta = 0.5 * (t1 + t2);
+    let cfm = 0.5 * (cf1 + cf2);
+    let cfx = 0.5 * cfm * xa / ta + 0.25 * (cf1 * x1 / t1 + cf2 * x2 / t2);
+    
+    // Derivatives of momentum residual
+    // dR_mom/dθ1
+    let z_tl = 1.0; // d(tlog)/d(log(θ))
+    let z_cfx = -xlog * 0.5;
+    let dcfx_dt1 = -0.5 * cfm * xa / (ta * ta) * 0.5 - 0.25 * cf1 * x1 / (t1 * t1);
+    vs1.data[1][1] = -z_tl / t1 + z_cfx * dcfx_dt1 + 0.5 * ulog * dh1_dt1;
+    
+    // dR_mom/dθ2
+    let dcfx_dt2 = -0.5 * cfm * xa / (ta * ta) * 0.5 - 0.25 * cf2 * x2 / (t2 * t2);
+    vs2.data[1][1] = z_tl / t2 + z_cfx * dcfx_dt2 + 0.5 * ulog * dh2_dt2;
+    
+    // dR_mom/dm (through H)
+    let z_ha = ulog;
+    vs1.data[1][2] = 0.5 * z_ha * dh1_dm1;
+    vs2.data[1][2] = 0.5 * z_ha * dh2_dm2;
+    
+    // === Shape equation Jacobian ===
+    // REZH = log(Hs2/Hs1) + (2*Hc/Hs + 1 - H)*log(U2/U1) + log(x2/x1)*(0.5*CFX - DIX)
+    
+    if state2.inverse_mode {
+        // Inverse mode: R_shape = Hk - Hk_target
+        // dR/dθ2 = dHk/dθ2 = dHk/dH * dH/dθ2
+        vs2.data[2][1] = dhk2_dh2 * dh2_dt2;
+        // dR/dm2 = dHk/dm2 = dHk/dH * dH/dm2
+        vs2.data[2][2] = dhk2_dh2 * dh2_dm2;
+        // Station 1 derivatives are zero in inverse mode shape equation
+        vs1.data[2][1] = 0.0;
+        vs1.data[2][2] = 0.0;
+    } else {
+        // Direct mode: standard entrainment equation
+        let hsa = 0.5 * (hs1 + hs2);
+        let hca = 0.0; // Incompressible
+        let btmp_shape = 2.0 * hca / hsa.max(0.1) + 1.0 - ha;
+        
+        let xot1 = x1 / t1;
+        let xot2 = x2 / t2;
+        let dix = (1.0 - upw) * di1 * xot1 + upw * di2 * xot2;
+        let cfx_shape = (1.0 - upw) * cf1 * xot1 + upw * cf2 * xot2;
+        
+        // dR_shape/dθ1
+        let z_hs1 = -1.0 / hs1;
+        let z_cfx_s = xlog * 0.5;
+        let z_dix = -xlog;
+        let dt_cfx1 = (1.0 - upw) * cf1 * (-xot1 / t1);
+        let dt_dix1 = (1.0 - upw) * di1 * (-xot1 / t1);
+        vs1.data[2][1] = z_hs1 * dhs1_dhk1 * dhk1_dh1 * dh1_dt1 
+                        + z_cfx_s * dt_cfx1 + z_dix * dt_dix1
+                        - 0.5 * ulog * dh1_dt1;
+        
+        // dR_shape/dθ2
+        let z_hs2 = 1.0 / hs2;
+        let dt_cfx2 = upw * cf2 * (-xot2 / t2);
+        let dt_dix2 = upw * di2 * (-xot2 / t2);
+        vs2.data[2][1] = z_hs2 * dhs2_dhk2 * dhk2_dh2 * dh2_dt2
+                        + z_cfx_s * dt_cfx2 + z_dix * dt_dix2
+                        - 0.5 * ulog * dh2_dt2;
+        
+        // dR_shape/dm1, dR_shape/dm2 (through H and Hs)
+        vs1.data[2][2] = z_hs1 * dhs1_dhk1 * dhk1_dh1 * dh1_dm1 - 0.5 * ulog * dh1_dm1;
+        vs2.data[2][2] = z_hs2 * dhs2_dhk2 * dhk2_dh2 * dh2_dm2 - 0.5 * ulog * dh2_dm2;
+    }
+    
+    // === First equation (Amplification or Shear lag) ===
+    if state2.is_turbulent {
+        // Shear lag: R = SCC*(CQ - S*ALD)*ds - 2*DE*log(S2/S1) + ...
+        let s1_val = state1.ctau_or_ampl.max(1e-10);
+        let s2_val = state2.ctau_or_ampl.max(1e-10);
+        
+        // dR/dS1 = SCC*ds*(-ALD)*(1-UPW) + 2*DE/S1
+        let sccon = 5.6;
+        let usa = 0.5 * (closures1.us + closures2.us);
+        let scc = sccon * 1.333 / (1.0 + usa);
+        let dea = 0.5 * (closures1.delta + closures2.delta);
+        let ald = 1.0;
+        
+        vs1.data[0][0] = -scc * ds * ald * (1.0 - upw) + 2.0 * dea / s1_val;
+        vs2.data[0][0] = -scc * ds * ald * upw - 2.0 * dea / s2_val;
+        
+        // dR/dθ, dR/dm through CQ and DE derivatives (simplified)
+        vs1.data[0][1] = 0.0; // Simplified - would need CQ derivatives
+        vs2.data[0][1] = 0.0;
+        vs1.data[0][2] = 0.0;
+        vs2.data[0][2] = 0.0;
+    } else {
+        // Amplification: R = N2 - N1 - AX*ds
+        let ax = compute_amplification_rate(hk2, t2, re_t2);
+        
+        // dR/dN1 = -1, dR/dN2 = 1
+        vs1.data[0][0] = -1.0;
+        vs2.data[0][0] = 1.0;
+        
+        // dR/dθ through dAX/dθ (complex chain rule)
+        // Simplified: AX depends on Hk and Re_θ
+        let dax_dhk = compute_dax_dhk(hk2, t2, re_t2);
+        let dax_dret = compute_dax_dret(hk2, t2, re_t2);
+        
+        vs2.data[0][1] = -ds * (dax_dhk * dhk2_dh2 * dh2_dt2 + dax_dret * dret2_dt2);
+        vs2.data[0][2] = -ds * dax_dhk * dhk2_dh2 * dh2_dm2;
+        
+        vs1.data[0][1] = 0.0;
+        vs1.data[0][2] = 0.0;
+    }
+    
+    (vs1, vs2)
+}
+
+/// Derivative of amplification rate wrt Hk
+fn compute_dax_dhk(hk: f64, theta: f64, re_theta: f64) -> f64 {
+    let eps = 1e-6;
+    let ax1 = compute_amplification_rate(hk, theta, re_theta);
+    let ax2 = compute_amplification_rate(hk + eps, theta, re_theta);
+    (ax2 - ax1) / eps
+}
+
+/// Derivative of amplification rate wrt Re_theta
+fn compute_dax_dret(hk: f64, theta: f64, re_theta: f64) -> f64 {
+    let eps = re_theta * 1e-6;
+    let ax1 = compute_amplification_rate(hk, theta, re_theta);
+    let ax2 = compute_amplification_rate(hk, theta, re_theta + eps);
+    (ax2 - ax1) / eps
+}
+
 /// Compute Jacobian blocks for BL interval.
 /// 
 /// Returns (VS1, VS2) where:
 /// - VS1[k][l] = d(residual_k) / d(variable_l at station 1)
 /// - VS2[k][l] = d(residual_k) / d(variable_l at station 2)
 /// 
-/// Variables: [0] = Ctau/Ampl, [1] = Theta, [2] = mass (via delta* -> H)
+/// Variables: [0] = Ctau/Ampl, [1] = Theta, [2] = mass (direct) or Ue (inverse mode)
+/// 
+/// In inverse mode, the third variable changes from mass to Ue, and the
+/// third equation becomes Hk - Hk_target = 0.
 pub fn compute_interval_jacobian(
     state1: &StationState,
     state2: &StationState,
@@ -642,6 +943,9 @@ pub fn compute_interval_jacobian(
     let mut vs1 = BLBlock::zero();
     let mut vs2 = BLBlock::zero();
     
+    // Check if in inverse mode
+    let inverse_mode = state2.inverse_mode;
+    
     // Perturb station 1 variables
     for l in 0..3 {
         let mut state1_plus = *state1;
@@ -649,9 +953,16 @@ pub fn compute_interval_jacobian(
             0 => state1_plus.ctau_or_ampl += eps,
             1 => state1_plus.theta += eps,
             2 => {
-                // Mass -> affects H
-                state1_plus.mass += eps;
-                state1_plus.update_h();
+                // In direct mode: perturb mass (affects H)
+                // In inverse mode: perturb Ue
+                if inverse_mode {
+                    state1_plus.ue += eps;
+                    // Update mass to be consistent: m = Ue * δ* = Ue * θ * H
+                    state1_plus.mass = state1_plus.ue * state1_plus.theta * state1_plus.h;
+                } else {
+                    state1_plus.mass += eps;
+                    state1_plus.update_h();
+                }
             }
             _ => {}
         }
@@ -673,8 +984,16 @@ pub fn compute_interval_jacobian(
             0 => state2_plus.ctau_or_ampl += eps,
             1 => state2_plus.theta += eps,
             2 => {
-                state2_plus.mass += eps;
-                state2_plus.update_h();
+                // In direct mode: perturb mass
+                // In inverse mode: perturb Ue (the unknown we're solving for)
+                if inverse_mode {
+                    state2_plus.ue += eps;
+                    // Update mass to be consistent
+                    state2_plus.mass = state2_plus.ue * state2_plus.theta * state2_plus.h;
+                } else {
+                    state2_plus.mass += eps;
+                    state2_plus.update_h();
+                }
             }
             _ => {}
         }
@@ -738,6 +1057,9 @@ pub struct LocalNewtonResult {
 /// Given the upstream state (state1), solves for the current station state (state2)
 /// such that the interval residuals are zero.
 /// 
+/// In inverse mode, the third variable is Ue instead of mass, and the
+/// third equation is Hk - Hk_target = 0.
+/// 
 /// This matches XFOIL's local Newton loop in `xbl.f` lines 610-740.
 pub fn solve_station_newton(
     state1: &StationState,
@@ -745,6 +1067,8 @@ pub fn solve_station_newton(
     reynolds: f64,
     config: &LocalNewtonConfig,
 ) -> LocalNewtonResult {
+    use crate::boundary_layer::relax_ue_update;
+    
     let closures1 = BLClosures::compute(
         state1.theta, state1.h, state1.ue, reynolds, state1.is_turbulent
     );
@@ -752,6 +1076,12 @@ pub fn solve_station_newton(
     let mut iterations = 0;
     let mut converged = false;
     let mut residual_norm = f64::MAX;
+    
+    // Check if in inverse mode
+    let inverse_mode = state2.inverse_mode;
+    
+    // Use smaller relaxation for inverse mode to improve stability
+    let relax = if inverse_mode { config.relax * 0.5 } else { config.relax };
     
     for iter in 0..config.max_iter {
         iterations = iter + 1;
@@ -788,13 +1118,29 @@ pub fn solve_station_newton(
         };
         
         // Apply update with relaxation
-        state2.ctau_or_ampl = (state2.ctau_or_ampl + config.relax * delta[0]).max(0.0);
-        state2.theta = (state2.theta + config.relax * delta[1]).max(1e-12);
-        state2.mass = (state2.mass + config.relax * delta[2]).max(1e-12);
-        state2.update_h();
+        state2.ctau_or_ampl = (state2.ctau_or_ampl + relax * delta[0]).max(0.0);
+        state2.theta = (state2.theta + relax * delta[1]).max(1e-12);
         
-        // Clamp H to reasonable range
-        state2.h = state2.h.clamp(1.05, 10.0);
+        if inverse_mode {
+            // Inverse mode: update Ue (third variable)
+            // Use the dedicated relaxation function for Ue updates
+            let ue_old = state2.ue;
+            let ue_delta = delta[2];
+            state2.ue = relax_ue_update(ue_old, ue_old + ue_delta, relax);
+            state2.ue = state2.ue.max(1e-10); // Ensure positive
+            
+            // In inverse mode, H is prescribed (target Hk)
+            // Update mass to be consistent: m = Ue * δ* = Ue * θ * H
+            state2.h = state2.hk_target.clamp(1.05, 10.0);
+            state2.mass = state2.ue * state2.theta * state2.h;
+        } else {
+            // Direct mode: update mass (third variable)
+            state2.mass = (state2.mass + relax * delta[2]).max(1e-12);
+            state2.update_h();
+            
+            // Clamp H to reasonable range
+            state2.h = state2.h.clamp(1.05, 10.0);
+        }
     }
     
     LocalNewtonResult {
@@ -810,6 +1156,10 @@ pub fn solve_station_newton(
 /// This is a simplified version of XFOIL's BLMARCH. It uses local Newton
 /// iterations at each station to solve the BL equations sequentially.
 /// 
+/// Includes inverse mode detection: when Hk exceeds the separation threshold,
+/// the solver switches to inverse mode where Hk is prescribed and the shape
+/// equation becomes Hk - Hk_target = 0.
+/// 
 /// Returns the solved BL states at all stations.
 pub fn march_bl_surface(
     ue: &[f64],
@@ -819,6 +1169,8 @@ pub fn march_bl_surface(
     n_crit: f64,
     config: &LocalNewtonConfig,
 ) -> Vec<StationState> {
+    use crate::boundary_layer::{HK_MAX_LAMINAR, HK_MAX_TURBULENT, compute_target_hk};
+    
     let n_stations = panel_indices.len();
     if n_stations < 2 {
         return vec![];
@@ -842,6 +1194,7 @@ pub fn march_bl_surface(
     
     let mut is_turbulent = false;
     let mut ampl = 0.0;
+    let mut in_inverse_mode = false;
     
     // March downstream
     for j in 1..n_stations {
@@ -859,7 +1212,12 @@ pub fn march_bl_surface(
             is_turbulent = true;
         }
         
-        let initial_state = StationState::new(
+        // Check for separation / inverse mode
+        // From XFOIL: DIRECT = HKTEST.LT.HMAX
+        let hk_max = if is_turbulent { HK_MAX_TURBULENT } else { HK_MAX_LAMINAR };
+        let should_inverse = prev_state.h >= hk_max || in_inverse_mode;
+        
+        let mut initial_state = StationState::new(
             if is_turbulent { 0.03 } else { ampl }, // Initial Ctau or Ampl
             theta_guess,
             h_guess,
@@ -868,12 +1226,32 @@ pub fn march_bl_surface(
             is_turbulent,
         );
         
+        // Set inverse mode if needed
+        if should_inverse {
+            in_inverse_mode = true;
+            
+            // Compute target Hk for inverse mode
+            let ds = (s_j - prev_state.s).abs();
+            let hk_target = compute_target_hk(
+                prev_state.h,
+                ds,
+                prev_state.theta,
+                is_turbulent,
+                false, // not wake
+            );
+            
+            initial_state.set_inverse_mode(hk_target);
+            
+            // In inverse mode, clamp initial H guess to target
+            initial_state.h = hk_target;
+        }
+        
         // Local Newton solve
         let result = solve_station_newton(prev_state, initial_state, reynolds, config);
         
-        if !result.converged {
+        let mut final_state = if !result.converged {
             // Use guess if Newton fails
-            let fallback = StationState::new(
+            let mut fallback = StationState::new(
                 initial_state.ctau_or_ampl,
                 theta_guess * 1.1, // Slight increase
                 h_guess,
@@ -881,10 +1259,23 @@ pub fn march_bl_surface(
                 s_j,
                 is_turbulent,
             );
-            states.push(fallback);
+            if initial_state.inverse_mode {
+                fallback.set_inverse_mode(initial_state.hk_target);
+                fallback.h = initial_state.hk_target; // Enforce target Hk
+            }
+            fallback
         } else {
-            states.push(result.state);
+            result.state
+        };
+        
+        // Check if we can exit inverse mode (Hk dropped below threshold)
+        if in_inverse_mode && final_state.h < hk_max * 0.95 {
+            // Reattachment detected - exit inverse mode
+            in_inverse_mode = false;
+            final_state.clear_inverse_mode();
         }
+        
+        states.push(final_state);
         
         // Update amplification factor for transition
         if !is_turbulent {

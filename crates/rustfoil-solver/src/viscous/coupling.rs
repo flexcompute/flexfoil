@@ -6,6 +6,7 @@ use crate::inviscid::{compute_source_influence_matrix, compute_ue_change_from_ma
 use crate::viscous::newton::{
     NewtonConfig, NewtonGeometry, NewtonState, NewtonVIISolver,
     BlockTridiagJacobian, StationState, NewtonScaling,
+    XfoilNewtonSystem, XfoilNewtonConfig,
 };
 use crate::viscous::blsys::{
     LocalNewtonConfig, march_bl_surface, build_block_jacobian,
@@ -441,20 +442,33 @@ impl ViscousSolver {
         
         let mut initial_state = NewtonState::from_inviscid(inviscid, n_bl);
         
-        // Copy theta and h from BL solution for better initialization
+        // Copy theta and compute mass from BL solution for better initialization
+        // mass = Ue * delta_star = Ue * theta * h
         for (j, station) in bl_solution.upper.iter().enumerate() {
             if j < n_upper {
-                initial_state.theta[j] = station.state.theta.max(1e-8);
-                initial_state.h[j] = station.state.h.clamp(1.0, 10.0);
+                let panel_idx = geometry.upper_indices[j];
+                let ue = inviscid.gamma[panel_idx].abs().max(1e-10);
+                let theta = station.state.theta.max(1e-8);
+                let h = station.state.h.clamp(1.0, 10.0);
+                
+                initial_state.theta[j] = theta;
+                initial_state.mass[j] = ue * theta * h;  // mass = Ue * δ* = Ue * θ * H
                 initial_state.is_turbulent[j] = station.state.is_turbulent;
+                initial_state.ctau[j] = if station.state.is_turbulent { 0.03 } else { 0.0 };
             }
         }
         for (j, station) in bl_solution.lower.iter().enumerate() {
             if j < n_lower {
                 let bl_idx = n_upper + j;
-                initial_state.theta[bl_idx] = station.state.theta.max(1e-8);
-                initial_state.h[bl_idx] = station.state.h.clamp(1.0, 10.0);
+                let panel_idx = geometry.lower_indices[j];
+                let ue = inviscid.gamma[panel_idx].abs().max(1e-10);
+                let theta = station.state.theta.max(1e-8);
+                let h = station.state.h.clamp(1.0, 10.0);
+                
+                initial_state.theta[bl_idx] = theta;
+                initial_state.mass[bl_idx] = ue * theta * h;  // mass = Ue * δ* = Ue * θ * H
                 initial_state.is_turbulent[bl_idx] = station.state.is_turbulent;
+                initial_state.ctau[bl_idx] = if station.state.is_turbulent { 0.03 } else { 0.0 };
             }
         }
         
@@ -514,6 +528,239 @@ impl ViscousSolver {
         )
     }
     
+    /// XFOIL-style global Newton coupling with SETBL-style assembly.
+    /// 
+    /// This method implements the full XFOIL coupling architecture:
+    /// 1. Initialize BL states from inviscid solution
+    /// 2. Build global Newton system with block-tridiagonal structure
+    /// 3. Set up DIJ mass influence columns
+    /// 4. Iterate with inverse mode detection for separation
+    /// 5. Compute Cl from converged solution
+    #[allow(dead_code)]
+    fn xfoil_newton_coupling(
+        &self,
+        factorized: &FactorizedSolution,
+        flow: &FlowConditions,
+        body: &Body,
+        s_coords: &[f64],
+        x_coords: &[f64],
+        y_coords: &[f64],
+        chord: f64,
+    ) -> ViscousSolution {
+        use crate::viscous::blsys::{BLClosures, compute_analytical_jacobian, compute_interval_residuals};
+        
+        // Get inviscid solution
+        let inviscid = factorized.solve_alpha(flow);
+        let n_panels = inviscid.gamma.len();
+        
+        // Compute DIJ matrix
+        let panels = body.panels();
+        let nodes: Vec<Point> = panels.iter().map(|p| p.p1).collect();
+        let dij = compute_source_influence_matrix(&nodes);
+        
+        // Find stagnation point
+        let stag_idx = inviscid.gamma.iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| a.abs().partial_cmp(&b.abs()).unwrap())
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        
+        // Build surface indices
+        let upper_indices: Vec<usize> = (0..=stag_idx).rev().collect();
+        let lower_indices: Vec<usize> = (stag_idx..n_panels).collect();
+        let n_upper = upper_indices.len();
+        let n_lower = lower_indices.len();
+        
+        // Initialize edge velocities from inviscid
+        let ue_inviscid: Vec<f64> = inviscid.gamma.iter().map(|g| g.abs()).collect();
+        
+        // Create XFOIL Newton config
+        let xfoil_config = XfoilNewtonConfig {
+            max_iterations: self.config.max_iterations,
+            tolerance: self.config.tolerance,
+            reynolds: self.config.reynolds,
+            n_crit: self.config.n_crit,
+            initial_damping: self.config.relaxation_initial,
+            min_damping: self.config.relaxation_min,
+        };
+        
+        // Create XFOIL Newton system
+        let mut system = XfoilNewtonSystem::new(
+            xfoil_config,
+            n_upper,
+            n_lower,
+            n_panels,
+            dij,
+            upper_indices.clone(),
+            lower_indices.clone(),
+            ue_inviscid,
+        );
+        
+        // Initialize BL station states
+        let theta_init = 1e-4 / self.config.reynolds.sqrt();
+        let h_init = 2.59; // Blasius
+        
+        let mut upper_states: Vec<StationState> = upper_indices.iter().enumerate()
+            .map(|(j, &panel_idx)| {
+                let ue = system.ue[panel_idx];
+                let s = s_coords.get(panel_idx).copied().unwrap_or(0.0);
+                StationState::new(
+                    0.0, // Ampl = 0 initially
+                    theta_init,
+                    h_init,
+                    ue,
+                    s,
+                    false, // laminar
+                )
+            })
+            .collect();
+        
+        let mut lower_states: Vec<StationState> = lower_indices.iter().enumerate()
+            .map(|(j, &panel_idx)| {
+                let ue = system.ue[panel_idx];
+                let s = s_coords.get(panel_idx).copied().unwrap_or(0.0);
+                StationState::new(
+                    0.0,
+                    theta_init,
+                    h_init,
+                    ue,
+                    s,
+                    false,
+                )
+            })
+            .collect();
+        
+        // SETBL-style: Build initial Jacobian and residuals
+        self.assemble_bl_system(&mut system.upper_jac, &upper_states, self.config.reynolds);
+        self.assemble_bl_system(&mut system.lower_jac, &lower_states, self.config.reynolds);
+        
+        // Run Newton iteration
+        let converged = system.iterate(&mut upper_states, &mut lower_states);
+        
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "XFOIL Newton: converged={}, iterations={}, ||R||={:.2e}",
+            converged, system.iterations, system.residual_norm
+        );
+        
+        // Build NewtonGeometry for solution construction
+        let geometry = NewtonGeometry::new(
+            s_coords.to_vec(),
+            x_coords.to_vec(),
+            y_coords.to_vec(),
+            chord,
+            stag_idx,
+        );
+        
+        // Convert to NewtonState for solution building
+        let mut state = NewtonState::from_inviscid(&inviscid, n_upper + n_lower);
+        
+        // Copy BL results to state
+        for (j, st) in upper_states.iter().enumerate() {
+            if j < n_upper {
+                state.theta[j] = st.theta;
+                state.mass[j] = st.mass;
+                state.is_turbulent[j] = st.is_turbulent;
+            }
+        }
+        for (j, st) in lower_states.iter().enumerate() {
+            if j < n_lower {
+                let idx = n_upper + j;
+                state.theta[idx] = st.theta;
+                state.mass[idx] = st.mass;
+                state.is_turbulent[idx] = st.is_turbulent;
+            }
+        }
+        
+        // Update gamma from converged Ue
+        for (j, &panel_idx) in upper_indices.iter().enumerate() {
+            if j < upper_states.len() && panel_idx < state.gamma.len() {
+                let sign = state.gamma[panel_idx].signum();
+                state.gamma[panel_idx] = sign * system.ue[panel_idx];
+            }
+        }
+        for (j, &panel_idx) in lower_indices.iter().enumerate() {
+            if j < lower_states.len() && panel_idx < state.gamma.len() {
+                let sign = state.gamma[panel_idx].signum();
+                state.gamma[panel_idx] = sign * system.ue[panel_idx];
+            }
+        }
+        
+        self.build_solution_from_newton(
+            &state,
+            factorized,
+            flow,
+            body,
+            &geometry,
+            chord,
+            system.iterations,
+            converged,
+        )
+    }
+    
+    /// Assemble BL system (SETBL-style) for one surface.
+    /// 
+    /// Builds the block-tridiagonal Jacobian and RHS from BL states.
+    fn assemble_bl_system(
+        &self,
+        jac: &mut BlockTridiagJacobian,
+        states: &[StationState],
+        reynolds: f64,
+    ) {
+        use crate::viscous::blsys::{BLClosures, compute_analytical_jacobian, compute_interval_residuals};
+        
+        if states.len() < 2 {
+            return;
+        }
+        
+        // First station: similarity condition
+        let closures0 = BLClosures::compute(
+            states[0].theta, states[0].h, states[0].ue, reynolds, states[0].is_turbulent
+        );
+        
+        // Initialize first station (similarity)
+        let theta_init = 1e-4 / reynolds.sqrt();
+        let mass_init = states[0].ue * theta_init * 2.59;
+        jac.set_diag(0, super::newton::BLBlock::identity());
+        jac.set_rhs(0, [
+            -states[0].ctau_or_ampl,
+            -(states[0].theta - theta_init),
+            -(states[0].mass - mass_init),
+        ]);
+        
+        // March downstream
+        for j in 1..states.len() {
+            let state1 = &states[j - 1];
+            let state2 = &states[j];
+            
+            let closures1 = BLClosures::compute(
+                state1.theta, state1.h, state1.ue, reynolds, state1.is_turbulent
+            );
+            let closures2 = BLClosures::compute(
+                state2.theta, state2.h, state2.ue, reynolds, state2.is_turbulent
+            );
+            
+            // Compute analytical Jacobian blocks
+            let (vs1, vs2) = compute_analytical_jacobian(
+                state1, state2, &closures1, &closures2, reynolds
+            );
+            
+            // Compute residuals
+            let residuals = compute_interval_residuals(
+                state1, state2, &closures1, &closures2, reynolds
+            );
+            
+            // Set Jacobian blocks
+            jac.set_subdiag(j, vs1);
+            jac.set_diag(j, vs2);
+            jac.set_rhs(j, [
+                -residuals.res_1,
+                -residuals.res_momentum,
+                -residuals.res_shape,
+            ]);
+        }
+    }
+    
     /// Build ViscousSolution from Newton solver result.
     fn build_solution_from_newton(
         &self,
@@ -545,23 +792,49 @@ impl ViscousSolver {
             .map(|&i| geometry.s_coords[i])
             .collect();
         
+        // Compute edge velocities
+        let ue: Vec<f64> = state.gamma.iter().map(|g| g.abs()).collect();
+        
         let theta_upper: Vec<f64> = state.theta[0..n_upper].to_vec();
         let theta_lower: Vec<f64> = state.theta[n_upper..n_upper + n_lower].to_vec();
         
-        let h_upper: Vec<f64> = state.h[0..n_upper].to_vec();
-        let h_lower: Vec<f64> = state.h[n_upper..n_upper + n_lower].to_vec();
-        
-        let delta_star_upper: Vec<f64> = theta_upper.iter()
-            .zip(h_upper.iter())
-            .map(|(&th, &h)| th * h)
+        // Compute delta_star from mass: δ* = mass / Ue
+        let delta_star_upper: Vec<f64> = (0..n_upper)
+            .map(|j| {
+                let panel_idx = geometry.upper_indices[j];
+                let ue_local = ue[panel_idx].max(1e-10);
+                state.mass[j] / ue_local
+            })
             .collect();
-        let delta_star_lower: Vec<f64> = theta_lower.iter()
-            .zip(h_lower.iter())
-            .map(|(&th, &h)| th * h)
+        let delta_star_lower: Vec<f64> = (0..n_lower)
+            .map(|j| {
+                let bl_idx = n_upper + j;
+                let panel_idx = geometry.lower_indices[j];
+                let ue_local = ue[panel_idx].max(1e-10);
+                state.mass[bl_idx] / ue_local
+            })
+            .collect();
+        
+        // Compute H from mass: H = δ*/θ = mass / (Ue * θ)
+        let h_upper: Vec<f64> = (0..n_upper)
+            .map(|j| {
+                let panel_idx = geometry.upper_indices[j];
+                let ue_local = ue[panel_idx].max(1e-10);
+                let theta_local = theta_upper[j].max(1e-10);
+                (state.mass[j] / (ue_local * theta_local)).clamp(1.05, 10.0)
+            })
+            .collect();
+        let h_lower: Vec<f64> = (0..n_lower)
+            .map(|j| {
+                let bl_idx = n_upper + j;
+                let panel_idx = geometry.lower_indices[j];
+                let ue_local = ue[panel_idx].max(1e-10);
+                let theta_local = theta_lower[j].max(1e-10);
+                (state.mass[bl_idx] / (ue_local * theta_local)).clamp(1.05, 10.0)
+            })
             .collect();
         
         // Compute skin friction
-        let ue: Vec<f64> = state.gamma.iter().map(|g| g.abs()).collect();
         let cf_upper: Vec<f64> = theta_upper.iter()
             .zip(h_upper.iter())
             .enumerate()
@@ -794,18 +1067,23 @@ impl ViscousSolver {
         }
         
         // Update state with BL solution
+        // Convert to mass-based storage: mass = Ue * θ * H
         for (j, st) in upper_states.iter().enumerate() {
             if j < n_upper {
+                let panel_idx = geometry.upper_indices[j];
+                let ue_local = ue[panel_idx];
                 state.theta[j] = st.theta;
-                state.h[j] = st.h;
+                state.mass[j] = ue_local * st.theta * st.h;  // mass = Ue * δ*
                 state.is_turbulent[j] = st.is_turbulent;
             }
         }
         for (j, st) in lower_states.iter().enumerate() {
             if j < n_lower {
                 let idx = n_upper + j;
+                let panel_idx = geometry.lower_indices[j];
+                let ue_local = ue[panel_idx];
                 state.theta[idx] = st.theta;
-                state.h[idx] = st.h;
+                state.mass[idx] = ue_local * st.theta * st.h;  // mass = Ue * δ*
                 state.is_turbulent[idx] = st.is_turbulent;
             }
         }
@@ -841,22 +1119,19 @@ impl ViscousSolver {
         let total_norm = (upper_norm.powi(2) + lower_norm.powi(2)).sqrt();
         
         // Apply updates (could add line search here)
+        // sol[0] = dCtau, sol[1] = dTheta, sol[2] = dMass
         for (j, sol) in upper_jac.solution.iter().enumerate() {
-            if j < n_upper && j < state.theta.len() {
+            if j < n_upper && j < state.theta.len() && j < state.mass.len() {
                 state.theta[j] = (state.theta[j] + sol[1]).max(1e-12);
-                // Update H from mass if available
-                let mass = state.theta[j] * state.h[j] * ue[geometry.upper_indices.get(j).copied().unwrap_or(0)];
-                if mass > 1e-12 {
-                    let new_delta_star = sol[2] / ue[geometry.upper_indices.get(j).copied().unwrap_or(0)].max(1e-10);
-                    state.h[j] = (new_delta_star / state.theta[j]).clamp(1.05, 10.0);
-                }
+                state.mass[j] = (state.mass[j] + sol[2]).max(1e-12);
             }
         }
         
         for (j, sol) in lower_jac.solution.iter().enumerate() {
             let idx = n_upper + j;
-            if idx < state.theta.len() {
+            if idx < state.theta.len() && idx < state.mass.len() {
                 state.theta[idx] = (state.theta[idx] + sol[1]).max(1e-12);
+                state.mass[idx] = (state.mass[idx] + sol[2]).max(1e-12);
             }
         }
         
@@ -1251,6 +1526,70 @@ fn build_viscous_solution(
     )
 }
 
+/// Compute Cl from viscous-modified edge velocity distribution.
+/// 
+/// This is the proper way to compute viscous Cl when separation occurs.
+/// The inverse mode modifies Ue in separated regions, and this modified
+/// Ue should be used to compute Cp and hence Cl.
+/// 
+/// Cp = 1 - (Ue/U_inf)²
+/// Cl = ∫ Cp * dy
+/// 
+/// # Arguments
+/// * `ue` - Edge velocity at each station (from BL solution)
+/// * `x` - X-coordinates of stations
+/// * `y` - Y-coordinates of stations  
+/// * `chord` - Chord length for normalization
+/// 
+/// # Returns
+/// Lift coefficient computed from the viscous Ue distribution
+fn compute_cl_from_ue(ue: &[f64], x: &[f64], y: &[f64], chord: f64) -> f64 {
+    if ue.len() < 2 || x.len() != ue.len() || y.len() != ue.len() {
+        return 0.0;
+    }
+    
+    let u_inf = 1.0; // Freestream velocity (normalized)
+    let mut cl = 0.0;
+    
+    // Compute Cp from Ue and integrate
+    // Cl = -∮ Cp * cos(θ_panel) ds / chord ≈ -∫ Cp dy / chord
+    for i in 1..ue.len() {
+        let cp_i = 1.0 - (ue[i] / u_inf).powi(2);
+        let cp_prev = 1.0 - (ue[i-1] / u_inf).powi(2);
+        let cp_avg = 0.5 * (cp_i + cp_prev);
+        
+        // Contribution to lift (negative because Cp acts inward)
+        let dy = y[i] - y[i-1];
+        cl -= cp_avg * dy;
+    }
+    
+    cl / chord
+}
+
+/// Check if flow is significantly separated (high Hk on upper surface).
+/// 
+/// Returns the fraction of upper surface that is separated.
+/// Only counts turbulent stations where H exceeds the turbulent threshold,
+/// since laminar flow naturally has H ≈ 2.6 (Blasius value).
+fn compute_separation_extent(bl: &BLSolution) -> f64 {
+    use crate::boundary_layer::{HK_MAX_LAMINAR, HK_MAX_TURBULENT};
+    
+    let n_upper = bl.upper.len();
+    if n_upper == 0 {
+        return 0.0;
+    }
+    
+    // Count stations where H exceeds the appropriate threshold for the flow state
+    let n_separated = bl.upper.iter()
+        .filter(|st| {
+            let threshold = if st.state.is_turbulent { HK_MAX_TURBULENT } else { HK_MAX_LAMINAR };
+            st.state.h >= threshold
+        })
+        .count();
+    
+    n_separated as f64 / n_upper as f64
+}
+
 /// Build the complete viscous solution from components with method-aware Cl correction.
 fn build_viscous_solution_with_method(
     inviscid: &InviscidSolution,
@@ -1277,30 +1616,115 @@ fn build_viscous_solution_with_method(
     let h_lower: Vec<f64> = bl.lower.iter().map(|st| st.state.h).collect();
     let cf_upper: Vec<f64> = bl.upper.iter().map(|st| st.state.cf).collect();
     let cf_lower: Vec<f64> = bl.lower.iter().map(|st| st.state.cf).collect();
+    
+    // Extract edge velocities from BL solution for viscous Cl calculation
+    let ue_upper: Vec<f64> = bl.upper.iter().map(|st| st.state.ue).collect();
+    let ue_lower: Vec<f64> = bl.lower.iter().map(|st| st.state.ue).collect();
+    let x_upper: Vec<f64> = bl.upper.iter().map(|st| st.state.x).collect();
+    let x_lower: Vec<f64> = bl.lower.iter().map(|st| st.state.x).collect();
 
-    // Compute viscous Cl correction based on displacement thickness
-    // The BL displacement thickness effectively "decambers" the airfoil,
-    // reducing lift. XFOIL accounts for this through V-I coupling.
-    // 
-    // Different coupling methods need different correction factors:
-    // - Semi-Direct: No transpiration feedback, needs larger correction
-    // - Transpiration: Source panels already provide ~4% Cl reduction
+    // Check for significant separation
+    let separation_extent = compute_separation_extent(bl);
+    
+    // Compute Cl using two methods:
+    // 1. Modified inviscid Cl with displacement correction (attached flow)
+    // 2. Direct integration of viscous Ue (separated flow)
+    
+    // Method 1: Displacement thickness correction
     let ds_upper_te = delta_star_upper.last().copied().unwrap_or(0.0);
     let ds_lower_te = delta_star_lower.last().copied().unwrap_or(0.0);
     let ds_total_te = ds_upper_te + ds_lower_te;
     
-    // Method-dependent correction factor
-    // Tuned to match XFOIL at Re=3M, α=4° for NACA 0012
+    // Method-dependent correction factor for attached flow
+    // The BL displacement thickness already scales with Re, so we use a 
+    // constant correction factor without Re scaling to avoid double-counting.
     let cl_correction_factor = match coupling_method {
-        CouplingMethod::SemiDirect => 1.2,  // Less correction (no transpiration)
-        CouplingMethod::Transpiration => 3.6,  // Higher correction to match XFOIL
-        CouplingMethod::FullNewton => 1.0,  // Newton handles coupling internally
+        CouplingMethod::SemiDirect => 1.2,
+        CouplingMethod::Transpiration => 2.5,  // Reduced from 3.6 to avoid over-correction
+        CouplingMethod::FullNewton => 1.0,
     };
     
-    // Reynolds-dependent scaling (higher Re = smaller BL = less correction needed)
-    let re_factor = (3e6 / reynolds).sqrt().clamp(0.7, 1.5);
-    let cl_reduction = cl_correction_factor * re_factor * ds_total_te / chord;
-    let cl_viscous = inviscid.cl * (1.0 - cl_reduction);
+    // Mild Re scaling (reduced range to avoid over-correction at low Re)
+    let re_factor = (3e6 / reynolds).sqrt().clamp(0.85, 1.2);
+    let cl_reduction_attached = cl_correction_factor * re_factor * ds_total_te / chord;
+    let cl_attached = inviscid.cl * (1.0 - cl_reduction_attached);
+    
+    // Method 2: Direct Ue integration for separated flow
+    // Get y-coordinates from the body
+    let nodes: Vec<Point> = panels.iter().map(|p| p.p1).collect();
+    
+    // Map BL stations to panel coordinates
+    let y_upper: Vec<f64> = bl.upper.iter()
+        .map(|st| {
+            if st.idx < nodes.len() { nodes[st.idx].y } else { 0.0 }
+        })
+        .collect();
+    let y_lower: Vec<f64> = bl.lower.iter()
+        .map(|st| {
+            if st.idx < nodes.len() { nodes[st.idx].y } else { 0.0 }
+        })
+        .collect();
+    
+    // Compute Cl from viscous Ue distribution
+    let cl_upper_viscous = compute_cl_from_ue(&ue_upper, &x_upper, &y_upper, chord);
+    let cl_lower_viscous = compute_cl_from_ue(&ue_lower, &x_lower, &y_lower, chord);
+    let cl_separated = cl_upper_viscous + cl_lower_viscous;
+    
+    // For FullNewton coupling (XFOIL-style), compute Cl from modified circulation
+    // by applying transpiration to the inviscid panel system
+    let cl_viscous = match coupling_method {
+        CouplingMethod::FullNewton => {
+            // The Ue values from the converged BL solution already include 
+            // viscous effects. Compute Cl by integrating Cp from these Ue values.
+            // This is more accurate than the displacement correction.
+            
+            // Compute Cp from converged Ue
+            let u_inf = flow.v_inf;
+            
+            // For XFOIL-style Cl computation:
+            // Cl = (1/c) * ∮ (Cp_lower - Cp_upper) dx
+            // where Cp = 1 - (Ue/U_inf)²
+            
+            let mut cl_integral = 0.0;
+            
+            // Upper surface contribution (negative because y increases)
+            for i in 1..ue_upper.len() {
+                let cp1 = 1.0 - (ue_upper[i - 1] / u_inf).powi(2);
+                let cp2 = 1.0 - (ue_upper[i] / u_inf).powi(2);
+                let cp_avg = 0.5 * (cp1 + cp2);
+                let dx = x_upper[i] - x_upper[i - 1];
+                cl_integral -= cp_avg * dx;
+            }
+            
+            // Lower surface contribution (positive because y decreases)
+            for i in 1..ue_lower.len() {
+                let cp1 = 1.0 - (ue_lower[i - 1] / u_inf).powi(2);
+                let cp2 = 1.0 - (ue_lower[i] / u_inf).powi(2);
+                let cp_avg = 0.5 * (cp1 + cp2);
+                let dx = x_lower[i] - x_lower[i - 1];
+                cl_integral += cp_avg * dx;
+            }
+            
+            cl_integral / chord
+        }
+        _ => {
+            // Use attached flow correction for other methods
+            // The inverse mode affects the BL solution (δ*, θ) which feeds into the 
+            // displacement thickness correction.
+            // For separated flow, the increased δ* from inverse mode will naturally
+            // increase cl_reduction_attached, reducing lift.
+            cl_attached
+        }
+    };
+    
+    // Log the Cl values for debugging
+    #[cfg(debug_assertions)]
+    if separation_extent > 0.1 {
+        eprintln!(
+            "Cl: inviscid={:.4}, attached={:.4}, separated={:.4}, final={:.4}, sep_extent={:.2}%",
+            inviscid.cl, cl_attached, cl_separated, cl_viscous, separation_extent * 100.0
+        );
+    }
 
     ViscousSolution {
         cl: cl_viscous,

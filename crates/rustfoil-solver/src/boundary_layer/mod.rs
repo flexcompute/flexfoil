@@ -17,14 +17,21 @@ pub mod closure;
 pub mod xfoil_turb;
 /// Wake boundary layer marching.
 pub mod wake;
+/// Inverse mode for separated flow regions.
+pub mod inverse;
 
-pub use state::{BLState, BLStation, Surface};
+pub use state::{BLState, BLStation, Surface, HK_MAX_LAMINAR, HK_MAX_TURBULENT};
 pub use laminar::thwaites_solve;
 pub use turbulent::head_solve;
 pub use transition::{TransitionInfo, compute_amplification};
 pub use closure::{shape_factor_correlations, skin_friction, thwaites_h};
 pub use xfoil_turb::{XfoilConstants, xfoil_turb_solve};
 pub use wake::{WakeConfig, WakeStation, initialize_wake, march_wake, squire_young_drag, compute_squire_young_drag, compute_wake_drag};
+pub use inverse::{
+    InverseConfig, InverseModeResult,
+    should_use_inverse_mode, compute_target_hk, compute_target_hk_with_config,
+    solve_inverse_mode, relax_ue_update, blend_ue_for_feedback,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -537,6 +544,61 @@ impl BLSolver {
         solution.cd_pressure = (cd_total - solution.cd_friction).max(0.0);
         solution.cd = cd_total;
     }
+}
+
+/// Log BL state at stations for diagnostics (high-alpha debugging).
+/// 
+/// This function is useful for comparing with XFOIL output to understand
+/// where the physics diverges at high angles of attack.
+/// 
+/// # Arguments
+/// * `solution` - The BL solution to log
+/// * `label` - A label to identify this log output
+pub fn log_bl_state_at_stations(solution: &BLSolution, label: &str) {
+    eprintln!("=== BL State: {} ===", label);
+    eprintln!("Upper surface ({} stations):", solution.upper.len());
+    for (i, st) in solution.upper.iter().enumerate() {
+        // Log every 10th station, plus first and last
+        if i == 0 || i == solution.upper.len() - 1 || i % 10 == 0 {
+            let hk = st.state.h; // Hk = H for incompressible
+            let separated = if hk > 2.5 { "*SEP*" } else { "" };
+            eprintln!(
+                "  [{:3}] x={:.4}, Hk={:.3}, theta={:.2e}, delta*={:.2e}, Ue={:.4}, Cf={:.2e} {}",
+                i, st.state.x, hk, st.state.theta, st.state.delta_star, st.state.ue, st.state.cf, separated
+            );
+        }
+    }
+    
+    eprintln!("Lower surface ({} stations):", solution.lower.len());
+    for (i, st) in solution.lower.iter().enumerate() {
+        if i == 0 || i == solution.lower.len() - 1 || i % 10 == 0 {
+            let hk = st.state.h;
+            let separated = if hk > 2.5 { "*SEP*" } else { "" };
+            eprintln!(
+                "  [{:3}] x={:.4}, Hk={:.3}, theta={:.2e}, delta*={:.2e}, Ue={:.4}, Cf={:.2e} {}",
+                i, st.state.x, hk, st.state.theta, st.state.delta_star, st.state.ue, st.state.cf, separated
+            );
+        }
+    }
+    
+    eprintln!("Transition: upper x/c={:.4}, lower x/c={:.4}",
+        solution.transition_upper.x_tr, solution.transition_lower.x_tr);
+    eprintln!("Drag: Cd_f={:.5}, Cd_p={:.5}, Cd={:.5}",
+        solution.cd_friction, solution.cd_pressure, solution.cd);
+}
+
+/// Check if flow is separated at any station on the upper surface.
+/// 
+/// Returns the first station index where Hk exceeds the turbulent threshold (2.5).
+pub fn find_separation_point(solution: &BLSolution) -> Option<usize> {
+    const HK_MAX_TURBULENT: f64 = 2.5;
+    
+    for (i, st) in solution.upper.iter().enumerate() {
+        if st.state.is_turbulent && st.state.h >= HK_MAX_TURBULENT {
+            return Some(i);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
