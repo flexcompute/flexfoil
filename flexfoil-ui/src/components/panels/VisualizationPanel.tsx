@@ -3,8 +3,10 @@
  * 
  * Contains:
  * - Display toggles (Grid, Curve, Panels, Points, Controls, Streamlines, Smoke)
+ * - Aerodynamic overlays (Cp pressure, Force vectors)
  * - Streamline options (density, adaptive)
  * - Smoke options (density, particles per blob, spawn interval, max age)
+ * - Animation options (morphing enable, duration)
  * - Flow speed control
  */
 
@@ -20,6 +22,8 @@ export function VisualizationPanel() {
     showControls,
     showStreamlines,
     showSmoke,
+    showCp,
+    showForces,
     setShowGrid,
     setShowCurve,
     setShowPanels,
@@ -27,6 +31,14 @@ export function VisualizationPanel() {
     setShowControls,
     setShowStreamlines,
     setShowSmoke,
+    setShowCp,
+    setShowForces,
+    
+    // Animation options
+    enableMorphing,
+    morphDuration,
+    setEnableMorphing,
+    setMorphDuration,
     
     // Streamline options
     streamlineDensity,
@@ -47,6 +59,16 @@ export function VisualizationPanel() {
     // Flow speed
     flowSpeed,
     setFlowSpeed,
+    
+    // Cp options
+    cpDisplayMode,
+    cpBarScale,
+    setCpDisplayMode,
+    setCpBarScale,
+    
+    // Force options
+    forceScale,
+    setForceScale,
     
     // Reset
     resetVisualization,
@@ -101,6 +123,123 @@ export function VisualizationPanel() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <ToggleItem label="Streamlines" checked={showStreamlines} onChange={setShowStreamlines} />
           <ToggleItem label="Smoke" checked={showSmoke} onChange={setShowSmoke} />
+        </div>
+      </section>
+
+      {/* Aerodynamic Overlays Section */}
+      <section>
+        <h4 style={{ 
+          margin: '0 0 8px 0', 
+          fontSize: '12px', 
+          fontWeight: 600,
+          color: 'var(--text-primary)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.5px',
+        }}>
+          Aerodynamic Overlays
+        </h4>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <ToggleItem label="Pressure (Cp)" checked={showCp} onChange={setShowCp} />
+          <ToggleItem label="Force Vectors" checked={showForces} onChange={setShowForces} />
+        </div>
+      </section>
+
+      {/* Cp Options Section */}
+      {showCp && (
+        <section>
+          <h4 style={{ 
+            margin: '0 0 8px 0', 
+            fontSize: '12px', 
+            fontWeight: 600,
+            color: 'var(--text-primary)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+          }}>
+            Cp Display Options
+          </h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Mode</span>
+              <select 
+                value={cpDisplayMode}
+                onChange={(e) => setCpDisplayMode(e.target.value as 'color' | 'bars' | 'both')}
+                style={{
+                  padding: '6px 8px',
+                  fontSize: '12px',
+                  background: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '4px',
+                  color: 'var(--text-primary)',
+                }}
+              >
+                <option value="color">Color Only</option>
+                <option value="bars">Bars Only</option>
+                <option value="both">Color + Bars</option>
+              </select>
+            </div>
+            <SliderItem
+              label="Bar Scale"
+              value={cpBarScale}
+              min={0.01}
+              max={0.5}
+              step={0.01}
+              onChange={setCpBarScale}
+              formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+            />
+          </div>
+        </section>
+      )}
+
+      {/* Force Vector Options Section */}
+      {showForces && (
+        <section>
+          <h4 style={{ 
+            margin: '0 0 8px 0', 
+            fontSize: '12px', 
+            fontWeight: 600,
+            color: 'var(--text-primary)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+          }}>
+            Force Vector Options
+          </h4>
+          <SliderItem
+            label="Scale"
+            value={forceScale}
+            min={0.05}
+            max={0.5}
+            step={0.01}
+            onChange={setForceScale}
+            formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+          />
+        </section>
+      )}
+
+      {/* Animation Section */}
+      <section>
+        <h4 style={{ 
+          margin: '0 0 8px 0', 
+          fontSize: '12px', 
+          fontWeight: 600,
+          color: 'var(--text-primary)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.5px',
+        }}>
+          Animation
+        </h4>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <ToggleItem label="Smooth Morphing" checked={enableMorphing} onChange={setEnableMorphing} />
+          {enableMorphing && (
+            <SliderItem
+              label="Duration"
+              value={morphDuration}
+              min={50}
+              max={1000}
+              step={50}
+              onChange={setMorphDuration}
+              formatValue={(v) => `${v}ms`}
+            />
+          )}
         </div>
       </section>
 

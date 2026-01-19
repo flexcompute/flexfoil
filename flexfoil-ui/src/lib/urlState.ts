@@ -12,7 +12,7 @@ import type { ControlMode, SpacingKnot } from '../types';
 const DEFAULTS = {
   naca: '0012',
   nPanels: 160,
-  mode: 'surface' as ControlMode,
+  mode: 'parameters' as ControlMode,
   alpha: 0,
   polarStart: -5,
   polarEnd: 15,
@@ -97,8 +97,12 @@ export function encodeUrlState(state: UrlState): string {
   
   // Control mode
   if (state.mode && state.mode !== DEFAULTS.mode) {
-    compact.m = state.mode[0]; // 's', 'b', or 'b' (bezier/bspline distinguished later)
-    if (state.mode === 'bspline') compact.m = 'p'; // use 'p' for bspline
+    // p = parameters, c = camber-spline, t = thickness-spline
+    switch (state.mode) {
+      case 'parameters': compact.m = 'p'; break;
+      case 'camber-spline': compact.m = 'c'; break;
+      case 'thickness-spline': compact.m = 't'; break;
+    }
   }
   
   // Solver settings
@@ -167,9 +171,9 @@ export function decodeUrlState(encoded: string): UrlState | null {
     // Control mode
     if (compact.m) {
       switch (compact.m) {
-        case 's': state.mode = 'surface'; break;
-        case 'b': state.mode = 'bezier'; break;
-        case 'p': state.mode = 'bspline'; break;
+        case 'p': state.mode = 'parameters'; break;
+        case 'c': state.mode = 'camber-spline'; break;
+        case 't': state.mode = 'thickness-spline'; break;
       }
     }
     

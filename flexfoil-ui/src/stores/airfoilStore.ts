@@ -18,6 +18,8 @@ import type {
   SpacingPanelMode,
   SSPInterpolation,
   SSPVisualization,
+  CamberControlPoint,
+  ThicknessControlPoint,
 } from '../types';
 import {
   generateNaca4 as wasmGenerateNaca4,
@@ -27,6 +29,12 @@ import {
   isWasmReady
 } from '../lib/wasm';
 import { evaluateBSpline, evaluateBezierCurve } from '../lib/bspline';
+import {
+  scaleAirfoil,
+  createCamberControlPoints,
+  createThicknessControlPoints,
+  reconstructFromControlPoints,
+} from '../lib/airfoilGeometry';
 import { 
   syncToUrl, 
   loadFromUrl, 
@@ -51,6 +59,11 @@ type TrackedState = Pick<
   | 'curvatureWeight'
   | 'spacingPanelMode'
   | 'sspInterpolation'
+  | 'camberControlPoints'
+  | 'thicknessControlPoints'
+  | 'thicknessScale'
+  | 'camberScale'
+  | 'baseCoordinates'
 >;
 
 // Default NACA 0012 coordinates (simplified)
@@ -101,21 +114,40 @@ interface AirfoilStore extends AirfoilState {
   setName: (name: string) => void;
   setDisplayAlpha: (alpha: number) => void;
   
-  // Point manipulation
+  // Point manipulation (legacy, kept for compatibility)
   updatePoint: (index: number, point: AirfoilPoint) => void;
   addPoint: (index: number, point: AirfoilPoint) => void;
   removePoint: (index: number) => void;
   
-  // Bezier handles
+  // Bezier handles (legacy, kept for compatibility)
   setBezierHandles: (handles: BezierHandle[]) => void;
   updateBezierHandle: (index: number, handle: BezierHandle) => void;
   
-  // B-spline control points
+  // B-spline control points (legacy, kept for compatibility)
   setBSplineControlPoints: (points: BSplineControlPoint[]) => void;
   updateBSplineControlPoint: (id: string, point: Partial<BSplineControlPoint>) => void;
   addBSplineControlPoint: (point: BSplineControlPoint) => void;
   removeBSplineControlPoint: (id: string) => void;
   setBSplineDegree: (degree: number) => void;
+  
+  // Camber/thickness scaling (parameters mode)
+  setThicknessScale: (scale: number) => void;
+  setCamberScale: (scale: number) => void;
+  applyScaling: () => void;
+  
+  // Camber control points (camber-spline mode)
+  setCamberControlPoints: (points: CamberControlPoint[]) => void;
+  updateCamberControlPoint: (id: string, point: Partial<CamberControlPoint>) => void;
+  addCamberControlPoint: (point: CamberControlPoint) => void;
+  removeCamberControlPoint: (id: string) => void;
+  initializeCamberControlPoints: () => void;
+  
+  // Thickness control points (thickness-spline mode)
+  setThicknessControlPoints: (points: ThicknessControlPoint[]) => void;
+  updateThicknessControlPoint: (id: string, point: Partial<ThicknessControlPoint>) => void;
+  addThicknessControlPoint: (point: ThicknessControlPoint) => void;
+  removeThicknessControlPoint: (id: string) => void;
+  initializeThicknessControlPoints: () => void;
   
   // Spacing
   setSpacingKnots: (knots: SpacingKnot[]) => void;
@@ -142,6 +174,9 @@ interface AirfoilStore extends AirfoilState {
   
   // Reset
   reset: () => void;
+  
+  // Initialize default airfoil (call after WASM ready)
+  initializeDefaultAirfoil: () => void;
 }
 
 /**
@@ -173,7 +208,7 @@ export const useAirfoilStore = create<AirfoilStore>()(
       name: 'NACA 0012',
       coordinates: DEFAULT_NACA0012,
       panels: DEFAULT_NACA0012,
-      controlMode: 'surface',
+      controlMode: 'parameters',  // Default to parameters mode
       bezierHandles: [],
       bsplineControlPoints: [],
       bsplineDegree: 3,
@@ -185,6 +220,13 @@ export const useAirfoilStore = create<AirfoilStore>()(
       spacingPanelMode: 'simple',  // Default to simple curvature-based
       sspInterpolation: 'linear',  // Default to linear (Mark Drela's original)
       sspVisualization: 'plot',    // Default to S-F plot view
+      
+      // Camber/thickness editing state
+      camberControlPoints: [],
+      thicknessControlPoints: [],
+      thicknessScale: 1.0,
+      camberScale: 1.0,
+      baseCoordinates: DEFAULT_NACA0012,
 
       // Actions
       setCoordinates: (coords) => set({ coordinates: coords }),
@@ -297,6 +339,174 @@ export const useAirfoilStore = create<AirfoilStore>()(
       
       setSSPVisualization: (viz) => set({ sspVisualization: viz }),
 
+      // Thickness/camber scaling actions
+      setThicknessScale: (scale) => set((state) => {
+        const newScale = Math.max(0.1, Math.min(3.0, scale));
+        // Apply scaling to base coordinates
+        if (state.baseCoordinates.length > 0) {
+          const scaledCoords = scaleAirfoil(state.baseCoordinates, newScale, state.camberScale);
+          return { 
+            thicknessScale: newScale, 
+            coordinates: scaledCoords,
+            panels: scaledCoords,
+          };
+        }
+        return { thicknessScale: newScale };
+      }),
+      
+      setCamberScale: (scale) => set((state) => {
+        const newScale = Math.max(0, Math.min(3.0, scale));
+        // Apply scaling to base coordinates
+        if (state.baseCoordinates.length > 0) {
+          const scaledCoords = scaleAirfoil(state.baseCoordinates, state.thicknessScale, newScale);
+          return { 
+            camberScale: newScale, 
+            coordinates: scaledCoords,
+            panels: scaledCoords,
+          };
+        }
+        return { camberScale: newScale };
+      }),
+      
+      applyScaling: () => set((state) => {
+        // Save current scaled airfoil as the new base
+        return {
+          baseCoordinates: [...state.coordinates],
+          thicknessScale: 1.0,
+          camberScale: 1.0,
+        };
+      }),
+      
+      // Camber control point actions
+      setCamberControlPoints: (points) => set({ camberControlPoints: points }),
+      
+      updateCamberControlPoint: (id, point) => set((state) => {
+        const newPoints = state.camberControlPoints.map((p) =>
+          p.id === id ? { ...p, ...point } : p
+        );
+        // Reconstruct airfoil from control points
+        if (newPoints.length >= 2 && state.thicknessControlPoints.length >= 2) {
+          const newCoords = reconstructFromControlPoints(
+            newPoints,
+            state.thicknessControlPoints,
+            state.nPanels + 1
+          );
+          return { 
+            camberControlPoints: newPoints, 
+            coordinates: newCoords,
+            panels: newCoords,
+          };
+        }
+        return { camberControlPoints: newPoints };
+      }),
+      
+      addCamberControlPoint: (point) => set((state) => {
+        const newPoints = [...state.camberControlPoints, point].sort((a, b) => a.x - b.x);
+        // Reconstruct airfoil
+        if (newPoints.length >= 2 && state.thicknessControlPoints.length >= 2) {
+          const newCoords = reconstructFromControlPoints(
+            newPoints,
+            state.thicknessControlPoints,
+            state.nPanels + 1
+          );
+          return { 
+            camberControlPoints: newPoints, 
+            coordinates: newCoords,
+            panels: newCoords,
+          };
+        }
+        return { camberControlPoints: newPoints };
+      }),
+      
+      removeCamberControlPoint: (id) => set((state) => {
+        if (state.camberControlPoints.length <= 2) return state;
+        const newPoints = state.camberControlPoints.filter((p) => p.id !== id);
+        // Reconstruct airfoil
+        if (newPoints.length >= 2 && state.thicknessControlPoints.length >= 2) {
+          const newCoords = reconstructFromControlPoints(
+            newPoints,
+            state.thicknessControlPoints,
+            state.nPanels + 1
+          );
+          return { 
+            camberControlPoints: newPoints, 
+            coordinates: newCoords,
+            panels: newCoords,
+          };
+        }
+        return { camberControlPoints: newPoints };
+      }),
+      
+      initializeCamberControlPoints: () => set((state) => {
+        const points = createCamberControlPoints(state.coordinates, 7);
+        return { camberControlPoints: points };
+      }),
+      
+      // Thickness control point actions
+      setThicknessControlPoints: (points) => set({ thicknessControlPoints: points }),
+      
+      updateThicknessControlPoint: (id, point) => set((state) => {
+        const newPoints = state.thicknessControlPoints.map((p) =>
+          p.id === id ? { ...p, ...point } : p
+        );
+        // Reconstruct airfoil from control points
+        if (state.camberControlPoints.length >= 2 && newPoints.length >= 2) {
+          const newCoords = reconstructFromControlPoints(
+            state.camberControlPoints,
+            newPoints,
+            state.nPanels + 1
+          );
+          return { 
+            thicknessControlPoints: newPoints, 
+            coordinates: newCoords,
+            panels: newCoords,
+          };
+        }
+        return { thicknessControlPoints: newPoints };
+      }),
+      
+      addThicknessControlPoint: (point) => set((state) => {
+        const newPoints = [...state.thicknessControlPoints, point].sort((a, b) => a.x - b.x);
+        // Reconstruct airfoil
+        if (state.camberControlPoints.length >= 2 && newPoints.length >= 2) {
+          const newCoords = reconstructFromControlPoints(
+            state.camberControlPoints,
+            newPoints,
+            state.nPanels + 1
+          );
+          return { 
+            thicknessControlPoints: newPoints, 
+            coordinates: newCoords,
+            panels: newCoords,
+          };
+        }
+        return { thicknessControlPoints: newPoints };
+      }),
+      
+      removeThicknessControlPoint: (id) => set((state) => {
+        if (state.thicknessControlPoints.length <= 2) return state;
+        const newPoints = state.thicknessControlPoints.filter((p) => p.id !== id);
+        // Reconstruct airfoil
+        if (state.camberControlPoints.length >= 2 && newPoints.length >= 2) {
+          const newCoords = reconstructFromControlPoints(
+            state.camberControlPoints,
+            newPoints,
+            state.nPanels + 1
+          );
+          return { 
+            thicknessControlPoints: newPoints, 
+            coordinates: newCoords,
+            panels: newCoords,
+          };
+        }
+        return { thicknessControlPoints: newPoints };
+      }),
+      
+      initializeThicknessControlPoints: () => set((state) => {
+        const points = createThicknessControlPoints(state.coordinates, 7);
+        return { thicknessControlPoints: points };
+      }),
+
       generateNaca4: (params) => {
         const { m, p, t, nPoints } = params;
         
@@ -332,6 +542,11 @@ export const useAirfoilStore = create<AirfoilStore>()(
               name,
               bezierHandles: [],
               bsplineControlPoints: [],
+              baseCoordinates: buffer,  // Store as base for scaling
+              thicknessScale: 1.0,
+              camberScale: 1.0,
+              camberControlPoints: [],
+              thicknessControlPoints: [],
             });
             return;
           } catch (e) {
@@ -347,6 +562,11 @@ export const useAirfoilStore = create<AirfoilStore>()(
                 name,
                 bezierHandles: [],
                 bsplineControlPoints: [],
+                baseCoordinates: coords,
+                thicknessScale: 1.0,
+                camberScale: 1.0,
+                camberControlPoints: [],
+                thicknessControlPoints: [],
               });
               return;
             } catch (e2) {
@@ -408,6 +628,11 @@ export const useAirfoilStore = create<AirfoilStore>()(
           name,
           bezierHandles: [],
           bsplineControlPoints: [],
+          baseCoordinates: coords,
+          thicknessScale: 1.0,
+          camberScale: 1.0,
+          camberControlPoints: [],
+          thicknessControlPoints: [],
         });
       },
 
@@ -468,7 +693,7 @@ export const useAirfoilStore = create<AirfoilStore>()(
         name: 'NACA 0012',
         coordinates: DEFAULT_NACA0012,
         panels: DEFAULT_NACA0012,
-        controlMode: 'surface',
+        controlMode: 'parameters',
         bezierHandles: [],
         bsplineControlPoints: [],
         bsplineDegree: 3,
@@ -480,7 +705,45 @@ export const useAirfoilStore = create<AirfoilStore>()(
         spacingPanelMode: 'simple',
         sspInterpolation: 'linear',
         sspVisualization: 'plot',
+        camberControlPoints: [],
+        thicknessControlPoints: [],
+        thicknessScale: 1.0,
+        camberScale: 1.0,
+        baseCoordinates: DEFAULT_NACA0012,
       }),
+      
+      initializeDefaultAirfoil: () => {
+        if (!isWasmReady()) {
+          console.warn('WASM not ready, cannot initialize default airfoil');
+          return;
+        }
+        
+        try {
+          // Generate NACA 0012 using XFOIL's exact algorithm
+          const bufferCoords = generateNaca4Xfoil(12, 123);
+          const buffer: AirfoilPoint[] = bufferCoords.map(pt => ({ x: pt.x, y: pt.y }));
+          
+          // Apply XFOIL paneling for proper analysis
+          const currentNPanels = useAirfoilStore.getState().nPanels || 160;
+          const paneledCoords = repanelXfoil(buffer, currentNPanels);
+          const panels: AirfoilPoint[] = paneledCoords.map(pt => ({ x: pt.x, y: pt.y }));
+          
+          set({
+            name: 'NACA 0012',
+            coordinates: buffer,
+            panels: panels,
+            bezierHandles: [],
+            bsplineControlPoints: [],
+            baseCoordinates: buffer,
+            thicknessScale: 1.0,
+            camberScale: 1.0,
+            camberControlPoints: [],
+            thicknessControlPoints: [],
+          });
+        } catch (e) {
+          console.error('Failed to initialize default airfoil:', e);
+        }
+      },
     }),
     {
       // Temporal middleware options
@@ -499,6 +762,11 @@ export const useAirfoilStore = create<AirfoilStore>()(
         curvatureWeight: state.curvatureWeight,
         spacingPanelMode: state.spacingPanelMode,
         sspInterpolation: state.sspInterpolation,
+        camberControlPoints: state.camberControlPoints,
+        thicknessControlPoints: state.thicknessControlPoints,
+        thicknessScale: state.thicknessScale,
+        camberScale: state.camberScale,
+        baseCoordinates: state.baseCoordinates,
       }),
       
       // Deep equality check to avoid duplicate history entries

@@ -39,6 +39,7 @@ export function SolvePanel() {
   
   // Results
   const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [resultAlpha, setResultAlpha] = useState<number | null>(null); // Alpha that was solved for
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
@@ -54,12 +55,14 @@ export function SolvePanel() {
     
     setIsRunning(true);
     setError(null);
+    setResultAlpha(null);
     
     try {
       if (runMode === 'alpha') {
         // Direct alpha analysis
         const res = analyzeAirfoil(panels, targetAlpha);
         setResult(res);
+        setResultAlpha(targetAlpha);
         if (!res.success) {
           setError(res.error || 'Analysis failed');
         }
@@ -83,6 +86,9 @@ export function SolvePanel() {
           
           if (Math.abs(clError) < tol) {
             setResult(res);
+            setResultAlpha(alpha);
+            // Update display alpha to show the found alpha
+            setDisplayAlpha(alpha);
             break;
           }
           
@@ -97,6 +103,9 @@ export function SolvePanel() {
             // Last iteration - use whatever we got
             const finalRes = analyzeAirfoil(panels, alpha);
             setResult(finalRes);
+            setResultAlpha(alpha);
+            // Update display alpha even if not fully converged
+            setDisplayAlpha(alpha);
             if (Math.abs(targetCl - finalRes.cl) > 0.01) {
               setError(`Could not converge to CL=${targetCl.toFixed(3)}. Got CL=${finalRes.cl.toFixed(3)} at α=${alpha.toFixed(2)}°`);
             }
@@ -108,7 +117,7 @@ export function SolvePanel() {
     }
     
     setIsRunning(false);
-  }, [panels, runMode, targetAlpha, targetCl]);
+  }, [panels, runMode, targetAlpha, targetCl, setDisplayAlpha]);
 
   // Run polar sweep
   const runPolar = useCallback(() => {
@@ -254,9 +263,12 @@ export function SolvePanel() {
             <div className="form-label">Results</div>
             <div style={{
               display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
+              gridTemplateColumns: runMode === 'cl' ? '1fr 1fr 1fr' : '1fr 1fr',
               gap: '8px',
             }}>
+              {runMode === 'cl' && resultAlpha !== null && (
+                <ResultCard label="α (°)" value={resultAlpha.toFixed(2)} highlight />
+              )}
               <ResultCard label="CL" value={result.cl.toFixed(4)} />
               <ResultCard label="CM" value={result.cm.toFixed(4)} />
             </div>
@@ -420,18 +432,23 @@ export function SolvePanel() {
   );
 }
 
-function ResultCard({ label, value }: { label: string; value: string }) {
+function ResultCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
   return (
     <div style={{
       padding: '8px',
-      background: 'var(--bg-tertiary)',
+      background: highlight ? 'var(--accent-primary)' : 'var(--bg-tertiary)',
       borderRadius: '4px',
       textAlign: 'center',
     }}>
-      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px' }}>
+      <div style={{ fontSize: '10px', color: highlight ? 'var(--bg-primary)' : 'var(--text-muted)', marginBottom: '2px' }}>
         {label}
       </div>
-      <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: '14px' }}>
+      <div style={{ 
+        fontFamily: 'var(--font-mono)', 
+        fontWeight: 600, 
+        fontSize: '14px',
+        color: highlight ? 'var(--bg-primary)' : 'inherit',
+      }}>
         {value}
       </div>
     </div>

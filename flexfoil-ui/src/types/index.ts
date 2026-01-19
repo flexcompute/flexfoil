@@ -17,7 +17,7 @@ export interface AirfoilPoint extends Point {
 }
 
 /** Control modes for airfoil manipulation */
-export type ControlMode = 'surface' | 'bezier' | 'bspline';
+export type ControlMode = 'parameters' | 'camber-spline' | 'thickness-spline';
 
 /** Spacing panel modes */
 export type SpacingPanelMode = 'simple' | 'advanced';
@@ -44,6 +44,26 @@ export interface BSplineControlPoint extends Point {
   id: string;
   /** Weight for NURBS (default 1.0 for B-spline) */
   weight?: number;
+}
+
+/** A camber line control point */
+export interface CamberControlPoint {
+  /** Unique identifier */
+  id: string;
+  /** Chord position (0 to 1, LE to TE) */
+  x: number;
+  /** Camber value (typically -0.1 to 0.1) */
+  y: number;
+}
+
+/** A thickness distribution control point */
+export interface ThicknessControlPoint {
+  /** Unique identifier */
+  id: string;
+  /** Chord position (0 to 1, LE to TE) */
+  x: number;
+  /** Half-thickness value (typically 0 to 0.15) */
+  t: number;
 }
 
 /** SSP spacing knot for repaneling */
@@ -76,9 +96,9 @@ export interface AirfoilState {
   panels: AirfoilPoint[];
   /** Current control mode */
   controlMode: ControlMode;
-  /** Bezier handles (when in bezier mode) */
+  /** Bezier handles (legacy, kept for compatibility) */
   bezierHandles: BezierHandle[];
-  /** B-spline control points (when in bspline mode) */
+  /** B-spline control points (legacy, kept for compatibility) */
   bsplineControlPoints: BSplineControlPoint[];
   /** B-spline degree */
   bsplineDegree: number;
@@ -98,6 +118,18 @@ export interface AirfoilState {
   sspInterpolation: SSPInterpolation;
   /** Advanced SSP visualization: plot (F vs S) or foil (normal displacement) */
   sspVisualization: SSPVisualization;
+  
+  // Camber/thickness editing state
+  /** Camber line control points (when in camber-spline mode) */
+  camberControlPoints: CamberControlPoint[];
+  /** Thickness distribution control points (when in thickness-spline mode) */
+  thicknessControlPoints: ThicknessControlPoint[];
+  /** Thickness scale factor (1.0 = original) */
+  thicknessScale: number;
+  /** Camber scale factor (1.0 = original) */
+  camberScale: number;
+  /** Original airfoil for scaling reference */
+  baseCoordinates: AirfoilPoint[];
 }
 
 /** A polar data point */
@@ -136,6 +168,12 @@ export interface VisualizationState {
   showControls: boolean;
   showStreamlines: boolean;
   showSmoke: boolean;
+  showCp: boolean;
+  showForces: boolean;
+  
+  // Animation options
+  enableMorphing: boolean;
+  morphDuration: number;
   
   // Streamline options
   streamlineDensity: number;
@@ -149,4 +187,11 @@ export interface VisualizationState {
   
   // Flow speed multiplier
   flowSpeed: number;
+  
+  // Cp visualization options
+  cpDisplayMode: 'color' | 'bars' | 'both';
+  cpBarScale: number;
+  
+  // Force vector options
+  forceScale: number;
 }

@@ -16,6 +16,12 @@ interface VisualizationStore extends VisualizationState {
   setShowControls: (show: boolean) => void;
   setShowStreamlines: (show: boolean) => void;
   setShowSmoke: (show: boolean) => void;
+  setShowCp: (show: boolean) => void;
+  setShowForces: (show: boolean) => void;
+  
+  // Animation options actions
+  setEnableMorphing: (enable: boolean) => void;
+  setMorphDuration: (duration: number) => void;
   
   // Streamline options actions
   setStreamlineDensity: (density: number) => void;
@@ -30,6 +36,13 @@ interface VisualizationStore extends VisualizationState {
   // Flow speed action
   setFlowSpeed: (speed: number) => void;
   
+  // Cp visualization options actions
+  setCpDisplayMode: (mode: 'color' | 'bars' | 'both') => void;
+  setCpBarScale: (scale: number) => void;
+  
+  // Force vector options actions
+  setForceScale: (scale: number) => void;
+  
   // Reset
   resetVisualization: () => void;
 }
@@ -43,6 +56,12 @@ const DEFAULT_STATE: VisualizationState = {
   showControls: true,
   showStreamlines: false,
   showSmoke: false,
+  showCp: false,
+  showForces: false,
+  
+  // Animation options
+  enableMorphing: true,
+  morphDuration: 300,
   
   // Streamline options
   streamlineDensity: 50,
@@ -56,6 +75,13 @@ const DEFAULT_STATE: VisualizationState = {
   
   // Flow speed
   flowSpeed: 1.0,
+  
+  // Cp visualization options
+  cpDisplayMode: 'both',
+  cpBarScale: 0.1,
+  
+  // Force vector options
+  forceScale: 0.15,
 };
 
 export const useVisualizationStore = create<VisualizationStore>((set) => ({
@@ -69,6 +95,14 @@ export const useVisualizationStore = create<VisualizationStore>((set) => ({
   setShowControls: (show) => set({ showControls: show }),
   setShowStreamlines: (show) => set({ showStreamlines: show }),
   setShowSmoke: (show) => set({ showSmoke: show }),
+  setShowCp: (show) => set({ showCp: show }),
+  setShowForces: (show) => set({ showForces: show }),
+  
+  // Animation options actions
+  setEnableMorphing: (enable) => set({ enableMorphing: enable }),
+  setMorphDuration: (duration) => set({ 
+    morphDuration: Math.max(50, Math.min(1000, duration)) 
+  }),
   
   // Streamline options actions
   setStreamlineDensity: (density) => set({ 
@@ -93,6 +127,17 @@ export const useVisualizationStore = create<VisualizationStore>((set) => ({
   // Flow speed action
   setFlowSpeed: (speed) => set({ 
     flowSpeed: Math.max(0.1, Math.min(5.0, speed)) 
+  }),
+  
+  // Cp visualization options actions
+  setCpDisplayMode: (mode) => set({ cpDisplayMode: mode }),
+  setCpBarScale: (scale) => set({ 
+    cpBarScale: Math.max(0.01, Math.min(0.5, scale)) 
+  }),
+  
+  // Force vector options actions
+  setForceScale: (scale) => set({ 
+    forceScale: Math.max(0.05, Math.min(0.5, scale)) 
   }),
   
   // Reset
