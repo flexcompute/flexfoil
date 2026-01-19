@@ -260,9 +260,23 @@ impl BLClosureDerivs {
 /// UPW = 1.0 gives backward Euler (full upwinding)
 /// 
 /// XFOIL dynamically adjusts based on log(Hk) changes.
+/// In the wake (is_wake=true), uses less upwinding.
 pub fn compute_upwind_factor(hk1: f64, hk2: f64) -> f64 {
+    compute_upwind_factor_wake(hk1, hk2, false)
+}
+
+/// XFOIL-style upwinding with wake handling.
+/// 
+/// In wake region, XFOIL uses HDCON = HUPWT/HK2^2 (factor of 5 removed)
+/// for smoother blending through wake.
+pub fn compute_upwind_factor_wake(hk1: f64, hk2: f64, is_wake: bool) -> f64 {
     let hupwt = 1.0;
-    let hdcon = 5.0 * hupwt / hk2.powi(2);
+    // XFOIL: wake uses less upwinding (factor of 5 removed)
+    let hdcon = if is_wake {
+        hupwt / hk2.powi(2)
+    } else {
+        5.0 * hupwt / hk2.powi(2)
+    };
     
     let arg = ((hk2 - 1.0) / (hk1 - 1.0).max(0.01)).abs();
     let hl = arg.ln();

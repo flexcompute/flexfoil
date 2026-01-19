@@ -474,9 +474,14 @@ impl BLSolver {
             let st = &solution.upper[i];
             let st_prev = &solution.upper[i - 1];
             
-            // Wall shear stress: τ = 0.5 * ρ * Ue² * Cf
-            let tau_i = 0.5 * st.state.ue.powi(2) * st.state.cf;
-            let tau_prev = 0.5 * st_prev.state.ue.powi(2) * st_prev.state.cf;
+            // Wall shear stress: τ = 0.5 * ρ * Ue² * Cf (bounded for numerical safety)
+            let ue_i = st.state.ue.clamp(0.01, 3.0);
+            let ue_prev = st_prev.state.ue.clamp(0.01, 3.0);
+            let cf_i = st.state.cf.clamp(0.0, 0.1);
+            let cf_prev = st_prev.state.cf.clamp(0.0, 0.1);
+            
+            let tau_i = 0.5 * ue_i.powi(2) * cf_i;
+            let tau_prev = 0.5 * ue_prev.powi(2) * cf_prev;
             
             // Get coordinates from indices
             let idx_i = st.idx.min(x_coords.len() - 1);
@@ -495,8 +500,13 @@ impl BLSolver {
             let st = &solution.lower[i];
             let st_prev = &solution.lower[i - 1];
             
-            let tau_i = 0.5 * st.state.ue.powi(2) * st.state.cf;
-            let tau_prev = 0.5 * st_prev.state.ue.powi(2) * st_prev.state.cf;
+            let ue_i = st.state.ue.clamp(0.01, 3.0);
+            let ue_prev = st_prev.state.ue.clamp(0.01, 3.0);
+            let cf_i = st.state.cf.clamp(0.0, 0.1);
+            let cf_prev = st_prev.state.cf.clamp(0.0, 0.1);
+            
+            let tau_i = 0.5 * ue_i.powi(2) * cf_i;
+            let tau_prev = 0.5 * ue_prev.powi(2) * cf_prev;
             
             let idx_i = st.idx.min(x_coords.len() - 1);
             let idx_prev = st_prev.idx.min(x_coords.len() - 1);
