@@ -1110,20 +1110,19 @@ export function AirfoilCanvas() {
       const { grid, bounds, nx, ny, psiMin, psiMax, psi0 } = psiContours;
       const [xMin, xMax, yMin, yMax] = bounds;
       
-      // Create d3-contour generator with proper thresholds around ψ₀
-      // Use more levels for smoother gradients
-      const nLevels = 15;
+      // Create d3-contour generator with thresholds that DON'T include ψ₀
+      // This avoids creating a visible band at the dividing streamline
+      // (since interior = ψ₀, including it as a threshold creates artifacts)
+      const nLevels = 12;
       const thresholds: number[] = [];
       
-      // Add levels below ψ₀ (blue region)
-      for (let i = 0; i < nLevels; i++) {
-        thresholds.push(psiMin + (psi0 - psiMin) * (i / nLevels));
+      // Add levels below ψ₀ (blue region) - up to but not including ψ₀
+      for (let i = 0; i <= nLevels; i++) {
+        thresholds.push(psiMin + (psi0 - psiMin) * (i / (nLevels + 1)));
       }
-      // Add ψ₀ as exact threshold (dividing streamline)
-      thresholds.push(psi0);
-      // Add levels above ψ₀ (red region)
+      // Add levels above ψ₀ (red region) - starting just above ψ₀
       for (let i = 1; i <= nLevels; i++) {
-        thresholds.push(psi0 + (psiMax - psi0) * (i / nLevels));
+        thresholds.push(psi0 + (psiMax - psi0) * (i / (nLevels + 1)));
       }
       
       // Generate filled contour polygons
