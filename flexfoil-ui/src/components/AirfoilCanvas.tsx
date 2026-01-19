@@ -24,7 +24,7 @@ import type { Point, ViewportState, AirfoilPoint } from '../types';
 import { computeStreamlines, computePsiGrid, createSmokeSystem, isWasmReady, WasmSmokeSystem, analyzeAirfoil } from '../lib/wasm';
 import { useMorphingAnimation, getCpColor, computeForceVectors } from '../hooks/useMorphingAnimation';
 import { generateCamberSplineCurve } from '../lib/airfoilGeometry';
-import { contours } from 'd3-contour';
+// Removed d3-contour - using efficient cell-based rendering instead
 
 /**
  * Compute cumulative arc lengths for a sequence of points.
@@ -358,11 +358,8 @@ function connectSegments(
 
 /**
  * Extrapolate the dividing streamline (ψ = ψ₀) to hit the airfoil surface.
- * This extends each line segment towards the airfoil until it intersects the boundary.
- * 
- * NOTE: We use a simple extrapolation approach - extending the line in the direction
- * of its endpoint until it gets close to the airfoil. This gives a good visual
- * approximation of where the stagnation streamline meets the body.
+ * Uses quadratic curve fitting to match the curvature of the streamline
+ * near the stagnation point, providing a smooth approach to the body.
  */
 function extrapolateDividingStreamline(
   psi0Lines: [number, number][][],
@@ -381,14 +378,12 @@ function extrapolateDividingStreamline(
       const p1 = airfoilPoints[i];
       const p2 = airfoilPoints[(i + 1) % airfoilPoints.length];
       
-      // Find closest point on line segment p1-p2
       const dx = p2.x - p1.x;
       const dy = p2.y - p1.y;
       const lenSq = dx * dx + dy * dy;
       
       if (lenSq < 1e-10) continue;
       
-      // Project point onto line
       const t = Math.max(0, Math.min(1, ((px - p1.x) * dx + (py - p1.y) * dy) / lenSq));
       const projX = p1.x + t * dx;
       const projY = p1.y + t * dy;
@@ -403,79 +398,88 @@ function extrapolateDividingStreamline(
     return { ...closest, dist: minDist };
   };
   
-  // Extrapolate each polyline
-  return psi0Lines.map(line => {
-    if (line.length < 2) return line;
+  // Quadratic extrapolation using last N points for curvature matching
+  const extrapolateWithCurvature = (
+    points: [number, number][],
+    fromEnd: boolean
+  ): [number, number][] => {
+    const n = points.length;
+    if (n < 3) return [];
     
-    const result: [number, number][] = [...line];
+    // Get the last 3-5 points to estimate curvature
+    const numFit = Math.min(5, n);
+    const fitPoints: [number, number][] = fromEnd
+      ? points.slice(-numFit)
+      : points.slice(0, numFit).reverse();
     
-    // Extrapolate from the end (towards airfoil)
-    const lastIdx = line.length - 1;
-    const endPt = line[lastIdx];
-    const prevPt = line[lastIdx - 1];
+    // Parameterize by arc length
+    const arcLengths = [0];
+    for (let i = 1; i < fitPoints.length; i++) {
+      const dx = fitPoints[i][0] - fitPoints[i-1][0];
+      const dy = fitPoints[i][1] - fitPoints[i-1][1];
+      arcLengths.push(arcLengths[i-1] + Math.sqrt(dx*dx + dy*dy));
+    }
+    const totalLen = arcLengths[arcLengths.length - 1];
+    if (totalLen < 1e-8) return [];
     
-    // Direction of the line at the end
-    const dirX = endPt[0] - prevPt[0];
-    const dirY = endPt[1] - prevPt[1];
-    const dirLen = Math.sqrt(dirX * dirX + dirY * dirY);
+    // Fit quadratic using velocity and acceleration at endpoint
+    const endPt = fitPoints[fitPoints.length - 1];
+    const prevPt = fitPoints[fitPoints.length - 2];
+    const prev2Pt = fitPoints.length > 2 ? fitPoints[fitPoints.length - 3] : prevPt;
     
-    if (dirLen > 1e-8) {
-      const unitX = dirX / dirLen;
-      const unitY = dirY / dirLen;
+    // Compute velocity and acceleration at end
+    const v1x = endPt[0] - prevPt[0];
+    const v1y = endPt[1] - prevPt[1];
+    const v0x = prevPt[0] - prev2Pt[0];
+    const v0y = prevPt[1] - prev2Pt[1];
+    
+    // Acceleration (change in velocity) gives curvature info
+    const ax = v1x - v0x;
+    const ay = v1y - v0y;
+    
+    // Generate extrapolation points
+    const extraPoints: [number, number][] = [];
+    const stepSize = 0.01;
+    const maxSteps = 200;
+    
+    for (let step = 1; step <= maxSteps; step++) {
+      const dt = step * stepSize / totalLen;
+      // Quadratic extrapolation with curvature
+      const x = endPt[0] + v1x * dt + 0.5 * ax * dt * dt;
+      const y = endPt[1] + v1y * dt + 0.5 * ay * dt * dt;
       
-      // Step along the direction until we get close to the airfoil
-      let stepSize = 0.01;
-      let x = endPt[0];
-      let y = endPt[1];
+      const { dist, x: closestX, y: closestY } = closestPointOnAirfoil(x, y);
       
-      for (let step = 0; step < 200; step++) {
-        x += unitX * stepSize;
-        y += unitY * stepSize;
-        
-        const { dist } = closestPointOnAirfoil(x, y);
-        
-        // Stop when we're close to the airfoil
-        if (dist < 0.02) {
-          const closest = closestPointOnAirfoil(x, y);
-          result.push([closest.x, closest.y]);
-          break;
-        }
-        
-        // Stop if we've gone too far (outside reasonable bounds)
-        if (x < -2 || x > 3 || y < -2 || y > 2) break;
+      if (dist < 0.015) {
+        extraPoints.push([closestX, closestY]);
+        break;
+      }
+      
+      if (x < -2 || x > 3 || y < -2 || y > 2) break;
+      
+      // Add intermediate points for smooth curve
+      if (step % 3 === 0) {
+        extraPoints.push([x, y]);
       }
     }
     
-    // Also extrapolate from the start if needed (for the other stagnation point)
-    const startPt = line[0];
-    const nextPt = line[1];
+    return extraPoints;
+  };
+  
+  // Extrapolate each polyline
+  return psi0Lines.map(line => {
+    if (line.length < 3) return line;
     
-    const startDirX = startPt[0] - nextPt[0];
-    const startDirY = startPt[1] - nextPt[1];
-    const startDirLen = Math.sqrt(startDirX * startDirX + startDirY * startDirY);
+    const result: [number, number][] = [...line];
     
-    if (startDirLen > 1e-8) {
-      const unitX = startDirX / startDirLen;
-      const unitY = startDirY / startDirLen;
-      
-      let stepSize = 0.01;
-      let x = startPt[0];
-      let y = startPt[1];
-      
-      for (let step = 0; step < 200; step++) {
-        x += unitX * stepSize;
-        y += unitY * stepSize;
-        
-        const { dist } = closestPointOnAirfoil(x, y);
-        
-        if (dist < 0.02) {
-          const closest = closestPointOnAirfoil(x, y);
-          result.unshift([closest.x, closest.y]);
-          break;
-        }
-        
-        if (x < -2 || x > 3 || y < -2 || y > 2) break;
-      }
+    // Extrapolate from the end with curvature matching
+    const endExtrap = extrapolateWithCurvature(line, true);
+    result.push(...endExtrap);
+    
+    // Extrapolate from the start with curvature matching
+    const startExtrap = extrapolateWithCurvature(line, false);
+    for (let i = startExtrap.length - 1; i >= 0; i--) {
+      result.unshift(startExtrap[i]);
     }
     
     return result;
@@ -1101,95 +1105,81 @@ export function AirfoilCanvas() {
       };
     };
     
-    // Draw stream function visualization using d3-contour for proper filled contours
-    // NOTE: The filled contours show the stream function field with a diverging colormap:
+    // Draw stream function visualization using filled contour bands
+    // Uses marching squares to generate iso-contour polygons at each threshold
+    // Fills regions between contours with appropriate colors
     // - Blue tones: flow going under the airfoil (ψ < ψ₀)
     // - Red tones: flow going over the airfoil (ψ > ψ₀)
-    // The dividing streamline (ψ = ψ₀) separates these regions precisely.
     if (showPsiContours && psiContours.grid.length > 0) {
       const { grid, bounds, nx, ny, psiMin, psiMax, psi0 } = psiContours;
       const [xMin, xMax, yMin, yMax] = bounds;
+      const dx = (xMax - xMin) / (nx - 1);
+      const dy = (yMax - yMin) / (ny - 1);
       
-      // Replace NaN (interior) with value far below psiMin so d3-contour ignores it
-      // This avoids rectangular holes from NaN handling
-      const interiorValue = psiMin - 1000;
-      const cleanGrid = grid.map(v => isFinite(v) ? v : interiorValue);
-      
-      // Create d3-contour generator WITHOUT ψ₀ threshold
-      // The ψ₀ contour would pick up the fake interior boundary
-      // Instead, we draw the dividing streamline separately using psi0Lines
-      const nLevels = 12;
+      // Generate thresholds for filled bands
+      const nLevels = 10;
       const thresholds: number[] = [];
       
-      // Add levels below ψ₀ (blue region) - approaching but not including ψ₀
+      // Levels below ψ₀
       for (let i = 0; i <= nLevels; i++) {
-        thresholds.push(psiMin + (psi0 - psiMin) * (i / (nLevels + 1)));
+        thresholds.push(psiMin + (psi0 - psiMin) * (i / nLevels));
       }
-      // Add levels above ψ₀ (red region) - starting just above ψ₀
+      // Levels above ψ₀ (skip psi0 itself to avoid duplicate)
       for (let i = 1; i <= nLevels; i++) {
-        thresholds.push(psi0 + (psiMax - psi0) * (i / (nLevels + 1)));
+        thresholds.push(psi0 + (psiMax - psi0) * (i / nLevels));
       }
+      thresholds.sort((a, b) => a - b);
       
-      // Generate filled contour polygons using cleaned grid
-      const contourGenerator = contours()
-        .size([nx, ny])
-        .thresholds(thresholds);
-      
-      const contourData = contourGenerator(cleanGrid as number[]);
-      
-      // Create a custom projection that transforms grid coordinates to canvas
-      const gridToWorld = (gridX: number, gridY: number) => {
-        const worldX = xMin + (gridX / (nx - 1)) * (xMax - xMin);
-        const worldY = yMin + (gridY / (ny - 1)) * (yMax - yMin);
-        return rotatePoint({ x: worldX, y: worldY });
-      };
-      
-      // Custom path renderer for canvas
-      const renderContourPath = (geometry: { type: string; coordinates: number[][][] | number[][][][] }) => {
-        if (geometry.type === 'MultiPolygon') {
-          for (const polygon of geometry.coordinates as number[][][][]) {
-            for (const ring of polygon) {
-              ctx.beginPath();
-              for (let i = 0; i < ring.length; i++) {
-                const [gx, gy] = ring[i];
-                const world = gridToWorld(gx, gy);
-                const canvas = toCanvas(world);
-                if (i === 0) ctx.moveTo(canvas.x, canvas.y);
-                else ctx.lineTo(canvas.x, canvas.y);
-              }
-              ctx.closePath();
-              ctx.fill();
-            }
-          }
-        }
-      };
-      
-      // Draw filled contours from lowest to highest (painter's algorithm)
-      // d3-contour creates regions where ψ >= threshold
       const alpha = isDark ? 0.5 : 0.6;
       
-      for (const c of contourData) {
-        const value = c.value;
+      // For each threshold, generate filled contour
+      // Use painter's algorithm: draw from lowest to highest
+      for (const threshold of thresholds) {
+        // Get contour segments at this threshold
+        const segments = marchingSquares(grid, nx, ny, threshold, xMin, yMin, dx, dy);
+        const polylines = connectSegments(segments);
         
-        // Color based on whether above or below ψ₀
-        // Note: contour at value T shows region where ψ >= T
-        if (value < psi0) {
-          // Blue region (flow going under)
-          const t = (psi0 - value) / (psi0 - psiMin);
-          const r = Math.round(180 - t * 100);
-          const g = Math.round(200 - t * 80);
-          const b = Math.round(240 - t * 20);
-          ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        // Color based on threshold value relative to ψ₀
+        let r: number, g: number, b: number;
+        if (threshold < psi0) {
+          const t = Math.min(1, (psi0 - threshold) / (psi0 - psiMin + 1e-10));
+          r = Math.round(180 - t * 100);
+          g = Math.round(200 - t * 80);
+          b = Math.round(240 - t * 20);
         } else {
-          // Red region (flow going over)
-          const t = (value - psi0) / (psiMax - psi0 + 1e-10);
-          const r = Math.round(255 - t * 30);
-          const g = Math.round(200 - t * 100);
-          const b = Math.round(190 - t * 100);
-          ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+          const t = Math.min(1, (threshold - psi0) / (psiMax - psi0 + 1e-10));
+          r = Math.round(255 - t * 30);
+          g = Math.round(200 - t * 100);
+          b = Math.round(190 - t * 100);
         }
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${alpha * 0.5})`;
+        ctx.lineWidth = 0.5;
         
-        renderContourPath(c as unknown as { type: string; coordinates: number[][][] | number[][][][] });
+        // Fill each closed polyline as a polygon
+        for (const polyline of polylines) {
+          if (polyline.length < 3) continue;
+          
+          ctx.beginPath();
+          const first = toCanvas(rotatePoint({ x: polyline[0][0], y: polyline[0][1] }));
+          ctx.moveTo(first.x, first.y);
+          
+          for (let i = 1; i < polyline.length; i++) {
+            const p = toCanvas(rotatePoint({ x: polyline[i][0], y: polyline[i][1] }));
+            ctx.lineTo(p.x, p.y);
+          }
+          
+          // Check if polyline is closed (endpoints close together)
+          const start = polyline[0];
+          const end = polyline[polyline.length - 1];
+          const isClosed = Math.abs(start[0] - end[0]) < 0.01 && Math.abs(start[1] - end[1]) < 0.01;
+          
+          if (isClosed) {
+            ctx.closePath();
+            ctx.fill();
+          }
+          ctx.stroke();
+        }
       }
       
       // Mask out the airfoil interior
