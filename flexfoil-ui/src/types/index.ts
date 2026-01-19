@@ -168,6 +168,7 @@ export interface VisualizationState {
   showControls: boolean;
   showStreamlines: boolean;
   showSmoke: boolean;
+  showPsiContours: boolean;
   showCp: boolean;
   showForces: boolean;
   

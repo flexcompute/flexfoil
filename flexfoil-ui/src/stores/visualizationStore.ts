@@ -16,6 +16,7 @@ interface VisualizationStore extends VisualizationState {
   setShowControls: (show: boolean) => void;
   setShowStreamlines: (show: boolean) => void;
   setShowSmoke: (show: boolean) => void;
+  setShowPsiContours: (show: boolean) => void;
   setShowCp: (show: boolean) => void;
   setShowForces: (show: boolean) => void;
   
@@ -56,6 +57,7 @@ const DEFAULT_STATE: VisualizationState = {
   showControls: true,
   showStreamlines: false,
   showSmoke: false,
+  showPsiContours: false,
   showCp: false,
   showForces: false,
   
@@ -95,6 +97,7 @@ export const useVisualizationStore = create<VisualizationStore>((set) => ({
   setShowControls: (show) => set({ showControls: show }),
   setShowStreamlines: (show) => set({ showStreamlines: show }),
   setShowSmoke: (show) => set({ showSmoke: show }),
+  setShowPsiContours: (show) => set({ showPsiContours: show }),
   setShowCp: (show) => set({ showCp: show }),
   setShowForces: (show) => set({ showForces: show }),
   

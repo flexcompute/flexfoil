@@ -12,6 +12,7 @@ import init, {
     compute_curvature_spacing,
     analyze_airfoil,
     compute_streamlines,
+    compute_psi_grid,
     WasmSmokeSystem,
     greet,
     RustFoil,
@@ -329,6 +330,56 @@ export function computeStreamlines(
     
     const coordsFlat = pointsToFlat(coordinates);
     return compute_streamlines(coordsFlat, alphaDeg, seedCount, new Float64Array(bounds)) as StreamlineResult;
+}
+
+/**
+ * Stream function grid result from WASM.
+ */
+export interface PsiGridResult {
+    /** Stream function values in row-major order (ny rows, nx columns) */
+    grid: number[];
+    /** Internal stream function value (contour at this value = dividing streamline) */
+    psi_0: number;
+    /** Grid width */
+    nx: number;
+    /** Grid height */
+    ny: number;
+    /** Minimum psi value (excluding interior NaN) */
+    psi_min: number;
+    /** Maximum psi value (excluding interior NaN) */
+    psi_max: number;
+    success: boolean;
+    error?: string;
+}
+
+/**
+ * Compute stream function values on a grid.
+ * 
+ * The stream function ψ is constant along streamlines. The contour ψ = psi_0
+ * represents the dividing streamline that passes through the stagnation point.
+ * 
+ * @param coordinates - Airfoil coordinates
+ * @param alphaDeg - Angle of attack in degrees
+ * @param bounds - [xMin, xMax, yMin, yMax] for grid domain
+ * @param resolution - [nx, ny] grid resolution
+ */
+export function computePsiGrid(
+    coordinates: { x: number; y: number }[],
+    alphaDeg: number,
+    bounds: [number, number, number, number] = [-1.0, 2.0, -1.0, 1.0],
+    resolution: [number, number] = [100, 80]
+): PsiGridResult {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+    
+    const coordsFlat = pointsToFlat(coordinates);
+    return compute_psi_grid(
+        coordsFlat, 
+        alphaDeg, 
+        new Float64Array(bounds), 
+        new Uint32Array(resolution)
+    ) as PsiGridResult;
 }
 
 /**
