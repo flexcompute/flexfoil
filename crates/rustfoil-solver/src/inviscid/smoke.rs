@@ -3,7 +3,7 @@
 //! Spawns blobs of particles at regular intervals. Each particle is
 //! individually advected through the flow field using RK2 integration.
 
-use super::velocity::{velocity_at, is_inside_airfoil};
+use super::velocity::{velocity_at, is_inside_airfoil, psi_at};
 use rustfoil_core::Point;
 
 /// A particle in the smoke system.
@@ -164,6 +164,23 @@ impl SmokeSystem {
                     1.0
                 }
             })
+            .collect()
+    }
+
+    /// Get stream function (psi) values for each particle.
+    /// 
+    /// This is used to determine which side of the dividing streamline
+    /// each particle is on. Compare with psi_0 to determine above/below.
+    pub fn get_psi_values(
+        &self,
+        nodes: &[Point],
+        gamma: &[f64],
+        alpha: f64,
+        v_inf: f64,
+    ) -> Vec<f64> {
+        self.particles
+            .iter()
+            .map(|p| psi_at(p.x, p.y, nodes, gamma, alpha, v_inf))
             .collect()
     }
 

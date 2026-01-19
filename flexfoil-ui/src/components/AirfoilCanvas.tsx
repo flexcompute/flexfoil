@@ -1684,8 +1684,7 @@ export function AirfoilCanvas() {
           const barLength = Math.abs(cpVal) * cpBarScale * viewport.zoom;
           const pCanvas = toCanvas(rotatePoint(closestPt));
           
-          // Compute normal direction (pointing outward from surface)
-          // Use panel index to find local tangent
+          // Find closest panel index
           let closestIdx = 0;
           let minDistSq = Infinity;
           for (let j = 0; j < morphedPanels.length; j++) {
@@ -1698,22 +1697,30 @@ export function AirfoilCanvas() {
             }
           }
           
+          // Compute tangent from neighboring points
           const prevIdx = Math.max(closestIdx - 1, 0);
           const nextIdx = Math.min(closestIdx + 1, morphedPanels.length - 1);
           const dx = morphedPanels[nextIdx].x - morphedPanels[prevIdx].x;
           const dy = morphedPanels[nextIdx].y - morphedPanels[prevIdx].y;
           const len = Math.sqrt(dx * dx + dy * dy) || 1;
           
-          // Normal perpendicular to tangent - determine correct outward direction
-          // For upper surface (y > 0 typically), normal points up; for lower, down
+          // Normal perpendicular to tangent (rotate tangent 90 degrees)
+          // Convention: rotate CCW for outward normal on a CCW-wound airfoil
           let nx = -dy / len;
           let ny = dx / len;
           
-          // Ensure normal points outward (away from chord line at y=0)
-          if (closestPt.y > 0 && ny < 0) {
+          // Determine if we're on upper or lower surface based on panel index
+          // Panels typically go: TE (upper) -> LE -> TE (lower)
+          // So first half is upper surface, second half is lower
+          const nPanels = morphedPanels.length;
+          const isUpperSurface = closestIdx < nPanels / 2;
+          
+          // For upper surface, normal should point up (ny > 0)
+          // For lower surface, normal should point down (ny < 0)
+          if (isUpperSurface && ny < 0) {
             nx = -nx;
             ny = -ny;
-          } else if (closestPt.y < 0 && ny > 0) {
+          } else if (!isUpperSurface && ny > 0) {
             nx = -nx;
             ny = -ny;
           }

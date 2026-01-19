@@ -968,6 +968,8 @@ pub struct WasmSmokeSystem {
     gamma: Vec<f64>,
     alpha: f64,
     v_inf: f64,
+    /// Dividing streamline value (psi_0)
+    psi_0: f64,
 }
 
 #[wasm_bindgen]
@@ -986,6 +988,7 @@ impl WasmSmokeSystem {
             gamma: Vec::new(),
             alpha: 0.0,
             v_inf: 1.0,
+            psi_0: 0.0,
         }
     }
 
@@ -1001,7 +1004,7 @@ impl WasmSmokeSystem {
         self.coords = coords.chunks(2).map(|c| point(c[0], c[1])).collect();
         self.alpha = alpha_deg.to_radians();
 
-        // Solve to get gamma
+        // Solve to get gamma and psi_0
         let body = match Body::from_points("airfoil", &self.coords) {
             Ok(b) => b,
             Err(_) => return,
@@ -1012,6 +1015,7 @@ impl WasmSmokeSystem {
 
         if let Ok(solution) = solver.solve(&[body], &flow) {
             self.gamma = solution.gamma;
+            self.psi_0 = solution.psi_0;
         }
         
         // Invalidate cached streamlines so they're recomputed with new flow
@@ -1070,6 +1074,22 @@ impl WasmSmokeSystem {
     /// Get current freestream velocity magnitude.
     pub fn get_v_inf(&self) -> f64 {
         self.v_inf
+    }
+
+    /// Get stream function (psi) values for each particle.
+    /// 
+    /// This is used to determine which side of the dividing streamline
+    /// each particle is on. Compare with get_psi_0() to determine above/below.
+    pub fn get_psi_values(&self) -> Vec<f64> {
+        self.inner.get_psi_values(&self.coords, &self.gamma, self.alpha, self.v_inf)
+    }
+
+    /// Get the dividing streamline value (psi_0).
+    /// 
+    /// Particles with psi > psi_0 go above the dividing streamline (upper surface).
+    /// Particles with psi < psi_0 go below the dividing streamline (lower surface).
+    pub fn get_psi_0(&self) -> f64 {
+        self.psi_0
     }
 }
 
