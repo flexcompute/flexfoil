@@ -1105,9 +1105,9 @@ export function AirfoilCanvas() {
       };
     };
     
-    // Draw stream function visualization using filled contour bands
-    // Uses marching squares to generate iso-contour polygons at each threshold
-    // Fills regions between contours with appropriate colors
+    // Draw stream function visualization:
+    // 1. Cell-based fills for continuous color field
+    // 2. Marching squares contour lines on top for iso-contours
     // - Blue tones: flow going under the airfoil (ψ < ψ₀)
     // - Red tones: flow going over the airfoil (ψ > ψ₀)
     if (showPsiContours && psiContours.grid.length > 0) {
@@ -1116,49 +1116,79 @@ export function AirfoilCanvas() {
       const dx = (xMax - xMin) / (nx - 1);
       const dy = (yMax - yMin) / (ny - 1);
       
-      // Generate thresholds for filled bands
-      const nLevels = 10;
-      const thresholds: number[] = [];
-      
-      // Levels below ψ₀
-      for (let i = 0; i <= nLevels; i++) {
-        thresholds.push(psiMin + (psi0 - psiMin) * (i / nLevels));
-      }
-      // Levels above ψ₀ (skip psi0 itself to avoid duplicate)
-      for (let i = 1; i <= nLevels; i++) {
-        thresholds.push(psi0 + (psiMax - psi0) * (i / nLevels));
-      }
-      thresholds.sort((a, b) => a - b);
-      
       const alpha = isDark ? 0.5 : 0.6;
       
-      // For each threshold, generate filled contour
-      // Use painter's algorithm: draw from lowest to highest
-      for (const threshold of thresholds) {
-        // Get contour segments at this threshold
+      // STEP 1: Draw cell-based fills for continuous color field
+      for (let iy = 0; iy < ny - 1; iy++) {
+        for (let ix = 0; ix < nx - 1; ix++) {
+          const v00 = grid[iy * nx + ix];
+          const v10 = grid[iy * nx + ix + 1];
+          const v01 = grid[(iy + 1) * nx + ix];
+          const v11 = grid[(iy + 1) * nx + ix + 1];
+          
+          // Skip cells with NaN (interior)
+          if (!isFinite(v00) || !isFinite(v10) || !isFinite(v01) || !isFinite(v11)) {
+            continue;
+          }
+          
+          const avgPsi = (v00 + v10 + v01 + v11) / 4;
+          
+          let r: number, g: number, b: number;
+          if (avgPsi < psi0) {
+            const t = Math.min(1, (psi0 - avgPsi) / (psi0 - psiMin + 1e-10));
+            r = Math.round(180 - t * 100);
+            g = Math.round(200 - t * 80);
+            b = Math.round(240 - t * 20);
+          } else {
+            const t = Math.min(1, (avgPsi - psi0) / (psiMax - psi0 + 1e-10));
+            r = Math.round(255 - t * 30);
+            g = Math.round(200 - t * 100);
+            b = Math.round(190 - t * 100);
+          }
+          ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+          
+          const x0 = xMin + ix * dx;
+          const y0 = yMin + iy * dy;
+          const x1 = x0 + dx;
+          const y1 = y0 + dy;
+          
+          const p00 = toCanvas(rotatePoint({ x: x0, y: y0 }));
+          const p10 = toCanvas(rotatePoint({ x: x1, y: y0 }));
+          const p01 = toCanvas(rotatePoint({ x: x0, y: y1 }));
+          const p11 = toCanvas(rotatePoint({ x: x1, y: y1 }));
+          
+          ctx.beginPath();
+          ctx.moveTo(p00.x, p00.y);
+          ctx.lineTo(p10.x, p10.y);
+          ctx.lineTo(p11.x, p11.y);
+          ctx.lineTo(p01.x, p01.y);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+      
+      // STEP 2: Draw iso-contour lines using marching squares
+      const nLevels = 10;
+      const contourThresholds: number[] = [];
+      
+      // Levels below ψ₀
+      for (let i = 1; i < nLevels; i++) {
+        contourThresholds.push(psiMin + (psi0 - psiMin) * (i / nLevels));
+      }
+      // Levels above ψ₀
+      for (let i = 1; i < nLevels; i++) {
+        contourThresholds.push(psi0 + (psiMax - psi0) * (i / nLevels));
+      }
+      
+      ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.25)';
+      ctx.lineWidth = 0.8;
+      
+      for (const threshold of contourThresholds) {
         const segments = marchingSquares(grid, nx, ny, threshold, xMin, yMin, dx, dy);
         const polylines = connectSegments(segments);
         
-        // Color based on threshold value relative to ψ₀
-        let r: number, g: number, b: number;
-        if (threshold < psi0) {
-          const t = Math.min(1, (psi0 - threshold) / (psi0 - psiMin + 1e-10));
-          r = Math.round(180 - t * 100);
-          g = Math.round(200 - t * 80);
-          b = Math.round(240 - t * 20);
-        } else {
-          const t = Math.min(1, (threshold - psi0) / (psiMax - psi0 + 1e-10));
-          r = Math.round(255 - t * 30);
-          g = Math.round(200 - t * 100);
-          b = Math.round(190 - t * 100);
-        }
-        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
-        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${alpha * 0.5})`;
-        ctx.lineWidth = 0.5;
-        
-        // Fill each closed polyline as a polygon
         for (const polyline of polylines) {
-          if (polyline.length < 3) continue;
+          if (polyline.length < 2) continue;
           
           ctx.beginPath();
           const first = toCanvas(rotatePoint({ x: polyline[0][0], y: polyline[0][1] }));
@@ -1167,16 +1197,6 @@ export function AirfoilCanvas() {
           for (let i = 1; i < polyline.length; i++) {
             const p = toCanvas(rotatePoint({ x: polyline[i][0], y: polyline[i][1] }));
             ctx.lineTo(p.x, p.y);
-          }
-          
-          // Check if polyline is closed (endpoints close together)
-          const start = polyline[0];
-          const end = polyline[polyline.length - 1];
-          const isClosed = Math.abs(start[0] - end[0]) < 0.01 && Math.abs(start[1] - end[1]) < 0.01;
-          
-          if (isClosed) {
-            ctx.closePath();
-            ctx.fill();
           }
           ctx.stroke();
         }
