@@ -10,12 +10,12 @@
 //! - Returns pressure coefficient (Cp) distribution
 //! - Multi-body support built-in
 //!
-//! ## Phase 3: Boundary Layer Solver (Coming Soon)
+//! ## Phase 3: Boundary Layer Solver
 //! - Integral boundary layer equations
 //! - Thwaites (laminar) + Head/Green (turbulent)
 //! - Transition prediction (eN method)
 //!
-//! ## Phase 4: Viscous-Inviscid Interaction (Coming Soon)
+//! ## Phase 4: Viscous-Inviscid Interaction
 //! - Global Newton-Raphson coupling
 //! - Transpiration velocity model
 //! - Full polar generation
@@ -51,5 +51,15 @@
 #![warn(clippy::all)]
 
 pub mod inviscid;
+pub mod boundary_layer;
+pub mod viscous;
 
-// Re-exports will be added as modules are implemented
+// Re-exports for convenience
+pub use boundary_layer::{
+    BLSolution, BLConfig, BLSolver, TurbulentModel,
+    XfoilConstants, BLState, BLStation, Surface,
+};
+pub use viscous::{
+    ViscousSolver, ViscousSolution, ViscousConfig, CouplingMethod,
+    NewtonConfig, NewtonGeometry, NewtonState, NewtonResult, NewtonVIISolver,
+};

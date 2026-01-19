@@ -11,7 +11,11 @@ import type {
   BSplineControlPoint,
   SpacingKnot,
   Naca4Params,
-  PolarPoint
+  PolarPoint,
+  BLDistribution,
+  ViscousSolution,
+  SolverMode,
+  TurbulentModel
 } from '../types';
 import {
   generateNaca4 as wasmGenerateNaca4,
@@ -112,6 +116,16 @@ interface AirfoilStore extends AirfoilState {
   addPolarPoint: (point: PolarPoint) => void;
   clearPolar: () => void;
   
+  // Viscous analysis
+  setReynolds: (re: number) => void;
+  setSolverMode: (mode: SolverMode) => void;
+  setTurbulentModel: (model: TurbulentModel) => void;
+  setNCrit: (nCrit: number) => void;
+  setViscousSolution: (solution: ViscousSolution | null) => void;
+  setBLData: (data: BLDistribution | null) => void;
+  setAutoCompute: (enabled: boolean) => void;
+  invalidateSolution: () => void;
+  
   // Reset
   reset: () => void;
 }
@@ -130,6 +144,15 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
   curvatureWeight: 0,
   displayAlpha: 0,
   polarData: [],
+  
+  // Viscous state
+  reynolds: 1e6,
+  solverMode: 'inviscid',
+  turbulentModel: 0,  // Head (default)
+  nCrit: 9.0,         // Standard transition criterion
+  viscousSolution: null,
+  blData: null,
+  isAutoCompute: false,
 
   // Actions
   setCoordinates: (coords) => set({ coordinates: coords }),
@@ -403,6 +426,16 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
   })),
   clearPolar: () => set({ polarData: [] }),
 
+  // Viscous analysis actions
+  setReynolds: (re) => set({ reynolds: Math.max(1e3, Math.min(1e9, re)), viscousSolution: null, blData: null }),
+  setSolverMode: (mode) => set({ solverMode: mode, viscousSolution: null, blData: null }),
+  setTurbulentModel: (model) => set({ turbulentModel: model, viscousSolution: null, blData: null }),
+  setNCrit: (nCrit) => set({ nCrit: Math.max(1, Math.min(14, nCrit)), viscousSolution: null, blData: null }),
+  setViscousSolution: (solution) => set({ viscousSolution: solution }),
+  setBLData: (data) => set({ blData: data }),
+  setAutoCompute: (enabled) => set({ isAutoCompute: enabled }),
+  invalidateSolution: () => set({ viscousSolution: null, blData: null }),
+
   reset: () => set({
     name: 'NACA 0012',
     coordinates: DEFAULT_NACA0012,
@@ -416,6 +449,13 @@ export const useAirfoilStore = create<AirfoilStore>((set) => ({
     curvatureWeight: 0,
     displayAlpha: 0,
     polarData: [],
+    reynolds: 1e6,
+    solverMode: 'inviscid',
+    turbulentModel: 0,
+    nCrit: 9.0,
+    viscousSolution: null,
+    blData: null,
+    isAutoCompute: false,
   }),
 }));
 

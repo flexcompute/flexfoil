@@ -1050,6 +1050,528 @@ impl Default for RustFoil {
     }
 }
 
+// ============================================================================
+// Viscous Analysis
+// ============================================================================
+
+use rustfoil_solver::viscous::{ViscousSolver, ViscousConfig};
+use rustfoil_solver::TurbulentModel;
+
+/// Available turbulent boundary layer models.
+///
+/// Use with `set_turbulent_model()` to change the BL model.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurbModel {
+    /// Head's entrainment method (1958) - fast, good for attached flows
+    Head = 0,
+    /// XFOIL's Cτ lag method (Drela 1987) - accurate, good for separation
+    XfoilCtau = 1,
+    /// Green's lag-entrainment method (1977) - best history effects
+    GreenLag = 2,
+}
+
+impl From<TurbModel> for TurbulentModel {
+    fn from(m: TurbModel) -> Self {
+        match m {
+            TurbModel::Head => TurbulentModel::Head,
+            TurbModel::XfoilCtau => TurbulentModel::XfoilCtau,
+            TurbModel::GreenLag => TurbulentModel::GreenLag,
+        }
+    }
+}
+
+impl Default for TurbModel {
+    fn default() -> Self {
+        TurbModel::Head
+    }
+}
+
+/// Result of a viscous analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ViscousAnalysisResult {
+    /// Lift coefficient
+    pub cl: f64,
+    /// Drag coefficient (total)
+    pub cd: f64,
+    /// Friction drag coefficient
+    pub cd_friction: f64,
+    /// Pressure drag coefficient
+    pub cd_pressure: f64,
+    /// Moment coefficient
+    pub cm: f64,
+    /// Pressure coefficient distribution
+    pub cp: Vec<f64>,
+    /// X-coordinates for Cp
+    pub cp_x: Vec<f64>,
+    /// Transition x/c on upper surface
+    pub x_tr_upper: f64,
+    /// Transition x/c on lower surface
+    pub x_tr_lower: f64,
+    /// Whether the solution converged
+    pub converged: bool,
+    /// Number of iterations
+    pub iterations: usize,
+    /// Reynolds number
+    pub reynolds: f64,
+    /// Angle of attack (degrees)
+    pub alpha: f64,
+    /// Whether the analysis succeeded
+    pub success: bool,
+    /// Error message (if any)
+    pub error: Option<String>,
+}
+
+/// Boundary layer distribution data for plotting.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BLDistribution {
+    /// Arc-length on upper surface
+    pub s_upper: Vec<f64>,
+    /// Arc-length on lower surface
+    pub s_lower: Vec<f64>,
+    /// X-coordinates on upper surface
+    pub x_upper: Vec<f64>,
+    /// X-coordinates on lower surface
+    pub x_lower: Vec<f64>,
+    /// Momentum thickness on upper surface
+    pub theta_upper: Vec<f64>,
+    /// Momentum thickness on lower surface
+    pub theta_lower: Vec<f64>,
+    /// Displacement thickness on upper surface
+    pub delta_star_upper: Vec<f64>,
+    /// Displacement thickness on lower surface
+    pub delta_star_lower: Vec<f64>,
+    /// Shape factor on upper surface
+    pub h_upper: Vec<f64>,
+    /// Shape factor on lower surface
+    pub h_lower: Vec<f64>,
+    /// Skin friction on upper surface
+    pub cf_upper: Vec<f64>,
+    /// Skin friction on lower surface
+    pub cf_lower: Vec<f64>,
+    /// Transition x/c on upper surface
+    pub x_tr_upper: f64,
+    /// Transition x/c on lower surface
+    pub x_tr_lower: f64,
+}
+
+/// Point in a Reynolds number sweep.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReSweepPoint {
+    /// Reynolds number
+    pub reynolds: f64,
+    /// Lift coefficient
+    pub cl: f64,
+    /// Drag coefficient
+    pub cd: f64,
+    /// Moment coefficient
+    pub cm: f64,
+    /// Transition x/c upper
+    pub x_tr_upper: f64,
+    /// Transition x/c lower
+    pub x_tr_lower: f64,
+    /// Converged
+    pub converged: bool,
+}
+
+/// Analyze airfoil with viscous boundary layer.
+///
+/// # Arguments
+/// * `coords` - Airfoil coordinates as flat array [x0, y0, x1, y1, ...]
+/// * `alpha_deg` - Angle of attack in degrees
+/// * `reynolds` - Chord Reynolds number
+///
+/// # Returns
+/// Viscous analysis result as a JavaScript object.
+#[wasm_bindgen]
+pub fn analyze_viscous(coords: &[f64], alpha_deg: f64, reynolds: f64) -> JsValue {
+    let result = analyze_viscous_impl(coords, alpha_deg, reynolds, TurbModel::default(), 9.0);
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+/// Analyze airfoil with viscous boundary layer and extended options.
+///
+/// # Arguments
+/// * `coords` - Airfoil coordinates as flat array [x0, y0, x1, y1, ...]
+/// * `alpha_deg` - Angle of attack in degrees
+/// * `reynolds` - Chord Reynolds number
+/// * `model` - Turbulent BL model (0=Head, 1=XfoilCtau, 2=GreenLag)
+/// * `n_crit` - Critical N-factor for transition (typically 9.0)
+///
+/// # Returns
+/// Viscous analysis result as a JavaScript object.
+#[wasm_bindgen]
+pub fn analyze_viscous_extended(
+    coords: &[f64], 
+    alpha_deg: f64, 
+    reynolds: f64,
+    model: TurbModel,
+    n_crit: f64,
+) -> JsValue {
+    let result = analyze_viscous_impl(coords, alpha_deg, reynolds, model, n_crit);
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+/// Get information about available turbulent models.
+///
+/// Returns a JSON object describing each model.
+#[wasm_bindgen]
+pub fn get_turbulent_model_info() -> JsValue {
+    let info = serde_json::json!({
+        "models": [
+            {
+                "id": 0,
+                "name": "Head",
+                "fullName": "Head's Entrainment Method (1958)",
+                "description": "Two-equation method using momentum thickness and entrainment shape factor. Fast and stable, good for attached flows.",
+                "equations": ["dθ/ds + (H+2)(θ/Ue)(dUe/ds) = Cf/2", "d(H₁θ)/ds = Cₑ(H₁)"],
+                "recommended": "General use, fast polar generation"
+            },
+            {
+                "id": 1,
+                "name": "XfoilCtau",
+                "fullName": "XFOIL Cτ Lag-Dissipation Method (Drela 1987)",
+                "description": "Two-equation method using momentum thickness and shear lag coefficient. More accurate for separating flows.",
+                "equations": ["dθ/ds + (H+2)(θ/Ue)(dUe/ds) = Cf/2", "dCτ/ds = (Cτ_eq - Cτ)/L"],
+                "recommended": "High accuracy, strong pressure gradients"
+            },
+            {
+                "id": 2,
+                "name": "GreenLag",
+                "fullName": "Green's Lag-Entrainment Method (1977)",
+                "description": "Three-equation method combining entrainment and lag equations. Best for history effects.",
+                "equations": ["dθ/ds", "dH₁/ds", "dCτ/ds"],
+                "recommended": "Complex flows with strong history effects"
+            }
+        ],
+        "default": "Head"
+    });
+    serde_wasm_bindgen::to_value(&info).unwrap_or(JsValue::NULL)
+}
+
+fn analyze_viscous_impl(
+    coords: &[f64], 
+    alpha_deg: f64, 
+    reynolds: f64,
+    model: TurbModel,
+    n_crit: f64,
+) -> ViscousAnalysisResult {
+    // Parse coordinates
+    if coords.len() < 6 || coords.len() % 2 != 0 {
+        return ViscousAnalysisResult {
+            cl: 0.0,
+            cd: 0.0,
+            cd_friction: 0.0,
+            cd_pressure: 0.0,
+            cm: 0.0,
+            cp: vec![],
+            cp_x: vec![],
+            x_tr_upper: 1.0,
+            x_tr_lower: 1.0,
+            converged: false,
+            iterations: 0,
+            reynolds,
+            alpha: alpha_deg,
+            success: false,
+            error: Some("Invalid coordinates: need at least 3 points (6 values)".to_string()),
+        };
+    }
+
+    let points: Vec<_> = coords.chunks(2).map(|c| point(c[0], c[1])).collect();
+
+    // Build body
+    let body = match Body::from_points("airfoil", &points) {
+        Ok(b) => b,
+        Err(e) => {
+            return ViscousAnalysisResult {
+                cl: 0.0,
+                cd: 0.0,
+                cd_friction: 0.0,
+                cd_pressure: 0.0,
+                cm: 0.0,
+                cp: vec![],
+                cp_x: vec![],
+                x_tr_upper: 1.0,
+                x_tr_lower: 1.0,
+                converged: false,
+                iterations: 0,
+                reynolds,
+                alpha: alpha_deg,
+                success: false,
+                error: Some(format!("Geometry error: {}", e)),
+            };
+        }
+    };
+
+    // Solve with selected model
+    let config = ViscousConfig {
+        reynolds,
+        n_crit,
+        turbulent_model: model.into(),
+        ..Default::default()
+    };
+    let solver = ViscousSolver::new(config);
+    let flow = FlowConditions::with_alpha_deg(alpha_deg);
+
+    let solution = solver.solve(&body, &flow);
+
+    ViscousAnalysisResult {
+        cl: solution.cl,
+        cd: solution.cd,
+        cd_friction: solution.cd_friction,
+        cd_pressure: solution.cd_pressure,
+        cm: solution.cm,
+        cp: solution.cp,
+        cp_x: solution.cp_x,
+        x_tr_upper: solution.x_tr_upper,
+        x_tr_lower: solution.x_tr_lower,
+        converged: solution.converged,
+        iterations: solution.iterations,
+        reynolds: solution.reynolds,
+        alpha: solution.alpha,
+        success: true,
+        error: None,
+    }
+}
+
+/// Get boundary layer distribution data for plotting.
+///
+/// # Arguments
+/// * `coords` - Airfoil coordinates as flat array
+/// * `alpha_deg` - Angle of attack in degrees
+/// * `reynolds` - Chord Reynolds number
+///
+/// # Returns
+/// BL distribution data as a JavaScript object.
+#[wasm_bindgen]
+pub fn get_bl_distribution(coords: &[f64], alpha_deg: f64, reynolds: f64) -> JsValue {
+    let result = get_bl_distribution_impl(coords, alpha_deg, reynolds);
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+fn get_bl_distribution_impl(coords: &[f64], alpha_deg: f64, reynolds: f64) -> Option<BLDistribution> {
+    if coords.len() < 6 || coords.len() % 2 != 0 {
+        return None;
+    }
+
+    let points: Vec<_> = coords.chunks(2).map(|c| point(c[0], c[1])).collect();
+
+    let body = Body::from_points("airfoil", &points).ok()?;
+
+    let config = ViscousConfig {
+        reynolds,
+        n_crit: 9.0,
+        ..Default::default()
+    };
+    let solver = ViscousSolver::new(config);
+    let flow = FlowConditions::with_alpha_deg(alpha_deg);
+
+    let solution = solver.solve(&body, &flow);
+
+    // Extract x-coordinates from s-coordinates (approximate using arc-length)
+    let panels = body.panels();
+    let chord = body.chord();
+    
+    // For x-coordinates, we use the panel midpoints
+    let x_coords: Vec<f64> = panels.iter().map(|p| p.midpoint().x).collect();
+    
+    // Map s to x (simplified - assume s roughly corresponds to panel index)
+    let x_upper: Vec<f64> = solution.s_upper.iter().map(|&s| {
+        // Find approximate x for this s value
+        let idx = ((s * x_coords.len() as f64) as usize).min(x_coords.len() - 1);
+        x_coords.get(idx).copied().unwrap_or(s)
+    }).collect();
+    
+    let x_lower: Vec<f64> = solution.s_lower.iter().map(|&s| {
+        let idx = ((s * x_coords.len() as f64) as usize).min(x_coords.len() - 1);
+        x_coords.get(idx).copied().unwrap_or(s)
+    }).collect();
+
+    Some(BLDistribution {
+        s_upper: solution.s_upper,
+        s_lower: solution.s_lower,
+        x_upper,
+        x_lower,
+        theta_upper: solution.theta_upper,
+        theta_lower: solution.theta_lower,
+        delta_star_upper: solution.delta_star_upper,
+        delta_star_lower: solution.delta_star_lower,
+        h_upper: solution.h_upper,
+        h_lower: solution.h_lower,
+        cf_upper: solution.cf_upper,
+        cf_lower: solution.cf_lower,
+        x_tr_upper: solution.x_tr_upper,
+        x_tr_lower: solution.x_tr_lower,
+    })
+}
+
+/// Run a Reynolds number sweep at fixed alpha.
+///
+/// # Arguments
+/// * `coords` - Airfoil coordinates as flat array
+/// * `alpha_deg` - Angle of attack in degrees
+/// * `re_start` - Starting Reynolds number
+/// * `re_end` - Ending Reynolds number
+/// * `re_count` - Number of Reynolds numbers to evaluate
+///
+/// # Returns
+/// Array of Re sweep points as a JavaScript object.
+#[wasm_bindgen]
+pub fn run_re_sweep(
+    coords: &[f64],
+    alpha_deg: f64,
+    re_start: f64,
+    re_end: f64,
+    re_count: u32,
+) -> JsValue {
+    let result = run_re_sweep_impl(coords, alpha_deg, re_start, re_end, re_count);
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+fn run_re_sweep_impl(
+    coords: &[f64],
+    alpha_deg: f64,
+    re_start: f64,
+    re_end: f64,
+    re_count: u32,
+) -> Vec<ReSweepPoint> {
+    if coords.len() < 6 || coords.len() % 2 != 0 || re_count < 2 {
+        return vec![];
+    }
+
+    let points: Vec<_> = coords.chunks(2).map(|c| point(c[0], c[1])).collect();
+
+    let body = match Body::from_points("airfoil", &points) {
+        Ok(b) => b,
+        Err(_) => return vec![],
+    };
+
+    let flow = FlowConditions::with_alpha_deg(alpha_deg);
+    
+    // Generate Re values (log-spaced for better distribution)
+    let log_start = re_start.ln();
+    let log_end = re_end.ln();
+    let re_values: Vec<f64> = (0..re_count)
+        .map(|i| {
+            let t = i as f64 / (re_count - 1) as f64;
+            (log_start + t * (log_end - log_start)).exp()
+        })
+        .collect();
+
+    re_values
+        .iter()
+        .map(|&re| {
+            let config = ViscousConfig {
+                reynolds: re,
+                n_crit: 9.0,
+                ..Default::default()
+            };
+            let solver = ViscousSolver::new(config);
+            let solution = solver.solve(&body, &flow);
+
+            ReSweepPoint {
+                reynolds: re,
+                cl: solution.cl,
+                cd: solution.cd,
+                cm: solution.cm,
+                x_tr_upper: solution.x_tr_upper,
+                x_tr_lower: solution.x_tr_lower,
+                converged: solution.converged,
+            }
+        })
+        .collect()
+}
+
+/// Run a viscous alpha polar sweep.
+///
+/// # Arguments
+/// * `coords` - Airfoil coordinates as flat array
+/// * `reynolds` - Chord Reynolds number
+/// * `alpha_start` - Starting alpha (degrees)
+/// * `alpha_end` - Ending alpha (degrees)
+/// * `alpha_step` - Alpha step (degrees)
+///
+/// # Returns
+/// Array of polar points as a JavaScript object.
+#[wasm_bindgen]
+pub fn run_viscous_polar(
+    coords: &[f64],
+    reynolds: f64,
+    alpha_start: f64,
+    alpha_end: f64,
+    alpha_step: f64,
+) -> JsValue {
+    let result = run_viscous_polar_impl(coords, reynolds, alpha_start, alpha_end, alpha_step);
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+/// Viscous polar point.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ViscousPolarPoint {
+    /// Angle of attack (degrees)
+    pub alpha: f64,
+    /// Lift coefficient
+    pub cl: f64,
+    /// Drag coefficient
+    pub cd: f64,
+    /// Moment coefficient
+    pub cm: f64,
+    /// Transition x/c upper
+    pub x_tr_upper: f64,
+    /// Transition x/c lower
+    pub x_tr_lower: f64,
+    /// Converged
+    pub converged: bool,
+}
+
+fn run_viscous_polar_impl(
+    coords: &[f64],
+    reynolds: f64,
+    alpha_start: f64,
+    alpha_end: f64,
+    alpha_step: f64,
+) -> Vec<ViscousPolarPoint> {
+    if coords.len() < 6 || coords.len() % 2 != 0 || alpha_step.abs() < 0.01 {
+        return vec![];
+    }
+
+    let points: Vec<_> = coords.chunks(2).map(|c| point(c[0], c[1])).collect();
+
+    let body = match Body::from_points("airfoil", &points) {
+        Ok(b) => b,
+        Err(_) => return vec![],
+    };
+
+    let config = ViscousConfig {
+        reynolds,
+        n_crit: 9.0,
+        ..Default::default()
+    };
+    let solver = ViscousSolver::new(config);
+
+    let mut results = Vec::new();
+    let mut alpha = alpha_start;
+
+    while (alpha_step > 0.0 && alpha <= alpha_end) || (alpha_step < 0.0 && alpha >= alpha_end) {
+        let flow = FlowConditions::with_alpha_deg(alpha);
+        let solution = solver.solve(&body, &flow);
+
+        results.push(ViscousPolarPoint {
+            alpha,
+            cl: solution.cl,
+            cd: solution.cd,
+            cm: solution.cm,
+            x_tr_upper: solution.x_tr_upper,
+            x_tr_lower: solution.x_tr_lower,
+            converged: solution.converged,
+        });
+
+        alpha += alpha_step;
+    }
+
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

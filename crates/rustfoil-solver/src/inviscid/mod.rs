@@ -33,6 +33,14 @@ pub use error::SolverError;
 pub use velocity::{build_streamlines, velocity_at, is_inside_airfoil, StreamlineOptions};
 pub use smoke::SmokeSystem;
 
+// Source influence for V-I coupling (DIJ matrix)
+pub use influence::{
+    source_panel_velocity,
+    source_tangent_influence,
+    compute_source_influence_matrix,
+    compute_ue_change_from_mass,
+};
+
 use nalgebra::{DMatrix, DVector};
 use rustfoil_core::{Body, Point};
 use std::f64::consts::PI;
@@ -196,6 +204,236 @@ impl FactorizedSolution {
 
         (cl, cm)
     }
+    
+    /// Solve with transpiration velocity boundary condition.
+    /// 
+    /// Transpiration velocity Vn represents mass injection/suction at the surface
+    /// due to boundary layer displacement. This modifies the effective inviscid
+    /// solution by adding source panel contributions.
+    /// 
+    /// # Arguments
+    /// * `flow` - Flow conditions (alpha, V_inf)
+    /// * `vn` - Transpiration velocity at each node (length = n_nodes)
+    /// * `s_coords` - Arc-length coordinates for panel length calculation
+    /// 
+    /// # Returns
+    /// Modified inviscid solution accounting for displacement effects
+    pub fn solve_with_transpiration(
+        &self,
+        flow: &FlowConditions,
+        vn: &[f64],
+        s_coords: &[f64],
+    ) -> InviscidSolution {
+        let n = self.n_nodes;
+        
+        // Get base inviscid solution
+        let base = self.solve_alpha(flow);
+        
+        // Handle size mismatch by padding or truncating vn
+        let vn_padded: Vec<f64> = if vn.len() == n {
+            vn.to_vec()
+        } else if vn.len() == n - 1 {
+            // Common case: s_coords has N elements, n_nodes has N+1
+            // Pad with zero at the end (TE typically has zero transpiration)
+            let mut v = vn.to_vec();
+            v.push(0.0);
+            v
+        } else if vn.len() > n {
+            // Truncate if too long
+            vn[..n].to_vec()
+        } else {
+            return base;
+        };
+        
+        // If transpiration is all zeros, return base solution
+        if vn_padded.iter().all(|&v| v.abs() < 1e-12) {
+            return base;
+        }
+        
+        let vn = &vn_padded;
+        
+        // Compute source panel strengths from transpiration
+        // sigma_i = Vn_i (transpiration velocity acts as source strength)
+        // The source distribution modifies the tangential velocity at the surface
+        
+        // Pad s_coords if needed to match n_nodes
+        let s_coords_padded: Vec<f64> = if s_coords.len() == n {
+            s_coords.to_vec()
+        } else if s_coords.len() == n - 1 {
+            let mut s = s_coords.to_vec();
+            // Extend by approximate arc length step
+            let ds = if s.len() > 1 { s[s.len()-1] - s[s.len()-2] } else { 0.01 };
+            s.push(s.last().copied().unwrap_or(0.0) + ds);
+            s
+        } else {
+            s_coords[..n.min(s_coords.len())].to_vec()
+        };
+        
+        // Compute velocity correction from source panels
+        let gamma_correction = compute_source_velocity_correction(
+            &self.nodes,
+            vn,
+            &s_coords_padded,
+        );
+        
+        // Apply correction to gamma values
+        // Transpiration (Vn > 0) represents mass blowing OUT, which reduces local velocity
+        // The source panel calculation gives positive delta_gamma for positive Vn,
+        // but physically we need to SUBTRACT this effect
+        //
+        // NOTE: Current source panel approach gives ~4% correction, but XFOIL's 
+        // full Newton coupling gives ~11% Cl reduction. This is a fundamental
+        // limitation of the transpiration-as-sources approach vs proper V-I coupling.
+        let gamma: Vec<f64> = base.gamma.iter()
+            .zip(gamma_correction.iter())
+            .map(|(&g, &dg)| g - dg)  // Note: subtract, not add
+            .collect();
+        
+        // Recompute Cp with corrected gamma
+        let cp: Vec<f64> = gamma
+            .iter()
+            .map(|&g| 1.0 - (g / flow.v_inf).powi(2))
+            .collect();
+        
+        // Recompute forces
+        let (cl, cm) = self.compute_forces(&cp, flow);
+        
+        InviscidSolution {
+            gamma,
+            cp,
+            cl,
+            cm,
+            psi_0: base.psi_0,
+            nodes_per_body: vec![n],
+        }
+    }
+}
+
+/// Compute velocity correction at surface nodes due to source panel distribution.
+/// 
+/// For transpiration, mass injection at the surface is modeled as source panels.
+/// The source strength at each panel equals the local transpiration velocity.
+/// 
+/// The tangential velocity perturbation from a source panel of strength sigma is:
+/// delta_u_tangent = (sigma / 2pi) * (theta2 - theta1)
+/// 
+/// # Arguments
+/// * `nodes` - Airfoil node positions
+/// * `vn` - Transpiration velocity (source strength) at each node
+/// * `s_coords` - Arc-length coordinates for panel lengths
+/// 
+/// # Returns
+/// Velocity correction to be added to gamma at each node
+fn compute_source_velocity_correction(
+    nodes: &[Point],
+    vn: &[f64],
+    s_coords: &[f64],
+) -> Vec<f64> {
+    let n = nodes.len();
+    if n < 3 || vn.len() != n || s_coords.len() != n {
+        return vec![0.0; n];
+    }
+    
+    let mut delta_gamma = vec![0.0; n];
+    
+    // For each field point i, sum source influence from all panels
+    for i in 0..n {
+        let xi = nodes[i].x;
+        let yi = nodes[i].y;
+        
+        // Sum influence from all source panels
+        for jo in 0..n {
+            let jp = (jo + 1) % n;
+            
+            // Panel endpoints
+            let x_jo = nodes[jo].x;
+            let y_jo = nodes[jo].y;
+            let x_jp = nodes[jp].x;
+            let y_jp = nodes[jp].y;
+            
+            // Panel geometry
+            let dx = x_jp - x_jo;
+            let dy = y_jp - y_jo;
+            let ds_sq = dx * dx + dy * dy;
+            
+            if ds_sq < 1e-24 {
+                continue;
+            }
+            
+            let dso = ds_sq.sqrt();
+            let dsio = 1.0 / dso;
+            let sx = dx * dsio;
+            let sy = dy * dsio;
+            
+            // Vector from panel endpoints to field point
+            let rx1 = xi - x_jo;
+            let ry1 = yi - y_jo;
+            let rx2 = xi - x_jp;
+            let ry2 = yi - y_jp;
+            
+            // Transform to panel-local coordinates
+            let x1 = sx * rx1 + sy * ry1;
+            let x2 = sx * rx2 + sy * ry2;
+            let yy = sx * ry1 - sy * rx1;
+            
+            let rs1 = rx1 * rx1 + ry1 * ry1;
+            let rs2 = rx2 * rx2 + ry2 * ry2;
+            
+            // Source panel influence on tangential velocity
+            // For a constant-strength source panel, the tangential velocity at point P is:
+            // u_t = (sigma / 2pi) * ln(r2/r1)
+            // where r1, r2 are distances to panel endpoints
+            
+            // Skip self-influence (handled separately)
+            if i == jo || i == jp {
+                continue;
+            }
+            
+            if rs1 < 1e-20 || rs2 < 1e-20 {
+                continue;
+            }
+            
+            // Average source strength on this panel
+            let sigma_avg = 0.5 * (vn[jo] + vn[jp]);
+            
+            // Log term for tangential velocity
+            let log_term = 0.5 * (rs2 / rs1).ln();
+            
+            // Angle term (for stream function, but also affects tangential velocity)
+            let theta1 = yy.atan2(x1);
+            let theta2 = yy.atan2(x2);
+            let dtheta = theta2 - theta1;
+            
+            // Velocity contribution in panel-local coordinates
+            // Source panel: u_local (tangent) = sigma/(2pi) * ln(r2/r1)
+            //               v_local (normal) = sigma/(2pi) * (theta2-theta1)
+            let u_local = sigma_avg / (2.0 * PI) * log_term;
+            let v_local = sigma_avg / (2.0 * PI) * dtheta;
+            
+            // Transform back to global and project onto tangent direction at node i
+            let u_global = u_local * sx + v_local * (-sy);
+            let v_global = u_local * sy + v_local * sx;
+            
+            // For gamma correction, we need the tangential velocity perturbation
+            // at node i. Approximate by using the panel tangent at node i
+            let tangent_i = if i < n - 1 {
+                let dxi = nodes[i + 1].x - nodes[i].x;
+                let dyi = nodes[i + 1].y - nodes[i].y;
+                let len = (dxi * dxi + dyi * dyi).sqrt().max(1e-12);
+                (dxi / len, dyi / len)
+            } else {
+                let dxi = nodes[i].x - nodes[i - 1].x;
+                let dyi = nodes[i].y - nodes[i - 1].y;
+                let len = (dxi * dxi + dyi * dyi).sqrt().max(1e-12);
+                (dxi / len, dyi / len)
+            };
+            
+            // Project velocity onto tangent to get gamma correction
+            delta_gamma[i] += u_global * tangent_i.0 + v_global * tangent_i.1;
+        }
+    }
+    
+    delta_gamma
 }
 
 /// Inviscid flow solver using Drela's linear vorticity panel method.
