@@ -25,9 +25,16 @@ pub struct TransitionInfo {
     pub forced: bool,
 }
 
-/// Compute the amplification rate dN/ds using XFOIL's envelope method.
+/// Compute the amplification rate dN/ds using XFOIL's DAMPL2 method.
 ///
-/// This implements the DAMPL subroutine from XFOIL (Drela & Giles, 1987).
+/// This implements the DAMPL2 subroutine from XFOIL (Nov 1996 version).
+/// Key improvements over DAMPL:
+/// 1. Extra exponential term in AF for high H (separation bubbles)
+/// 2. Non-envelope Orr-Sommerfeld correction for H > 3.5
+///
+/// Reference: Drela & Giles, "Viscous/Inviscid Analysis of Transonic and
+/// Low Reynolds Number Airfoils", AIAA Journal, Oct. 1987.
+/// Updated: March 1991, November 1996.
 ///
 /// # Arguments
 /// * `h` - Shape factor (kinematic shape parameter HK)
@@ -37,6 +44,10 @@ pub struct TransitionInfo {
 /// # Returns
 /// dN/ds (amplification rate per unit arc length)
 pub fn amplification_rate(h: f64, theta: f64, re_theta: f64) -> f64 {
+    const DGR: f64 = 0.08;  // Ramp half-width in log10(Re_theta) space
+    const HK1: f64 = 3.5;   // Start of separation profile blending
+    const HK2: f64 = 4.0;   // End of separation profile blending
+    
     let hk = h.max(1.05);
     let theta = theta.max(1e-10);
     let rt = re_theta.max(1.0);
@@ -44,41 +55,65 @@ pub fn amplification_rate(h: f64, theta: f64, re_theta: f64) -> f64 {
     // HMI = 1/(HK-1)
     let hmi = 1.0 / (hk - 1.0).max(0.1);
     
-    // Critical log10(Re_theta) correlation
+    // Critical log10(Re_theta) correlation (Falkner-Skan profiles)
     let aa = 2.492 * hmi.powf(0.43);
     let bb = (14.0 * hmi - 9.24).tanh();
-    let gr_crit = aa + 0.7 * (bb + 1.0);
+    let grc = aa + 0.7 * (bb + 1.0);
     
     // Current log10(Re_theta)
     let gr = rt.log10();
     
-    // Ramp parameter DGR = 0.08
-    let dgr = 0.08;
-    
-    if gr < gr_crit - dgr {
+    if gr < grc - DGR {
         // Below critical: no amplification
         return 0.0;
     }
     
-    // Smooth ramp turn-on
-    let rnorm = ((gr - (gr_crit - dgr)) / (2.0 * dgr)).clamp(0.0, 1.0);
+    // === Smooth ramp turn-on near critical Re_theta ===
+    let rnorm = ((gr - (grc - DGR)) / (2.0 * DGR)).clamp(0.0, 1.0);
     let rfac = if rnorm >= 1.0 {
         1.0
     } else {
         3.0 * rnorm.powi(2) - 2.0 * rnorm.powi(3)
     };
     
-    // DADR = dN/dRe_theta = 0.028*(HK-1) - 0.0345*exp(-ARG^2)
+    // === Amplification envelope slope dN/d(Re_theta) ===
     let arg = 3.87 * hmi - 2.52;
-    let dadr = 0.028 * (hk - 1.0) - 0.0345 * (-arg.powi(2)).exp();
+    let ex = (-arg.powi(2)).exp();
+    let dadr = 0.028 * (hk - 1.0) - 0.0345 * ex;
     
-    // AF = m(H) correlation
-    let af = -0.05 + 2.7 * hmi - 5.5 * hmi.powi(2) + 3.0 * hmi.powi(3);
+    // === AF = m(H) correlation with DAMPL2 exponential term ===
+    // The exponential term improves accuracy for separation bubble profiles
+    let brg = -20.0 * hmi;
+    let af = -0.05 + 2.7 * hmi - 5.5 * hmi.powi(2) + 3.0 * hmi.powi(3) + 0.1 * brg.exp();
     
-    // AX = AF * DADR / theta (amplification rate per unit x)
-    // This is the key: divide by theta, not multiply!
-    let ax = (af * dadr / theta) * rfac;
+    // Base envelope amplification rate AX1
+    let ax1 = (af * dadr / theta) * rfac;
     
+    // === Non-envelope correction for separated profiles (H > 3.5) ===
+    // For laminar separation bubbles, Falkner-Skan profiles underpredict
+    // instability. This uses Orr-Sommerfeld max-amplification instead.
+    if hk < HK1 {
+        return ax1.max(0.0);
+    }
+    
+    // Blending fraction: 0 at HK1=3.5, 1 at HK2=4.0
+    let hnorm = ((hk - HK1) / (HK2 - HK1)).clamp(0.0, 1.0);
+    let hfac = if hnorm >= 1.0 {
+        1.0
+    } else {
+        3.0 * hnorm.powi(2) - 2.0 * hnorm.powi(3)
+    };
+    
+    // Modified amplification rate AX2 for separated profiles
+    // Based on Orr-Sommerfeld maximum amplification rate
+    let gr0 = 0.30 + 0.35 * (-0.15 * (hk - 5.0)).exp();
+    let tnr = (1.2 * (gr - gr0)).tanh();
+    
+    let ax2_raw = (0.086 * tnr - 0.25 / (hk - 1.0).powf(1.5)) / theta;
+    let ax2 = ax2_raw.max(0.0);
+    
+    // Blend between envelope (AX1) and Orr-Sommerfeld (AX2)
+    let ax = hfac * ax2 + (1.0 - hfac) * ax1;
     ax.max(0.0)
 }
 

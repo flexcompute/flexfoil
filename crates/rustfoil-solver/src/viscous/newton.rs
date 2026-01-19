@@ -147,6 +147,15 @@ impl NewtonGeometry {
 /// State vector for Newton iteration.
 ///
 /// Contains all unknowns that are solved simultaneously.
+/// 
+/// # XFOIL-Style Variables
+/// 
+/// The BL unknowns per station are `[Ctau/Ampl, theta, mass]` where:
+/// - `mass = Ue * delta_star = Ue * theta * H`
+/// - `Ue` is NOT an unknown - it's computed from: `Ue = Ue_inviscid + sum_j(DIJ[i][j] * mass[j])`
+/// - `H` is a derived quantity: `H = mass / (Ue * theta)`
+/// 
+/// This matches XFOIL's state vector structure for proper V-I coupling.
 #[derive(Debug, Clone)]
 pub struct NewtonState {
     /// Panel vorticity at each node (N values)
@@ -154,26 +163,43 @@ pub struct NewtonState {
     /// BL momentum thickness at each station
     /// Ordered: upper surface (LE to TE), lower surface (LE to TE)
     pub theta: Vec<f64>,
-    /// BL shape factor H at each station
-    pub h: Vec<f64>,
+    /// BL mass defect at each station: mass = Ue * delta_star
+    /// This is the XFOIL-style 3rd variable that couples to inviscid through DIJ
+    pub mass: Vec<f64>,
     /// Whether each station is turbulent
     pub is_turbulent: Vec<bool>,
     /// Transition index on upper surface (index into upper stations)
     pub transition_upper: Option<usize>,
     /// Transition index on lower surface (index into lower stations)
     pub transition_lower: Option<usize>,
+    /// Ctau (shear stress coefficient) for turbulent stations
+    /// In laminar regions, this stores amplification factor
+    pub ctau: Vec<f64>,
+    /// Whether station is in inverse mode (separated)
+    pub inverse_mode: Vec<bool>,
+    /// Target Hk for inverse mode stations
+    pub hk_target: Vec<f64>,
 }
 
 impl NewtonState {
     /// Create a new state with given sizes.
     pub fn new(n_panels: usize, n_bl_stations: usize) -> Self {
+        // Initialize with reasonable defaults
+        // Initial theta from Blasius: θ ~ 0.664*sqrt(ν*x/U) ~ 1e-4 for Re~1e6
+        let theta_init = 1e-5;
+        // Initial H ~ 2.6 (Blasius), so mass = Ue * θ * H ~ 1.0 * 1e-5 * 2.6
+        let mass_init = theta_init * 2.6;
+        
         Self {
             gamma: vec![0.0; n_panels],
-            theta: vec![1e-6; n_bl_stations],
-            h: vec![2.6; n_bl_stations], // Blasius initial value
+            theta: vec![theta_init; n_bl_stations],
+            mass: vec![mass_init; n_bl_stations],
             is_turbulent: vec![false; n_bl_stations],
             transition_upper: None,
             transition_lower: None,
+            ctau: vec![0.03; n_bl_stations], // Typical initial Ctau
+            inverse_mode: vec![false; n_bl_stations],
+            hk_target: vec![2.5; n_bl_stations],
         }
     }
     
@@ -185,9 +211,9 @@ impl NewtonState {
         state
     }
     
-    /// Total number of unknowns.
+    /// Total number of unknowns: gamma + theta + mass
     pub fn total_size(&self) -> usize {
-        self.gamma.len() + self.theta.len() + self.h.len()
+        self.gamma.len() + self.theta.len() + self.mass.len()
     }
     
     /// Get value at flat index.
@@ -200,7 +226,7 @@ impl NewtonState {
         } else if idx < n_gamma + n_theta {
             self.theta[idx - n_gamma]
         } else {
-            self.h[idx - n_gamma - n_theta]
+            self.mass[idx - n_gamma - n_theta]
         }
     }
     
@@ -214,7 +240,7 @@ impl NewtonState {
         } else if idx < n_gamma + n_theta {
             self.theta[idx - n_gamma] = value;
         } else {
-            self.h[idx - n_gamma - n_theta] = value;
+            self.mass[idx - n_gamma - n_theta] = value;
         }
     }
     
@@ -229,7 +255,7 @@ impl NewtonState {
         let mut v = Vec::with_capacity(self.total_size());
         v.extend(&self.gamma);
         v.extend(&self.theta);
-        v.extend(&self.h);
+        v.extend(&self.mass);
         v
     }
     
@@ -240,7 +266,7 @@ impl NewtonState {
         
         self.gamma.copy_from_slice(&v[0..n_gamma]);
         self.theta.copy_from_slice(&v[n_gamma..n_gamma + n_theta]);
-        self.h.copy_from_slice(&v[n_gamma + n_theta..]);
+        self.mass.copy_from_slice(&v[n_gamma + n_theta..]);
     }
     
     /// Apply a step with given scale factor.
@@ -253,19 +279,101 @@ impl NewtonState {
         for i in 0..self.theta.len() {
             new_state.theta[i] = (self.theta[i] + alpha * step.d_theta[i]).max(1e-10);
         }
-        for i in 0..self.h.len() {
-            new_state.h[i] = (self.h[i] + alpha * step.d_h[i]).clamp(1.0, 10.0);
+        for i in 0..self.mass.len() {
+            // Mass must stay positive
+            new_state.mass[i] = (self.mass[i] + alpha * step.d_mass[i]).max(1e-12);
         }
+        
+        // Copy auxiliary state
+        new_state.ctau = self.ctau.clone();
+        new_state.inverse_mode = self.inverse_mode.clone();
+        new_state.hk_target = self.hk_target.clone();
         
         new_state
     }
     
-    /// Compute displacement thickness from theta and H.
+    /// Compute displacement thickness: δ* = mass / Ue
+    /// 
+    /// Since mass = Ue * δ*, we have δ* = mass / Ue
     pub fn delta_star(&self) -> Vec<f64> {
-        self.theta.iter()
-            .zip(self.h.iter())
-            .map(|(&th, &h)| th * h)
+        // For now, return mass as δ* approximation (assuming Ue ~ 1)
+        // The caller should use compute_delta_star_with_ue for accuracy
+        self.mass.clone()
+    }
+    
+    /// Compute displacement thickness given edge velocities.
+    /// δ* = mass / Ue
+    pub fn delta_star_with_ue(&self, ue: &[f64]) -> Vec<f64> {
+        self.mass.iter()
+            .zip(ue.iter())
+            .map(|(&m, &u)| m / u.max(1e-10))
             .collect()
+    }
+    
+    /// Compute shape factor H given edge velocities.
+    /// H = δ* / θ = mass / (Ue * θ)
+    pub fn h_with_ue(&self, ue: &[f64]) -> Vec<f64> {
+        self.mass.iter()
+            .zip(self.theta.iter())
+            .zip(ue.iter())
+            .map(|((&m, &th), &u)| m / (u.max(1e-10) * th.max(1e-10)))
+            .collect()
+    }
+    
+    /// Compute edge velocity from inviscid Ue plus DIJ mass coupling.
+    /// 
+    /// This is the key XFOIL relationship:
+    /// `Ue[i] = Ue_inviscid[i] + sum_j(DIJ[i][j] * mass[j])`
+    /// 
+    /// # Arguments
+    /// * `ue_inviscid` - Edge velocity from inviscid solution (|gamma|)
+    /// * `dij` - Source influence matrix
+    /// * `bl_to_panel` - Mapping from BL station index to panel index
+    /// 
+    /// # Returns
+    /// Edge velocity at each panel node
+    pub fn compute_ue_from_mass(
+        &self,
+        ue_inviscid: &[f64],
+        dij: &[Vec<f64>],
+        bl_to_panel: &[usize],
+    ) -> Vec<f64> {
+        let n_panels = ue_inviscid.len();
+        let mut ue = ue_inviscid.to_vec();
+        
+        // Build mass at each panel from BL stations
+        let mut mass_at_panel = vec![0.0; n_panels];
+        for (bl_idx, &panel_idx) in bl_to_panel.iter().enumerate() {
+            if panel_idx < n_panels && bl_idx < self.mass.len() {
+                mass_at_panel[panel_idx] = self.mass[bl_idx];
+            }
+        }
+        
+        // Apply DIJ coupling: dUe[i] = sum_j DIJ[i][j] * mass[j]
+        for i in 0..n_panels {
+            if i < dij.len() {
+                for j in 0..n_panels.min(dij[i].len()) {
+                    ue[i] += dij[i][j] * mass_at_panel[j];
+                }
+            }
+        }
+        
+        // Ensure positive
+        for u in &mut ue {
+            *u = u.abs().max(1e-10);
+        }
+        
+        ue
+    }
+    
+    /// Initialize mass from H and Ue: mass = Ue * θ * H
+    pub fn init_mass_from_h(&mut self, h: &[f64], ue: &[f64], bl_to_panel: &[usize]) {
+        for (bl_idx, &panel_idx) in bl_to_panel.iter().enumerate() {
+            if bl_idx < self.mass.len() && bl_idx < h.len() {
+                let ue_val = if panel_idx < ue.len() { ue[panel_idx].abs().max(1e-10) } else { 1.0 };
+                self.mass[bl_idx] = ue_val * self.theta[bl_idx] * h[bl_idx];
+            }
+        }
     }
 }
 
@@ -276,8 +384,8 @@ pub struct NewtonStep {
     pub d_gamma: Vec<f64>,
     /// Change in theta
     pub d_theta: Vec<f64>,
-    /// Change in H
-    pub d_h: Vec<f64>,
+    /// Change in mass defect
+    pub d_mass: Vec<f64>,
 }
 
 impl NewtonStep {
@@ -286,7 +394,16 @@ impl NewtonStep {
         Self {
             d_gamma: v[0..n_gamma].to_vec(),
             d_theta: v[n_gamma..n_gamma + n_bl].to_vec(),
-            d_h: v[n_gamma + n_bl..].to_vec(),
+            d_mass: v[n_gamma + n_bl..].to_vec(),
+        }
+    }
+    
+    /// Create a zero step.
+    pub fn zero(n_gamma: usize, n_bl: usize) -> Self {
+        Self {
+            d_gamma: vec![0.0; n_gamma],
+            d_theta: vec![0.0; n_bl],
+            d_mass: vec![0.0; n_bl],
         }
     }
     
@@ -294,7 +411,7 @@ impl NewtonStep {
     pub fn norm(&self) -> f64 {
         let sum: f64 = self.d_gamma.iter().map(|x| x * x).sum::<f64>()
             + self.d_theta.iter().map(|x| x * x).sum::<f64>()
-            + self.d_h.iter().map(|x| x * x).sum::<f64>();
+            + self.d_mass.iter().map(|x| x * x).sum::<f64>();
         sum.sqrt()
     }
 }
@@ -1071,8 +1188,393 @@ impl BlockTridiagJacobian {
     }
 }
 
+// ============================================================================
+// XFOIL-Style Newton System for Viscous-Inviscid Coupling
+// ============================================================================
+
+/// Configuration for XFOIL-style Newton solver.
+#[derive(Debug, Clone)]
+pub struct XfoilNewtonConfig {
+    /// Maximum Newton iterations for global system
+    pub max_iterations: usize,
+    /// Convergence tolerance (residual norm)
+    pub tolerance: f64,
+    /// Reynolds number
+    pub reynolds: f64,
+    /// Critical N-factor for transition
+    pub n_crit: f64,
+    /// Initial damping factor
+    pub initial_damping: f64,
+    /// Minimum damping factor
+    pub min_damping: f64,
+}
+
+impl Default for XfoilNewtonConfig {
+    fn default() -> Self {
+        Self {
+            max_iterations: 25,
+            tolerance: 1e-5,
+            reynolds: 1e6,
+            n_crit: 9.0,
+            initial_damping: 0.5,
+            min_damping: 0.1,
+        }
+    }
+}
+
+/// XFOIL-style global Newton system for viscous-inviscid coupling.
+/// 
+/// This combines:
+/// - Block-tridiagonal BL Jacobian (A/B blocks)
+/// - Mass influence columns (from DIJ coupling)
+/// - Inverse mode handling for separated flows
+/// 
+/// The system structure matches XFOIL's SETBL/BLSOLV:
+/// ```text
+/// | A  |     .  |     .  |     |   d       R
+/// | B  A     .  |     .  |     |   d   =   R
+/// | .  B  A  .  |     .  |     |   d       R
+/// | |  |  |  B  A     .  |     |   d       R
+/// | .  .  .  .  .  .  .  |     |   d       R
+/// ```
+/// 
+/// Where:
+/// - A, B are 3x3 blocks for BL equations
+/// - | represents mass influence columns (from DIJ)
+/// - d is the solution update [dCtau, dθ, dm]
+/// - R is the residual vector
+#[derive(Debug)]
+pub struct XfoilNewtonSystem {
+    /// Configuration
+    pub config: XfoilNewtonConfig,
+    /// Block-tridiagonal Jacobian for upper surface
+    pub upper_jac: BlockTridiagJacobian,
+    /// Block-tridiagonal Jacobian for lower surface  
+    pub lower_jac: BlockTridiagJacobian,
+    /// DIJ source influence matrix (for Ue coupling)
+    pub dij: Vec<Vec<f64>>,
+    /// Mapping from BL station index to panel node index (upper surface)
+    pub upper_bl_to_panel: Vec<usize>,
+    /// Mapping from BL station index to panel node index (lower surface)
+    pub lower_bl_to_panel: Vec<usize>,
+    /// Current edge velocities at each panel node
+    pub ue: Vec<f64>,
+    /// Inviscid edge velocities (from panel method)
+    pub ue_inviscid: Vec<f64>,
+    /// Converged flag
+    pub converged: bool,
+    /// Final residual norm
+    pub residual_norm: f64,
+    /// Number of iterations taken
+    pub iterations: usize,
+}
+
+impl XfoilNewtonSystem {
+    /// Create a new XFOIL Newton system.
+    pub fn new(
+        config: XfoilNewtonConfig,
+        n_upper: usize,
+        n_lower: usize,
+        n_panels: usize,
+        dij: Vec<Vec<f64>>,
+        upper_indices: Vec<usize>,
+        lower_indices: Vec<usize>,
+        ue_inviscid: Vec<f64>,
+    ) -> Self {
+        Self {
+            config,
+            upper_jac: BlockTridiagJacobian::new(n_upper, n_panels),
+            lower_jac: BlockTridiagJacobian::new(n_lower, n_panels),
+            dij,
+            upper_bl_to_panel: upper_indices,
+            lower_bl_to_panel: lower_indices,
+            ue: ue_inviscid.clone(),
+            ue_inviscid,
+            converged: false,
+            residual_norm: f64::MAX,
+            iterations: 0,
+        }
+    }
+    
+    /// Update edge velocities from mass defect using DIJ coupling.
+    /// 
+    /// Ue[i] = Ue_inviscid[i] + Σ_j DIJ[i][j] * mass[j]
+    pub fn update_ue_from_mass(&mut self, mass_upper: &[f64], mass_lower: &[f64]) {
+        let n_panels = self.ue_inviscid.len();
+        self.ue = self.ue_inviscid.clone();
+        
+        // Build mass at each panel node
+        let mut mass_at_panel = vec![0.0; n_panels];
+        for (j, &panel_idx) in self.upper_bl_to_panel.iter().enumerate() {
+            if panel_idx < n_panels && j < mass_upper.len() {
+                mass_at_panel[panel_idx] = mass_upper[j];
+            }
+        }
+        for (j, &panel_idx) in self.lower_bl_to_panel.iter().enumerate() {
+            if panel_idx < n_panels && j < mass_lower.len() {
+                mass_at_panel[panel_idx] = mass_lower[j];
+            }
+        }
+        
+        // Apply DIJ coupling: dUe[i] = Σ_j DIJ[i][j] * mass[j]
+        for i in 0..n_panels {
+            if i < self.dij.len() {
+                for j in 0..n_panels.min(self.dij[i].len()) {
+                    self.ue[i] += self.dij[i][j] * mass_at_panel[j];
+                }
+            }
+            self.ue[i] = self.ue[i].abs().max(1e-10);
+        }
+    }
+    
+    /// Set up mass influence columns from DIJ matrix.
+    /// 
+    /// This computes VM[iv][jv][k] = dR_k/dUe * dUe/dm_j for the coupling.
+    pub fn setup_mass_influence(
+        &mut self,
+        upper_states: &[StationState],
+        lower_states: &[StationState],
+    ) {
+        // Upper surface mass influence
+        let upper_theta: Vec<f64> = upper_states.iter().map(|s| s.theta).collect();
+        let upper_h: Vec<f64> = upper_states.iter().map(|s| s.h).collect();
+        let upper_ue: Vec<f64> = self.upper_bl_to_panel.iter()
+            .map(|&i| self.ue.get(i).copied().unwrap_or(1.0))
+            .collect();
+        
+        self.upper_jac.set_mass_influence_from_dij(
+            &self.dij,
+            &self.upper_bl_to_panel,
+            &upper_ue,
+            &upper_theta,
+            &upper_h,
+            self.config.reynolds,
+        );
+        
+        // Lower surface mass influence
+        let lower_theta: Vec<f64> = lower_states.iter().map(|s| s.theta).collect();
+        let lower_h: Vec<f64> = lower_states.iter().map(|s| s.h).collect();
+        let lower_ue: Vec<f64> = self.lower_bl_to_panel.iter()
+            .map(|&i| self.ue.get(i).copied().unwrap_or(1.0))
+            .collect();
+        
+        self.lower_jac.set_mass_influence_from_dij(
+            &self.dij,
+            &self.lower_bl_to_panel,
+            &lower_ue,
+            &lower_theta,
+            &lower_h,
+            self.config.reynolds,
+        );
+    }
+    
+    /// Solve the Newton system for both surfaces.
+    /// 
+    /// Returns true if both surfaces converged.
+    pub fn solve(&mut self) -> bool {
+        let upper_ok = self.upper_jac.solve();
+        let lower_ok = self.lower_jac.solve();
+        
+        // Compute combined residual norm
+        let upper_norm = self.upper_jac.rhs_norm();
+        let lower_norm = self.lower_jac.rhs_norm();
+        self.residual_norm = (upper_norm.powi(2) + lower_norm.powi(2)).sqrt();
+        
+        upper_ok && lower_ok
+    }
+    
+    /// Apply the solution update to BL states.
+    /// 
+    /// Returns the updated mass arrays for upper and lower surfaces.
+    pub fn apply_update(
+        &self,
+        upper_states: &mut [StationState],
+        lower_states: &mut [StationState],
+        damping: f64,
+    ) -> (Vec<f64>, Vec<f64>) {
+        // Apply upper surface updates
+        for (j, sol) in self.upper_jac.solution.iter().enumerate() {
+            if j < upper_states.len() {
+                upper_states[j].ctau_or_ampl = (upper_states[j].ctau_or_ampl + damping * sol[0]).max(0.0);
+                upper_states[j].theta = (upper_states[j].theta + damping * sol[1]).max(1e-12);
+                upper_states[j].mass = (upper_states[j].mass + damping * sol[2]).max(1e-12);
+                upper_states[j].update_h();
+            }
+        }
+        
+        // Apply lower surface updates
+        for (j, sol) in self.lower_jac.solution.iter().enumerate() {
+            if j < lower_states.len() {
+                lower_states[j].ctau_or_ampl = (lower_states[j].ctau_or_ampl + damping * sol[0]).max(0.0);
+                lower_states[j].theta = (lower_states[j].theta + damping * sol[1]).max(1e-12);
+                lower_states[j].mass = (lower_states[j].mass + damping * sol[2]).max(1e-12);
+                lower_states[j].update_h();
+            }
+        }
+        
+        // Return updated mass arrays
+        let mass_upper: Vec<f64> = upper_states.iter().map(|s| s.mass).collect();
+        let mass_lower: Vec<f64> = lower_states.iter().map(|s| s.mass).collect();
+        (mass_upper, mass_lower)
+    }
+    
+    /// Detect and enable inverse mode for separated stations.
+    /// 
+    /// Checks each station's shape factor against separation thresholds:
+    /// - Laminar: Hk > HK_MAX_LAMINAR (3.8)
+    /// - Turbulent: Hk > HK_MAX_TURBULENT (2.5)
+    /// 
+    /// When separation is detected, enables inverse mode and computes
+    /// target Hk using XFOIL's approach.
+    pub fn detect_and_set_inverse_mode(
+        &self,
+        upper_states: &mut [StationState],
+        lower_states: &mut [StationState],
+    ) {
+        use crate::boundary_layer::{HK_MAX_LAMINAR, HK_MAX_TURBULENT, compute_target_hk};
+        
+        // Process upper surface
+        let mut in_inverse_upper = false;
+        for j in 1..upper_states.len() {
+            let hk_max = if upper_states[j].is_turbulent { HK_MAX_TURBULENT } else { HK_MAX_LAMINAR };
+            let hk = upper_states[j].h;
+            
+            // Check if we should enter inverse mode
+            if hk >= hk_max || in_inverse_upper {
+                in_inverse_upper = true;
+                
+                // Compute target Hk (gradually relax toward equilibrium)
+                let ds = (upper_states[j].s - upper_states[j - 1].s).abs().max(1e-10);
+                let hk_target = compute_target_hk(
+                    upper_states[j - 1].h,
+                    ds,
+                    upper_states[j - 1].theta,
+                    upper_states[j].is_turbulent,
+                    false, // not wake
+                );
+                
+                upper_states[j].set_inverse_mode(hk_target);
+                
+                // Check for reattachment
+                if hk < hk_max * 0.9 {
+                    in_inverse_upper = false;
+                    upper_states[j].clear_inverse_mode();
+                }
+            } else {
+                upper_states[j].clear_inverse_mode();
+            }
+        }
+        
+        // Process lower surface
+        let mut in_inverse_lower = false;
+        for j in 1..lower_states.len() {
+            let hk_max = if lower_states[j].is_turbulent { HK_MAX_TURBULENT } else { HK_MAX_LAMINAR };
+            let hk = lower_states[j].h;
+            
+            if hk >= hk_max || in_inverse_lower {
+                in_inverse_lower = true;
+                
+                let ds = (lower_states[j].s - lower_states[j - 1].s).abs().max(1e-10);
+                let hk_target = compute_target_hk(
+                    lower_states[j - 1].h,
+                    ds,
+                    lower_states[j - 1].theta,
+                    lower_states[j].is_turbulent,
+                    false,
+                );
+                
+                lower_states[j].set_inverse_mode(hk_target);
+                
+                if hk < hk_max * 0.9 {
+                    in_inverse_lower = false;
+                    lower_states[j].clear_inverse_mode();
+                }
+            } else {
+                lower_states[j].clear_inverse_mode();
+            }
+        }
+    }
+    
+    /// Run the full Newton iteration loop.
+    /// 
+    /// This performs XFOIL-style coupled Newton iteration:
+    /// 1. Detect separation and enable inverse mode
+    /// 2. Compute BL residuals and Jacobian
+    /// 3. Set up mass influence from DIJ
+    /// 4. Solve block-tridiagonal system
+    /// 5. Update BL states and Ue
+    /// 6. Check convergence
+    pub fn iterate(
+        &mut self,
+        upper_states: &mut [StationState],
+        lower_states: &mut [StationState],
+    ) -> bool {
+        let mut damping = self.config.initial_damping;
+        let mut prev_norm = f64::MAX;
+        
+        for iter in 0..self.config.max_iterations {
+            self.iterations = iter + 1;
+            
+            // Update Ue from current mass defect
+            let mass_upper: Vec<f64> = upper_states.iter().map(|s| s.mass).collect();
+            let mass_lower: Vec<f64> = lower_states.iter().map(|s| s.mass).collect();
+            self.update_ue_from_mass(&mass_upper, &mass_lower);
+            
+            // Update Ue in station states
+            for (j, &panel_idx) in self.upper_bl_to_panel.iter().enumerate() {
+                if j < upper_states.len() && panel_idx < self.ue.len() {
+                    upper_states[j].ue = self.ue[panel_idx];
+                    upper_states[j].update_h();
+                }
+            }
+            for (j, &panel_idx) in self.lower_bl_to_panel.iter().enumerate() {
+                if j < lower_states.len() && panel_idx < self.ue.len() {
+                    lower_states[j].ue = self.ue[panel_idx];
+                    lower_states[j].update_h();
+                }
+            }
+            
+            // Detect and enable inverse mode for separated stations
+            self.detect_and_set_inverse_mode(upper_states, lower_states);
+            
+            // Set up mass influence from DIJ
+            self.setup_mass_influence(upper_states, lower_states);
+            
+            // Solve block systems
+            if !self.solve() {
+                // Reduce damping and retry
+                damping = (damping * 0.5).max(self.config.min_damping);
+                continue;
+            }
+            
+            // Check convergence
+            if self.residual_norm < self.config.tolerance {
+                self.converged = true;
+                return true;
+            }
+            
+            // Adaptive damping
+            if self.residual_norm > prev_norm {
+                damping = (damping * 0.7).max(self.config.min_damping);
+            } else if self.residual_norm < 0.5 * prev_norm {
+                damping = (damping * 1.2).min(1.0);
+            }
+            prev_norm = self.residual_norm;
+            
+            // Apply updates
+            let (new_mass_upper, new_mass_lower) = self.apply_update(upper_states, lower_states, damping);
+            
+            // Update Ue for next iteration
+            self.update_ue_from_mass(&new_mass_upper, &new_mass_lower);
+        }
+        
+        self.converged = false;
+        false
+    }
+}
+
 /// State at a single BL station for local Newton iteration.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct StationState {
     /// First variable: Ctau (turbulent) or Ampl (laminar)
     pub ctau_or_ampl: f64,
@@ -1088,6 +1590,27 @@ pub struct StationState {
     pub is_turbulent: bool,
     /// Shape factor H (derived from mass/theta/Ue)
     pub h: f64,
+    /// Whether in inverse mode (Hk exceeds separation threshold)
+    /// In inverse mode, Hk is prescribed and Ue is solved for.
+    pub inverse_mode: bool,
+    /// Target Hk when in inverse mode (from compute_target_hk)
+    pub hk_target: f64,
+}
+
+impl Default for StationState {
+    fn default() -> Self {
+        Self {
+            ctau_or_ampl: 0.0,
+            theta: 1e-6,
+            mass: 0.0,
+            ue: 1.0,
+            s: 0.0,
+            is_turbulent: false,
+            h: 2.6,
+            inverse_mode: false,
+            hk_target: 0.0,
+        }
+    }
 }
 
 impl StationState {
@@ -1103,7 +1626,53 @@ impl StationState {
             s,
             is_turbulent,
             h,
+            inverse_mode: false,
+            hk_target: 0.0,
         }
+    }
+    
+    /// Create with inverse mode enabled.
+    pub fn new_inverse(
+        ctau_or_ampl: f64,
+        theta: f64,
+        h: f64,
+        ue: f64,
+        s: f64,
+        is_turbulent: bool,
+        hk_target: f64,
+    ) -> Self {
+        let delta_star = theta * h;
+        let mass = ue * delta_star;
+        Self {
+            ctau_or_ampl,
+            theta,
+            mass,
+            ue,
+            s,
+            is_turbulent,
+            h,
+            inverse_mode: true,
+            hk_target,
+        }
+    }
+    
+    /// Check if inverse mode should be enabled based on current Hk.
+    pub fn should_use_inverse(&self) -> bool {
+        use crate::boundary_layer::{HK_MAX_LAMINAR, HK_MAX_TURBULENT};
+        let hk_max = if self.is_turbulent { HK_MAX_TURBULENT } else { HK_MAX_LAMINAR };
+        self.h >= hk_max
+    }
+    
+    /// Enable inverse mode with a target Hk.
+    pub fn set_inverse_mode(&mut self, hk_target: f64) {
+        self.inverse_mode = true;
+        self.hk_target = hk_target;
+    }
+    
+    /// Disable inverse mode.
+    pub fn clear_inverse_mode(&mut self) {
+        self.inverse_mode = false;
+        self.hk_target = 0.0;
     }
     
     /// Get displacement thickness delta*.
@@ -1529,11 +2098,8 @@ impl NewtonVIISolver {
                 geometry.lower_indices[j - n_upper]
             };
             
-            let ue = state.gamma[panel_idx].abs().max(1e-10);
-            let theta = state.theta[j].max(1e-10);
-            let dh = step.d_h[j] * alpha;
-            
-            dm_panels[panel_idx] = ue * theta * dh;
+            // d_mass is now the direct change in mass defect
+            dm_panels[panel_idx] = step.d_mass[j] * alpha;
         }
         
         // Compute Ue correction from DIJ
@@ -1648,8 +2214,15 @@ impl NewtonVIISolver {
         // First station: initial condition residual
         // theta should be small (stagnation point)
         let theta_init = 1e-4 / self.config.reynolds.sqrt();
+        let panel_0 = surface_indices[0];
+        let ue_0 = ue[panel_0].max(1e-10);
+        
         r_momentum[bl_offset] = state.theta[bl_offset] - theta_init;
-        r_shape[bl_offset] = state.h[bl_offset] - 2.59; // Blasius H
+        
+        // For mass, initial condition: mass = Ue * θ * H_blasius
+        let h_blasius = 2.59;
+        let mass_init = ue_0 * theta_init * h_blasius;
+        r_shape[bl_offset] = state.mass[bl_offset] - mass_init;
         
         // March along surface
         for j in 1..n_stations {
@@ -1670,8 +2243,10 @@ impl NewtonVIISolver {
             
             let theta = state.theta[bl_idx];
             let theta_prev = state.theta[bl_idx_prev];
-            let h = state.h[bl_idx];
-            let h_prev = state.h[bl_idx_prev];
+            
+            // Compute H from mass: H = mass / (Ue * θ)
+            let h = (state.mass[bl_idx] / (ue_local * theta.max(1e-10))).clamp(1.05, 10.0);
+            let h_prev = (state.mass[bl_idx_prev] / (ue_prev * theta_prev.max(1e-10))).clamp(1.05, 10.0);
             
             // Velocity gradient
             let due_ds = (ue_local - ue_prev) / ds;
@@ -1691,14 +2266,21 @@ impl NewtonVIISolver {
             let dtheta_ds_actual = (theta - theta_prev) / ds;
             r_momentum[bl_idx] = dtheta_ds_actual - dtheta_ds_computed;
             
-            // Shape equation residual (using Head's method):
-            // d(H1*θ)/ds = Ce
-            let h1 = head_h1(h);
-            let h1_prev = head_h1(h_prev);
-            let ce = head_entrainment(h1_prev);
-            
-            let d_h1_theta_ds_actual = (h1 * theta - h1_prev * theta_prev) / ds;
-            r_shape[bl_idx] = d_h1_theta_ds_actual - ce;
+            // Shape equation residual
+            // In inverse mode: Hk - Hk_target = 0
+            // In direct mode: d(H1*θ)/ds = Ce
+            if state.inverse_mode[bl_idx] {
+                let hk_target = state.hk_target[bl_idx];
+                r_shape[bl_idx] = h - hk_target;
+            } else {
+                // Direct mode: Head's entrainment
+                let h1 = head_h1(h);
+                let h1_prev = head_h1(h_prev);
+                let ce = head_entrainment(h1_prev);
+                
+                let d_h1_theta_ds_actual = (h1 * theta - h1_prev * theta_prev) / ds;
+                r_shape[bl_idx] = d_h1_theta_ds_actual - ce;
+            }
         }
     }
     
@@ -1742,10 +2324,10 @@ impl NewtonVIISolver {
         // State and residual sizes must match for square Jacobian
         debug_assert_eq!(
             n_vars_state, n_vars_res,
-            "State size {} != Residual size {}. State: gamma={}, theta={}, h={}. \
+            "State size {} != Residual size {}. State: gamma={}, theta={}, mass={}. \
              Residuals: inv={}, mom={}, shape={}",
             n_vars_state, n_vars_res,
-            state.gamma.len(), state.theta.len(), state.h.len(),
+            state.gamma.len(), state.theta.len(), state.mass.len(),
             residuals.r_inviscid.len(), residuals.r_momentum.len(), residuals.r_shape.len()
         );
         
@@ -1861,12 +2443,12 @@ mod tests {
         // Set some values
         state.gamma[0] = 1.0;
         state.theta[0] = 2.0;
-        state.h[0] = 3.0;
+        state.mass[0] = 3.0;
         
         // Test get
         assert!((state.get(0) - 1.0).abs() < 1e-10); // gamma[0]
         assert!((state.get(10) - 2.0).abs() < 1e-10); // theta[0]
-        assert!((state.get(15) - 3.0).abs() < 1e-10); // h[0]
+        assert!((state.get(15) - 3.0).abs() < 1e-10); // mass[0]
         
         // Test set
         state.set(0, 10.0);
@@ -1876,7 +2458,7 @@ mod tests {
     #[test]
     fn test_newton_state_total_size() {
         let state = NewtonState::new(100, 50);
-        assert_eq!(state.total_size(), 100 + 50 + 50); // gamma + theta + h
+        assert_eq!(state.total_size(), 100 + 50 + 50); // gamma + theta + mass
     }
     
     #[test]
