@@ -24,6 +24,7 @@ import type { Point, ViewportState, AirfoilPoint } from '../types';
 import { computeStreamlines, computePsiGrid, createSmokeSystem, isWasmReady, WasmSmokeSystem, analyzeAirfoil } from '../lib/wasm';
 import { useMorphingAnimation, getCpColor, computeForceVectors } from '../hooks/useMorphingAnimation';
 import { generateCamberSplineCurve } from '../lib/airfoilGeometry';
+import { contours } from 'd3-contour';
 
 /**
  * Compute cumulative arc lengths for a sequence of points.
@@ -479,40 +480,6 @@ function extrapolateDividingStreamline(
     
     return result;
   });
-}
-
-/**
- * Generate a color for a stream function value using a diverging colormap.
- * Blue for flow below ψ₀ (going under), red for flow above ψ₀ (going over).
- * Uses smooth gradient interpolation within each region.
- */
-function getPsiColor(psi: number, psiMin: number, psiMax: number, psi0: number, isDark: boolean): string {
-  const totalRange = psiMax - psiMin;
-  if (totalRange < 1e-10) return isDark ? 'rgba(50, 50, 50, 0.3)' : 'rgba(200, 200, 200, 0.3)';
-  
-  const alpha = isDark ? 0.4 : 0.5;
-  
-  if (psi < psi0) {
-    // Below psi_0 - blue tones (flow going under)
-    // Map from psiMin -> psi0 to intensity 1 -> 0 (darker blue far from psi0, lighter near)
-    const rangeBelow = psi0 - psiMin;
-    const t = rangeBelow > 1e-10 ? (psi0 - psi) / rangeBelow : 0; // 0 at psi0, 1 at psiMin
-    // Gradient from light blue (t=0) to deep blue (t=1)
-    const r = Math.round(180 - t * 140);  // 180 -> 40
-    const g = Math.round(200 - t * 120);  // 200 -> 80
-    const b = Math.round(240 - t * 40);   // 240 -> 200
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-  } else {
-    // Above psi_0 - red/salmon tones (flow going over)
-    // Map from psi0 -> psiMax to intensity 0 -> 1 (lighter near psi0, darker far)
-    const rangeAbove = psiMax - psi0;
-    const t = rangeAbove > 1e-10 ? (psi - psi0) / rangeAbove : 0; // 0 at psi0, 1 at psiMax
-    // Gradient from light salmon (t=0) to deep red (t=1)
-    const r = Math.round(255 - t * 55);   // 255 -> 200
-    const g = Math.round(210 - t * 130);  // 210 -> 80
-    const b = Math.round(200 - t * 140);  // 200 -> 60
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-  }
 }
 
 // Constants
@@ -1134,61 +1101,91 @@ export function AirfoilCanvas() {
       };
     };
     
-    // Draw stream function visualization (filled contours + iso-lines) behind everything else
+    // Draw stream function visualization using d3-contour for proper filled contours
     // NOTE: The filled contours show the stream function field with a diverging colormap:
     // - Blue tones: flow going under the airfoil (ψ < ψ₀)
     // - Red tones: flow going over the airfoil (ψ > ψ₀)
-    // The interior of the airfoil is NOT rendered - only the external flow field is shown.
-    // The dividing streamline (ψ = ψ₀) is extrapolated to intersect the airfoil surface.
+    // The dividing streamline (ψ = ψ₀) separates these regions precisely.
     if (showPsiContours && psiContours.grid.length > 0) {
       const { grid, bounds, nx, ny, psiMin, psiMax, psi0 } = psiContours;
       const [xMin, xMax, yMin, yMax] = bounds;
-      const dx = (xMax - xMin) / (nx - 1);
-      const dy = (yMax - yMin) / (ny - 1);
       
-      // Draw all cells - interior values are already ψ₀ from the solver
-      // We'll mask out the airfoil shape after drawing
-      for (let iy = 0; iy < ny - 1; iy++) {
-        for (let ix = 0; ix < nx - 1; ix++) {
-          // Get corner values
-          const v00 = grid[iy * nx + ix];
-          const v10 = grid[iy * nx + ix + 1];
-          const v01 = grid[(iy + 1) * nx + ix];
-          const v11 = grid[(iy + 1) * nx + ix + 1];
-          
-          if (!isFinite(v00) || !isFinite(v10) || !isFinite(v01) || !isFinite(v11)) {
-            continue;
-          }
-          
-          // Use average of corner values for cell color
-          const avgPsi = (v00 + v10 + v01 + v11) / 4;
-          const color = getPsiColor(avgPsi, psiMin, psiMax, psi0, isDark);
-          
-          // Cell corners in world coordinates
-          const x0 = xMin + ix * dx;
-          const y0 = yMin + iy * dy;
-          const x1 = x0 + dx;
-          const y1 = y0 + dy;
-          
-          // Transform to canvas coordinates (with rotation)
-          const p00 = toCanvas(rotatePoint({ x: x0, y: y0 }));
-          const p10 = toCanvas(rotatePoint({ x: x1, y: y0 }));
-          const p01 = toCanvas(rotatePoint({ x: x0, y: y1 }));
-          const p11 = toCanvas(rotatePoint({ x: x1, y: y1 }));
-          
-          ctx.fillStyle = color;
-          ctx.beginPath();
-          ctx.moveTo(p00.x, p00.y);
-          ctx.lineTo(p10.x, p10.y);
-          ctx.lineTo(p11.x, p11.y);
-          ctx.lineTo(p01.x, p01.y);
-          ctx.closePath();
-          ctx.fill();
-        }
+      // Create d3-contour generator with proper thresholds around ψ₀
+      // Use more levels for smoother gradients
+      const nLevels = 15;
+      const thresholds: number[] = [];
+      
+      // Add levels below ψ₀ (blue region)
+      for (let i = 0; i < nLevels; i++) {
+        thresholds.push(psiMin + (psi0 - psiMin) * (i / nLevels));
+      }
+      // Add ψ₀ as exact threshold (dividing streamline)
+      thresholds.push(psi0);
+      // Add levels above ψ₀ (red region)
+      for (let i = 1; i <= nLevels; i++) {
+        thresholds.push(psi0 + (psiMax - psi0) * (i / nLevels));
       }
       
-      // Mask out the airfoil interior by drawing filled airfoil shape
-      // This cleanly clips the stream function at any zoom level
+      // Generate filled contour polygons
+      const contourGenerator = contours()
+        .size([nx, ny])
+        .thresholds(thresholds);
+      
+      const contourData = contourGenerator(grid as number[]);
+      
+      // Create a custom projection that transforms grid coordinates to canvas
+      const gridToWorld = (gridX: number, gridY: number) => {
+        const worldX = xMin + (gridX / (nx - 1)) * (xMax - xMin);
+        const worldY = yMin + (gridY / (ny - 1)) * (yMax - yMin);
+        return rotatePoint({ x: worldX, y: worldY });
+      };
+      
+      // Custom path renderer for canvas
+      const renderContourPath = (geometry: { type: string; coordinates: number[][][] | number[][][][] }) => {
+        if (geometry.type === 'MultiPolygon') {
+          for (const polygon of geometry.coordinates as number[][][][]) {
+            for (const ring of polygon) {
+              ctx.beginPath();
+              for (let i = 0; i < ring.length; i++) {
+                const [gx, gy] = ring[i];
+                const world = gridToWorld(gx, gy);
+                const canvas = toCanvas(world);
+                if (i === 0) ctx.moveTo(canvas.x, canvas.y);
+                else ctx.lineTo(canvas.x, canvas.y);
+              }
+              ctx.closePath();
+              ctx.fill();
+            }
+          }
+        }
+      };
+      
+      // Draw filled contours from lowest to highest (painter's algorithm)
+      const alpha = isDark ? 0.5 : 0.6;
+      for (const c of contourData) {
+        const value = c.value;
+        
+        // Color based on whether above or below ψ₀
+        if (value < psi0) {
+          // Blue region (flow going under)
+          const t = (psi0 - value) / (psi0 - psiMin);
+          const r = Math.round(180 - t * 100);
+          const g = Math.round(200 - t * 80);
+          const b = Math.round(240 - t * 20);
+          ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        } else {
+          // Red region (flow going over)
+          const t = (value - psi0) / (psiMax - psi0);
+          const r = Math.round(255 - t * 30);
+          const g = Math.round(200 - t * 100);
+          const b = Math.round(190 - t * 100);
+          ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        }
+        
+        renderContourPath(c as unknown as { type: string; coordinates: number[][][] | number[][][][] });
+      }
+      
+      // Mask out the airfoil interior
       if (panels.length > 2) {
         ctx.fillStyle = isDark ? '#1a1a2e' : '#ffffff';
         ctx.beginPath();
@@ -1200,23 +1197,6 @@ export function AirfoilCanvas() {
         }
         ctx.closePath();
         ctx.fill();
-      }
-      
-      // Draw contour lines on top of filled regions (faint)
-      ctx.strokeStyle = isDark ? 'rgba(100, 149, 237, 0.3)' : 'rgba(65, 105, 225, 0.3)';
-      ctx.lineWidth = 0.5;
-      
-      for (const line of psiContours.lines) {
-        if (line.length < 2) continue;
-        ctx.beginPath();
-        const first = toCanvas(rotatePoint({ x: line[0][0], y: line[0][1] }));
-        ctx.moveTo(first.x, first.y);
-        
-        for (let i = 1; i < line.length; i++) {
-          const p = toCanvas(rotatePoint({ x: line[i][0], y: line[i][1] }));
-          ctx.lineTo(p.x, p.y);
-        }
-        ctx.stroke();
       }
       
       // Draw dividing streamline (ψ = ψ₀) prominently - extrapolated to hit the airfoil
