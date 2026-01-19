@@ -86,14 +86,81 @@ export interface AirfoilState {
   displayAlpha: number;
   /** Polar sweep data */
   polarData: PolarPoint[];
+  
+  // Viscous analysis state
+  /** Reynolds number */
+  reynolds: number;
+  /** Solver mode (inviscid or viscous) */
+  solverMode: SolverMode;
+  /** Turbulent boundary layer model */
+  turbulentModel: TurbulentModel;
+  /** Critical N-factor for transition prediction (typically 9.0) */
+  nCrit: number;
+  /** Cached viscous solution */
+  viscousSolution: ViscousSolution | null;
+  /** Boundary layer distribution data */
+  blData: BLDistribution | null;
+  /** Whether to auto-recompute on geometry change */
+  isAutoCompute: boolean;
 }
 
 /** A polar data point */
 export interface PolarPoint {
   alpha: number;
   cl: number;
+  cd?: number;
   cm: number;
+  reynolds?: number;
+  x_tr_upper?: number;
+  x_tr_lower?: number;
+  converged?: boolean;
 }
+
+/** Boundary layer distribution data */
+export interface BLDistribution {
+  s_upper: number[];
+  s_lower: number[];
+  x_upper: number[];
+  x_lower: number[];
+  theta_upper: number[];
+  theta_lower: number[];
+  delta_star_upper: number[];
+  delta_star_lower: number[];
+  h_upper: number[];
+  h_lower: number[];
+  cf_upper: number[];
+  cf_lower: number[];
+  x_tr_upper: number;
+  x_tr_lower: number;
+}
+
+/** Viscous solution result */
+export interface ViscousSolution {
+  cl: number;
+  cd: number;
+  cd_friction: number;
+  cd_pressure: number;
+  cm: number;
+  cp: number[];
+  cp_x: number[];
+  x_tr_upper: number;
+  x_tr_lower: number;
+  converged: boolean;
+  iterations: number;
+  reynolds: number;
+  alpha: number;
+}
+
+/** Solver mode */
+export type SolverMode = 'inviscid' | 'viscous';
+
+/** 
+ * Turbulent boundary layer model selection.
+ * - 0: Head's entrainment method (fast, good for attached flows)
+ * - 1: XFOIL's Cτ lag-dissipation method (accurate, good for separation)
+ * - 2: Green's lag-entrainment method (best history effects)
+ */
+export type TurbulentModel = 0 | 1 | 2;
 
 /** Panel configuration for FlexLayout */
 export interface PanelConfig {

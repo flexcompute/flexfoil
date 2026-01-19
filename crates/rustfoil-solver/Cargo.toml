@@ -9,6 +9,7 @@ description = "Inviscid and viscous solvers for RustFoil airfoil analysis"
 [dependencies]
 rustfoil-core = { path = "../rustfoil-core" }
 nalgebra.workspace = true
+serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
 approx = "0.5"
