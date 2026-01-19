@@ -1228,17 +1228,37 @@ export function AirfoilCanvas() {
       };
       
       // Get the primary (longest) polyline for a threshold
-      const getPrimaryContour = (threshold: number): [number, number][] | null => {
+      // For the dividing streamline (endpoints in interior), connect with straight line
+      const getPrimaryContour = (threshold: number, connectInterior: boolean = false): [number, number][] | null => {
         const segments = marchingSquares(grid, nx, ny, threshold, xMin, yMin, dx, dy);
         const polylines = connectSegments(segments);
         if (polylines.length === 0) return null;
+        
         // Return the longest polyline, oriented L→R
         let longest = polylines[0];
         for (const pl of polylines) {
           if (pl.length > longest.length) longest = pl;
         }
-        return orientLeftToRight(longest);
+        let result = orientLeftToRight(longest);
+        
+        // If both endpoints are in interior (not on grid boundary), connect them
+        // This handles the dividing streamline which terminates at the airfoil
+        if (connectInterior && result.length >= 2) {
+          const start = result[0];
+          const end = result[result.length - 1];
+          const startInInterior = isInInterior(start[0], start[1]);
+          const endInInterior = isInInterior(end[0], end[1]);
+          
+          if (startInInterior && endInInterior) {
+            // Connect end back to start with a straight line (through foil)
+            // This closes the contour
+            result = [...result, start];
+          }
+        }
+        
+        return result;
       };
+      
       
       // Build filled bands between adjacent contours
       for (let i = 0; i < allThresholds.length - 1; i++) {
@@ -1246,8 +1266,9 @@ export function AirfoilCanvas() {
         const t2 = allThresholds[i + 1];
         const tMid = (t1 + t2) / 2;
         
-        const contour1 = getPrimaryContour(t1);
-        const contour2 = getPrimaryContour(t2);
+        // Connect interior endpoints to complete all contours
+        const contour1 = getPrimaryContour(t1, true);
+        const contour2 = getPrimaryContour(t2, true);
         
         if (!contour1 || !contour2 || contour1.length < 2 || contour2.length < 2) {
           continue;
@@ -1334,11 +1355,12 @@ export function AirfoilCanvas() {
         ctx.fill();
       }
       
-      // Draw contour lines on top
+      // Draw contour lines on top (don't connect interior for line drawing - we mask the foil anyway)
       ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.2)';
       ctx.lineWidth = 0.8;
       for (const threshold of allThresholds) {
-        const contour = getPrimaryContour(threshold);
+        // Don't connect interior for drawing - the foil mask will hide the inside
+        const contour = getPrimaryContour(threshold, false);
         if (!contour || contour.length < 2) continue;
         ctx.beginPath();
         const first = toCanvas(rotatePoint({ x: contour[0][0], y: contour[0][1] }));
