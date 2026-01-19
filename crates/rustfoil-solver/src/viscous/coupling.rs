@@ -2,6 +2,7 @@
 
 use crate::boundary_layer::{BLConfig, BLSolution, BLSolver, TurbulentModel, BLState, compute_squire_young_drag};
 use crate::inviscid::{FlowConditions, InviscidSolution, InviscidSolver, FactorizedSolution};
+use crate::inviscid::{compute_source_influence_matrix, compute_ue_change_from_mass};
 use crate::viscous::newton::{
     NewtonConfig, NewtonGeometry, NewtonState, NewtonVIISolver,
     BlockTridiagJacobian, StationState, NewtonScaling,
@@ -455,13 +456,28 @@ impl ViscousSolver {
             }
         }
         
-        // Create and run Newton solver
+        // Compute DIJ source influence matrix for mass defect coupling
+        // This is the key XFOIL-style V-I coupling: source panels from mass defect
+        // affect surface velocity through dUe/dm
+        // Extract unique nodes from panels (panel p1 points form the node sequence)
+        let panels = body.panels();
+        let nodes: Vec<Point> = panels.iter().map(|p| p.p1).collect();
+        let dij = compute_source_influence_matrix(&nodes);
+        
+        #[cfg(debug_assertions)]
+        {
+            // Verify DIJ matrix is non-trivial
+            let dij_max: f64 = dij.iter().flat_map(|row| row.iter()).fold(0.0, |a, &b| a.max(b.abs()));
+            eprintln!("DIJ matrix: {}x{}, max={:.4e}", dij.len(), dij.get(0).map(|r| r.len()).unwrap_or(0), dij_max);
+        }
+        
+        // Create and run Newton solver with DIJ coupling
         let newton_solver = NewtonVIISolver::new(newton_config);
-        let result = newton_solver.solve(initial_state, factorized, flow, &geometry);
+        let result = newton_solver.solve_with_dij(initial_state, factorized, flow, &geometry, &dij);
         
         #[cfg(debug_assertions)]
         eprintln!(
-            "Newton VII: converged={}, iterations={}, ||R||={:.2e}",
+            "Newton VII (DIJ): converged={}, iterations={}, ||R||={:.2e}",
             result.converged, result.iterations, result.residual_norm
         );
         

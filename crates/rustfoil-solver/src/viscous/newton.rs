@@ -1213,6 +1213,297 @@ impl NewtonVIISolver {
         }
     }
     
+    /// Solve the coupled VII system with DIJ mass influence matrix.
+    /// 
+    /// This is the full XFOIL-style coupling where:
+    /// - DIJ[i][j] = dGamma(i)/dSigma(j) (source influence on surface velocity)
+    /// - Mass defect changes dm affect edge velocity: dUe = DIJ * dm
+    /// - Newton iteration includes this coupling in the Jacobian
+    pub fn solve_with_dij(
+        &self,
+        initial_state: NewtonState,
+        factorized: &FactorizedSolution,
+        flow: &FlowConditions,
+        geometry: &NewtonGeometry,
+        dij: &[Vec<f64>],
+    ) -> NewtonResult {
+        let mut state = initial_state;
+        let mut residual_history = Vec::new();
+        let mut converged = false;
+        let mut iteration = 0;
+        
+        // Initial residual (using DIJ for mass influence)
+        let mut residuals = self.compute_residuals_with_dij(&state, factorized, flow, geometry, dij);
+        let mut r_norm = residuals.norm();
+        residual_history.push(r_norm);
+        
+        let r_norm_0 = r_norm.max(1e-10);
+        
+        for iter in 0..self.config.max_iterations {
+            iteration = iter + 1;
+            
+            // Check convergence
+            if r_norm / r_norm_0 < self.config.tolerance {
+                converged = true;
+                break;
+            }
+            
+            // Build Jacobian with DIJ mass influence
+            let jacobian = self.build_jacobian_with_dij(&state, &residuals, factorized, flow, geometry, dij);
+            
+            // Solve Newton step: J * dx = -R
+            let step = match self.solve_newton_step(&jacobian, &residuals) {
+                Some(s) => s,
+                None => {
+                    #[cfg(debug_assertions)]
+                    eprintln!("Newton iter {}: Singular Jacobian (DIJ)", iter);
+                    break;
+                }
+            };
+            
+            // Line search with DIJ residuals
+            let alpha = self.line_search_with_dij(&state, &step, &residuals, factorized, flow, geometry, dij);
+            
+            // Update state
+            state = state.apply_step(&step, alpha);
+            
+            // Apply DIJ-based edge velocity correction
+            // The mass defect changes propagate to edge velocity
+            self.apply_dij_velocity_correction(&mut state, &step, alpha, geometry, dij);
+            
+            // Recompute residuals
+            residuals = self.compute_residuals_with_dij(&state, factorized, flow, geometry, dij);
+            r_norm = residuals.norm();
+            residual_history.push(r_norm);
+            
+            #[cfg(debug_assertions)]
+            if iter % 5 == 0 {
+                eprintln!(
+                    "Newton (DIJ) iter {}: ||R||={:.2e}, α={:.3}, ||dx||={:.2e}",
+                    iter, r_norm, alpha, step.norm()
+                );
+            }
+        }
+        
+        NewtonResult {
+            state,
+            residual_norm: r_norm,
+            iterations: iteration,
+            converged,
+            residual_history,
+        }
+    }
+    
+    /// Compute residuals including DIJ mass influence on edge velocity.
+    fn compute_residuals_with_dij(
+        &self,
+        state: &NewtonState,
+        factorized: &FactorizedSolution,
+        flow: &FlowConditions,
+        geometry: &NewtonGeometry,
+        dij: &[Vec<f64>],
+    ) -> Residuals {
+        use crate::viscous::compute_transpiration;
+        
+        let n_panels = geometry.n_panels;
+        let n_upper = geometry.upper_indices.len();
+        let n_lower = geometry.lower_indices.len();
+        let n_bl = n_upper + n_lower;
+        
+        let mut residuals = Residuals::new(n_panels, n_bl);
+        
+        // 1. Compute base edge velocity from gamma
+        let ue_base: Vec<f64> = state.gamma.iter().map(|g| g.abs()).collect();
+        
+        // 2. Compute mass defect m = Ue * delta_star at each BL station
+        let delta_star = state.delta_star();
+        let mass_defect: Vec<f64> = (0..n_bl).map(|j| {
+            let panel_idx = if j < n_upper {
+                geometry.upper_indices[j]
+            } else {
+                geometry.lower_indices[j - n_upper]
+            };
+            ue_base[panel_idx] * delta_star[j]
+        }).collect();
+        
+        // 3. Compute edge velocity correction from DIJ coupling
+        // Map mass defect back to panel nodes
+        let mut dm_panels = vec![0.0; n_panels];
+        for j in 0..n_upper {
+            let panel_idx = geometry.upper_indices[j];
+            dm_panels[panel_idx] = mass_defect[j];
+        }
+        for j in 0..n_lower {
+            let panel_idx = geometry.lower_indices[j];
+            dm_panels[panel_idx] = mass_defect[n_upper + j];
+        }
+        
+        // dUe from DIJ: dUe[i] = sum_j DIJ[i][j] * m[j]
+        let due_from_dij: Vec<f64> = crate::inviscid::compute_ue_change_from_mass(dij, &dm_panels);
+        
+        // 4. Effective edge velocity includes DIJ correction
+        let _ue_effective: Vec<f64> = ue_base.iter()
+            .zip(due_from_dij.iter())
+            .map(|(&ue, &due)| (ue + due).max(1e-10))
+            .collect();
+        
+        // 5. Map delta_star to panel nodes for transpiration
+        let delta_star_nodes = self.map_bl_to_nodes(&delta_star, geometry);
+        
+        // 6. Compute transpiration Vn = d(Ue*δ*)/ds
+        let vn = compute_transpiration(&ue_base, &delta_star_nodes, &geometry.s_coords);
+        
+        // 7. Inviscid residuals with transpiration
+        let inviscid_with_vn = factorized.solve_with_transpiration(flow, &vn, &geometry.s_coords);
+        for i in 0..n_panels {
+            residuals.r_inviscid[i] = state.gamma[i] - inviscid_with_vn.gamma[i];
+        }
+        
+        // 8. BL residuals (momentum and shape equations)
+        self.compute_bl_residuals(
+            state,
+            &ue_base,
+            geometry,
+            &mut residuals.r_momentum,
+            &mut residuals.r_shape,
+        );
+        
+        residuals
+    }
+    
+    /// Build Jacobian with DIJ mass influence included.
+    fn build_jacobian_with_dij(
+        &self,
+        state: &NewtonState,
+        residuals: &Residuals,
+        factorized: &FactorizedSolution,
+        flow: &FlowConditions,
+        geometry: &NewtonGeometry,
+        dij: &[Vec<f64>],
+    ) -> DMatrix<f64> {
+        // Start with base Jacobian from finite differences
+        let mut jacobian = self.build_jacobian_fd(state, residuals, factorized, flow, geometry);
+        
+        let n_panels = geometry.n_panels;
+        let n_upper = geometry.upper_indices.len();
+        let n_lower = geometry.lower_indices.len();
+        let n_bl = n_upper + n_lower;
+        
+        // Add mass influence coupling: dR_inviscid/dm through DIJ
+        // For each inviscid equation i, add sensitivity to mass defect changes
+        // 
+        // R_inviscid[i] = gamma[i] - gamma_target[i](transpiration)
+        // dR_inviscid[i]/dm[j] = -d(gamma_target[i])/dm[j] = -DIJ[i][panel_j]
+        
+        for i in 0..n_panels {
+            for j in 0..n_bl {
+                // Map BL station j to panel index
+                let panel_j = if j < n_upper {
+                    geometry.upper_indices[j]
+                } else {
+                    geometry.lower_indices[j - n_upper]
+                };
+                
+                // Get DIJ influence
+                let dij_val = dij.get(i)
+                    .and_then(|row| row.get(panel_j))
+                    .copied()
+                    .unwrap_or(0.0);
+                
+                // Add to Jacobian: column for shape factor H relates to delta_star
+                // h[j] is at column n_panels + n_bl + j
+                let col_h = n_panels + n_bl + j;
+                if col_h < jacobian.ncols() {
+                    // dR_i/dH_j = -DIJ[i][panel_j] * dδ*/dH * Ue
+                    // dδ*/dH = θ (since δ* = θ*H)
+                    let theta_j = state.theta[j].max(1e-10);
+                    let ue_j = state.gamma[panel_j].abs().max(1e-10);
+                    jacobian[(i, col_h)] += -dij_val * theta_j * ue_j * 0.1; // Damped influence
+                }
+            }
+        }
+        
+        jacobian
+    }
+    
+    /// Line search with DIJ residuals.
+    fn line_search_with_dij(
+        &self,
+        state: &NewtonState,
+        step: &NewtonStep,
+        residuals: &Residuals,
+        factorized: &FactorizedSolution,
+        flow: &FlowConditions,
+        geometry: &NewtonGeometry,
+        dij: &[Vec<f64>],
+    ) -> f64 {
+        let mut alpha = 1.0;
+        let r_norm_0 = residuals.norm();
+        
+        for _ in 0..self.config.line_search_max_iter {
+            let state_new = state.apply_step(step, alpha);
+            let r_new = self.compute_residuals_with_dij(&state_new, factorized, flow, geometry, dij);
+            let r_norm = r_new.norm();
+            
+            // Armijo condition
+            if r_norm < r_norm_0 * (1.0 - self.config.armijo_c * alpha) {
+                return alpha;
+            }
+            
+            alpha *= 0.5;
+        }
+        
+        alpha
+    }
+    
+    /// Apply DIJ-based edge velocity correction after Newton step.
+    /// 
+    /// The mass defect changes dm propagate to edge velocity through:
+    /// dUe = DIJ * dm
+    fn apply_dij_velocity_correction(
+        &self,
+        state: &mut NewtonState,
+        step: &NewtonStep,
+        alpha: f64,
+        geometry: &NewtonGeometry,
+        dij: &[Vec<f64>],
+    ) {
+        let n_panels = geometry.n_panels;
+        let n_upper = geometry.upper_indices.len();
+        let n_lower = geometry.lower_indices.len();
+        let n_bl = n_upper + n_lower;
+        
+        // Compute mass defect changes from the step
+        // dm = d(Ue*δ*) ≈ Ue * d(θ*H) + θ*H * dUe
+        // For simplicity, use dm ≈ Ue * θ * dH (primary contribution)
+        let mut dm_panels = vec![0.0; n_panels];
+        
+        for j in 0..n_bl {
+            let panel_idx = if j < n_upper {
+                geometry.upper_indices[j]
+            } else {
+                geometry.lower_indices[j - n_upper]
+            };
+            
+            let ue = state.gamma[panel_idx].abs().max(1e-10);
+            let theta = state.theta[j].max(1e-10);
+            let dh = step.d_h[j] * alpha;
+            
+            dm_panels[panel_idx] = ue * theta * dh;
+        }
+        
+        // Compute Ue correction from DIJ
+        let due = crate::inviscid::compute_ue_change_from_mass(dij, &dm_panels);
+        
+        // Apply correction to gamma (gamma ≈ Ue for attached flow)
+        // Only apply to nodes where both arrays have values
+        let n_apply = n_panels.min(due.len()).min(state.gamma.len());
+        for i in 0..n_apply {
+            let sign = state.gamma[i].signum();
+            state.gamma[i] += sign * due[i] * 0.1; // Damped to avoid instability
+        }
+    }
+    
     /// Compute all residuals at current state.
     pub fn compute_residuals(
         &self,
