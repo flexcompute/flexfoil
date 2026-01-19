@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RustFoil vs XFOIL Comparison</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+        .header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            padding: 2rem;
+            text-align: center;
+            border-bottom: 1px solid #333;
+        }
+        .header h1 {
+            font-size: 2rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(90deg, #4facfe, #00f2fe);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .header p {
+            color: #888;
+            font-size: 0.9rem;
+        }
+        .controls {
+            background: #1a1a1a;
+            padding: 1rem 2rem;
+            display: flex;
+            gap: 2rem;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            border-bottom: 1px solid #333;
+        }
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .control-group label {
+            font-size: 0.85rem;
+            color: #aaa;
+        }
+        select {
+            background: #2a2a2a;
+            color: #fff;
+            border: 1px solid #444;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+        select:hover {
+            border-color: #4facfe;
+        }
+        .tabs {
+            display: flex;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 1rem;
+            background: #151515;
+        }
+        .tab {
+            padding: 0.6rem 1.5rem;
+            background: #252525;
+            border: 1px solid #333;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.2s;
+        }
+        .tab:hover {
+            background: #333;
+        }
+        .tab.active {
+            background: #4facfe;
+            color: #000;
+            border-color: #4facfe;
+        }
+        .charts-container {
+            padding: 1rem;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 1rem;
+        }
+        .chart-wrapper {
+            background: #1a1a1a;
+            border-radius: 8px;
+            padding: 1rem;
+            border: 1px solid #333;
+        }
+        .chart {
+            width: 100%;
+            height: 450px;
+        }
+        .stats {
+            background: #1a1a1a;
+            margin: 1rem;
+            padding: 1.5rem;
+            border-radius: 8px;
+            border: 1px solid #333;
+        }
+        .stats h3 {
+            margin-bottom: 1rem;
+            color: #4facfe;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+        .stat-card {
+            background: #252525;
+            padding: 1rem;
+            border-radius: 6px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #4facfe;
+        }
+        .stat-label {
+            font-size: 0.8rem;
+            color: #888;
+            margin-top: 0.25rem;
+        }
+        .loading {
+            text-align: center;
+            padding: 4rem;
+            color: #888;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>RustFoil vs XFOIL Comparison</h1>
+        <p>Interactive polar comparison for validation</p>
+    </div>
+    
+    <div class="controls">
+        <div class="control-group">
+            <label>Airfoil:</label>
+            <select id="airfoil-select">
+                <option value="NACA 0012">NACA 0012</option>
+                <option value="NACA 2412">NACA 2412</option>
+                <option value="NACA 4412">NACA 4412</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <label>Reynolds:</label>
+            <select id="reynolds-select">
+                <option value="Re1e+06">1,000,000</option>
+                <option value="Re3e+06" selected>3,000,000</option>
+                <option value="Re6e+06">6,000,000</option>
+            </select>
+        </div>
+    </div>
+    
+    <div class="tabs">
+        <div class="tab active" data-view="single">Single Condition</div>
+        <div class="tab" data-view="all-re">All Reynolds</div>
+        <div class="tab" data-view="all-foils">All Airfoils</div>
+    </div>
+    
+    <div class="stats" id="stats">
+        <h3>Error Metrics</h3>
+        <div class="stats-grid" id="stats-grid"></div>
+    </div>
+    
+    <div class="charts-container" id="charts-container">
+        <div class="loading">Loading data...</div>
+    </div>
+
+    <script>
+    // Embedded comparison data
+    const comparisonData = {
+  "NACA 0012": {
+    "Re1e+06": {
+      "xfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 14.0],
+        "cl": [-0.4345, -0.3274, -0.2186, -0.1095, -0.0, 0.1096, 0.2187, 0.3274, 0.4359, 0.5441, 0.6522, 0.7605, 0.8682, 0.9755, 1.0814, 1.1843, 1.2785, 1.4122],
+        "cd": [0.0071, 0.00627, 0.00573, 0.00548, 0.00538, 0.00548, 0.00573, 0.00627, 0.00709, 0.00822, 0.00966, 0.01134, 0.01323, 0.01536, 0.01779, 0.02076, 0.02492, 0.04004]
+      },
+      "rustfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+        "cl": [-0.4585, -0.3449, -0.2311, -0.1164, -0.0027, 0.1121, 0.2266, 0.3399, 0.4594, 0.5770, 0.6957, 0.8159, 0.9361, 1.0536, 1.1671, 1.2750, 1.3765, 1.4702, 1.5551],
+        "cd": [0.0074, 0.0066, 0.0060, 0.0056, 0.0054, 0.0056, 0.0060, 0.0066, 0.0074, 0.0083, 0.0095, 0.0109, 0.0126, 0.0146, 0.0170, 0.0199, 0.0234, 0.0278, 0.0331]
+      }
+    },
+    "Re3e+06": {
+      "xfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+        "cl": [-0.4461, -0.3346, -0.2231, -0.1118, -0.0, 0.1118, 0.2231, 0.3333, 0.4424, 0.5504, 0.6573, 0.7631, 0.8677, 0.9705, 1.0710, 1.1679, 1.2591, 1.3414, 1.4122],
+        "cd": [0.0060, 0.0054, 0.0054, 0.0052, 0.0051, 0.0052, 0.0054, 0.0057, 0.0062, 0.0068, 0.0077, 0.0088, 0.0102, 0.0119, 0.0140, 0.0167, 0.0201, 0.0248, 0.0315]
+      },
+      "rustfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+        "cl": [-0.4586, -0.3450, -0.2311, -0.1164, -0.0027, 0.1121, 0.2267, 0.3400, 0.4594, 0.5770, 0.6958, 0.8159, 0.9361, 1.0536, 1.1672, 1.2751, 1.3766, 1.4702, 1.5552],
+        "cd": [0.0061, 0.0056, 0.0053, 0.0051, 0.0051, 0.0051, 0.0053, 0.0056, 0.0061, 0.0068, 0.0077, 0.0088, 0.0101, 0.0117, 0.0137, 0.0160, 0.0188, 0.0223, 0.0266]
+      }
+    },
+    "Re6e+06": {
+      "xfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 14.0],
+        "cl": [-0.4486, -0.3359, -0.2238, -0.1121, -0.0, 0.1121, 0.2238, 0.3345, 0.4441, 0.5523, 0.6591, 0.7644, 0.8680, 0.9695, 1.0681, 1.1627, 1.2508, 1.4042],
+        "cd": [0.0056, 0.0051, 0.0050, 0.0049, 0.0047, 0.0049, 0.0050, 0.0052, 0.0056, 0.0061, 0.0069, 0.0079, 0.0092, 0.0107, 0.0127, 0.0152, 0.0184, 0.0290]
+      },
+      "rustfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+        "cl": [-0.4586, -0.3450, -0.2311, -0.1164, -0.0027, 0.1121, 0.2267, 0.3400, 0.4594, 0.5770, 0.6958, 0.8159, 0.9361, 1.0536, 1.1672, 1.2751, 1.3766, 1.4702, 1.5552],
+        "cd": [0.0055, 0.0052, 0.0050, 0.0048, 0.0048, 0.0048, 0.0050, 0.0052, 0.0055, 0.0061, 0.0069, 0.0078, 0.0090, 0.0104, 0.0121, 0.0142, 0.0167, 0.0198, 0.0235]
+      }
+    }
+  },
+  "NACA 2412": {
+    "Re1e+06": {
+      "xfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 14.0],
+        "cl": [-0.2128, -0.1050, 0.0044, 0.1140, 0.2233, 0.3332, 0.4437, 0.5536, 0.6630, 0.7721, 0.8807, 0.9885, 1.0948, 1.1977, 1.2928, 1.3724, 1.4297, 1.4630],
+        "cd": [0.0076, 0.0067, 0.0060, 0.0057, 0.0057, 0.0059, 0.0063, 0.0070, 0.0079, 0.0091, 0.0106, 0.0124, 0.0145, 0.0172, 0.0209, 0.0265, 0.0352, 0.0658]
+      },
+      "rustfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+        "cl": [-0.2362, -0.1220, -0.0082, 0.1066, 0.2212, 0.3358, 0.4503, 0.5648, 0.6792, 0.7938, 0.9086, 1.0229, 1.1367, 1.2488, 1.3583, 1.4635, 1.5631, 1.6553, 1.7386],
+        "cd": [0.0080, 0.0071, 0.0065, 0.0061, 0.0058, 0.0058, 0.0060, 0.0064, 0.0069, 0.0077, 0.0087, 0.0099, 0.0114, 0.0132, 0.0154, 0.0181, 0.0214, 0.0257, 0.0312]
+      }
+    },
+    "Re3e+06": {
+      "xfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+        "cl": [-0.2216, -0.1100, 0.0004, 0.1109, 0.2218, 0.3324, 0.4427, 0.5527, 0.6617, 0.7699, 0.8773, 0.9831, 1.0872, 1.1888, 1.2868, 1.3789, 1.4608, 1.5248, 1.5591],
+        "cd": [0.0062, 0.0056, 0.0054, 0.0052, 0.0052, 0.0053, 0.0055, 0.0059, 0.0065, 0.0073, 0.0084, 0.0097, 0.0114, 0.0135, 0.0163, 0.0199, 0.0250, 0.0325, 0.0444]
+      },
+      "rustfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+        "cl": [-0.2362, -0.1220, -0.0082, 0.1066, 0.2212, 0.3358, 0.4503, 0.5648, 0.6792, 0.7939, 0.9087, 1.0230, 1.1367, 1.2489, 1.3584, 1.4636, 1.5632, 1.6554, 1.7387],
+        "cd": [0.0065, 0.0060, 0.0056, 0.0054, 0.0053, 0.0053, 0.0055, 0.0058, 0.0062, 0.0068, 0.0077, 0.0087, 0.0100, 0.0115, 0.0134, 0.0157, 0.0185, 0.0221, 0.0266]
+      }
+    },
+    "Re6e+06": {
+      "xfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+        "cl": [-0.2241, -0.1113, -0.0001, 0.1112, 0.2224, 0.3332, 0.4435, 0.5530, 0.6617, 0.7693, 0.8757, 0.9809, 1.0842, 1.1852, 1.2827, 1.3753, 1.4594, 1.5290, 1.5753],
+        "cd": [0.0057, 0.0052, 0.0050, 0.0049, 0.0049, 0.0050, 0.0052, 0.0055, 0.0060, 0.0066, 0.0076, 0.0088, 0.0102, 0.0121, 0.0146, 0.0179, 0.0224, 0.0289, 0.0394]
+      },
+      "rustfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+        "cl": [-0.2362, -0.1220, -0.0082, 0.1066, 0.2212, 0.3358, 0.4503, 0.5648, 0.6792, 0.7939, 0.9087, 1.0230, 1.1367, 1.2489, 1.3584, 1.4636, 1.5632, 1.6554, 1.7387],
+        "cd": [0.0058, 0.0054, 0.0051, 0.0050, 0.0050, 0.0050, 0.0051, 0.0054, 0.0057, 0.0063, 0.0070, 0.0079, 0.0091, 0.0104, 0.0121, 0.0141, 0.0165, 0.0196, 0.0235]
+      }
+    }
+  },
+  "NACA 4412": {
+    "Re1e+06": {
+      "xfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 14.0],
+        "cl": [0.0166, 0.1283, 0.2388, 0.3495, 0.4617, 0.5729, 0.6821, 0.7913, 0.9013, 1.0104, 1.1181, 1.2243, 1.3261, 1.4194, 1.4982, 1.5529, 1.5772, 1.5338],
+        "cd": [0.0073, 0.0065, 0.0060, 0.0058, 0.0059, 0.0063, 0.0069, 0.0077, 0.0088, 0.0103, 0.0120, 0.0141, 0.0168, 0.0204, 0.0258, 0.0339, 0.0461, 0.0856]
+      },
+      "rustfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+        "cl": [0.0033, 0.1174, 0.2313, 0.3453, 0.4599, 0.5748, 0.6901, 0.8053, 0.9208, 1.0363, 1.1519, 1.2674, 1.3819, 1.4948, 1.6050, 1.7112, 1.8120, 1.9056, 1.9906],
+        "cd": [0.0085, 0.0076, 0.0069, 0.0064, 0.0061, 0.0061, 0.0062, 0.0066, 0.0071, 0.0078, 0.0088, 0.0100, 0.0115, 0.0133, 0.0155, 0.0183, 0.0218, 0.0264, 0.0326]
+      }
+    },
+    "Re3e+06": {
+      "xfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 14.0],
+        "cl": [0.0048, 0.1178, 0.2296, 0.3416, 0.4540, 0.5662, 0.6775, 0.7882, 0.8984, 1.0079, 1.1162, 1.2231, 1.3280, 1.4297, 1.5262, 1.6142, 1.7476],
+        "cd": [0.0061, 0.0055, 0.0053, 0.0052, 0.0053, 0.0056, 0.0060, 0.0066, 0.0073, 0.0084, 0.0097, 0.0113, 0.0133, 0.0159, 0.0193, 0.0239, 0.0474]
+      },
+      "rustfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+        "cl": [0.0033, 0.1174, 0.2313, 0.3454, 0.4599, 0.5748, 0.6901, 0.8054, 0.9208, 1.0363, 1.1519, 1.2675, 1.3820, 1.4948, 1.6051, 1.7113, 1.8121, 1.9057, 1.9907],
+        "cd": [0.0068, 0.0062, 0.0058, 0.0055, 0.0054, 0.0055, 0.0057, 0.0060, 0.0065, 0.0071, 0.0079, 0.0089, 0.0102, 0.0117, 0.0136, 0.0158, 0.0186, 0.0221, 0.0266]
+      }
+    },
+    "Re6e+06": {
+      "xfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 14.0],
+        "cl": [0.0033, 0.1169, 0.2295, 0.3420, 0.4548, 0.5675, 0.6793, 0.7901, 0.9001, 1.0094, 1.1175, 1.2243, 1.3294, 1.4319, 1.5307, 1.6239, 1.7078, 1.8128],
+        "cd": [0.0056, 0.0051, 0.0050, 0.0050, 0.0051, 0.0053, 0.0056, 0.0061, 0.0067, 0.0076, 0.0087, 0.0101, 0.0119, 0.0142, 0.0171, 0.0210, 0.0263, 0.0447]
+      },
+      "rustfoil": {
+        "alpha": [-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+        "cl": [0.0033, 0.1174, 0.2313, 0.3454, 0.4599, 0.5748, 0.6901, 0.8054, 0.9208, 1.0363, 1.1519, 1.2675, 1.3820, 1.4948, 1.6051, 1.7113, 1.8121, 1.9057, 1.9907],
+        "cd": [0.0060, 0.0056, 0.0053, 0.0052, 0.0051, 0.0052, 0.0054, 0.0057, 0.0061, 0.0067, 0.0074, 0.0083, 0.0094, 0.0108, 0.0124, 0.0144, 0.0169, 0.0200, 0.0239]
+      }
+    }
+  }
+};
+
+    const plotLayout = {
+        paper_bgcolor: '#1a1a1a',
+        plot_bgcolor: '#1a1a1a',
+        font: { color: '#e0e0e0', family: '-apple-system, BlinkMacSystemFont, sans-serif' },
+        margin: { t: 50, r: 30, b: 50, l: 60 },
+        legend: { 
+            bgcolor: 'rgba(26,26,26,0.8)', 
+            bordercolor: '#444',
+            borderwidth: 1,
+            x: 0.02,
+            y: 0.98
+        },
+        xaxis: { 
+            gridcolor: '#333', 
+            zerolinecolor: '#555',
+            title: { font: { size: 12 } }
+        },
+        yaxis: { 
+            gridcolor: '#333', 
+            zerolinecolor: '#555',
+            title: { font: { size: 12 } }
+        },
+        hovermode: 'closest'
+    };
+
+    const xfoilColor = '#4facfe';
+    const rustfoilColor = '#ff7f50';
+    
+    let currentView = 'single';
+    let currentAirfoil = 'NACA 0012';
+    let currentReynolds = 'Re3e+06';
+
+    function computeErrors(xfoil, rustfoil) {
+        if (!xfoil || !rustfoil) return null;
+        
+        let clErrors = [], cdErrors = [];
+        
+        for (let i = 0; i < xfoil.alpha.length; i++) {
+            const alpha = xfoil.alpha[i];
+            const j = rustfoil.alpha.findIndex(a => Math.abs(a - alpha) < 0.1);
+            if (j >= 0) {
+                clErrors.push(rustfoil.cl[j] - xfoil.cl[i]);
+                cdErrors.push(rustfoil.cd[j] - xfoil.cd[i]);
+            }
+        }
+        
+        if (clErrors.length === 0) return null;
+        
+        const clRms = Math.sqrt(clErrors.reduce((s, e) => s + e*e, 0) / clErrors.length);
+        const cdRms = Math.sqrt(cdErrors.reduce((s, e) => s + e*e, 0) / cdErrors.length);
+        
+        return {
+            clRms: clRms,
+            cdRms: cdRms,
+            cdCounts: cdRms * 10000,
+            nPoints: clErrors.length
+        };
+    }
+
+    function updateStats() {
+        const grid = document.getElementById('stats-grid');
+        const data = comparisonData[currentAirfoil]?.[currentReynolds];
+        
+        if (!data) {
+            grid.innerHTML = '<div class="stat-card"><span class="stat-value">N/A</span></div>';
+            return;
+        }
+        
+        const errors = computeErrors(data.xfoil, data.rustfoil);
+        
+        if (!errors) {
+            grid.innerHTML = '<div class="stat-card"><span class="stat-value">N/A</span></div>';
+            return;
+        }
+        
+        grid.innerHTML = `
+            <div class="stat-card">
+                <div class="stat-value">${errors.clRms.toFixed(4)}</div>
+                <div class="stat-label">Cl RMS Error</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${errors.cdCounts.toFixed(1)}</div>
+                <div class="stat-label">Cd Error (counts)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${errors.nPoints}</div>
+                <div class="stat-label">Data Points</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${currentReynolds.replace('Re', '').replace('+', '')}</div>
+                <div class="stat-label">Reynolds Number</div>
+            </div>
+        `;
+    }
+
+    function plotSingleCondition() {
+        const container = document.getElementById('charts-container');
+        const data = comparisonData[currentAirfoil]?.[currentReynolds];
+        
+        if (!data) {
+            container.innerHTML = '<div class="loading">No data available</div>';
+            return;
+        }
+        
+        container.innerHTML = `
+            <div class="chart-wrapper"><div id="cl-alpha" class="chart"></div></div>
+            <div class="chart-wrapper"><div id="cd-alpha" class="chart"></div></div>
+            <div class="chart-wrapper"><div id="polar" class="chart"></div></div>
+            <div class="chart-wrapper"><div id="ld" class="chart"></div></div>
+        `;
+        
+        // Cl vs Alpha
+        Plotly.newPlot('cl-alpha', [
+            {
+                x: data.xfoil.alpha,
+                y: data.xfoil.cl,
+                name: 'XFOIL',
+                mode: 'lines+markers',
+                marker: { size: 6, color: xfoilColor },
+                line: { color: xfoilColor, width: 2 }
+            },
+            {
+                x: data.rustfoil.alpha,
+                y: data.rustfoil.cl,
+                name: 'RustFoil',
+                mode: 'lines+markers',
+                marker: { size: 6, color: rustfoilColor, symbol: 'square' },
+                line: { color: rustfoilColor, width: 2, dash: 'dash' }
+            }
+        ], {
+            ...plotLayout,
+            title: { text: 'Lift Coefficient', font: { size: 14 } },
+            xaxis: { ...plotLayout.xaxis, title: 'α (deg)' },
+            yaxis: { ...plotLayout.yaxis, title: 'Cl' }
+        }, { responsive: true });
+        
+        // Cd vs Alpha
+        Plotly.newPlot('cd-alpha', [
+            {
+                x: data.xfoil.alpha,
+                y: data.xfoil.cd.map(cd => cd * 10000),
+                name: 'XFOIL',
+                mode: 'lines+markers',
+                marker: { size: 6, color: xfoilColor },
+                line: { color: xfoilColor, width: 2 }
+            },
+            {
+                x: data.rustfoil.alpha,
+                y: data.rustfoil.cd.map(cd => cd * 10000),
+                name: 'RustFoil',
+                mode: 'lines+markers',
+                marker: { size: 6, color: rustfoilColor, symbol: 'square' },
+                line: { color: rustfoilColor, width: 2, dash: 'dash' }
+            }
+        ], {
+            ...plotLayout,
+            title: { text: 'Drag Coefficient', font: { size: 14 } },
+            xaxis: { ...plotLayout.xaxis, title: 'α (deg)' },
+            yaxis: { ...plotLayout.yaxis, title: 'Cd (counts)' }
+        }, { responsive: true });
+        
+        // Drag Polar
+        Plotly.newPlot('polar', [
+            {
+                x: data.xfoil.cd.map(cd => cd * 10000),
+                y: data.xfoil.cl,
+                name: 'XFOIL',
+                mode: 'lines+markers',
+                marker: { size: 6, color: xfoilColor },
+                line: { color: xfoilColor, width: 2 }
+            },
+            {
+                x: data.rustfoil.cd.map(cd => cd * 10000),
+                y: data.rustfoil.cl,
+                name: 'RustFoil',
+                mode: 'lines+markers',
+                marker: { size: 6, color: rustfoilColor, symbol: 'square' },
+                line: { color: rustfoilColor, width: 2, dash: 'dash' }
+            }
+        ], {
+            ...plotLayout,
+            title: { text: 'Drag Polar', font: { size: 14 } },
+            xaxis: { ...plotLayout.xaxis, title: 'Cd (counts)' },
+            yaxis: { ...plotLayout.yaxis, title: 'Cl' }
+        }, { responsive: true });
+        
+        // L/D
+        const ldXfoil = data.xfoil.cl.map((cl, i) => data.xfoil.cd[i] > 0 ? cl / data.xfoil.cd[i] : 0);
+        const ldRustfoil = data.rustfoil.cl.map((cl, i) => data.rustfoil.cd[i] > 0 ? cl / data.rustfoil.cd[i] : 0);
+        
+        Plotly.newPlot('ld', [
+            {
+                x: data.xfoil.cl,
+                y: ldXfoil,
+                name: 'XFOIL',
+                mode: 'lines+markers',
+                marker: { size: 6, color: xfoilColor },
+                line: { color: xfoilColor, width: 2 }
+            },
+            {
+                x: data.rustfoil.cl,
+                y: ldRustfoil,
+                name: 'RustFoil',
+                mode: 'lines+markers',
+                marker: { size: 6, color: rustfoilColor, symbol: 'square' },
+                line: { color: rustfoilColor, width: 2, dash: 'dash' }
+            }
+        ], {
+            ...plotLayout,
+            title: { text: 'Lift-to-Drag Ratio', font: { size: 14 } },
+            xaxis: { ...plotLayout.xaxis, title: 'Cl' },
+            yaxis: { ...plotLayout.yaxis, title: 'L/D' }
+        }, { responsive: true });
+    }
+
+    function plotAllReynolds() {
+        const container = document.getElementById('charts-container');
+        container.innerHTML = `
+            <div class="chart-wrapper"><div id="cl-all-re" class="chart"></div></div>
+            <div class="chart-wrapper"><div id="cd-all-re" class="chart"></div></div>
+        `;
+        
+        const reynolds = ['Re1e+06', 'Re3e+06', 'Re6e+06'];
+        const reLabels = ['1M', '3M', '6M'];
+        const reColors = ['#ff6b6b', '#4ecdc4', '#45b7d1'];
+        
+        const traces = [];
+        
+        reynolds.forEach((re, idx) => {
+            const data = comparisonData[currentAirfoil]?.[re];
+            if (!data) return;
+            
+            traces.push({
+                x: data.xfoil.alpha,
+                y: data.xfoil.cl,
+                name: `XFOIL Re=${reLabels[idx]}`,
+                mode: 'lines+markers',
+                marker: { size: 5, color: reColors[idx] },
+                line: { color: reColors[idx], width: 2 },
+                legendgroup: `re${idx}`
+            });
+            
+            traces.push({
+                x: data.rustfoil.alpha,
+                y: data.rustfoil.cl,
+                name: `RustFoil Re=${reLabels[idx]}`,
+                mode: 'lines+markers',
+                marker: { size: 5, color: reColors[idx], symbol: 'square' },
+                line: { color: reColors[idx], width: 2, dash: 'dash' },
+                legendgroup: `re${idx}`
+            });
+        });
+        
+        Plotly.newPlot('cl-all-re', traces, {
+            ...plotLayout,
+            title: { text: `${currentAirfoil} - Cl vs Alpha (All Reynolds)`, font: { size: 14 } },
+            xaxis: { ...plotLayout.xaxis, title: 'α (deg)' },
+            yaxis: { ...plotLayout.yaxis, title: 'Cl' }
+        }, { responsive: true });
+        
+        // Cd plot
+        const cdTraces = [];
+        reynolds.forEach((re, idx) => {
+            const data = comparisonData[currentAirfoil]?.[re];
+            if (!data) return;
+            
+            cdTraces.push({
+                x: data.xfoil.alpha,
+                y: data.xfoil.cd.map(cd => cd * 10000),
+                name: `XFOIL Re=${reLabels[idx]}`,
+                mode: 'lines+markers',
+                marker: { size: 5, color: reColors[idx] },
+                line: { color: reColors[idx], width: 2 },
+                legendgroup: `re${idx}`,
+                showlegend: false
+            });
+            
+            cdTraces.push({
+                x: data.rustfoil.alpha,
+                y: data.rustfoil.cd.map(cd => cd * 10000),
+                name: `RustFoil Re=${reLabels[idx]}`,
+                mode: 'lines+markers',
+                marker: { size: 5, color: reColors[idx], symbol: 'square' },
+                line: { color: reColors[idx], width: 2, dash: 'dash' },
+                legendgroup: `re${idx}`,
+                showlegend: false
+            });
+        });
+        
+        Plotly.newPlot('cd-all-re', cdTraces, {
+            ...plotLayout,
+            title: { text: `${currentAirfoil} - Cd vs Alpha (All Reynolds)`, font: { size: 14 } },
+            xaxis: { ...plotLayout.xaxis, title: 'α (deg)' },
+            yaxis: { ...plotLayout.yaxis, title: 'Cd (counts)' }
+        }, { responsive: true });
+    }
+
+    function plotAllAirfoils() {
+        const container = document.getElementById('charts-container');
+        container.innerHTML = `
+            <div class="chart-wrapper"><div id="cl-all-foils" class="chart"></div></div>
+            <div class="chart-wrapper"><div id="polar-all-foils" class="chart"></div></div>
+        `;
+        
+        const airfoils = ['NACA 0012', 'NACA 2412', 'NACA 4412'];
+        const foilColors = ['#4facfe', '#00f5d4', '#f72585'];
+        
+        const traces = [];
+        
+        airfoils.forEach((foil, idx) => {
+            const data = comparisonData[foil]?.[currentReynolds];
+            if (!data) return;
+            
+            traces.push({
+                x: data.xfoil.alpha,
+                y: data.xfoil.cl,
+                name: `XFOIL ${foil}`,
+                mode: 'lines+markers',
+                marker: { size: 5, color: foilColors[idx] },
+                line: { color: foilColors[idx], width: 2 },
+                legendgroup: `foil${idx}`
+            });
+            
+            traces.push({
+                x: data.rustfoil.alpha,
+                y: data.rustfoil.cl,
+                name: `RustFoil ${foil}`,
+                mode: 'lines+markers',
+                marker: { size: 5, color: foilColors[idx], symbol: 'square' },
+                line: { color: foilColors[idx], width: 2, dash: 'dash' },
+                legendgroup: `foil${idx}`
+            });
+        });
+        
+        Plotly.newPlot('cl-all-foils', traces, {
+            ...plotLayout,
+            title: { text: `All Airfoils at ${currentReynolds.replace('Re', 'Re=')}`, font: { size: 14 } },
+            xaxis: { ...plotLayout.xaxis, title: 'α (deg)' },
+            yaxis: { ...plotLayout.yaxis, title: 'Cl' }
+        }, { responsive: true });
+        
+        // Polar plot
+        const polarTraces = [];
+        airfoils.forEach((foil, idx) => {
+            const data = comparisonData[foil]?.[currentReynolds];
+            if (!data) return;
+            
+            polarTraces.push({
+                x: data.xfoil.cd.map(cd => cd * 10000),
+                y: data.xfoil.cl,
+                name: `XFOIL ${foil}`,
+                mode: 'lines+markers',
+                marker: { size: 5, color: foilColors[idx] },
+                line: { color: foilColors[idx], width: 2 },
+                legendgroup: `foil${idx}`,
+                showlegend: false
+            });
+            
+            polarTraces.push({
+                x: data.rustfoil.cd.map(cd => cd * 10000),
+                y: data.rustfoil.cl,
+                name: `RustFoil ${foil}`,
+                mode: 'lines+markers',
+                marker: { size: 5, color: foilColors[idx], symbol: 'square' },
+                line: { color: foilColors[idx], width: 2, dash: 'dash' },
+                legendgroup: `foil${idx}`,
+                showlegend: false
+            });
+        });
+        
+        Plotly.newPlot('polar-all-foils', polarTraces, {
+            ...plotLayout,
+            title: { text: `Drag Polar - All Airfoils`, font: { size: 14 } },
+            xaxis: { ...plotLayout.xaxis, title: 'Cd (counts)' },
+            yaxis: { ...plotLayout.yaxis, title: 'Cl' }
+        }, { responsive: true });
+    }
+
+    function updatePlots() {
+        updateStats();
+        
+        switch (currentView) {
+            case 'single':
+                plotSingleCondition();
+                break;
+            case 'all-re':
+                plotAllReynolds();
+                break;
+            case 'all-foils':
+                plotAllAirfoils();
+                break;
+        }
+    }
+
+    // Event listeners
+    document.getElementById('airfoil-select').addEventListener('change', (e) => {
+        currentAirfoil = e.target.value;
+        updatePlots();
+    });
+
+    document.getElementById('reynolds-select').addEventListener('change', (e) => {
+        currentReynolds = e.target.value;
+        updatePlots();
+    });
+
+    document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            currentView = tab.dataset.view;
+            updatePlots();
+        });
+    });
+
+    // Initial render
+    updatePlots();
+    </script>
+</body>
+</html>
