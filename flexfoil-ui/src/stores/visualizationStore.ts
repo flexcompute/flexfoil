@@ -70,7 +70,7 @@ const DEFAULT_STATE: VisualizationState = {
   // Smoke options
   smokeDensity: 30,          // Number of spawn points
   smokeParticlesPerBlob: 15, // Particles per blob
-  smokeSpawnInterval: 0.5,   // Seconds between blob spawns (for visible separation)
+  smokeSpawnInterval: 2.0,   // Seconds between blob spawns (for clear separation)
   smokeMaxAge: 6.0,          // Particle lifetime in seconds
   
   // Flow speed
@@ -118,7 +118,7 @@ export const useVisualizationStore = create<VisualizationStore>((set) => ({
     smokeParticlesPerBlob: Math.max(3, Math.min(30, count)) 
   }),
   setSmokeSpawnInterval: (interval) => set({ 
-    smokeSpawnInterval: Math.max(0.05, Math.min(1.0, interval)) 
+    smokeSpawnInterval: Math.max(0.1, Math.min(5.0, interval)) 
   }),
   setSmokeMaxAge: (age) => set({ 
     smokeMaxAge: Math.max(0.5, Math.min(10.0, age)) 
