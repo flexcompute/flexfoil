@@ -969,8 +969,18 @@ export function AirfoilCanvas() {
         const smokeSystem = smokeSystemRef.current as any;
         if (typeof smokeSystem.get_psi_values === 'function') {
           const psiVals = smokeSystem.get_psi_values();
+          const psi0Val = smokeSystem.get_psi_0();
           setSmokePsiValues(new Float64Array(psiVals));
-          setSmokePsi0(smokeSystem.get_psi_0());
+          setSmokePsi0(psi0Val);
+          
+          // Debug: log values occasionally
+          if (Math.random() < 0.01 && psiVals.length > 0) {
+            const above = psiVals.filter((v: number) => v > psi0Val).length;
+            const below = psiVals.filter((v: number) => v <= psi0Val).length;
+            console.log(`Smoke psi: psi0=${psi0Val.toFixed(4)}, above=${above}, below=${below}, sample=[${psiVals.slice(0, 5).map((v: number) => v.toFixed(4)).join(', ')}]`);
+          }
+        } else {
+          console.log('get_psi_values not available on smoke system');
         }
       }
       
@@ -1466,6 +1476,11 @@ export function AirfoilCanvas() {
     if (showSmoke && smokePositions && smokeAlphas) {
       const count = smokePositions.length / 2;
       const hasPsiData = smokePsiValues && smokePsiValues.length === count;
+      
+      // Debug: log if psi data is available
+      if (Math.random() < 0.005) {
+        console.log(`Render: count=${count}, psiLen=${smokePsiValues?.length}, hasPsiData=${hasPsiData}, psi0=${smokePsi0}`);
+      }
       
       // Colors for above/below dividing streamline
       // Upper surface (psi > psi0): warm red/orange

@@ -7,7 +7,7 @@
  * - Inviscid/Viscous mode switch (viscous disabled for now)
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
 import { analyzeAirfoil, isWasmReady, type AnalysisResult } from '../../lib/wasm';
 import type { PolarPoint } from '../../types';
@@ -16,21 +16,52 @@ type SolverMode = 'inviscid' | 'viscous';
 type RunMode = 'alpha' | 'cl';
 
 export function SolvePanel() {
-  const { panels, name, polarData, setDisplayAlpha, setPolarData, clearPolar } = useAirfoilStore();
+  const { panels, name, polarData, displayAlpha, setDisplayAlpha, setPolarData, clearPolar } = useAirfoilStore();
   
   // Solver settings
   const [solverMode, setSolverMode] = useState<SolverMode>('inviscid');
   const [runMode, setRunMode] = useState<RunMode>('alpha');
   
-  // Single-point inputs
-  const [targetAlpha, setTargetAlphaLocal] = useState(5.0);
+  // Single-point inputs - initialize from store's displayAlpha
+  const [targetAlpha, setTargetAlphaLocal] = useState(displayAlpha);
   const [targetCl, setTargetCl] = useState(0.5);
   
-  // Wrapper to update both local state and store displayAlpha
+  // Debounce timer ref
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // Sync local targetAlpha with store on mount (respect store's initial value)
+  const initializedRef = useRef(false);
+  useEffect(() => {
+    if (!initializedRef.current) {
+      initializedRef.current = true;
+      // On first load, update store to match initial targetAlpha if different
+      if (displayAlpha !== targetAlpha) {
+        setDisplayAlpha(targetAlpha);
+      }
+    }
+  }, [displayAlpha, targetAlpha, setDisplayAlpha]);
+  
+  // Wrapper to update both local state and store displayAlpha (debounced)
   const setTargetAlpha = useCallback((alpha: number) => {
     setTargetAlphaLocal(alpha);
-    setDisplayAlpha(alpha);
+    
+    // Debounce the store update to avoid excessive recomputation while typing
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+    debounceRef.current = setTimeout(() => {
+      setDisplayAlpha(alpha);
+    }, 300); // 300ms debounce
   }, [setDisplayAlpha]);
+  
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, []);
   
   // Polar settings
   const [alphaStart, setAlphaStart] = useState(-5);
