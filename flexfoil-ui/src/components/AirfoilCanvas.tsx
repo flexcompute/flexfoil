@@ -1227,32 +1227,52 @@ export function AirfoilCanvas() {
         return !isOnGridBoundary(x, y);
       };
       
-      // Get the primary (longest) polyline for a threshold
-      // For the dividing streamline (endpoints in interior), connect with straight line
+      // Get contour for a threshold, combining and sorting all segments
+      // For contours with interior endpoints (like dividing streamline), connect with straight line
       const getPrimaryContour = (threshold: number, connectInterior: boolean = false): [number, number][] | null => {
         const segments = marchingSquares(grid, nx, ny, threshold, xMin, yMin, dx, dy);
         const polylines = connectSegments(segments);
         if (polylines.length === 0) return null;
         
-        // Return the longest polyline, oriented L→R
-        let longest = polylines[0];
-        for (const pl of polylines) {
-          if (pl.length > longest.length) longest = pl;
-        }
-        let result = orientLeftToRight(longest);
+        // Orient all polylines L→R and sort them by their leftmost x
+        const oriented = polylines.map(pl => orientLeftToRight(pl));
+        oriented.sort((a, b) => a[0][0] - b[0][0]);
         
-        // If both endpoints are in interior (not on grid boundary), connect them
-        // This handles the dividing streamline which terminates at the airfoil
-        if (connectInterior && result.length >= 2) {
+        // Combine all polylines into one, connecting gaps
+        let result: [number, number][] = [];
+        for (const pl of oriented) {
+          if (result.length === 0) {
+            result = [...pl];
+          } else {
+            // Connect previous end to this start
+            result.push(...pl);
+          }
+        }
+        
+        if (result.length < 2) return null;
+        
+        // Final orientation check
+        result = orientLeftToRight(result);
+        
+        // If both endpoints are in interior, connect them with straight line
+        if (connectInterior) {
           const start = result[0];
           const end = result[result.length - 1];
           const startInInterior = isInInterior(start[0], start[1]);
           const endInInterior = isInInterior(end[0], end[1]);
           
           if (startInInterior && endInInterior) {
-            // Connect end back to start with a straight line (through foil)
-            // This closes the contour
             result = [...result, start];
+          } else if (startInInterior || endInInterior) {
+            // One end in interior - find closest point on airfoil and add it
+            if (startInInterior) {
+              const closest = closestPointOnAirfoil(start[0], start[1]);
+              result = [[closest.x, closest.y], ...result];
+            }
+            if (endInInterior) {
+              const closest = closestPointOnAirfoil(end[0], end[1]);
+              result = [...result, [closest.x, closest.y]];
+            }
           }
         }
         
