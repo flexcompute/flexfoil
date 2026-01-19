@@ -899,6 +899,311 @@ impl WasmSmokeSystem {
     }
 }
 
+// ============================================================================
+// Morphing Interpolation (High-Performance)
+// ============================================================================
+
+/// Interpolate between two point arrays (same length - fast path).
+/// 
+/// # Arguments
+/// * `from` - Source points as flat array [x0, y0, x1, y1, ...]
+/// * `to` - Target points as flat array [x0, y0, x1, y1, ...]
+/// * `t` - Interpolation factor (0.0 = from, 1.0 = to)
+/// 
+/// # Returns
+/// Interpolated points as flat array.
+#[wasm_bindgen]
+pub fn lerp_points(from: &[f64], to: &[f64], t: f64) -> Vec<f64> {
+    let from_len = from.len();
+    let to_len = to.len();
+    
+    if from_len == 0 {
+        return to.to_vec();
+    }
+    if to_len == 0 {
+        return from.to_vec();
+    }
+    
+    // Fast path: same length arrays
+    if from_len == to_len {
+        let one_minus_t = 1.0 - t;
+        from.iter()
+            .zip(to.iter())
+            .map(|(&a, &b)| a * one_minus_t + b * t)
+            .collect()
+    } else {
+        // Different lengths: need index mapping
+        lerp_points_diff_length(from, to, t)
+    }
+}
+
+/// Interpolate between point arrays of different lengths.
+fn lerp_points_diff_length(from: &[f64], to: &[f64], t: f64) -> Vec<f64> {
+    let from_pts = from.len() / 2;
+    let to_pts = to.len() / 2;
+    
+    if from_pts == 0 || to_pts == 0 {
+        return if to_pts > 0 { to.to_vec() } else { from.to_vec() };
+    }
+    
+    let mut result = Vec::with_capacity(to.len());
+    let scale = (from_pts - 1) as f64 / (to_pts - 1) as f64;
+    let one_minus_t = 1.0 - t;
+    
+    for i in 0..to_pts {
+        let src_idx = i as f64 * scale;
+        let src_idx_low = src_idx as usize;
+        let src_idx_high = (src_idx_low + 1).min(from_pts - 1);
+        let src_t = src_idx - src_idx_low as f64;
+        let one_minus_src_t = 1.0 - src_t;
+        
+        // Interpolate within source
+        let src_x = from[src_idx_low * 2] * one_minus_src_t + from[src_idx_high * 2] * src_t;
+        let src_y = from[src_idx_low * 2 + 1] * one_minus_src_t + from[src_idx_high * 2 + 1] * src_t;
+        
+        // Interpolate between source and target
+        result.push(src_x * one_minus_t + to[i * 2] * t);
+        result.push(src_y * one_minus_t + to[i * 2 + 1] * t);
+    }
+    
+    result
+}
+
+/// Interpolate between two number arrays (for Cp values, etc.).
+/// 
+/// # Arguments
+/// * `from` - Source array
+/// * `to` - Target array  
+/// * `t` - Interpolation factor (0.0 = from, 1.0 = to)
+/// 
+/// # Returns
+/// Interpolated array.
+#[wasm_bindgen]
+pub fn lerp_array(from: &[f64], to: &[f64], t: f64) -> Vec<f64> {
+    let from_len = from.len();
+    let to_len = to.len();
+    
+    if from_len == 0 {
+        return to.to_vec();
+    }
+    if to_len == 0 {
+        return from.to_vec();
+    }
+    
+    let one_minus_t = 1.0 - t;
+    
+    // Fast path: same length
+    if from_len == to_len {
+        from.iter()
+            .zip(to.iter())
+            .map(|(&a, &b)| a * one_minus_t + b * t)
+            .collect()
+    } else {
+        // Different lengths: need index mapping
+        let scale = (from_len - 1) as f64 / (to_len - 1) as f64;
+        let mut result = Vec::with_capacity(to_len);
+        
+        for i in 0..to_len {
+            let src_idx = i as f64 * scale;
+            let src_idx_low = src_idx as usize;
+            let src_idx_high = (src_idx_low + 1).min(from_len - 1);
+            let src_t = src_idx - src_idx_low as f64;
+            
+            let src_val = from[src_idx_low] * (1.0 - src_t) + from[src_idx_high] * src_t;
+            result.push(src_val * one_minus_t + to[i] * t);
+        }
+        
+        result
+    }
+}
+
+/// Interpolate between two streamline arrays.
+/// 
+/// Streamlines are encoded as: [n_lines, n_pts_0, x0, y0, x1, y1, ..., n_pts_1, x0, y0, ...]
+/// 
+/// # Arguments
+/// * `from` - Source streamlines encoded
+/// * `to` - Target streamlines encoded
+/// * `t` - Interpolation factor (0.0 = from, 1.0 = to)
+/// 
+/// # Returns
+/// Interpolated streamlines in same encoding.
+#[wasm_bindgen]
+pub fn lerp_streamlines(from: &[f64], to: &[f64], t: f64) -> Vec<f64> {
+    // Decode streamlines
+    let from_lines = decode_streamlines(from);
+    let to_lines = decode_streamlines(to);
+    
+    if from_lines.is_empty() {
+        return to.to_vec();
+    }
+    if to_lines.is_empty() {
+        return from.to_vec();
+    }
+    
+    let max_lines = from_lines.len().max(to_lines.len());
+    let one_minus_t = 1.0 - t;
+    
+    let mut result_lines: Vec<Vec<(f64, f64)>> = Vec::with_capacity(max_lines);
+    
+    for i in 0..max_lines {
+        let from_line = &from_lines[i % from_lines.len()];
+        let to_line = &to_lines[i % to_lines.len()];
+        
+        if from_line.is_empty() {
+            result_lines.push(to_line.clone());
+            continue;
+        }
+        if to_line.is_empty() {
+            result_lines.push(from_line.clone());
+            continue;
+        }
+        
+        let from_pts = from_line.len();
+        let to_pts = to_line.len();
+        
+        let mut line_result: Vec<(f64, f64)> = Vec::with_capacity(to_pts);
+        
+        if from_pts == to_pts {
+            // Fast path: same length
+            for j in 0..to_pts {
+                line_result.push((
+                    from_line[j].0 * one_minus_t + to_line[j].0 * t,
+                    from_line[j].1 * one_minus_t + to_line[j].1 * t,
+                ));
+            }
+        } else {
+            // Different lengths: index mapping
+            let scale = (from_pts - 1) as f64 / (to_pts - 1) as f64;
+            
+            for j in 0..to_pts {
+                let src_idx = j as f64 * scale;
+                let src_idx_low = src_idx as usize;
+                let src_idx_high = (src_idx_low + 1).min(from_pts - 1);
+                let src_t = src_idx - src_idx_low as f64;
+                let one_minus_src_t = 1.0 - src_t;
+                
+                let src_x = from_line[src_idx_low].0 * one_minus_src_t + from_line[src_idx_high].0 * src_t;
+                let src_y = from_line[src_idx_low].1 * one_minus_src_t + from_line[src_idx_high].1 * src_t;
+                
+                line_result.push((
+                    src_x * one_minus_t + to_line[j].0 * t,
+                    src_y * one_minus_t + to_line[j].1 * t,
+                ));
+            }
+        }
+        
+        result_lines.push(line_result);
+    }
+    
+    encode_streamlines(&result_lines)
+}
+
+/// Decode streamlines from flat array format.
+/// Format: [n_lines, n_pts_0, x0, y0, x1, y1, ..., n_pts_1, x0, y0, ...]
+fn decode_streamlines(data: &[f64]) -> Vec<Vec<(f64, f64)>> {
+    if data.is_empty() {
+        return vec![];
+    }
+    
+    let n_lines = data[0] as usize;
+    let mut result = Vec::with_capacity(n_lines);
+    let mut idx = 1;
+    
+    for _ in 0..n_lines {
+        if idx >= data.len() {
+            break;
+        }
+        
+        let n_pts = data[idx] as usize;
+        idx += 1;
+        
+        let mut line = Vec::with_capacity(n_pts);
+        for _ in 0..n_pts {
+            if idx + 1 >= data.len() {
+                break;
+            }
+            line.push((data[idx], data[idx + 1]));
+            idx += 2;
+        }
+        result.push(line);
+    }
+    
+    result
+}
+
+/// Encode streamlines to flat array format.
+fn encode_streamlines(lines: &[Vec<(f64, f64)>]) -> Vec<f64> {
+    // Calculate total size
+    let total_pts: usize = lines.iter().map(|l| l.len()).sum();
+    let total_size = 1 + lines.len() + total_pts * 2;
+    
+    let mut result = Vec::with_capacity(total_size);
+    result.push(lines.len() as f64);
+    
+    for line in lines {
+        result.push(line.len() as f64);
+        for &(x, y) in line {
+            result.push(x);
+            result.push(y);
+        }
+    }
+    
+    result
+}
+
+/// Batch interpolation for morphing animation.
+/// Interpolates coordinates, panels, Cp, and cpX in a single WASM call.
+/// 
+/// # Arguments
+/// * `from_coords` - Source coordinates [x0, y0, ...]
+/// * `to_coords` - Target coordinates
+/// * `from_panels` - Source panels [x0, y0, ...]
+/// * `to_panels` - Target panels
+/// * `from_cp` - Source Cp values
+/// * `to_cp` - Target Cp values
+/// * `from_cpx` - Source Cp X positions
+/// * `to_cpx` - Target Cp X positions
+/// * `t` - Interpolation factor
+/// 
+/// # Returns
+/// JsValue containing { coordinates, panels, cp, cpX }
+#[wasm_bindgen]
+pub fn lerp_morph_state(
+    from_coords: &[f64],
+    to_coords: &[f64],
+    from_panels: &[f64],
+    to_panels: &[f64],
+    from_cp: &[f64],
+    to_cp: &[f64],
+    from_cpx: &[f64],
+    to_cpx: &[f64],
+    t: f64,
+) -> JsValue {
+    let coords = lerp_points(from_coords, to_coords, t);
+    let panels = lerp_points(from_panels, to_panels, t);
+    let cp = lerp_array(from_cp, to_cp, t);
+    let cp_x = lerp_array(from_cpx, to_cpx, t);
+    
+    let result = MorphResult {
+        coordinates: coords,
+        panels,
+        cp,
+        cp_x,
+    };
+    
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+/// Result of morph interpolation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MorphResult {
+    pub coordinates: Vec<f64>,
+    pub panels: Vec<f64>,
+    pub cp: Vec<f64>,
+    pub cp_x: Vec<f64>,
+}
+
 /// Main RustFoil interface for JavaScript.
 ///
 /// Provides a stateful API for interactive airfoil manipulation.

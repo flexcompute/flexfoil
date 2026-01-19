@@ -15,6 +15,11 @@ import init, {
     WasmSmokeSystem,
     greet,
     RustFoil,
+    // Morphing interpolation functions
+    lerp_points,
+    lerp_array,
+    lerp_streamlines,
+    lerp_morph_state,
 } from 'rustfoil-wasm';
 
 let initialized = false;
@@ -343,6 +348,170 @@ export function createSmokeSystem(
     }
     
     return new WasmSmokeSystem(new Float64Array(spawnY), spawnX, particlesPerBlob);
+}
+
+// ============================================================================
+// Morphing Interpolation (WASM-accelerated)
+// ============================================================================
+
+/**
+ * Interpolate between two point arrays using WASM.
+ * Much faster than JavaScript for large arrays.
+ */
+export function wasmLerpPoints(
+    from: { x: number; y: number }[],
+    to: { x: number; y: number }[],
+    t: number
+): { x: number; y: number }[] {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+    
+    const fromFlat = pointsToFlat(from);
+    const toFlat = pointsToFlat(to);
+    const result = lerp_points(fromFlat, toFlat, t);
+    return flatToPoints(result);
+}
+
+/**
+ * Interpolate between two number arrays using WASM.
+ */
+export function wasmLerpArray(
+    from: number[],
+    to: number[],
+    t: number
+): number[] {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+    
+    const result = lerp_array(new Float64Array(from), new Float64Array(to), t);
+    return Array.from(result);
+}
+
+/**
+ * Encode streamlines to flat array format for WASM.
+ * Format: [n_lines, n_pts_0, x0, y0, x1, y1, ..., n_pts_1, x0, y0, ...]
+ */
+export function encodeStreamlines(streamlines: [number, number][][]): Float64Array {
+    // Calculate total size
+    const totalPts = streamlines.reduce((sum, line) => sum + line.length, 0);
+    const totalSize = 1 + streamlines.length + totalPts * 2;
+    
+    const result = new Float64Array(totalSize);
+    result[0] = streamlines.length;
+    
+    let idx = 1;
+    for (const line of streamlines) {
+        result[idx++] = line.length;
+        for (const [x, y] of line) {
+            result[idx++] = x;
+            result[idx++] = y;
+        }
+    }
+    
+    return result;
+}
+
+/**
+ * Decode streamlines from flat array format.
+ */
+export function decodeStreamlines(data: Float64Array | number[]): [number, number][][] {
+    if (data.length === 0) {
+        return [];
+    }
+    
+    const nLines = data[0];
+    const result: [number, number][][] = [];
+    let idx = 1;
+    
+    for (let i = 0; i < nLines; i++) {
+        if (idx >= data.length) break;
+        
+        const nPts = data[idx++];
+        const line: [number, number][] = [];
+        
+        for (let j = 0; j < nPts; j++) {
+            if (idx + 1 >= data.length) break;
+            line.push([data[idx], data[idx + 1]]);
+            idx += 2;
+        }
+        result.push(line);
+    }
+    
+    return result;
+}
+
+/**
+ * Interpolate between two streamline arrays using WASM.
+ */
+export function wasmLerpStreamlines(
+    from: [number, number][][],
+    to: [number, number][][],
+    t: number
+): [number, number][][] {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+    
+    const fromEncoded = encodeStreamlines(from);
+    const toEncoded = encodeStreamlines(to);
+    const result = lerp_streamlines(fromEncoded, toEncoded, t);
+    return decodeStreamlines(result);
+}
+
+/**
+ * Result of WASM morph interpolation.
+ */
+export interface MorphResult {
+    coordinates: number[];
+    panels: number[];
+    cp: number[];
+    cp_x: number[];
+}
+
+/**
+ * Batch interpolation for morphing - interpolates coordinates, panels, cp, cpX
+ * in a single WASM call for maximum performance.
+ */
+export function wasmLerpMorphState(
+    fromCoords: { x: number; y: number }[],
+    toCoords: { x: number; y: number }[],
+    fromPanels: { x: number; y: number }[],
+    toPanels: { x: number; y: number }[],
+    fromCp: number[],
+    toCp: number[],
+    fromCpX: number[],
+    toCpX: number[],
+    t: number
+): {
+    coordinates: { x: number; y: number }[];
+    panels: { x: number; y: number }[];
+    cp: number[];
+    cpX: number[];
+} {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+    
+    const result = lerp_morph_state(
+        pointsToFlat(fromCoords),
+        pointsToFlat(toCoords),
+        pointsToFlat(fromPanels),
+        pointsToFlat(toPanels),
+        new Float64Array(fromCp),
+        new Float64Array(toCp),
+        new Float64Array(fromCpX),
+        new Float64Array(toCpX),
+        t
+    ) as MorphResult;
+    
+    return {
+        coordinates: flatToPoints(result.coordinates),
+        panels: flatToPoints(result.panels),
+        cp: Array.from(result.cp),
+        cpX: Array.from(result.cp_x),
+    };
 }
 
 // Re-export the RustFoil class and WasmSmokeSystem for advanced usage

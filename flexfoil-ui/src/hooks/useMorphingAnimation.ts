@@ -1,11 +1,12 @@
 /**
- * Morphing Animation Hook (Optimized)
+ * Morphing Animation Hook (WASM-Accelerated)
  * 
  * Provides smooth interpolation between airfoil states for animated transitions.
  * All visualizations (airfoil shape, streamlines, Cp, forces) morph together.
  * 
  * Performance optimizations:
- * - Pre-allocated typed arrays for numeric data
+ * - WASM-based interpolation for coordinates, panels, Cp, cpX
+ * - Pre-allocated buffers for streamlines (still JS for encoding overhead)
  * - Ref-based animation state (avoids React renders during animation)
  * - Fast paths for same-length arrays
  * - Batched state updates
@@ -13,6 +14,11 @@
 
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import type { AirfoilPoint } from '../types';
+import { 
+    isWasmReady, 
+    wasmLerpMorphState, 
+    wasmLerpStreamlines,
+} from '../lib/wasm';
 
 export interface MorphState {
   /** Interpolated airfoil coordinates */
@@ -184,10 +190,10 @@ function lerpArrayDiffLength(
 }
 
 /**
- * Interpolate streamlines - the most expensive operation
+ * Interpolate streamlines - the most expensive operation (JS fallback)
  * Optimized with in-place updates and fast paths
  */
-function lerpStreamlines(
+function lerpStreamlinesJS(
   from: [number, number][][],
   to: [number, number][][],
   t: number,
@@ -356,7 +362,7 @@ export function useMorphingAnimation(
     return false;
   }, []);
   
-  // Animation frame callback - optimized to minimize allocations
+  // Animation frame callback - WASM-accelerated interpolation
   const animate = useCallback((timestamp: number) => {
     const elapsed = timestamp - startTimeRef.current;
     const rawProgress = Math.min(elapsed / duration, 1);
@@ -379,48 +385,85 @@ export function useMorphingAnimation(
     const shouldUpdateState = isComplete || (frameCountRef.current % FRAMES_PER_UPDATE === 0);
     
     if (shouldUpdateState) {
-      const buffers = buffersRef.current;
+      let interpolated: MorphState;
       
-      // Use fast paths when array lengths match (common case)
-      if (prev.coordinates.length === target.coordinates.length) {
-        lerpPointsSameLength(prev.coordinates, target.coordinates, progress, buffers.coordinates);
+      // Use WASM for interpolation if available (much faster)
+      if (isWasmReady()) {
+        // Batch interpolation of coordinates, panels, cp, cpX in single WASM call
+        const morphed = wasmLerpMorphState(
+          prev.coordinates,
+          target.coordinates,
+          prev.panels,
+          target.panels,
+          prev.cp,
+          target.cp,
+          prev.cpX,
+          target.cpX,
+          progress
+        );
+        
+        // Streamlines - also via WASM
+        const streamlines = wasmLerpStreamlines(
+          prev.streamlines,
+          target.streamlines,
+          progress
+        );
+        
+        interpolated = {
+          coordinates: morphed.coordinates,
+          panels: morphed.panels,
+          streamlines,
+          cp: morphed.cp,
+          cpX: morphed.cpX,
+          cl: lerp(prev.cl, target.cl, progress),
+          cm: lerp(prev.cm, target.cm, progress),
+          isAnimating: !isComplete,
+          progress,
+        };
       } else {
-        lerpPointsDiffLength(prev.coordinates, target.coordinates, progress, buffers.coordinates);
+        // Fallback to JS implementation if WASM not ready
+        const buffers = buffersRef.current;
+        
+        // Use fast paths when array lengths match (common case)
+        if (prev.coordinates.length === target.coordinates.length) {
+          lerpPointsSameLength(prev.coordinates, target.coordinates, progress, buffers.coordinates);
+        } else {
+          lerpPointsDiffLength(prev.coordinates, target.coordinates, progress, buffers.coordinates);
+        }
+        
+        if (prev.panels.length === target.panels.length) {
+          lerpPointsSameLength(prev.panels, target.panels, progress, buffers.panels);
+        } else {
+          lerpPointsDiffLength(prev.panels, target.panels, progress, buffers.panels);
+        }
+        
+        if (prev.cp.length === target.cp.length) {
+          lerpArraySameLength(prev.cp, target.cp, progress, buffers.cp);
+        } else {
+          lerpArrayDiffLength(prev.cp, target.cp, progress, buffers.cp);
+        }
+        
+        if (prev.cpX.length === target.cpX.length) {
+          lerpArraySameLength(prev.cpX, target.cpX, progress, buffers.cpX);
+        } else {
+          lerpArrayDiffLength(prev.cpX, target.cpX, progress, buffers.cpX);
+        }
+        
+        // Streamlines - most expensive, but optimized
+        lerpStreamlinesJS(prev.streamlines, target.streamlines, progress, buffers.streamlines);
+        
+        interpolated = {
+          coordinates: buffers.coordinates.map(p => ({ x: p.x, y: p.y })),
+          panels: buffers.panels.map(p => ({ x: p.x, y: p.y })),
+          streamlines: buffers.streamlines.map(line => line.map(pt => [pt[0], pt[1]] as [number, number])),
+          cp: [...buffers.cp],
+          cpX: [...buffers.cpX],
+          cl: lerp(prev.cl, target.cl, progress),
+          cm: lerp(prev.cm, target.cm, progress),
+          isAnimating: !isComplete,
+          progress,
+        };
       }
-      
-      if (prev.panels.length === target.panels.length) {
-        lerpPointsSameLength(prev.panels, target.panels, progress, buffers.panels);
-      } else {
-        lerpPointsDiffLength(prev.panels, target.panels, progress, buffers.panels);
-      }
-      
-      if (prev.cp.length === target.cp.length) {
-        lerpArraySameLength(prev.cp, target.cp, progress, buffers.cp);
-      } else {
-        lerpArrayDiffLength(prev.cp, target.cp, progress, buffers.cp);
-      }
-      
-      if (prev.cpX.length === target.cpX.length) {
-        lerpArraySameLength(prev.cpX, target.cpX, progress, buffers.cpX);
-      } else {
-        lerpArrayDiffLength(prev.cpX, target.cpX, progress, buffers.cpX);
-      }
-      
-      // Streamlines - most expensive, but optimized
-      lerpStreamlines(prev.streamlines, target.streamlines, progress, buffers.streamlines);
-      
-      // Create new state object (required for React to detect change)
-      const interpolated: MorphState = {
-        coordinates: buffers.coordinates.map(p => ({ x: p.x, y: p.y })),
-        panels: buffers.panels.map(p => ({ x: p.x, y: p.y })),
-        streamlines: buffers.streamlines.map(line => line.map(pt => [pt[0], pt[1]] as [number, number])),
-        cp: [...buffers.cp],
-        cpX: [...buffers.cpX],
-        cl: lerp(prev.cl, target.cl, progress),
-        cm: lerp(prev.cm, target.cm, progress),
-        isAnimating: !isComplete,
-        progress,
-      };
       
       setMorphState(interpolated);
     }
