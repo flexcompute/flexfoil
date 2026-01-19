@@ -1115,19 +1115,19 @@ export function AirfoilCanvas() {
       const interiorValue = psiMin - 1000;
       const cleanGrid = grid.map(v => isFinite(v) ? v : interiorValue);
       
-      // Create d3-contour generator with ψ₀ as exact threshold
+      // Create d3-contour generator WITHOUT ψ₀ threshold
+      // The ψ₀ contour would pick up the fake interior boundary
+      // Instead, we draw the dividing streamline separately using psi0Lines
       const nLevels = 12;
       const thresholds: number[] = [];
       
-      // Add levels below ψ₀ (blue region) - starting from psiMin (not interiorValue)
-      for (let i = 0; i < nLevels; i++) {
-        thresholds.push(psiMin + (psi0 - psiMin) * (i / nLevels));
+      // Add levels below ψ₀ (blue region) - approaching but not including ψ₀
+      for (let i = 0; i <= nLevels; i++) {
+        thresholds.push(psiMin + (psi0 - psiMin) * (i / (nLevels + 1)));
       }
-      // Add ψ₀ as exact threshold (dividing streamline)
-      thresholds.push(psi0);
-      // Add levels above ψ₀ (red region)
+      // Add levels above ψ₀ (red region) - starting just above ψ₀
       for (let i = 1; i <= nLevels; i++) {
-        thresholds.push(psi0 + (psiMax - psi0) * (i / nLevels));
+        thresholds.push(psi0 + (psiMax - psi0) * (i / (nLevels + 1)));
       }
       
       // Generate filled contour polygons using cleaned grid
@@ -1167,27 +1167,21 @@ export function AirfoilCanvas() {
       // Draw filled contours from lowest to highest (painter's algorithm)
       // d3-contour creates regions where ψ >= threshold
       const alpha = isDark ? 0.5 : 0.6;
-      let psi0Contour: typeof contourData[0] | null = null;
       
       for (const c of contourData) {
         const value = c.value;
         
-        // Save the ψ₀ contour for drawing dividing streamline
-        if (Math.abs(value - psi0) < 1e-10) {
-          psi0Contour = c;
-        }
-        
         // Color based on whether above or below ψ₀
         // Note: contour at value T shows region where ψ >= T
         if (value < psi0) {
-          // Blue region (flow going under) - this covers ψ >= value (up to next threshold)
+          // Blue region (flow going under)
           const t = (psi0 - value) / (psi0 - psiMin);
           const r = Math.round(180 - t * 100);
           const g = Math.round(200 - t * 80);
           const b = Math.round(240 - t * 20);
           ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
         } else {
-          // Red region (flow going over) - ψ >= value (which is >= ψ₀)
+          // Red region (flow going over)
           const t = (value - psi0) / (psiMax - psi0 + 1e-10);
           const r = Math.round(255 - t * 30);
           const g = Math.round(200 - t * 100);
@@ -1212,28 +1206,24 @@ export function AirfoilCanvas() {
         ctx.fill();
       }
       
-      // Draw dividing streamline from d3-contour's ψ₀ boundary
-      // This ensures consistency between filled regions and the line
-      if (psi0Contour) {
+      // Draw dividing streamline using separately computed psi0Lines
+      // (computed with proper interior filtering, not affected by fake interior values)
+      if (psiContours.psi0Lines.length > 0) {
         ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.95)' : 'rgba(0, 0, 0, 0.9)';
         ctx.lineWidth = 2.5;
         ctx.setLineDash([]);
         
-        const geom = psi0Contour as unknown as { type: string; coordinates: number[][][] | number[][][][] };
-        if (geom.type === 'MultiPolygon') {
-          for (const polygon of geom.coordinates as number[][][][]) {
-            for (const ring of polygon) {
-              ctx.beginPath();
-              for (let i = 0; i < ring.length; i++) {
-                const [gx, gy] = ring[i];
-                const world = gridToWorld(gx, gy);
-                const canvas = toCanvas(world);
-                if (i === 0) ctx.moveTo(canvas.x, canvas.y);
-                else ctx.lineTo(canvas.x, canvas.y);
-              }
-              ctx.stroke();
-            }
+        for (const line of psiContours.psi0Lines) {
+          if (line.length < 2) continue;
+          ctx.beginPath();
+          const first = toCanvas(rotatePoint({ x: line[0][0], y: line[0][1] }));
+          ctx.moveTo(first.x, first.y);
+          
+          for (let i = 1; i < line.length; i++) {
+            const p = toCanvas(rotatePoint({ x: line[i][0], y: line[i][1] }));
+            ctx.lineTo(p.x, p.y);
           }
+          ctx.stroke();
         }
       }
     }
