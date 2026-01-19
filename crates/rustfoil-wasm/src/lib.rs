@@ -923,19 +923,18 @@ fn compute_psi_grid_impl(
         }
     };
 
-    // Compute grid with ψ₀ as interior value (instead of NaN)
-    // This gives a complete smooth field where interior points have the body stream function value
-    let grid = rustfoil_solver::inviscid::compute_psi_grid_with_interior(
+    // Compute grid with NaN for interior points
+    // The airfoil will be masked visually in the UI layer
+    let grid = rustfoil_solver::inviscid::compute_psi_grid(
         &points,
         &solution.gamma,
         flow.alpha,
         flow.v_inf,
         bounds[0], bounds[1], bounds[2], bounds[3],
         nx, ny,
-        Some(solution.psi_0),  // Use ψ₀ for interior points
     );
 
-    // Find min/max (all values should be finite now)
+    // Find min/max (excluding NaN interior points)
     let (psi_min, psi_max) = grid.iter()
         .filter(|v| v.is_finite())
         .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), &v| {
