@@ -50,11 +50,11 @@ interface VisualizationStore extends VisualizationState {
 
 const DEFAULT_STATE: VisualizationState = {
   // Display toggles
-  showGrid: true,
+  showGrid: false,
   showCurve: true,
   showPanels: false,
-  showPoints: true,
-  showControls: true,
+  showPoints: false,
+  showControls: false,
   showStreamlines: false,
   showSmoke: false,
   showPsiContours: false,

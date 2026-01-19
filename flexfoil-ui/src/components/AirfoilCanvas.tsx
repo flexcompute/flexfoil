@@ -1094,13 +1094,28 @@ export function AirfoilCanvas() {
     // NOTE: The filled contours show the stream function field with a diverging colormap:
     // - Blue tones: flow going under the airfoil (ψ < ψ₀)
     // - Red tones: flow going over the airfoil (ψ > ψ₀)
-    // The interior of the airfoil is shown with the body stream function value (ψ₀).
+    // The interior of the airfoil is NOT rendered - only the external flow field is shown.
     // The dividing streamline (ψ = ψ₀) is extrapolated to intersect the airfoil surface.
     if (showPsiContours && psiContours.grid.length > 0) {
       const { grid, bounds, nx, ny, psiMin, psiMax, psi0 } = psiContours;
       const [xMin, xMax, yMin, yMax] = bounds;
       const dx = (xMax - xMin) / (nx - 1);
       const dy = (yMax - yMin) / (ny - 1);
+      
+      // Point-in-polygon test using ray casting algorithm
+      // Returns true if point (x, y) is inside the airfoil
+      const isInsideAirfoil = (x: number, y: number): boolean => {
+        if (panels.length < 3) return false;
+        let inside = false;
+        for (let i = 0, j = panels.length - 1; i < panels.length; j = i++) {
+          const xi = panels[i].x, yi = panels[i].y;
+          const xj = panels[j].x, yj = panels[j].y;
+          if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+            inside = !inside;
+          }
+        }
+        return inside;
+      };
       
       // Bicubic (Catmull-Rom) spline interpolation for smooth gradients
       // Uses 4x4 neighborhood of grid points around each evaluation point
@@ -1156,6 +1171,15 @@ export function AirfoilCanvas() {
           // Draw sub-cells with bicubic interpolated values
           for (let sy = 0; sy < subDiv; sy++) {
             for (let sx = 0; sx < subDiv; sx++) {
+              // Sub-cell center in world coordinates
+              const centerX = xMin + ix * dx + (sx + 0.5) * subDx;
+              const centerY = yMin + iy * dy + (sy + 0.5) * subDy;
+              
+              // Skip cells inside the airfoil
+              if (isInsideAirfoil(centerX, centerY)) {
+                continue;
+              }
+              
               // Sub-cell center in normalized coordinates (0-1)
               const u = (sx + 0.5) / subDiv;
               const v_param = (sy + 0.5) / subDiv;
