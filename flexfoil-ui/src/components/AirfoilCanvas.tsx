@@ -714,7 +714,7 @@ export function AirfoilCanvas() {
   
   // Compute stream function (ψ) contours when enabled
   // Uses marching squares to extract iso-lines from the psi grid
-  // Uses FIXED bounds to avoid expensive recomputation on zoom/pan
+  // Uses adaptive bounds (same as streamlines) via stableViewport for debouncing
   // NOTE: The dividing streamline (ψ = ψ₀) is extrapolated to hit the airfoil surface
   useEffect(() => {
     if (!showPsiContours || !isWasmReady() || panels.length < 10 || isDraggingPoint) {
@@ -725,11 +725,15 @@ export function AirfoilCanvas() {
     }
     
     try {
-      // Use FIXED bounds - large enough to cover typical viewing area
-      // This prevents expensive recomputation on zoom/pan
-      const bounds: [number, number, number, number] = [-1.5, 2.5, -1.2, 1.2];
-      // Fixed resolution - good balance of quality vs performance
-      const resolution: [number, number] = [160, 96];
+      // Use adaptive bounds (same as streamlines) - updates when viewport settles
+      const bounds = streamlineBounds;
+      // Scale resolution based on bounds size (target ~40 points per unit for performance)
+      const xRange = bounds[1] - bounds[0];
+      const yRange = bounds[3] - bounds[2];
+      const resolution: [number, number] = [
+        Math.min(200, Math.round(xRange * 40)),
+        Math.min(120, Math.round(yRange * 40))
+      ];
       const result = computePsiGrid(panels, displayAlpha, bounds, resolution);
       
       if (!result.success) {
@@ -823,7 +827,7 @@ export function AirfoilCanvas() {
     } catch (e) {
       console.error('Psi contour computation failed:', e);
     }
-  }, [showPsiContours, panels, displayAlpha, isDraggingPoint]);
+  }, [showPsiContours, panels, displayAlpha, streamlineBounds, isDraggingPoint]);
   
   // Compute aerodynamic analysis (Cp, Cl, Cm)
   // SKIP during drag to prevent freezing - recalculate on drag end

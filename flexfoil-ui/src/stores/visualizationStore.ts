@@ -67,7 +67,7 @@ const DEFAULT_STATE: VisualizationState = {
   
   // Streamline options
   streamlineDensity: 50,
-  adaptiveStreamlines: false,  // Use fixed density since we have large bounds
+  adaptiveStreamlines: true,  // Adaptive bounds based on viewport (recommended)
   
   // Smoke options
   smokeDensity: 30,          // Number of spawn points
