@@ -1182,8 +1182,8 @@ pub fn compute_transpiration(
     
     // Apply limiting to prevent numerical instability
     // Transpiration should be bounded by a fraction of freestream velocity
-    // Conservative limit for stability
-    let vn_max = 0.2; // Max 20% of V_inf
+    // XFOIL uses higher limits; 30% allows more displacement effect
+    let vn_max = 0.3; // Max 30% of V_inf (was 0.2, increased for better Cl correction)
     for v in &mut vn {
         *v = v.clamp(-vn_max, vn_max);
     }
@@ -1217,8 +1217,24 @@ fn build_viscous_solution(
     let cf_upper: Vec<f64> = bl.upper.iter().map(|st| st.state.cf).collect();
     let cf_lower: Vec<f64> = bl.lower.iter().map(|st| st.state.cf).collect();
 
+    // Compute viscous Cl correction based on displacement thickness
+    // The BL displacement thickness effectively "decambers" the airfoil,
+    // reducing lift. XFOIL accounts for this through V-I coupling.
+    // 
+    // Approximate correction: dCl/Cl ≈ -k * (δ*_upper + δ*_lower) / c
+    // where k ≈ 1.5-2.5 based on XFOIL comparisons
+    let ds_upper_te = delta_star_upper.last().copied().unwrap_or(0.0);
+    let ds_lower_te = delta_star_lower.last().copied().unwrap_or(0.0);
+    let ds_total_te = ds_upper_te + ds_lower_te;
+    
+    // Correction factor tuned to match XFOIL
+    // Smaller factor since transpiration coupling already provides some correction
+    let cl_correction_factor = 1.8; // Empirical factor (reduced from 2.5)
+    let cl_reduction = cl_correction_factor * ds_total_te / chord;
+    let cl_viscous = inviscid.cl * (1.0 - cl_reduction);
+
     ViscousSolution {
-        cl: inviscid.cl,
+        cl: cl_viscous,
         cd: bl.cd,
         cd_friction: bl.cd_friction,
         cd_pressure: bl.cd_pressure,
@@ -1357,7 +1373,7 @@ mod tests {
     #[test]
     fn test_compute_transpiration_clamping() {
         // Test that extreme values are clamped
-        let n = 5;
+        let _n = 5;
         let ue = vec![1.0, 1.0, 1.0, 1.0, 1.0];
         // Very large jump in delta_star
         let delta_star = vec![0.0, 0.0, 1.0, 0.0, 0.0];
@@ -1365,9 +1381,9 @@ mod tests {
         
         let vn = compute_transpiration(&ue, &delta_star, &s_coords);
         
-        // All values should be clamped to [-0.2, 0.2]
+        // All values should be clamped to [-0.3, 0.3] (limit increased for better V-I coupling)
         for &v in &vn {
-            assert!(v.abs() <= 0.2 + 1e-10, "vn = {} should be clamped", v);
+            assert!(v.abs() <= 0.3 + 1e-10, "vn = {} should be clamped", v);
         }
     }
     
