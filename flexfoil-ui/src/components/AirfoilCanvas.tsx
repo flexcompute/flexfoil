@@ -253,8 +253,40 @@ export function AirfoilCanvas() {
     cm: number;
   }>({ cp: [], cpX: [], cl: 0, cm: 0 });
   
-  // Track last zoom for adaptive streamlines
+  // Stable viewport for adaptive streamlines - only updates after zooming settles
+  // This prevents expensive streamline recalculation on every scroll tick
   const lastZoomRef = useRef(viewport.zoom);
+  const [stableViewport, setStableViewport] = useState(viewport);
+  const zoomSettleTimerRef = useRef<number | null>(null);
+  
+  // Update stable viewport after zooming settles (debounced)
+  useEffect(() => {
+    // Clear any pending timer
+    if (zoomSettleTimerRef.current) {
+      clearTimeout(zoomSettleTimerRef.current);
+    }
+    
+    const zoomDelta = Math.abs(viewport.zoom - lastZoomRef.current) / lastZoomRef.current;
+    
+    // Immediate update if zoom changed significantly (>20%)
+    if (zoomDelta > 0.2) {
+      lastZoomRef.current = viewport.zoom;
+      setStableViewport(viewport);
+    } else if (adaptiveStreamlines) {
+      // For adaptive mode, also update after a settling period (2s of no changes)
+      // This allows streamlines to repopulate after fine zooming
+      zoomSettleTimerRef.current = window.setTimeout(() => {
+        lastZoomRef.current = viewport.zoom;
+        setStableViewport(viewport);
+      }, 2000);
+    }
+    
+    return () => {
+      if (zoomSettleTimerRef.current) {
+        clearTimeout(zoomSettleTimerRef.current);
+      }
+    };
+  }, [viewport, adaptiveStreamlines]);
   
   // Smoke system
   const smokeSystemRef = useRef<WasmSmokeSystem | null>(null);
@@ -262,28 +294,51 @@ export function AirfoilCanvas() {
   const [smokePositions, setSmokePositions] = useState<Float64Array | null>(null);
   const [smokeAlphas, setSmokeAlphas] = useState<Float64Array | null>(null);
   
-  // Compute adaptive streamline count based on zoom
-  const getAdaptiveStreamlineCount = useCallback(() => {
+  // Compute adaptive streamline count based on stable zoom (not live zoom)
+  // This avoids recreating the function on every scroll tick
+  const adaptiveStreamlineCount = useMemo(() => {
     if (!adaptiveStreamlines) {
       return streamlineDensity;
     }
     // Increase count when zoomed in, decrease when zoomed out
-    const zoomFactor = Math.log10(viewport.zoom / 100 + 1);
+    const zoomFactor = Math.log10(stableViewport.zoom / 100 + 1);
     return Math.min(100, Math.floor(streamlineDensity * (1 + zoomFactor * 0.5)));
-  }, [adaptiveStreamlines, streamlineDensity, viewport.zoom]);
+  }, [adaptiveStreamlines, streamlineDensity, stableViewport.zoom]);
   
   // Track if we're actively dragging (for disabling expensive computations during drag)
   const [isDraggingPoint, setIsDraggingPoint] = useState(false);
   
-  // Compute bounds for streamline domain - use large fixed bounds since Rust is fast
-  const getVisibleBounds = useCallback((): [number, number, number, number] => {
-    // Large domain that covers most reasonable viewing areas
-    // Streamlines will fill the entire screen regardless of zoom/pan
-    return [-2.0, 4.0, -2.0, 2.0];
-  }, []);
+  // Compute bounds for streamline domain
+  // For adaptive mode: use viewport-based bounds with padding
+  // For fixed mode: use large fixed bounds
+  const streamlineBounds = useMemo((): [number, number, number, number] => {
+    if (!adaptiveStreamlines) {
+      // Fixed mode: large domain that covers most reasonable viewing areas
+      return [-2.0, 4.0, -2.0, 2.0];
+    }
+    
+    // Adaptive mode: compute bounds from stable viewport with generous padding
+    // This ensures streamlines extend beyond the visible area
+    const { center, zoom, width, height } = stableViewport;
+    const halfWidth = (width / zoom) * 1.5;  // 50% padding on each side
+    const halfHeight = (height / zoom) * 1.5;
+    
+    // Ensure minimum bounds for streamline quality
+    const minHalfWidth = 1.5;
+    const minHalfHeight = 1.0;
+    
+    return [
+      center.x - Math.max(halfWidth, minHalfWidth),
+      center.x + Math.max(halfWidth, minHalfWidth),
+      center.y - Math.max(halfHeight, minHalfHeight),
+      center.y + Math.max(halfHeight, minHalfHeight),
+    ];
+  }, [adaptiveStreamlines, stableViewport]);
 
-  // Compute streamlines when enabled and alpha/panels/zoom change
+  // Compute streamlines when enabled and alpha/panels change
   // SKIP during drag to prevent freezing
+  // For adaptive mode: recomputes when viewport settles (via stableViewport -> streamlineBounds)
+  // For fixed mode: uses large fixed bounds that don't change with viewport
   useEffect(() => {
     if (!showStreamlines || !isWasmReady() || panels.length < 10 || isDraggingPoint) {
       if (!isDraggingPoint) {
@@ -292,25 +347,15 @@ export function AirfoilCanvas() {
       return;
     }
     
-    // Check if zoom changed significantly for adaptive mode
-    const zoomChanged = adaptiveStreamlines && 
-      Math.abs(viewport.zoom - lastZoomRef.current) / lastZoomRef.current > 0.2;
-    
-    if (zoomChanged) {
-      lastZoomRef.current = viewport.zoom;
-    }
-    
     try {
-      const seedCount = getAdaptiveStreamlineCount();
-      const bounds = getVisibleBounds();
-      const result = computeStreamlines(panels, displayAlpha, seedCount, bounds);
+      const result = computeStreamlines(panels, displayAlpha, adaptiveStreamlineCount, streamlineBounds);
       if (result.success) {
         setStreamlines(result.streamlines);
       }
     } catch (e) {
       console.error('Streamline computation failed:', e);
     }
-  }, [showStreamlines, panels, displayAlpha, streamlineDensity, adaptiveStreamlines, viewport.zoom, getAdaptiveStreamlineCount, getVisibleBounds, isDraggingPoint]);
+  }, [showStreamlines, panels, displayAlpha, adaptiveStreamlineCount, streamlineBounds, isDraggingPoint]);
   
   // Compute aerodynamic analysis (Cp, Cl, Cm)
   // SKIP during drag to prevent freezing - recalculate on drag end
@@ -368,8 +413,29 @@ export function AirfoilCanvas() {
     }
   }, [panels, isDraggingPoint]);
   
+  // Compute smoke spawn bounds based on viewport (for adaptive mode)
+  const smokeBounds = useMemo(() => {
+    if (!adaptiveStreamlines) {
+      // Fixed mode: large fixed spawn area
+      return { yMin: -1.5, yMax: 1.5, spawnX: -1.5 };
+    }
+    
+    // Adaptive mode: spawn based on stable viewport with padding
+    const { center, zoom, width, height } = stableViewport;
+    const viewHalfHeight = (height / zoom) * 1.2; // 20% padding
+    const viewHalfWidth = (width / zoom) * 0.5;
+    
+    // Ensure minimum spawn area
+    const yMin = center.y - Math.max(viewHalfHeight, 1.0);
+    const yMax = center.y + Math.max(viewHalfHeight, 1.0);
+    const spawnX = center.x - Math.max(viewHalfWidth, 1.0) - 0.5; // Spawn to left of visible area
+    
+    return { yMin, yMax, spawnX };
+  }, [adaptiveStreamlines, stableViewport]);
+
   // Initialize smoke system (only when toggled on or settings change)
   // SKIP recreation during drag - use cached panels
+  // For adaptive mode: recreates when viewport settles (via smokeBounds)
   useEffect(() => {
     if (!showSmoke || !isWasmReady() || smokePanelsRef.current.length < 10) {
       if (smokeAnimationRef.current) {
@@ -387,12 +453,13 @@ export function AirfoilCanvas() {
       return;
     }
     
-    // Create smoke system with spawn points based on smokeDensity
-    // Use large Y range to fill screen (-1.5 to 1.5) and spawn further back (-1.5)
+    // Create smoke system with spawn points based on smokeDensity and viewport bounds
+    const { yMin, yMax, spawnX } = smokeBounds;
+    const yRange = yMax - yMin;
     const spawnY = Array.from({ length: smokeDensity }, (_, i) => 
-      -1.5 + (i * 3.0) / Math.max(1, smokeDensity - 1)
+      yMin + (i * yRange) / Math.max(1, smokeDensity - 1)
     );
-    smokeSystemRef.current = createSmokeSystem(spawnY, -1.5, smokeParticlesPerBlob);
+    smokeSystemRef.current = createSmokeSystem(spawnY, spawnX, smokeParticlesPerBlob);
     smokeSystemRef.current.set_spawn_interval(smokeSpawnInterval);
     smokeSystemRef.current.set_max_age(smokeMaxAge);
     
@@ -463,7 +530,7 @@ export function AirfoilCanvas() {
         cancelAnimationFrame(smokeAnimationRef.current);
       }
     };
-  }, [showSmoke, smokeDensity, smokeParticlesPerBlob, smokeSpawnInterval, smokeMaxAge, flowSpeed, setSmokeDensity, isDraggingPoint, displayAlpha]);
+  }, [showSmoke, smokeDensity, smokeParticlesPerBlob, smokeSpawnInterval, smokeMaxAge, flowSpeed, setSmokeDensity, isDraggingPoint, displayAlpha, smokeBounds]);
   
   // Update flow when alpha changes (without recreating the system)
   // SKIP during drag

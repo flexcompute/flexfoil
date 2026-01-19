@@ -581,32 +581,28 @@ export function getCpColor(cp: number, isDark: boolean): string {
 /**
  * Compute lift and drag vectors from Cl.
  * Note: Panel method gives Cl but not Cd (inviscid).
- * Returns vectors in airfoil coordinates.
+ * Returns vectors in display coordinates (where freestream is horizontal).
  */
 export function computeForceVectors(
   cl: number,
-  alphaDeg: number,
+  _alphaDeg: number,
   scale: number = 0.1
 ): { lift: { x: number; y: number }; drag: { x: number; y: number } } {
-  const alphaRad = alphaDeg * Math.PI / 180;
-  
-  // Lift is perpendicular to freestream
-  // In wind axes: L is perpendicular to V_inf (up in body frame at alpha=0)
-  // In body frame: need to rotate
   const liftMag = cl * scale;
   
-  // Lift perpendicular to freestream (rotated by alpha)
+  // Lift is perpendicular to freestream.
+  // In the display, the airfoil is rotated so freestream appears horizontal.
+  // Therefore lift should point straight up (positive y) for positive Cl.
   const lift = {
-    x: -liftMag * Math.sin(alphaRad),
-    y: liftMag * Math.cos(alphaRad),
+    x: 0,
+    y: liftMag,
   };
   
-  // Drag parallel to freestream (inviscid = 0, but show small for visualization)
-  // For panel method, we don't have real drag, so just show a placeholder
-  const dragMag = 0; // Could estimate from Cm or leave as 0
+  // Drag parallel to freestream (inviscid = 0)
+  // For panel method, we don't have real drag
   const drag = {
-    x: dragMag * Math.cos(alphaRad),
-    y: dragMag * Math.sin(alphaRad),
+    x: 0,
+    y: 0,
   };
   
   return { lift, drag };
