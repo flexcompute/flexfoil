@@ -1141,20 +1141,20 @@ export function AirfoilCanvas() {
         if (psiValue < psi0) {
           // Blue gradient: stronger blue for more negative (further from psi0)
           const t = Math.min(1, Math.max(0, (psi0 - psiValue) / (psi0 - psiMin + 1e-10)));
-          const intensity = Math.pow(t, 0.7); // Emphasize variation
+          const intensity = Math.pow(t, 0.5); // Square root for more variation in lighter tones
           return [
-            Math.round(200 - intensity * 120),
-            Math.round(210 - intensity * 90),
-            Math.round(255 - intensity * 35)
+            Math.round(220 - intensity * 180),  // 220 -> 40
+            Math.round(230 - intensity * 160),  // 230 -> 70
+            Math.round(255 - intensity * 55)    // 255 -> 200
           ];
         } else {
           // Red gradient: stronger red for more positive (further from psi0)
           const t = Math.min(1, Math.max(0, (psiValue - psi0) / (psiMax - psi0 + 1e-10)));
-          const intensity = Math.pow(t, 0.7); // Emphasize variation
+          const intensity = Math.pow(t, 0.5); // Square root for more variation
           return [
-            Math.round(255 - intensity * 25),
-            Math.round(210 - intensity * 110),
-            Math.round(200 - intensity * 110)
+            Math.round(255 - intensity * 55),   // 255 -> 200
+            Math.round(220 - intensity * 160),  // 220 -> 60
+            Math.round(210 - intensity * 150)   // 210 -> 60
           ];
         }
       };
@@ -1215,18 +1215,16 @@ export function AirfoilCanvas() {
         return points;
       };
       
-      // Check if a point is near the airfoil (not on grid boundary)
-      const isNearAirfoil = (x: number, y: number): boolean => {
-        const tol = dx * 1.5;
-        // Not on grid boundary
-        if (Math.abs(x - xMin) < tol || Math.abs(x - xMax) < tol ||
-            Math.abs(y - yMin) < tol || Math.abs(y - yMax) < tol) {
-          return false;
-        }
-        // Check if close to airfoil
-        const closest = closestPointOnAirfoil(x, y);
-        const dist = Math.sqrt((x - closest.x) ** 2 + (y - closest.y) ** 2);
-        return dist < 0.15;
+      // Check if a point is on the grid boundary
+      const isOnGridBoundary = (x: number, y: number): boolean => {
+        const tol = dx * 2;
+        return Math.abs(x - xMin) < tol || Math.abs(x - xMax) < tol ||
+               Math.abs(y - yMin) < tol || Math.abs(y - yMax) < tol;
+      };
+      
+      // Check if a point is in the interior (not on grid boundary) - likely near airfoil
+      const isInInterior = (x: number, y: number): boolean => {
+        return !isOnGridBoundary(x, y);
       };
       
       // Get the primary (longest) polyline for a threshold
@@ -1266,13 +1264,25 @@ export function AirfoilCanvas() {
         const c1End = contour1[contour1.length - 1];
         const c2End = contour2[contour2.length - 1];
         
-        if (isNearAirfoil(c1End[0], c1End[1]) && isNearAirfoil(c2End[0], c2End[1])) {
-          // Both ends near airfoil - trace along it
+        // If either end is in interior (near airfoil), trace along airfoil
+        const c1EndInterior = isInInterior(c1End[0], c1End[1]);
+        const c2EndInterior = isInInterior(c2End[0], c2End[1]);
+        
+        if (c1EndInterior || c2EndInterior) {
           const p1 = closestPointOnAirfoil(c1End[0], c1End[1]);
           const p2 = closestPointOnAirfoil(c2End[0], c2End[1]);
-          const airfoilPath = traceAirfoil(p1.idx, p2.idx);
-          for (const pt of airfoilPath) {
-            polygon.push(pt);
+          if (c1EndInterior && c2EndInterior) {
+            // Both in interior - trace along airfoil
+            const airfoilPath = traceAirfoil(p1.idx, p2.idx);
+            for (const pt of airfoilPath) {
+              polygon.push(pt);
+            }
+          } else if (c1EndInterior) {
+            // Only c1 end in interior - add its closest airfoil point
+            polygon.push([p1.x, p1.y]);
+          } else {
+            // Only c2 end in interior - add its closest airfoil point  
+            polygon.push([p2.x, p2.y]);
           }
         }
         
@@ -1285,13 +1295,25 @@ export function AirfoilCanvas() {
         const c2Start = contour2[0];
         const c1Start = contour1[0];
         
-        if (isNearAirfoil(c2Start[0], c2Start[1]) && isNearAirfoil(c1Start[0], c1Start[1])) {
-          // Both starts near airfoil - trace along it
+        // If either start is in interior (near airfoil), trace along airfoil
+        const c2StartInterior = isInInterior(c2Start[0], c2Start[1]);
+        const c1StartInterior = isInInterior(c1Start[0], c1Start[1]);
+        
+        if (c2StartInterior || c1StartInterior) {
           const p2 = closestPointOnAirfoil(c2Start[0], c2Start[1]);
           const p1 = closestPointOnAirfoil(c1Start[0], c1Start[1]);
-          const airfoilPath = traceAirfoil(p2.idx, p1.idx);
-          for (const pt of airfoilPath) {
-            polygon.push(pt);
+          if (c2StartInterior && c1StartInterior) {
+            // Both in interior - trace along airfoil
+            const airfoilPath = traceAirfoil(p2.idx, p1.idx);
+            for (const pt of airfoilPath) {
+              polygon.push(pt);
+            }
+          } else if (c2StartInterior) {
+            // Only c2 start in interior - add its closest airfoil point
+            polygon.push([p2.x, p2.y]);
+          } else {
+            // Only c1 start in interior - add its closest airfoil point
+            polygon.push([p1.x, p1.y]);
           }
         }
         
