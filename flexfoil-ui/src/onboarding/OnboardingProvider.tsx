@@ -6,6 +6,8 @@
  * 
  * Supports interactive challenges where users must complete an action
  * before proceeding (with skip option).
+ * 
+ * Supports focusing panels before highlighting steps.
  */
 
 import { createContext, useCallback, useRef, useState, useEffect, type ReactNode } from 'react';
@@ -14,15 +16,18 @@ import 'driver.js/dist/driver.css';
 
 import { tours, type TourId, type TourStep } from './tours';
 import { getChallenge, type Challenge } from './challenges';
-import { markTourComplete, hasCompletedTour as checkTourCompleted, resetOnboarding } from './storage';
+import { markTourComplete, hasCompletedTour as checkTourCompleted, resetOnboarding, saveTourProgress, getTourProgress, clearTourProgress } from './storage';
+import { useLayout } from '../contexts/LayoutContext';
 
 export interface OnboardingContextType {
-  /** Start a specific tour */
-  startTour: (tourId: TourId) => void;
+  /** Start a specific tour (resumes from last position unless fromBeginning=true) */
+  startTour: (tourId: TourId, fromBeginning?: boolean) => void;
   /** End the current tour */
   endTour: () => void;
-  /** Check if a tour has been completed */
+  /** Check if a tour has been completed (all steps finished) */
   hasCompletedTour: (tourId: TourId) => boolean;
+  /** Check if a tour has been started (has progress or is complete) - use for auto-start checks */
+  hasStartedTour: (tourId: TourId) => boolean;
   /** Reset all tour progress */
   resetAllTours: () => void;
   /** Whether a tour is currently active */
@@ -43,6 +48,9 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
   const driverRef = useRef<Driver | null>(null);
   const challengeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentChallengeRef = useRef<Challenge | null>(null);
+  
+  // Get layout context for panel focusing
+  const { openPanel } = useLayout();
 
   // Clean up challenge polling
   const clearChallengePolling = useCallback(() => {
@@ -92,7 +100,7 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
   }, [buildChallengeHTML]);
 
   // Initialize driver instance with theme-aware styling
-  const getDriverInstance = useCallback((tourSteps: TourStep[]) => {
+  const getDriverInstance = useCallback((tourSteps: TourStep[], tourId: TourId) => {
     if (driverRef.current) {
       driverRef.current.destroy();
     }
@@ -117,10 +125,26 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
       onHighlightStarted: () => {
         clearChallengePolling();
         
-        // Find the original tour step to check for challenge
+        // Find the original tour step
         const stepIndex = driverRef.current?.getActiveIndex() ?? 0;
         const originalStep = tourSteps[stepIndex];
         
+        // Save progress so user can resume if they close the tour
+        saveTourProgress(tourId, stepIndex);
+        
+        // Focus panel if specified (brings tab to front)
+        if (originalStep?.focusPanel) {
+          openPanel(originalStep.focusPanel);
+          // Small delay to let the panel render before driver.js positions the highlight
+          // Driver.js will automatically reposition after this
+        }
+        
+        // Run onBeforeHighlight callback if provided
+        if (originalStep?.onBeforeHighlight) {
+          originalStep.onBeforeHighlight();
+        }
+        
+        // Handle challenge if present
         if (originalStep?.challengeId) {
           const challenge = getChallenge(originalStep.challengeId);
           if (challenge) {
@@ -158,22 +182,24 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
         if (originalStep?.challengeId) {
           const challenge = getChallenge(originalStep.challengeId);
           if (challenge && !challenge.validate()) {
-            // Add skip button and disable next
+            // Add skip button (unless noSkip is set) and disable next
             const footer = popover.footerButtons;
             const nextBtn = footer.querySelector('.driver-popover-next-btn') as HTMLButtonElement;
             
             if (nextBtn) {
-              // Create skip button
-              const skipBtn = document.createElement('button');
-              skipBtn.className = 'driver-popover-skip-btn';
-              skipBtn.textContent = 'Skip';
-              skipBtn.onclick = () => {
-                clearChallengePolling();
-                driverRef.current?.moveNext();
-              };
-              
-              // Insert skip before next
-              nextBtn.parentNode?.insertBefore(skipBtn, nextBtn);
+              // Only add skip button if challenge allows skipping
+              if (!challenge.noSkip) {
+                const skipBtn = document.createElement('button');
+                skipBtn.className = 'driver-popover-skip-btn';
+                skipBtn.textContent = 'Skip';
+                skipBtn.onclick = () => {
+                  clearChallengePolling();
+                  driverRef.current?.moveNext();
+                };
+                
+                // Insert skip before next
+                nextBtn.parentNode?.insertBefore(skipBtn, nextBtn);
+              }
               
               // Disable next until challenge complete
               nextBtn.disabled = true;
@@ -185,24 +211,27 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
 
       onDestroyed: () => {
         clearChallengePolling();
-        if (currentTour) {
-          markTourComplete(currentTour);
+        // Check if we completed all steps (progress saved at tourSteps.length - 1 means we were on last step)
+        const savedProgress = getTourProgress(tourId);
+        if (savedProgress >= tourSteps.length - 1) {
+          markTourComplete(tourId);
+          clearTourProgress(tourId);
         }
         setIsActive(false);
         setCurrentTour(null);
       },
 
       onCloseClick: () => {
-        clearChallengePolling();
-        if (currentTour) {
-          markTourComplete(currentTour);
-        }
+        // Save progress when user closes mid-tour
+        const currentStepIndex = driverRef.current?.getActiveIndex() ?? 0;
+        saveTourProgress(tourId, currentStepIndex);
+        // Must explicitly destroy - driver.js doesn't do it automatically
         driverRef.current?.destroy();
       },
     });
 
     return driverRef.current;
-  }, [currentTour, clearChallengePolling, buildChallengeHTML]);
+  }, [clearChallengePolling, buildChallengeHTML, openPanel]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -214,11 +243,16 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
     };
   }, [clearChallengePolling]);
 
-  const startTour = useCallback((tourId: TourId) => {
+  const startTour = useCallback((tourId: TourId, fromBeginning = false) => {
     const tourSteps = tours[tourId];
     if (!tourSteps) {
       console.warn(`Tour "${tourId}" not found`);
       return;
+    }
+
+    // If starting from beginning, clear any saved progress
+    if (fromBeginning) {
+      clearTourProgress(tourId);
     }
 
     setCurrentTour(tourId);
@@ -226,18 +260,25 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
 
     // Small delay to ensure DOM is ready
     setTimeout(() => {
-      const driverInstance = getDriverInstance(tourSteps);
+      const driverInstance = getDriverInstance(tourSteps, tourId);
       const driverSteps = convertToDriverSteps(tourSteps);
       driverInstance.setSteps(driverSteps);
-      driverInstance.drive();
+      
+      // Resume from saved progress (if any)
+      const savedStep = fromBeginning ? 0 : getTourProgress(tourId);
+      const startStep = Math.min(savedStep, tourSteps.length - 1);
+      
+      driverInstance.drive(startStep);
     }, 100);
   }, [getDriverInstance, convertToDriverSteps]);
 
   const endTour = useCallback(() => {
     clearChallengePolling();
     if (driverRef.current) {
+      // Save progress (don't mark complete unless they finished)
       if (currentTour) {
-        markTourComplete(currentTour);
+        const currentStepIndex = driverRef.current.getActiveIndex() ?? 0;
+        saveTourProgress(currentTour, currentStepIndex);
       }
       driverRef.current.destroy();
     }
@@ -249,6 +290,12 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
     return checkTourCompleted(tourId);
   }, []);
 
+  // Check if a tour has been started (has progress or is complete)
+  // Useful for preventing auto-start on tours user has already seen
+  const hasStartedTour = useCallback((tourId: TourId): boolean => {
+    return checkTourCompleted(tourId) || getTourProgress(tourId) > 0;
+  }, []);
+
   const resetAllTours = useCallback(() => {
     resetOnboarding();
   }, []);
@@ -257,6 +304,7 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
     startTour,
     endTour,
     hasCompletedTour,
+    hasStartedTour,
     resetAllTours,
     isActive,
     currentTour,

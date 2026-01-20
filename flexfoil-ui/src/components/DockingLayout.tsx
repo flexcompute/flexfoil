@@ -67,10 +67,23 @@ const defaultLayoutJson: IJsonModel = {
         ],
       },
       {
-        type: 'tabset',
+        type: 'row',
         weight: 50,
         children: [
-          { type: 'tab', id: 'canvas', name: 'Airfoil Canvas', component: 'canvas' },
+          {
+            type: 'tabset',
+            weight: 70,
+            children: [
+              { type: 'tab', id: 'canvas', name: 'Airfoil Canvas', component: 'canvas' },
+            ],
+          },
+          {
+            type: 'tabset',
+            weight: 30,
+            children: [
+              { type: 'tab', id: 'polar', name: 'Polar Plot', component: 'polar' },
+            ],
+          },
         ],
       },
       {
@@ -90,6 +103,7 @@ const defaultLayoutJson: IJsonModel = {
             weight: 50,
             children: [
               { type: 'tab', id: 'control', name: 'Control Mode', component: 'control' },
+              { type: 'tab', id: 'visualization', name: 'Visualization', component: 'visualization' },
             ],
           },
         ],
@@ -100,9 +114,10 @@ const defaultLayoutJson: IJsonModel = {
 
 interface DockingLayoutProps {
   wasmStatus: 'loading' | 'ready' | 'error';
+  initialViewport?: { centerX: number; centerY: number; zoom: number } | null;
 }
 
-export function DockingLayout({ wasmStatus }: DockingLayoutProps) {
+export function DockingLayout({ wasmStatus, initialViewport }: DockingLayoutProps) {
   // Initialize model from localStorage or default
   const [model, setModel] = useState(() => {
     try {
@@ -158,6 +173,37 @@ export function DockingLayout({ wasmStatus }: DockingLayoutProps) {
     setClosedPanels(new Set());
     localStorage.removeItem(LAYOUT_STORAGE_KEY);
   }, []);
+
+  // Focus/select an existing panel (bring to front)
+  const handleOpenPanel = useCallback(
+    (panelId: string) => {
+      const root = model.getRoot();
+      let existingTabId: string | null = null;
+      
+      const findTab = (node: any) => {
+        if (node.getType?.() === 'tab' && node.getComponent?.() === panelId) {
+          existingTabId = node.getId();
+          return true;
+        }
+        if (node.getChildren) {
+          for (const child of node.getChildren()) {
+            if (findTab(child)) return true;
+          }
+        }
+        return false;
+      };
+      findTab(root);
+
+      if (existingTabId) {
+        try {
+          model.doAction(Actions.selectTab(existingTabId));
+        } catch (e) {
+          console.warn('Failed to select tab:', e);
+        }
+      }
+    },
+    [model]
+  );
 
   // Restore a closed panel
   const handleRestorePanel = useCallback(
@@ -215,7 +261,7 @@ export function DockingLayout({ wasmStatus }: DockingLayoutProps) {
       case 'canvas':
         return (
           <div data-tour="panel-canvas" style={{ width: '100%', height: '100%' }}>
-            <AirfoilCanvas />
+            <AirfoilCanvas initialViewport={initialViewport} />
           </div>
         );
       case 'library':
@@ -300,6 +346,7 @@ export function DockingLayout({ wasmStatus }: DockingLayoutProps) {
           panels={PANELS}
           closedPanels={closedPanels}
           onRestorePanel={handleRestorePanel}
+          onOpenPanel={handleOpenPanel}
           onResetLayout={handleResetLayout}
           wasmStatus={wasmStatus}
         />

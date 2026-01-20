@@ -21,6 +21,8 @@ export interface Challenge {
   validate: () => boolean;
   /** Optional: highlight a specific element while challenge is active */
   highlightElement?: string;
+  /** If true, the skip button is not shown - user must complete the challenge */
+  noSkip?: boolean;
 }
 
 /**
@@ -121,6 +123,42 @@ export const challenges: Record<string, Challenge> = {
     highlightElement: '[data-tour="control-mode-thickness"]',
   },
 
+  // Panel visibility challenges
+  'open-visualization-panel': {
+    id: 'open-visualization-panel',
+    instruction: 'Open the Visualization panel',
+    hint: 'Go to Window menu and click on "Visualization", or click its tab if visible',
+    validate: () => {
+      // Check if the visualization panel element exists AND is visible (active tab)
+      const vizPanel = document.querySelector('[data-tour="panel-visualization"]');
+      if (!vizPanel) return false;
+      
+      // Check if the element is actually visible (not hidden by tab)
+      // FlexLayout hides inactive tabs with display:none on the parent
+      const rect = vizPanel.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    },
+    highlightElement: '[data-tour="menu-window"]',
+    noSkip: true,  // Must complete - subsequent steps depend on this panel being visible
+  },
+
+  'open-solve-panel': {
+    id: 'open-solve-panel',
+    instruction: 'Open the Solve panel',
+    hint: 'Go to Window menu and click on "Solve", or click its tab if visible',
+    validate: () => {
+      // Check if the solve panel element exists AND is visible (active tab)
+      const solvePanel = document.querySelector('[data-tour="panel-solve"]');
+      if (!solvePanel) return false;
+      
+      // Check if the element is actually visible (not hidden by tab)
+      const rect = solvePanel.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    },
+    highlightElement: '[data-tour="menu-window"]',
+    noSkip: true,  // Must complete - subsequent steps depend on this panel being visible
+  },
+
   // Visualization challenges
   'enable-streamlines': {
     id: 'enable-streamlines',
@@ -130,6 +168,29 @@ export const challenges: Record<string, Challenge> = {
       const { viz } = getState();
       return viz.showStreamlines;
     },
+    highlightElement: '[data-tour="viz-streamlines"]',
+  },
+
+  'enable-psi': {
+    id: 'enable-psi',
+    instruction: 'Enable stream function visualization',
+    hint: 'Toggle Stream Function (ψ) on',
+    validate: () => {
+      const { viz } = getState();
+      return viz.showPsiContours;
+    },
+    highlightElement: '[data-tour="viz-psi"]',
+  },
+
+  'enable-smoke': {
+    id: 'enable-smoke',
+    instruction: 'Enable smoke visualization',
+    hint: 'Toggle Smoke on to see animated flow',
+    validate: () => {
+      const { viz } = getState();
+      return viz.showSmoke;
+    },
+    highlightElement: '[data-tour="viz-smoke"]',
   },
 };
 

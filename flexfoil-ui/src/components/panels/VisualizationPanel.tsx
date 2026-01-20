@@ -107,7 +107,7 @@ export function VisualizationPanel() {
       </section>
 
       {/* Flow Visualization Section */}
-      <section>
+      <section data-tour="viz-flow">
         <h4 style={{ 
           margin: '0 0 8px 0', 
           fontSize: '12px', 
@@ -119,9 +119,9 @@ export function VisualizationPanel() {
           Flow Visualization
         </h4>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <ToggleItem label="Streamlines" checked={showStreamlines} onChange={setShowStreamlines} />
-          <ToggleItem label="Stream Function (ψ)" checked={showPsiContours} onChange={setShowPsiContours} />
-          <ToggleItem label="Smoke" checked={showSmoke} onChange={setShowSmoke} />
+          <ToggleItem label="Streamlines" checked={showStreamlines} onChange={setShowStreamlines} dataTour="viz-streamlines" />
+          <ToggleItem label="Stream Function (ψ)" checked={showPsiContours} onChange={setShowPsiContours} dataTour="viz-psi" />
+          <ToggleItem label="Smoke" checked={showSmoke} onChange={setShowSmoke} dataTour="viz-smoke" />
         </div>
       </section>
 
@@ -365,19 +365,23 @@ interface ToggleItemProps {
   label: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
+  dataTour?: string;
 }
 
-function ToggleItem({ label, checked, onChange }: ToggleItemProps) {
+function ToggleItem({ label, checked, onChange, dataTour }: ToggleItemProps) {
   return (
-    <label style={{ 
-      display: 'flex', 
-      alignItems: 'center', 
-      gap: '6px',
-      fontSize: '12px',
-      color: 'var(--text-secondary)',
-      cursor: 'pointer',
-      padding: '4px 0',
-    }}>
+    <label 
+      style={{ 
+        display: 'flex', 
+        alignItems: 'center', 
+        gap: '6px',
+        fontSize: '12px',
+        color: 'var(--text-secondary)',
+        cursor: 'pointer',
+        padding: '4px 0',
+      }}
+      {...(dataTour ? { 'data-tour': dataTour } : {})}
+    >
       <input 
         type="checkbox" 
         checked={checked} 

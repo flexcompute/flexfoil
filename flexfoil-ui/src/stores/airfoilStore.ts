@@ -889,6 +889,7 @@ export function clearHistory(): void {
 
 /**
  * Get current state for URL encoding
+ * Note: Viewport and visualization state are added separately by the components
  */
 export function getUrlState(): UrlState {
   const state = useAirfoilStore.getState();
@@ -900,6 +901,7 @@ export function getUrlState(): UrlState {
     nPanels: state.nPanels,
     spacing: state.spacingKnots,
     mode: state.controlMode,
+    alpha: state.displayAlpha,
   };
 }
 

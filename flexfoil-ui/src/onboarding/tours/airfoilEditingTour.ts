@@ -2,6 +2,7 @@
  * Airfoil Editing Tour - On-demand guide for canvas interaction
  * 
  * Includes challenges to try different editing modes.
+ * Uses focusPanel to bring tabbed panels to the front.
  */
 
 import type { TourStep } from './index';
@@ -9,6 +10,7 @@ import type { TourStep } from './index';
 export const airfoilEditingTour: TourStep[] = [
   {
     element: '[data-tour="control-mode-parameters"]',
+    focusPanel: 'control',
     popover: {
       title: 'Parameters Mode',
       description: 'Adjust thickness and camber using sliders. Great for quick, proportional scaling of the airfoil shape.',
@@ -18,6 +20,7 @@ export const airfoilEditingTour: TourStep[] = [
   },
   {
     element: '[data-tour="control-mode-camber"]',
+    focusPanel: 'control',
     popover: {
       title: 'Camber Mode',
       description: 'Drag control points to reshape the camber line. Try switching to Camber mode now!',
@@ -28,6 +31,7 @@ export const airfoilEditingTour: TourStep[] = [
   },
   {
     element: '[data-tour="control-mode-thickness"]',
+    focusPanel: 'control',
     popover: {
       title: 'Thickness Mode',
       description: 'Modify the thickness distribution along the chord. Now try switching to Thickness mode.',
@@ -38,6 +42,7 @@ export const airfoilEditingTour: TourStep[] = [
   },
   {
     element: '[data-tour="panel-canvas"]',
+    focusPanel: 'canvas',
     popover: {
       title: 'Interactive Canvas',
       description: 'Click and drag control points to modify the airfoil. Changes update the pressure distribution in real-time.',
@@ -56,6 +61,7 @@ export const airfoilEditingTour: TourStep[] = [
   },
   {
     element: '[data-tour="library-reset"]',
+    focusPanel: 'library',
     popover: {
       title: 'Reset to Default',
       description: 'Click this button to restore the airfoil to its original shape. Useful when experimenting goes too far!',

@@ -16,6 +16,7 @@
  */
 
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAirfoilStore, pauseHistory, resumeHistory } from '../stores/airfoilStore';
 import { useVisualizationStore } from '../stores/visualizationStore';
 import { useTheme } from '../contexts/ThemeContext';
@@ -24,6 +25,7 @@ import type { Point, ViewportState, AirfoilPoint } from '../types';
 import { computeStreamlines, computePsiGrid, createSmokeSystem, isWasmReady, WasmSmokeSystem, analyzeAirfoil } from '../lib/wasm';
 import { useMorphingAnimation, getCpColor, computeForceVectors } from '../hooks/useMorphingAnimation';
 import { generateCamberSplineCurve } from '../lib/airfoilGeometry';
+import { syncToUrl, getCompleteUrlState } from '../lib/urlState';
 // Removed d3-contour - using efficient cell-based rendering instead
 
 /**
@@ -491,7 +493,11 @@ const PANEL_POINT_RADIUS = 2.5;
 const CONTROL_RADIUS = 6;
 const HIT_RADIUS = 10;
 
-export function AirfoilCanvas() {
+interface AirfoilCanvasProps {
+  initialViewport?: { centerX: number; centerY: number; zoom: number } | null;
+}
+
+export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const smokeCanvasRef = useRef<HTMLCanvasElement>(null);  // Overlay canvas for smoke (redraws every frame)
   const containerRef = useRef<HTMLDivElement>(null);
@@ -502,7 +508,7 @@ export function AirfoilCanvas() {
   // Layout context for panel actions
   const { openPanel } = useLayout();
   
-  // State from store
+  // State from store (use shallow equality to prevent unnecessary re-renders)
   const { 
     coordinates, 
     panels, 
@@ -517,17 +523,77 @@ export function AirfoilCanvas() {
     removeCamberControlPoint,
     addThicknessControlPoint,
     removeThicknessControlPoint,
-  } = useAirfoilStore();
+  } = useAirfoilStore(
+    useShallow((state) => ({
+      coordinates: state.coordinates,
+      panels: state.panels,
+      controlMode: state.controlMode,
+      displayAlpha: state.displayAlpha,
+      camberControlPoints: state.camberControlPoints,
+      thicknessControlPoints: state.thicknessControlPoints,
+      updateCamberControlPoint: state.updateCamberControlPoint,
+      updateThicknessControlPoint: state.updateThicknessControlPoint,
+      addCamberControlPoint: state.addCamberControlPoint,
+      removeCamberControlPoint: state.removeCamberControlPoint,
+      addThicknessControlPoint: state.addThicknessControlPoint,
+      removeThicknessControlPoint: state.removeThicknessControlPoint,
+    }))
+  );
 
-  // Viewport state
-  const [viewport, setViewport] = useState<ViewportState>({
-    center: { x: 0.5, y: 0 },
-    zoom: 400,
+  // Viewport state (initialize from URL if provided)
+  const [viewport, setViewport] = useState<ViewportState>(() => ({
+    center: { 
+      x: initialViewport?.centerX ?? 0.5, 
+      y: initialViewport?.centerY ?? 0 
+    },
+    zoom: initialViewport?.zoom ?? 400,
     width: 800,
     height: 600,
-  });
+  }));
+  
+  // Get airfoil state for URL sync (use shallow equality)
+  const airfoilState = useAirfoilStore(
+    useShallow((state) => ({
+      name: state.name,
+      nPanels: state.nPanels,
+      spacingKnots: state.spacingKnots,
+      controlMode: state.controlMode,
+      displayAlpha: state.displayAlpha,
+      thicknessScale: state.thicknessScale,
+      camberScale: state.camberScale,
+      curvatureWeight: state.curvatureWeight,
+      spacingPanelMode: state.spacingPanelMode,
+      sspInterpolation: state.sspInterpolation,
+      sspVisualization: state.sspVisualization,
+    }))
+  );
 
-  // Visualization settings from store
+  // Visualization settings from store (use shallow equality to prevent infinite loops)
+  const visualizationState = useVisualizationStore(
+    useShallow((state) => ({
+      showGrid: state.showGrid,
+      showCurve: state.showCurve,
+      showPanels: state.showPanels,
+      showPoints: state.showPoints,
+      showControls: state.showControls,
+      showStreamlines: state.showStreamlines,
+      showSmoke: state.showSmoke,
+      showPsiContours: state.showPsiContours,
+      showCp: state.showCp,
+      showForces: state.showForces,
+      enableMorphing: state.enableMorphing,
+      morphDuration: state.morphDuration,
+      streamlineDensity: state.streamlineDensity,
+      adaptiveStreamlines: state.adaptiveStreamlines,
+      smokeDensity: state.smokeDensity,
+      smokeParticlesPerBlob: state.smokeParticlesPerBlob,
+      flowSpeed: state.flowSpeed,
+      cpDisplayMode: state.cpDisplayMode,
+      cpBarScale: state.cpBarScale,
+      forceScale: state.forceScale,
+    }))
+  );
+  
   const {
     showGrid,
     showCurve,
@@ -545,13 +611,32 @@ export function AirfoilCanvas() {
     adaptiveStreamlines,
     smokeDensity,
     smokeParticlesPerBlob,
-    smokeSpawnInterval: _smokeSpawnInterval,
-    smokeMaxAge: _smokeMaxAge,
     flowSpeed,
     cpDisplayMode,
     cpBarScale,
     forceScale,
-  } = useVisualizationStore();
+  } = visualizationState;
+  
+  // Get setSmokeDensity separately (not needed for URL sync)
+  const setSmokeDensity = useVisualizationStore((state) => state.setSmokeDensity);
+  
+  // Sync all state to URL (debounced)
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      const urlState = getCompleteUrlState(
+        airfoilState,
+        visualizationState,
+        {
+          centerX: viewport.center.x,
+          centerY: viewport.center.y,
+          zoom: viewport.zoom,
+        }
+      );
+      syncToUrl(urlState);
+    }, 500); // Debounce 500ms
+    
+    return () => clearTimeout(timeoutId);
+  }, [airfoilState, visualizationState, viewport]);
   
   // Streamlines cache
   const [streamlines, setStreamlines] = useState<[number, number][][]>([]);
@@ -848,9 +933,6 @@ export function AirfoilCanvas() {
   const splineCurve = useMemo(() => {
     return generateSplineCurve(morphState.coordinates, 300);
   }, [morphState.coordinates]);
-  
-  // Get setSmokeDensity for adaptive performance
-  const { setSmokeDensity } = useVisualizationStore();
   
   // Store panels for smoke system - only update when NOT dragging
   const smokePanelsRef = useRef(panels);
@@ -1370,7 +1452,7 @@ export function AirfoilCanvas() {
       };
       
       // Get contour for a threshold, combining and sorting all segments
-      // For contours with interior endpoints (like dividing streamline), connect with straight line
+      // For contours with interior endpoints (like dividing streamline), connect via airfoil trace
       const getPrimaryContour = (threshold: number, connectInterior: boolean = false): [number, number][] | null => {
         const segments = marchingSquares(grid, nx, ny, threshold, xMin, yMin, dx, dy);
         const polylines = connectSegments(segments);
@@ -1396,7 +1478,7 @@ export function AirfoilCanvas() {
         // Final orientation check
         result = orientLeftToRight(result);
         
-        // If both endpoints are in interior, connect them with straight line
+        // If both endpoints are in interior, connect them by tracing along airfoil
         if (connectInterior) {
           const start = result[0];
           const end = result[result.length - 1];
@@ -1404,7 +1486,11 @@ export function AirfoilCanvas() {
           const endInInterior = isInInterior(end[0], end[1]);
           
           if (startInInterior && endInInterior) {
-            result = [...result, start];
+            // Both endpoints near airfoil - trace along airfoil surface to close the loop
+            const p1 = closestPointOnAirfoil(start[0], start[1]);
+            const p2 = closestPointOnAirfoil(end[0], end[1]);
+            const airfoilPath = traceAirfoil(p2.idx, p1.idx);
+            result = [...result, ...airfoilPath];
           } else if (startInInterior || endInInterior) {
             // One end in interior - find closest point on airfoil and add it
             if (startInInterior) {
