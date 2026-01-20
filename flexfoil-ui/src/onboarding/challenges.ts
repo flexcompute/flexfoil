@@ -173,7 +173,6 @@ export const challenges: Record<string, Challenge> = {
       return rect.width > 0 && rect.height > 0;
     },
     highlightElement: '[data-tour="menu-window"]',
-    noSkip: true,  // Must complete - subsequent steps depend on this panel being visible
   },
 
   'open-solve-panel': {
@@ -190,7 +189,6 @@ export const challenges: Record<string, Challenge> = {
       return rect.width > 0 && rect.height > 0;
     },
     highlightElement: '[data-tour="menu-window"]',
-    noSkip: true,  // Must complete - subsequent steps depend on this panel being visible
   },
 
   // Visualization challenges

@@ -129,8 +129,7 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
       prevBtnText: 'Back',
       doneBtnText: 'Done',
       progressText: '{{current}} of {{total}}',
-      allowClose: false,  // Don't close on overlay click - use X button only
-      overlayClickNext: false,  // Don't advance on overlay click either
+      allowClose: true,
       overlayColor: isDark ? 'rgba(0, 0, 0, 0.75)' : 'rgba(0, 0, 0, 0.5)',
       stagePadding: 8,
       stageRadius: 8,
