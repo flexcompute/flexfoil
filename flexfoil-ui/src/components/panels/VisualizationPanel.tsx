@@ -48,15 +48,11 @@ export function VisualizationPanel() {
     setStreamlineDensity,
     setAdaptiveStreamlines,
     
-    // Smoke options
+    // Smoke options (spawn interval and max age are now auto-calculated)
     smokeDensity,
     smokeParticlesPerBlob,
-    smokeSpawnInterval,
-    smokeMaxAge,
     setSmokeDensity,
     setSmokeParticlesPerBlob,
-    setSmokeSpawnInterval,
-    setSmokeMaxAge,
     
     // Flow speed
     flowSpeed,
@@ -310,24 +306,7 @@ export function VisualizationPanel() {
               onChange={setSmokeParticlesPerBlob}
               formatValue={(v) => `${v}`}
             />
-            <SliderItem
-              label="Spawn Interval"
-              value={smokeSpawnInterval}
-              min={0.05}
-              max={1.0}
-              step={0.05}
-              onChange={setSmokeSpawnInterval}
-              formatValue={(v) => `${v.toFixed(2)}s`}
-            />
-            <SliderItem
-              label="Max Age"
-              value={smokeMaxAge}
-              min={0.5}
-              max={10.0}
-              step={0.5}
-              onChange={setSmokeMaxAge}
-              formatValue={(v) => `${v.toFixed(1)}s`}
-            />
+            {/* Spawn Interval and Max Age are now auto-calculated based on visible domain */}
           </div>
         </section>
       )}

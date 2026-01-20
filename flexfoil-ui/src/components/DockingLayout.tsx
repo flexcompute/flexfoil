@@ -207,26 +207,59 @@ export function DockingLayout({ wasmStatus }: DockingLayoutProps) {
   );
 
   // Factory function to create panel components
+  // Each panel is wrapped with data-tour attribute for onboarding targeting
   const factory = useCallback((node: any) => {
     const component = node.getComponent();
 
     switch (component) {
       case 'canvas':
-        return <AirfoilCanvas />;
+        return (
+          <div data-tour="panel-canvas" style={{ width: '100%', height: '100%' }}>
+            <AirfoilCanvas />
+          </div>
+        );
       case 'library':
-        return <AirfoilLibraryPanel />;
+        return (
+          <div data-tour="panel-library" style={{ width: '100%', height: '100%' }}>
+            <AirfoilLibraryPanel />
+          </div>
+        );
       case 'control':
-        return <ControlModePanel />;
+        return (
+          <div data-tour="panel-control" style={{ width: '100%', height: '100%' }}>
+            <ControlModePanel />
+          </div>
+        );
       case 'spacing':
-        return <SpacingPanel />;
+        return (
+          <div data-tour="panel-spacing" style={{ width: '100%', height: '100%' }}>
+            <SpacingPanel />
+          </div>
+        );
       case 'properties':
-        return <PropertiesPanel />;
+        return (
+          <div data-tour="panel-properties" style={{ width: '100%', height: '100%' }}>
+            <PropertiesPanel />
+          </div>
+        );
       case 'solve':
-        return <SolvePanel />;
+        return (
+          <div data-tour="panel-solve" style={{ width: '100%', height: '100%' }}>
+            <SolvePanel />
+          </div>
+        );
       case 'polar':
-        return <PolarPanel />;
+        return (
+          <div data-tour="panel-polar" style={{ width: '100%', height: '100%' }}>
+            <PolarPanel />
+          </div>
+        );
       case 'visualization':
-        return <VisualizationPanel />;
+        return (
+          <div data-tour="panel-visualization" style={{ width: '100%', height: '100%' }}>
+            <VisualizationPanel />
+          </div>
+        );
       default:
         return <div className="panel">Unknown panel: {component}</div>;
     }

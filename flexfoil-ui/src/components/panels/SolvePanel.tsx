@@ -210,7 +210,7 @@ export function SolvePanel() {
       <div className="panel-header">Solve</div>
       <div className="panel-content">
         {/* Solver Mode */}
-        <div className="form-group">
+        <div className="form-group" data-tour="solve-mode">
           <div className="form-label">Solver Mode</div>
           <div style={{ display: 'flex', gap: '4px' }}>
             <button
@@ -238,7 +238,7 @@ export function SolvePanel() {
         </div>
 
         {/* Single Point Analysis */}
-        <div className="form-group">
+        <div className="form-group" data-tour="solve-alpha">
           <div className="form-label">Single Point</div>
           
           {/* Run mode toggle */}
@@ -282,6 +282,7 @@ export function SolvePanel() {
               onClick={runAnalysis}
               disabled={isRunning || !isWasmReady()}
               style={{ minWidth: '60px' }}
+              data-tour="solve-run"
             >
               {isRunning ? '...' : 'Run'}
             </button>
@@ -307,7 +308,7 @@ export function SolvePanel() {
         )}
 
         {/* Polar Sweep */}
-        <div className="form-group" style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-color)' }}>
+        <div className="form-group" style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-color)' }} data-tour="solve-polar">
           <div className="form-label">Alpha Polar</div>
           
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
@@ -424,6 +425,7 @@ export function SolvePanel() {
                 URL.revokeObjectURL(url);
               }}
               style={{ width: '100%', marginTop: '8px' }}
+              data-tour="solve-export"
             >
               Export Polar
             </button>

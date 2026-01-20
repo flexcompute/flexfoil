@@ -143,7 +143,7 @@ export function AirfoilLibraryPanel() {
         </div>
 
         {/* Reset */}
-        <button onClick={reset} style={{ width: '100%', marginTop: '12px' }}>
+        <button onClick={reset} style={{ width: '100%', marginTop: '12px' }} data-tour="library-reset">
           Reset to Default
         </button>
       </div>

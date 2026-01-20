@@ -56,6 +56,18 @@ impl SmokeSystem {
         }
     }
 
+    /// Set spawn points from flat array of (x, y) pairs.
+    /// 
+    /// # Arguments
+    /// * `points` - Flat array [x0, y0, x1, y1, ...]
+    pub fn set_spawn_points(&mut self, points: &[f64]) {
+        self.spawn_points = points
+            .chunks(2)
+            .filter(|c| c.len() == 2)
+            .map(|c| (c[0], c[1]))
+            .collect();
+    }
+
     /// Set spawn interval (seconds between blob spawns).
     pub fn set_spawn_interval(&mut self, interval: f64) {
         self.spawn_interval = interval.max(0.02);

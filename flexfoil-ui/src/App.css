@@ -404,3 +404,209 @@ button.primary:hover {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
 }
+
+/* Driver.js onboarding tour styling */
+.driver-popover {
+  background: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3) !important;
+}
+
+.driver-popover-title {
+  font-size: 16px !important;
+  font-weight: 600 !important;
+  color: var(--text-primary) !important;
+  margin-bottom: 8px !important;
+}
+
+.driver-popover-description {
+  font-size: 14px !important;
+  color: var(--text-secondary) !important;
+  line-height: 1.5 !important;
+}
+
+.driver-popover-progress-text {
+  font-size: 12px !important;
+  color: var(--text-muted) !important;
+  font-family: var(--font-mono) !important;
+}
+
+.driver-popover-footer {
+  border-top: 1px solid var(--border-color) !important;
+  padding-top: 12px !important;
+  margin-top: 12px !important;
+}
+
+.driver-popover-navigation-btns {
+  gap: 8px !important;
+}
+
+.driver-popover-prev-btn,
+.driver-popover-next-btn {
+  background: var(--bg-tertiary) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 4px !important;
+  padding: 8px 16px !important;
+  color: var(--text-primary) !important;
+  font-size: 13px !important;
+  cursor: pointer !important;
+  transition: all 0.15s ease !important;
+}
+
+.driver-popover-prev-btn:hover,
+.driver-popover-next-btn:hover {
+  background: var(--bg-hover) !important;
+  border-color: var(--accent-primary) !important;
+}
+
+.driver-popover-next-btn {
+  background: var(--accent-primary) !important;
+  border-color: var(--accent-primary) !important;
+  color: var(--bg-primary) !important;
+  font-weight: 600 !important;
+}
+
+.driver-popover-next-btn:hover {
+  filter: brightness(1.1) !important;
+}
+
+.driver-popover-close-btn {
+  color: var(--text-muted) !important;
+}
+
+.driver-popover-close-btn:hover {
+  color: var(--text-primary) !important;
+}
+
+.driver-popover-arrow {
+  border-color: var(--bg-secondary) !important;
+}
+
+.driver-popover-arrow-side-left {
+  border-left-color: var(--bg-secondary) !important;
+}
+
+.driver-popover-arrow-side-right {
+  border-right-color: var(--bg-secondary) !important;
+}
+
+.driver-popover-arrow-side-top {
+  border-top-color: var(--bg-secondary) !important;
+}
+
+.driver-popover-arrow-side-bottom {
+  border-bottom-color: var(--bg-secondary) !important;
+}
+
+/* Highlighted element */
+.driver-active-element {
+  outline: 2px solid var(--accent-primary) !important;
+  outline-offset: 2px !important;
+}
+
+/* Skip button for challenges */
+.driver-popover-skip-btn {
+  background: transparent !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 4px !important;
+  padding: 8px 16px !important;
+  color: var(--text-muted) !important;
+  font-size: 13px !important;
+  cursor: pointer !important;
+  transition: all 0.15s ease !important;
+  margin-right: 8px !important;
+}
+
+.driver-popover-skip-btn:hover {
+  background: var(--bg-hover) !important;
+  color: var(--text-secondary) !important;
+}
+
+/* Disabled next button */
+.driver-popover-btn--disabled {
+  opacity: 0.4 !important;
+  cursor: not-allowed !important;
+}
+
+/* Challenge UI in popover */
+.tour-challenge {
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  border-left: 3px solid var(--accent-warning);
+}
+
+.tour-challenge--complete {
+  border-left-color: var(--accent-primary);
+  background: rgba(0, 212, 170, 0.1);
+}
+
+.tour-challenge__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.tour-challenge__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent-warning);
+  color: var(--bg-primary);
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.tour-challenge--complete .tour-challenge__icon {
+  background: var(--accent-primary);
+}
+
+.tour-challenge__label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent-warning);
+}
+
+.tour-challenge--complete .tour-challenge__label {
+  color: var(--accent-primary);
+}
+
+.tour-challenge__instruction {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.tour-challenge__target {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.tour-challenge__target strong {
+  color: var(--accent-primary);
+  font-family: var(--font-mono);
+}
+
+.tour-challenge__hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.tour-challenge__success {
+  font-size: 13px;
+  color: var(--accent-primary);
+  font-weight: 500;
+  margin-top: 8px;
+}

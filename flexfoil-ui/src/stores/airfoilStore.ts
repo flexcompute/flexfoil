@@ -341,15 +341,31 @@ export const useAirfoilStore = create<AirfoilStore>()(
       setSSPVisualization: (viz) => set({ sspVisualization: viz }),
 
       // Thickness/camber scaling actions
+      // Pattern: fine spline resolution in decomposition → transform → repanel
       setThicknessScale: (scale) => set((state) => {
         const newScale = Math.max(0.1, Math.min(3.0, scale));
         // Apply scaling to base coordinates
         if (state.baseCoordinates.length > 0) {
+          // scaleAirfoil uses high-resolution cosine decomposition to preserve LE
           const scaledCoords = scaleAirfoil(state.baseCoordinates, newScale, state.camberScale);
+          
+          // Auto-repanel after warping for proper curvature-based distribution
+          let panels = scaledCoords;
+          if (isWasmReady()) {
+            try {
+              const repaneled = repanelXfoil(scaledCoords, state.nPanels);
+              if (repaneled.length > 0) {
+                panels = repaneled.map(pt => ({ x: pt.x, y: pt.y }));
+              }
+            } catch (e) {
+              console.warn('Auto-repanel after thickness scale failed:', e);
+            }
+          }
+          
           return { 
             thicknessScale: newScale, 
             coordinates: scaledCoords,
-            panels: scaledCoords,
+            panels,
           };
         }
         return { thicknessScale: newScale };
@@ -359,11 +375,26 @@ export const useAirfoilStore = create<AirfoilStore>()(
         const newScale = Math.max(0, Math.min(3.0, scale));
         // Apply scaling to base coordinates
         if (state.baseCoordinates.length > 0) {
+          // scaleAirfoil uses high-resolution cosine decomposition to preserve LE
           const scaledCoords = scaleAirfoil(state.baseCoordinates, state.thicknessScale, newScale);
+          
+          // Auto-repanel after warping for proper curvature-based distribution
+          let panels = scaledCoords;
+          if (isWasmReady()) {
+            try {
+              const repaneled = repanelXfoil(scaledCoords, state.nPanels);
+              if (repaneled.length > 0) {
+                panels = repaneled.map(pt => ({ x: pt.x, y: pt.y }));
+              }
+            } catch (e) {
+              console.warn('Auto-repanel after camber scale failed:', e);
+            }
+          }
+          
           return { 
             camberScale: newScale, 
             coordinates: scaledCoords,
-            panels: scaledCoords,
+            panels,
           };
         }
         return { camberScale: newScale };
@@ -393,10 +424,24 @@ export const useAirfoilStore = create<AirfoilStore>()(
             state.baseCoordinates,
             state.nPanels + 1
           );
+          
+          // Auto-repanel after warping for proper curvature-based distribution
+          let panels: AirfoilPoint[] = newCoords;
+          if (isWasmReady()) {
+            try {
+              const repaneled = repanelXfoil(newCoords, state.nPanels);
+              if (repaneled.length > 0) {
+                panels = repaneled.map(pt => ({ x: pt.x, y: pt.y }));
+              }
+            } catch (e) {
+              // Silent fail - use unrepaneled coords
+            }
+          }
+          
           return { 
             camberControlPoints: newPoints, 
             coordinates: newCoords,
-            panels: newCoords,
+            panels,
           };
         }
         return { camberControlPoints: newPoints };
@@ -459,10 +504,24 @@ export const useAirfoilStore = create<AirfoilStore>()(
             state.baseCoordinates,
             state.nPanels + 1
           );
+          
+          // Auto-repanel after warping for proper curvature-based distribution
+          let panels: AirfoilPoint[] = newCoords;
+          if (isWasmReady()) {
+            try {
+              const repaneled = repanelXfoil(newCoords, state.nPanels);
+              if (repaneled.length > 0) {
+                panels = repaneled.map(pt => ({ x: pt.x, y: pt.y }));
+              }
+            } catch (e) {
+              // Silent fail - use unrepaneled coords
+            }
+          }
+          
           return { 
             thicknessControlPoints: newPoints, 
             coordinates: newCoords,
-            panels: newCoords,
+            panels,
           };
         }
         return { thicknessControlPoints: newPoints };

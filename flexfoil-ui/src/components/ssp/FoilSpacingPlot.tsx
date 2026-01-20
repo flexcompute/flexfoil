@@ -96,8 +96,7 @@ function interpolateAtS(
     return { x: 0.5, y: 0, nx: 0, ny: 1 };
   }
   
-  const totalLength = arcLengths[arcLengths.length - 1];
-  const targetS = S * totalLength;
+  const targetS = S * arcLengths[arcLengths.length - 1];
   
   // Find segment
   let i = 0;

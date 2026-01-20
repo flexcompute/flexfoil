@@ -121,10 +121,10 @@ export const useVisualizationStore = create<VisualizationStore>((set) => ({
     smokeParticlesPerBlob: Math.max(3, Math.min(30, count)) 
   }),
   setSmokeSpawnInterval: (interval) => set({ 
-    smokeSpawnInterval: Math.max(0.1, Math.min(5.0, interval)) 
+    smokeSpawnInterval: Math.max(0.1, Math.min(20.0, interval)) 
   }),
   setSmokeMaxAge: (age) => set({ 
-    smokeMaxAge: Math.max(0.5, Math.min(10.0, age)) 
+    smokeMaxAge: Math.max(0.5, Math.min(30.0, age)) 
   }),
   
   // Flow speed action

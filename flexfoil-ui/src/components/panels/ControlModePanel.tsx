@@ -87,18 +87,21 @@ export function ControlModePanel() {
             <button
               className={`control-mode-btn ${controlMode === 'parameters' ? 'active' : ''}`}
               onClick={() => handleModeChange('parameters')}
+              data-tour="control-mode-parameters"
             >
               Parameters
             </button>
             <button
               className={`control-mode-btn ${controlMode === 'camber-spline' ? 'active' : ''}`}
               onClick={() => handleModeChange('camber-spline')}
+              data-tour="control-mode-camber"
             >
               Camber
             </button>
             <button
               className={`control-mode-btn ${controlMode === 'thickness-spline' ? 'active' : ''}`}
               onClick={() => handleModeChange('thickness-spline')}
+              data-tour="control-mode-thickness"
             >
               Thickness
             </button>

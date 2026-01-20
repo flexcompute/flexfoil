@@ -493,6 +493,7 @@ const HIT_RADIUS = 10;
 
 export function AirfoilCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const smokeCanvasRef = useRef<HTMLCanvasElement>(null);  // Overlay canvas for smoke (redraws every frame)
   const containerRef = useRef<HTMLDivElement>(null);
   
   // Theme context
@@ -544,8 +545,8 @@ export function AirfoilCanvas() {
     adaptiveStreamlines,
     smokeDensity,
     smokeParticlesPerBlob,
-    smokeSpawnInterval,
-    smokeMaxAge,
+    smokeSpawnInterval: _smokeSpawnInterval,
+    smokeMaxAge: _smokeMaxAge,
     flowSpeed,
     cpDisplayMode,
     cpBarScale,
@@ -614,13 +615,14 @@ export function AirfoilCanvas() {
     };
   }, [viewport, adaptiveStreamlines]);
   
-  // Smoke system
+  // Smoke system - use refs instead of state to avoid triggering full canvas redraws
   const smokeSystemRef = useRef<WasmSmokeSystem | null>(null);
   const smokeAnimationRef = useRef<number | null>(null);
-  const [smokePositions, setSmokePositions] = useState<Float64Array | null>(null);
-  const [smokeAlphas, setSmokeAlphas] = useState<Float64Array | null>(null);
-  const [smokePsiValues, setSmokePsiValues] = useState<Float64Array | null>(null);
-  const [smokePsi0, setSmokePsi0] = useState<number>(0);
+  const smokePositionsRef = useRef<Float64Array | null>(null);
+  const smokeAlphasRef = useRef<Float64Array | null>(null);
+  const smokePsiValuesRef = useRef<Float64Array | null>(null);
+  const smokePsi0Ref = useRef<number>(0);
+  const drawSmokeRef = useRef<(() => void) | null>(null);  // Ref to drawSmoke for animation loop
   
   // Compute adaptive streamline count based on stable zoom (not live zoom)
   // This avoids recreating the function on every scroll tick
@@ -862,7 +864,7 @@ export function AirfoilCanvas() {
   const smokeBounds = useMemo(() => {
     if (!adaptiveStreamlines) {
       // Fixed mode: large fixed spawn area
-      return { yMin: -1.5, yMax: 1.5, spawnX: -1.5 };
+      return { yMin: -1.5, yMax: 1.5, spawnX: -1.5, exitX: 2.5 };
     }
     
     // Adaptive mode: spawn based on stable viewport with padding
@@ -874,8 +876,9 @@ export function AirfoilCanvas() {
     const yMin = center.y - Math.max(viewHalfHeight, 1.0);
     const yMax = center.y + Math.max(viewHalfHeight, 1.0);
     const spawnX = center.x - Math.max(viewHalfWidth, 1.0) - 0.5; // Spawn to left of visible area
+    const exitX = center.x + Math.max(viewHalfWidth, 1.0) + 0.5;  // Exit to right of visible area
     
-    return { yMin, yMax, spawnX };
+    return { yMin, yMax, spawnX, exitX };
   }, [adaptiveStreamlines, stableViewport]);
 
   // Initialize smoke system (only when toggled on or settings change)
@@ -888,8 +891,8 @@ export function AirfoilCanvas() {
         smokeAnimationRef.current = null;
       }
       smokeSystemRef.current = null;
-      setSmokePositions(null);
-      setSmokeAlphas(null);
+      smokePositionsRef.current = null;
+      smokeAlphasRef.current = null;
       return;
     }
     
@@ -899,14 +902,51 @@ export function AirfoilCanvas() {
     }
     
     // Create smoke system with spawn points based on smokeDensity and viewport bounds
-    const { yMin, yMax, spawnX } = smokeBounds;
+    // Spawn points are rotated by +alpha so they appear as a vertical line in display frame
+    // (display applies -alpha rotation, so we pre-rotate by +alpha to cancel it out)
+    const { yMin, yMax, spawnX, exitX } = smokeBounds;
     const yRange = yMax - yMin;
-    const spawnY = Array.from({ length: smokeDensity }, (_, i) => 
-      yMin + (i * yRange) / Math.max(1, smokeDensity - 1)
-    );
-    smokeSystemRef.current = createSmokeSystem(spawnY, spawnX, smokeParticlesPerBlob);
-    smokeSystemRef.current.set_spawn_interval(smokeSpawnInterval);
-    smokeSystemRef.current.set_max_age(smokeMaxAge);
+    const cx = 0.25; // Rotation center (quarter chord)
+    const cy = 0;
+    const rad = displayAlpha * Math.PI / 180; // Positive alpha to counter display's -alpha
+    const cosA = Math.cos(rad);
+    const sinA = Math.sin(rad);
+    
+    // Calculate domain width and dynamically set age/interval for 3 tranches
+    const domainWidth = exitX - spawnX;
+    const traversalTime = domainWidth / flowSpeed; // Time for particle to cross visible domain
+    const dynamicMaxAge = traversalTime * 1.3;     // 30% margin to ensure particles exit
+    const dynamicSpawnInterval = dynamicMaxAge / 3; // 3 tranches visible at once
+    
+    // Generate spawn points as a vertical line in display frame, then rotate to body frame
+    const spawnPoints: number[] = []; // Flat array [x0, y0, x1, y1, ...]
+    for (let i = 0; i < smokeDensity; i++) {
+      // Desired position in display frame (vertical line at spawnX)
+      const displayX = spawnX;
+      const displayY = yMin + (i * yRange) / Math.max(1, smokeDensity - 1);
+      
+      // Rotate by +alpha around quarter chord to get body frame position
+      const dx = displayX - cx;
+      const dy = displayY - cy;
+      const bodyX = cx + dx * cosA - dy * sinA;
+      const bodyY = cy + dx * sinA + dy * cosA;
+      
+      spawnPoints.push(bodyX, bodyY);
+    }
+    
+    // Create smoke system with dummy values, then set actual spawn points
+    smokeSystemRef.current = createSmokeSystem([0], spawnX, smokeParticlesPerBlob);
+    
+    // Set the properly rotated spawn points
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const smokeSystem = smokeSystemRef.current as any;
+    if (typeof smokeSystem.set_spawn_points === 'function') {
+      smokeSystem.set_spawn_points(new Float64Array(spawnPoints));
+    }
+    
+    // Use dynamically calculated values for proper tranche distribution
+    smokeSystemRef.current.set_spawn_interval(dynamicSpawnInterval);
+    smokeSystemRef.current.set_max_age(dynamicMaxAge);
     
     // Set initial flow using cached panels
     smokeSystemRef.current.set_flow(
@@ -961,8 +1001,9 @@ export function AirfoilCanvas() {
         smokeSystemRef.current.update(dt);
         const pos = smokeSystemRef.current.get_positions();
         const alphas = smokeSystemRef.current.get_alphas();
-        setSmokePositions(new Float64Array(pos));
-        setSmokeAlphas(new Float64Array(alphas));
+        // Store in refs (no state update = no full canvas redraw)
+        smokePositionsRef.current = new Float64Array(pos);
+        smokeAlphasRef.current = new Float64Array(alphas);
         
         // Get psi values for coloring particles by dividing streamline
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -970,17 +1011,13 @@ export function AirfoilCanvas() {
         if (typeof smokeSystem.get_psi_values === 'function') {
           const psiVals = smokeSystem.get_psi_values();
           const psi0Val = smokeSystem.get_psi_0();
-          setSmokePsiValues(new Float64Array(psiVals));
-          setSmokePsi0(psi0Val);
-          
-          // Debug: log values occasionally
-          if (Math.random() < 0.01 && psiVals.length > 0) {
-            const above = psiVals.filter((v: number) => v > psi0Val).length;
-            const below = psiVals.filter((v: number) => v <= psi0Val).length;
-            console.log(`Smoke psi: psi0=${psi0Val.toFixed(4)}, above=${above}, below=${below}, sample=[${psiVals.slice(0, 5).map((v: number) => v.toFixed(4)).join(', ')}]`);
-          }
-        } else {
-          console.log('get_psi_values not available on smoke system');
+          smokePsiValuesRef.current = new Float64Array(psiVals);
+          smokePsi0Ref.current = psi0Val;
+        }
+        
+        // Draw smoke on overlay canvas (doesn't trigger main canvas redraw)
+        if (drawSmokeRef.current) {
+          drawSmokeRef.current();
         }
       }
       
@@ -994,7 +1031,8 @@ export function AirfoilCanvas() {
         cancelAnimationFrame(smokeAnimationRef.current);
       }
     };
-  }, [showSmoke, smokeDensity, smokeParticlesPerBlob, smokeSpawnInterval, smokeMaxAge, flowSpeed, setSmokeDensity, isDraggingPoint, displayAlpha, smokeBounds]);
+  // Note: smokeSpawnInterval and smokeMaxAge removed - now computed dynamically from domain/flowSpeed
+  }, [showSmoke, smokeDensity, smokeParticlesPerBlob, flowSpeed, setSmokeDensity, isDraggingPoint, displayAlpha, smokeBounds]);
   
   // Update flow when alpha changes (without recreating the system)
   // SKIP during drag
@@ -1075,6 +1113,91 @@ export function AirfoilCanvas() {
     return null;
   }, [controlMode, camberControlPoints, thicknessControlPoints, toCanvas]);
 
+  // Draw smoke particles on overlay canvas (called every animation frame)
+  // This is separate from main draw() to avoid expensive redraws of psi contours etc.
+  const drawSmoke = useCallback(() => {
+    const canvas = smokeCanvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    // Clear the overlay canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    const smokePositions = smokePositionsRef.current;
+    const smokeAlphas = smokeAlphasRef.current;
+    const smokePsiValues = smokePsiValuesRef.current;
+    const smokePsi0 = smokePsi0Ref.current;
+    
+    if (!showSmoke || !smokePositions || !smokeAlphas) return;
+    
+    const count = smokePositions.length / 2;
+    const hasPsiData = smokePsiValues && smokePsiValues.length === count;
+    
+    // Colors for above/below dividing streamline
+    const colorAbove = isDark ? '#ff6b6b' : '#e63946';  // Red for upper surface
+    const colorBelow = isDark ? '#4dabf7' : '#1971c2';  // Blue for lower surface
+    const defaultColor = isDark ? '#61dafb' : '#228be6';
+    
+    // Helper to rotate a point around quarter chord by alpha
+    const rotatePoint = (p: Point): Point => {
+      if (displayAlpha === 0) return p;
+      const cx = 0.25;
+      const cy = 0;
+      const rad = -displayAlpha * Math.PI / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      const dx = p.x - cx;
+      const dy = p.y - cy;
+      return {
+        x: cx + dx * cos - dy * sin,
+        y: cy + dx * sin + dy * cos,
+      };
+    };
+    
+    for (let i = 0; i < count; i++) {
+      const x = smokePositions[i * 2];
+      const y = smokePositions[i * 2 + 1];
+      const alpha = smokeAlphas[i] || 0;
+      
+      if (alpha > 0.01) {
+        const pCanvas = toCanvas(rotatePoint({ x, y }));
+        ctx.beginPath();
+        
+        // Choose color based on psi value relative to psi0
+        if (hasPsiData) {
+          const psi = smokePsiValues[i];
+          ctx.fillStyle = psi > smokePsi0 ? colorAbove : colorBelow;
+        } else {
+          ctx.fillStyle = defaultColor;
+        }
+        
+        ctx.globalAlpha = alpha * 0.6;
+        ctx.arc(pCanvas.x, pCanvas.y, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }, [showSmoke, displayAlpha, toCanvas, isDark]);
+  
+  // Keep ref updated so animation loop can call it
+  useEffect(() => {
+    drawSmokeRef.current = drawSmoke;
+  }, [drawSmoke]);
+  
+  // Clear smoke canvas when smoke is disabled or when viewport changes
+  useEffect(() => {
+    const canvas = smokeCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    if (!showSmoke) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  }, [showSmoke, viewport]);
+  
   // Draw the canvas
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -1134,8 +1257,6 @@ export function AirfoilCanvas() {
     if (showPsiContours && psiContours.grid.length > 0) {
       const { grid, bounds, nx, ny, psiMin, psiMax, psi0 } = psiContours;
       
-      // Debug: log values once
-      console.log('PSI values:', { psiMin, psiMax, psi0, range: psiMax - psiMin });
       const [xMin, xMax, yMin, yMax] = bounds;
       const dx = (xMax - xMin) / (nx - 1);
       const dy = (yMax - yMin) / (ny - 1);
@@ -1471,50 +1592,8 @@ export function AirfoilCanvas() {
       ctx.globalAlpha = 1; // Reset alpha
     }
     
-    // Draw smoke particles (behind airfoil) - rotated by alpha to match airfoil
-    // Color by whether particle is above or below the dividing streamline
-    if (showSmoke && smokePositions && smokeAlphas) {
-      const count = smokePositions.length / 2;
-      const hasPsiData = smokePsiValues && smokePsiValues.length === count;
-      
-      // Debug: log if psi data is available
-      if (Math.random() < 0.005) {
-        console.log(`Render: count=${count}, psiLen=${smokePsiValues?.length}, hasPsiData=${hasPsiData}, psi0=${smokePsi0}`);
-      }
-      
-      // Colors for above/below dividing streamline
-      // Upper surface (psi > psi0): warm red/orange
-      // Lower surface (psi < psi0): cool blue
-      const colorAbove = isDark ? '#ff6b6b' : '#e63946';  // Red for upper surface
-      const colorBelow = isDark ? '#4dabf7' : '#1971c2';  // Blue for lower surface
-      
-      for (let i = 0; i < count; i++) {
-        const x = smokePositions[i * 2];
-        const y = smokePositions[i * 2 + 1];
-        const alpha = smokeAlphas[i] || 0;
-        
-        if (alpha > 0.01) {
-          const pCanvas = toCanvas(rotatePoint({ x, y }));
-          ctx.beginPath();
-          
-          // Choose color based on psi value relative to psi0
-          if (hasPsiData) {
-            const psi = smokePsiValues[i];
-            // psi > psi0 means above dividing streamline (upper surface path)
-            // psi < psi0 means below dividing streamline (lower surface path)
-            ctx.fillStyle = psi > smokePsi0 ? colorAbove : colorBelow;
-          } else {
-            ctx.fillStyle = colors.accentSecondary;
-          }
-          
-          ctx.globalAlpha = alpha * 0.6;
-          ctx.arc(pCanvas.x, pCanvas.y, 2, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-      ctx.globalAlpha = 1; // Reset alpha
-    }
-
+    // NOTE: Smoke is drawn on a separate overlay canvas (smokeCanvasRef) for performance
+    // This avoids redrawing expensive psi contours on every animation frame
 
     // Draw smooth spline curve (if enabled) - rotated by alpha
     if (showCurve && splineCurve.length > 1) {
@@ -1819,7 +1898,9 @@ export function AirfoilCanvas() {
       ctx.globalAlpha = 1;
     }
 
-  }, [viewport, morphState, splineCurve, controlMode, camberControlPoints, thicknessControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showPsiContours, psiContours, showSmoke, smokePositions, smokeAlphas, smokePsiValues, smokePsi0, displayAlpha, toCanvas, isDark, showCp, showForces, cpDisplayMode, cpBarScale, forceScale]);
+  // NOTE: Smoke state (smokePositions, etc.) intentionally NOT in dependencies
+  // Smoke is drawn on separate overlay canvas to avoid expensive redraws
+  }, [viewport, morphState, splineCurve, controlMode, camberControlPoints, thicknessControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showPsiContours, psiContours, displayAlpha, toCanvas, isDark, showCp, showForces, cpDisplayMode, cpBarScale, forceScale]);
 
   // Draw grid
   const drawGrid = useCallback((ctx: CanvasRenderingContext2D) => {
@@ -2205,6 +2286,19 @@ export function AirfoilCanvas() {
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
         style={{ cursor: isDragging ? 'grabbing' : isPanning ? 'grabbing' : hoveredPoint ? 'pointer' : 'crosshair' }}
+      />
+      
+      {/* Smoke overlay canvas - renders smoke particles without triggering expensive main canvas redraws */}
+      <canvas
+        ref={smokeCanvasRef}
+        width={viewport.width}
+        height={viewport.height}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          pointerEvents: 'none',  // Let clicks pass through to main canvas
+        }}
       />
       
       {/* Overlay controls - simplified, full controls in Visualization panel */}

@@ -1,10 +1,11 @@
 /**
- * MenuBar - Top menu bar with File/Edit/Window menus
+ * MenuBar - Top menu bar with File/Edit/Window/Help menus
  */
 
 import { useState, useRef, useEffect } from 'react';
 import { DarkModeToggle } from './DarkModeToggle';
 import { useUndoRedo } from '../hooks/useUndoRedo';
+import { useOnboarding } from '../onboarding';
 
 interface PanelInfo {
   id: string;
@@ -31,6 +32,9 @@ export function MenuBar({
   
   // Undo/redo functionality
   const { undo, redo, canUndo, canRedo } = useUndoRedo();
+  
+  // Onboarding
+  const { startTour, resetAllTours } = useOnboarding();
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -113,6 +117,7 @@ export function MenuBar({
         label="Edit"
         isActive={activeMenu === 'edit'}
         onClick={() => toggleMenu('edit')}
+        dataTour="menu-edit"
       />
       {activeMenu === 'edit' && (
         <MenuDropdown style={{ left: '120px' }}>
@@ -171,6 +176,61 @@ export function MenuBar({
         </MenuDropdown>
       )}
 
+      {/* Help Menu */}
+      <MenuButton
+        label="Help"
+        isActive={activeMenu === 'help'}
+        onClick={() => toggleMenu('help')}
+        dataTour="menu-help"
+      />
+      {activeMenu === 'help' && (
+        <MenuDropdown style={{ left: '232px' }}>
+          <div
+            style={{
+              padding: '4px 12px',
+              fontSize: '11px',
+              fontWeight: 600,
+              color: 'var(--text-muted)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+            }}
+          >
+            Tutorials
+          </div>
+          <MenuItem
+            label="Welcome Tour"
+            onClick={() => {
+              startTour('welcome');
+              setActiveMenu(null);
+            }}
+          />
+          <MenuItem
+            label="Airfoil Editing Guide"
+            onClick={() => {
+              startTour('airfoilEditing');
+              setActiveMenu(null);
+            }}
+          />
+          <MenuItem
+            label="Solving Guide"
+            onClick={() => {
+              startTour('solving');
+              setActiveMenu(null);
+            }}
+          />
+          <MenuDivider />
+          <MenuItem
+            label="Reset Tutorial Progress"
+            onClick={() => {
+              resetAllTours();
+              setActiveMenu(null);
+            }}
+          />
+          <MenuDivider />
+          <MenuItem label="About FlexFoil" disabled />
+        </MenuDropdown>
+      )}
+
       {/* Spacer */}
       <div style={{ flex: 1 }} />
 
@@ -218,10 +278,12 @@ function MenuButton({
   label,
   isActive,
   onClick,
+  dataTour,
 }: {
   label: string;
   isActive: boolean;
   onClick: () => void;
+  dataTour?: string;
 }) {
   const [isHovered, setIsHovered] = useState(false);
 
@@ -230,6 +292,7 @@ function MenuButton({
       onClick={onClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      data-tour={dataTour}
       style={{
         padding: '0 12px',
         height: '100%',

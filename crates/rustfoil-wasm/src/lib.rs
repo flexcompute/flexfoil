@@ -1050,6 +1050,16 @@ impl WasmSmokeSystem {
         self.inner.reset();
     }
 
+    /// Set spawn points from flat array of (x, y) pairs.
+    /// 
+    /// This allows arbitrary spawn positions (e.g., rotated for angle of attack).
+    /// 
+    /// # Arguments
+    /// * `points` - Flat array [x0, y0, x1, y1, ...]
+    pub fn set_spawn_points(&mut self, points: &[f64]) {
+        self.inner.set_spawn_points(points);
+    }
+
     /// Set spawn interval in seconds.
     pub fn set_spawn_interval(&mut self, interval: f64) {
         self.inner.set_spawn_interval(interval);

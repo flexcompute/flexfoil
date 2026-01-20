@@ -260,6 +260,10 @@ const interpolateY = interpolateYLinear;
  * The camber line is the locus of points midway between upper and lower surfaces.
  * The thickness is the distance from the camber line to the surface.
  * 
+ * IMPORTANT: Uses cosine spacing with high resolution (200+ samples) to preserve
+ * the critical leading edge geometry. Uniform spacing destroys LE detail because
+ * the LE region (x=0 to x=0.02) would only get ~1 sample.
+ * 
  * @param coords - Airfoil coordinates (TE -> upper -> LE -> lower -> TE format)
  * @returns Camber line and thickness distribution
  */
@@ -270,13 +274,18 @@ export function decomposeToCamberThickness(coords: AirfoilPoint[]): CamberThickn
   
   const { upper, lower } = splitSurfaces(coords);
   
-  // Sample x positions from 0 to 1
-  const nSamples = 50;
+  // Use COSINE spacing with high resolution to preserve LE geometry
+  // Cosine spacing concentrates points at x=0 (LE) and x=1 (TE)
+  // 200 samples ensures fine resolution even in the nose region
+  const nSamples = 200;
   const camber: { x: number; y: number }[] = [];
   const thickness: { x: number; t: number }[] = [];
   
   for (let i = 0; i <= nSamples; i++) {
-    const x = i / nSamples;
+    // Cosine spacing: x = (1 - cos(beta)) / 2 where beta goes from 0 to PI
+    // This gives x from 0 (LE) to 1 (TE) with concentration at both ends
+    const beta = (Math.PI * i) / nSamples;
+    const x = (1 - Math.cos(beta)) / 2;
     
     // Interpolate y values on upper and lower surfaces at this x
     const yUpper = interpolateY(upper.map(p => ({ x: p.x, y: p.y })), x);
@@ -507,6 +516,14 @@ export function scaleCamber(coords: AirfoilPoint[], factor: number): AirfoilPoin
 
 /**
  * Apply both thickness and camber scaling.
+ * 
+ * The algorithm preserves leading edge geometry by:
+ * 1. Decomposing with fine cosine-spaced resolution (200+ samples at LE)
+ * 2. Applying scaling to the smooth camber/thickness distributions
+ * 3. Reconstructing with cosine spacing matching the original point count
+ * 
+ * For best results after warping, consider repaneling with XFOIL's PANGEN
+ * to get proper curvature-based panel distribution.
  * 
  * @param coords - Original airfoil coordinates
  * @param thicknessFactor - Thickness scale factor
