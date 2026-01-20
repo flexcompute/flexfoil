@@ -16,6 +16,7 @@ interface MenuBarProps {
   panels: PanelInfo[];
   closedPanels: Set<string>;
   onRestorePanel: (panelId: string) => void;
+  onOpenPanel: (panelId: string) => void;  // Focus/select an existing panel
   onResetLayout: () => void;
   wasmStatus: 'loading' | 'ready' | 'error';
 }
@@ -24,6 +25,7 @@ export function MenuBar({
   panels,
   closedPanels,
   onRestorePanel,
+  onOpenPanel,
   onResetLayout,
   wasmStatus,
 }: MenuBarProps) {
@@ -55,7 +57,11 @@ export function MenuBar({
 
   const handleTogglePanel = (panelId: string) => {
     if (closedPanels.has(panelId)) {
+      // Panel is closed - restore it
       onRestorePanel(panelId);
+    } else {
+      // Panel exists but might be hidden behind another tab - bring to front
+      onOpenPanel(panelId);
     }
     setActiveMenu(null);
   };
@@ -147,6 +153,7 @@ export function MenuBar({
         label="Window"
         isActive={activeMenu === 'window'}
         onClick={() => toggleMenu('window')}
+        dataTour="menu-window"
       />
       {activeMenu === 'window' && (
         <MenuDropdown style={{ left: '168px' }}>
@@ -168,7 +175,6 @@ export function MenuBar({
               label={panel.name}
               checked={isPanelVisible(panel.id)}
               onClick={() => handleTogglePanel(panel.id)}
-              disabled={isPanelVisible(panel.id)}
             />
           ))}
           <MenuDivider />

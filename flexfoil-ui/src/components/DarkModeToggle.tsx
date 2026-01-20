@@ -17,6 +17,7 @@ export function DarkModeToggle({ className = '' }: DarkModeToggleProps) {
       className={className}
       title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
       aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+      data-tour="dark-mode-toggle"
       style={{
         display: 'inline-flex',
         alignItems: 'center',
