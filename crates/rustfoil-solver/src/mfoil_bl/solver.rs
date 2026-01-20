@@ -1,6 +1,6 @@
 //! Main mfoil-style coupled viscous-inviscid solver.
 
-use nalgebra::{DMatrix, DVector};
+use nalgebra::{DMatrix, DVector, Matrix3, Vector3};
 use super::state::{MfoilState, MfoilParam, MfoilPanel, MfoilGeom, SurfaceIndex};
 use super::closures::*;
 use super::residuals::{residual_station, residual_transition};
@@ -588,13 +588,7 @@ impl MfoilSolver {
 
         // Get inviscid edge velocity
         let ueinv = self.get_ueinv();
-        
-        // Debug output for size checking
-        #[cfg(debug_assertions)]
-        eprintln!(
-            "[init_boundary_layer] n={}, nw={}, nsys={}, xi.len={}, ueinv.len={}",
-            n, nw, nsys, self.isol.xi.len(), ueinv.len()
-        );
+        self.vsol.turb = vec![false; nsys];
 
         // Initialize each surface
         for si in 0..3 {
@@ -603,8 +597,8 @@ impl MfoilSolver {
                 1 => SurfaceIndex::Upper,
                 _ => SurfaceIndex::Wake,
             };
-            
-            let is = &self.vsol.is[si];
+
+            let is = self.vsol.is[si].clone();
             if is.is_empty() {
                 continue;
             }
@@ -612,40 +606,132 @@ impl MfoilSolver {
             let mut param = self.param.clone();
             param.set_surface(surf_idx);
 
-            // Initialize first point (stagnation or wake start)
-            let i0 = is[0];
-            let xi0 = self.isol.xi[i0].max(1e-8);
-            let ue0 = ueinv[i0].abs().max(1e-8);
-            
-            // Thwaites initialization
-            let k = ue0 / xi0;
-            let th0 = (0.45 * param.mu0 / param.rho0 / (6.0 * k)).sqrt().max(1e-10);
-            let ds0 = 2.2 * th0;
-            
-            self.glob.set_node(i0, [th0, ds0, 0.0, ue0]);
+            let xi = is.iter().map(|&i| self.isol.xi[i]).collect::<Vec<f64>>();
+            let mut ue = is.iter().map(|&i| ueinv[i]).collect::<Vec<f64>>();
 
-            // March downstream
-            for ii in 1..is.len() {
-                let i = is[ii];
-                let i_prev = is[ii - 1];
-                
-                let xi_prev = self.isol.xi[i_prev];
-                let xi = self.isol.xi[i];
-                let ue = ueinv[i].abs().max(1e-8);
-                
-                // Simple scaling from previous
-                let scale = (xi / xi_prev.max(1e-12)).sqrt().min(2.0);
-                let th = self.glob.theta(i_prev) * scale;
-                let ds = self.glob.delta_star(i_prev) * scale;
-                let sa = self.glob.sa(i_prev);
-                
-                self.glob.set_node(i, [th, ds, sa, ue]);
-                
-                // Check for transition (simplified)
-                if !param.turb && sa > param.ncrit {
-                    self.vsol.turb[i] = true;
-                    param.turb = true;
+            let uemax = ue
+                .iter()
+                .fold(0.0_f64, |a, &b| a.max(b.abs()))
+                .max(1e-12);
+            for u in &mut ue {
+                *u = u.abs().max(1e-8 * uemax);
+            }
+
+            let mut u = vec![[0.0; 4]; is.len()];
+
+            // Initialize first point
+            let mut i0 = 0usize;
+            if si < 2 {
+                // Thwaites initialization at stagnation
+                let (k, hitstag) = if xi[0] < 1e-8 * xi[xi.len() - 1] {
+                    (ue[1] / xi[1].max(1e-12), true)
+                } else {
+                    (ue[0] / xi[0].max(1e-12), false)
+                };
+                let (th, ds) = thwaites_init(k, param.mu0 / param.rho0);
+                let xst = 1e-6;
+                let mut ust = [th, ds, 0.0, k * xst];
+
+                // Newton correction at stagnation
+                for _ in 0..20 {
+                    param.turb = false;
+                    param.simi = true;
+                    let res = residual_station(&param, [xst, xst], [ust, ust], [0.0, 0.0]);
+                    param.simi = false;
+                    let rnorm = (res.r[0] * res.r[0] + res.r[1] * res.r[1] + res.r[2] * res.r[2]).sqrt();
+                    if rnorm < 1e-10 {
+                        break;
+                    }
+                    let mut a = Matrix3::zeros();
+                    for row in 0..3 {
+                        for col in 0..3 {
+                            a[(row, col)] = res.r_u[row][col] + res.r_u[row][4 + col];
+                        }
+                    }
+                    let b = Vector3::new(-res.r[0], -res.r[1], -res.r[2]);
+                    if let Some(dv) = a.lu().solve(&b) {
+                        let dm = (dv[0] / ust[0]).abs().max((dv[1] / ust[1]).abs());
+                        let omega = if dm < 0.2 { 1.0 } else { 0.2 / dm };
+                        ust[0] += omega * dv[0];
+                        ust[1] += omega * dv[1];
+                        ust[2] += omega * dv[2];
+                    }
                 }
+
+                if hitstag {
+                    u[0] = ust;
+                    u[0][3] = ue[0];
+                    i0 = 1;
+                }
+                u[i0] = ust;
+                u[i0][3] = ue[i0];
+            } else {
+                // Wake initialization
+                u[0] = self.wake_init(ue[0]);
+                self.vsol.turb[is[0]] = true;
+                param.turb = true;
+            }
+
+            // March over remaining points
+            let mut tran = false;
+            let mut i = i0 + 1;
+            while i < is.len() {
+                u[i] = u[i - 1];
+                u[i][3] = ue[i];
+                if tran {
+                    u[i][2] = get_cttr(&u[i], &param).0;
+                }
+                self.vsol.turb[is[i]] = tran || param.turb;
+
+                let mut direct = true;
+                for iter in 0..30 {
+                    let ip = [i - 1, i];
+                    let res = if tran {
+                        residual_transition(&param, [xi[ip[0]], xi[ip[1]]], [u[ip[0]], u[ip[1]]], [0.0, 0.0]).0
+                    } else {
+                        residual_station(&param, [xi[ip[0]], xi[ip[1]]], [u[ip[0]], u[ip[1]]], [0.0, 0.0])
+                    };
+                    let rnorm = (res.r[0] * res.r[0] + res.r[1] * res.r[1] + res.r[2] * res.r[2]).sqrt();
+                    if rnorm < 1e-10 {
+                        break;
+                    }
+
+                    if direct {
+                        let mut a = Matrix3::zeros();
+                        for row in 0..3 {
+                            for col in 0..3 {
+                                a[(row, col)] = res.r_u[row][4 + col];
+                            }
+                        }
+                        let b = Vector3::new(-res.r[0], -res.r[1], -res.r[2]);
+                        if let Some(dv) = a.lu().solve(&b) {
+                            let dm = (dv[0] / u[i - 1][0]).abs().max((dv[1] / u[i - 1][1]).abs());
+                            let omega = if dm < 0.2 { 1.0 } else { 0.2 / dm };
+                            u[i][0] += omega * dv[0];
+                            u[i][1] += omega * dv[1];
+                            u[i][2] += omega * dv[2];
+                        }
+                    } else {
+                        // Inverse mode not implemented
+                        direct = true;
+                    }
+                }
+
+                // Transition check
+                if !tran && si < 2 && u[i][2] > param.ncrit {
+                    tran = true;
+                    param.turb = true;
+                    self.vsol.turb[is[i]] = true;
+                    self.vsol.xt[si][0] = 0.5 * (xi[i - 1] + xi[i]);
+                    self.store_transition(si, i);
+                }
+
+                i += 1;
+            }
+
+            // Store surface state back into global state
+            for (local, &idx) in is.iter().enumerate() {
+                self.glob.set_node(idx, u[local]);
             }
         }
     }
@@ -702,12 +788,29 @@ impl MfoilSolver {
         ue
     }
 
-    /// Calculate ue influence matrix (simplified).
+    /// Calculate ue influence matrix (source influence).
     fn calc_ue_m(&mut self) {
         let nsys = self.glob.nsys;
-        // For now, use identity (no cross-coupling)
-        // Full implementation would compute source panel influences
+        let n = self.foil.n;
         self.vsol.ue_m = DMatrix::zeros(nsys, nsys);
+
+        if n == 0 {
+            return;
+        }
+
+        // Compute source influence matrix for airfoil nodes
+        let nodes: Vec<rustfoil_core::Point> = (0..n)
+            .map(|i| rustfoil_core::Point::new(self.foil.x[(0, i)], self.foil.x[(1, i)]))
+            .collect();
+
+        let dij = crate::inviscid::compute_source_influence_matrix(&nodes);
+
+        // Fill ue_m for airfoil nodes; wake rows/cols remain zero
+        for i in 0..n {
+            for j in 0..n {
+                self.vsol.ue_m[(i, j)] = dij[i][j];
+            }
+        }
     }
 
     /// Move stagnation point based on viscous solution.
@@ -757,6 +860,10 @@ impl MfoilSolver {
 
             // Apply update with under-relaxation
             self.update_state();
+
+            // Update stagnation point and transition location
+            self.stagpoint_move();
+            self.update_transition();
         }
 
         if self.config.verbose >= 1 && !converged {
@@ -800,31 +907,58 @@ impl MfoilSolver {
             }).collect();
 
             // First point (similarity or wake init)
-            let i0 = is[0];
+            let xi = is.iter().map(|&i| self.isol.xi[i]).collect::<Vec<f64>>();
+            let i0 = if si < 2 && xi[0] < 1e-8 * xi[xi.len() - 1] { 1 } else { 0 };
             if si < 2 {
-                // Similarity residual for stagnation
+                // Stagnation state extrapolation
+                let ip = [i0, i0 + 1];
+                let u1 = self.glob.get_node(ip[0]);
+                let u2 = self.glob.get_node(ip[1]);
+                let (ust, ust_u, _ust_x, xst) = Self::stagnation_state([u1, u2], [xi[i0], xi[i0 + 1]]);
+
                 param.turb = false;
                 param.simi = true;
-                let u1 = self.glob.get_node(i0);
-                let x1 = self.isol.xi[i0].max(1e-12);
-                let res = residual_station(&param, [x1, x1], [u1, u1], [aux[0], aux[0]]);
-                
-                // Store in global arrays
-                let ig = 3 * i0;
+                let res = residual_station(&param, [xst, xst], [ust, ust], [aux[i0], aux[i0]]);
+                param.simi = false;
+
+                // Linearize residual wrt Ust then map to U1/U2 via Ust_U
+                let mut r1_u = [[0.0; 8]; 3];
+                for k in 0..3 {
+                    for j in 0..4 {
+                        let r1_ust = res.r_u[k][j] + res.r_u[k][4 + j];
+                        for m in 0..8 {
+                            r1_u[k][m] += r1_ust * ust_u[j][m];
+                        }
+                    }
+                }
+
+                // Accumulate into global residual/Jacobian
+                let ig = 3 * is[i0];
                 for k in 0..3 {
                     self.glob.r[ig + k] = res.r[k];
                     for j in 0..4 {
-                        self.glob.r_u[(ig + k, 4 * i0 + j)] = res.r_u[k][j] + res.r_u[k][4 + j];
+                        self.glob.r_u[(ig + k, 4 * ip[0] + j)] += r1_u[k][j];
+                        self.glob.r_u[(ig + k, 4 * ip[1] + j)] += r1_u[k][4 + j];
                     }
                 }
-                param.simi = false;
+
+                if i0 == 1 {
+                    // If first xi is tiny, enforce U = Ust at i=0
+                    let ig0 = 3 * is[0];
+                    let u0 = self.glob.get_node(is[0]);
+                    self.glob.r[ig0] = u0[0] - ust[0];
+                    self.glob.r[ig0 + 1] = u0[1] - ust[1];
+                    self.glob.r[ig0 + 2] = u0[2] - ust[2];
+                    for j in 0..4 {
+                        self.glob.r_u[(ig0, 4 * is[0] + j)] += if j == 0 { 1.0 } else { 0.0 };
+                        self.glob.r_u[(ig0 + 1, 4 * is[0] + j)] += if j == 1 { 1.0 } else { 0.0 };
+                        self.glob.r_u[(ig0 + 2, 4 * is[0] + j)] += if j == 2 { 1.0 } else { 0.0 };
+                    }
+                }
             } else {
                 // Wake initialization residual
-                self.wake_residual(i0, &mut param);
+                self.wake_residual(is[0], &mut param);
             }
-
-            // Track transition updates to apply after loop
-            let mut transition_at: Option<usize> = None;
 
             // March over remaining points
             for ii in 1..is.len() {
@@ -836,23 +970,17 @@ impl MfoilSolver {
                 let x1 = self.isol.xi[i_prev].max(1e-12);
                 let x2 = self.isol.xi[i].max(1e-12);
 
-                // Check turbulent state
+                // Transition flag from stored turb state
                 let was_turb = self.vsol.turb.get(i_prev).copied().unwrap_or(false);
                 let is_turb = self.vsol.turb.get(i).copied().unwrap_or(false);
-                
-                // Check for dynamic transition (sa exceeds ncrit)
-                let sa_curr = u2[2];
-                let transition_here = !was_turb && !is_turb && si < 2 && sa_curr > param.ncrit;
-                
-                if transition_here && transition_at.is_none() {
-                    transition_at = Some(ii);
-                }
-
-                let tran = !was_turb && is_turb;
-                param.turb = is_turb || (transition_at.is_some() && ii >= transition_at.unwrap());
+                let tran = was_turb ^ is_turb;
+                param.turb = is_turb;
 
                 let res = if tran {
                     let (res, _xt) = residual_transition(&param, [x1, x2], [u1, u2], [aux[ii-1], aux[ii]]);
+                    if si < 2 {
+                        self.store_transition(si, ii);
+                    }
                     res
                 } else {
                     residual_station(&param, [x1, x2], [u1, u2], [aux[ii-1], aux[ii]])
@@ -869,15 +997,6 @@ impl MfoilSolver {
                 }
             }
             
-            // Apply transition updates after loop completes
-            if let Some(trans_ii) = transition_at {
-                for ii in trans_ii..is.len() {
-                    let i = is[ii];
-                    if i < self.vsol.turb.len() {
-                        self.vsol.turb[i] = true;
-                    }
-                }
-            }
         }
     }
 
@@ -896,11 +1015,33 @@ impl MfoilSolver {
         let uu = self.glob.get_node(iu);
         let uw = self.glob.get_node(iw);
 
-        // Wake residual: theta, delta_star continuity
+        // Trailing edge gap (approximate)
+        let h_te = 0.0;
+
+        // Wake shear stress from upper/lower
+        let mut param = self.param.clone();
+        param.turb = true;
+        param.wake = false;
+
+        let (ctl, ctl_ul) = if self.vsol.turb[il] {
+            (ul[2], [0.0, 0.0, 1.0, 0.0])
+        } else {
+            get_cttr(&ul, &param)
+        };
+        let (ctu, ctu_uu) = if self.vsol.turb[iu] {
+            (uu[2], [0.0, 0.0, 1.0, 0.0])
+        } else {
+            get_cttr(&uu, &param)
+        };
+
+        let thsum = (ul[0] + uu[0]).max(1e-12);
+        let ctw = (ctl * ul[0] + ctu * uu[0]) / thsum;
+
+        // Wake residual: theta, delta_star continuity + shear stress
         let r = [
             uw[0] - (ul[0] + uu[0]),
-            uw[1] - (ul[1] + uu[1]),
-            uw[2] - 0.5 * (ul[2] + uu[2]),
+            uw[1] - (ul[1] + uu[1] + h_te),
+            uw[2] - ctw,
         ];
 
         let ig = 3 * iw;
@@ -917,52 +1058,307 @@ impl MfoilSolver {
         self.glob.r_u[(ig + 1, 4 * iu + 1)] = -1.0;
         self.glob.r_u[(ig + 1, 4 * iw + 1)] = 1.0;
 
-        self.glob.r_u[(ig + 2, 4 * il + 2)] = -0.5;
-        self.glob.r_u[(ig + 2, 4 * iu + 2)] = -0.5;
         self.glob.r_u[(ig + 2, 4 * iw + 2)] = 1.0;
+        // Shear stress linearization
+        let ctw_ul = [
+            (ctl_ul[0] * ul[0] + (ctl - ctw)) / thsum,
+            (ctl_ul[1] * ul[0]) / thsum,
+            (ctl_ul[2] * ul[0]) / thsum,
+            (ctl_ul[3] * ul[0]) / thsum,
+        ];
+        let ctw_uu = [
+            (ctu_uu[0] * uu[0] + (ctu - ctw)) / thsum,
+            (ctu_uu[1] * uu[0]) / thsum,
+            (ctu_uu[2] * uu[0]) / thsum,
+            (ctu_uu[3] * uu[0]) / thsum,
+        ];
+        for j in 0..4 {
+            self.glob.r_u[(ig + 2, 4 * il + j)] -= ctw_ul[j];
+            self.glob.r_u[(ig + 2, 4 * iu + j)] -= ctw_uu[j];
+        }
+    }
+
+    /// Update transition locations based on current state.
+    fn update_transition(&mut self) {
+        for si in 0..2 {
+            let is = self.vsol.is[si].clone();
+            if is.len() < 2 {
+                continue;
+            }
+
+            // Current last laminar station
+            let mut ilam0 = 0usize;
+            for (i, &idx) in is.iter().enumerate() {
+                if self.vsol.turb[idx] {
+                    ilam0 = i.saturating_sub(1);
+                    break;
+                }
+            }
+
+            // March amplification to get new last laminar station
+            let ilam = self.march_amplification(si);
+
+            if ilam == ilam0 {
+                continue;
+            }
+
+            if ilam < ilam0 {
+                // Transition earlier: fill turbulent between [ilam+1, ilam0]
+                let mut param = self.param.clone();
+                param.set_surface(if si == 0 { SurfaceIndex::Lower } else { SurfaceIndex::Upper });
+                param.turb = true;
+                let sa0 = get_cttr(&self.glob.get_node(is[ilam + 1]), &param).0;
+                let sa1 = if ilam0 + 1 < is.len() {
+                    self.glob.sa(is[ilam0 + 1])
+                } else {
+                    sa0
+                };
+                let xi = is.iter().map(|&i| self.isol.xi[i]).collect::<Vec<f64>>();
+                let dx = (xi[ilam0.min(is.len() - 1)] - xi[ilam + 1]).max(1e-12);
+                for i in (ilam + 1)..=ilam0 {
+                    let f = if i == ilam + 1 {
+                        0.0
+                    } else {
+                        (xi[i] - xi[ilam + 1]) / dx
+                    };
+                    self.glob.u[(2, is[i])] = sa0 + f * (sa1 - sa0);
+                    self.vsol.turb[is[i]] = true;
+                }
+            } else {
+                // Transition later: set laminar between [ilam0, ilam]
+                for i in ilam0..=ilam {
+                    self.vsol.turb[is[i]] = false;
+                }
+            }
+
+            // Store transition location if we have one
+            if ilam + 1 < is.len() {
+                self.store_transition(si, ilam + 1);
+            }
+        }
+    }
+
+    /// March amplification equation on a surface and return last laminar index.
+    fn march_amplification(&mut self, si: usize) -> usize {
+        let is = &self.vsol.is[si];
+        let n = is.len();
+        if n < 2 {
+            return 0;
+        }
+
+        let mut param = self.param.clone();
+        param.set_surface(if si == 0 { SurfaceIndex::Lower } else { SurfaceIndex::Upper });
+        param.turb = false;
+        param.wake = false;
+
+        self.glob.u[(2, is[0])] = 0.0;
+
+        let mut i = 1usize;
+        while i < n {
+            let u1 = self.glob.get_node(is[i - 1]);
+            let mut u2 = self.glob.get_node(is[i]);
+            if self.vsol.turb[is[i]] {
+                u2[2] = u1[2] * 1.01;
+            }
+            let dx = self.isol.xi[is[i]] - self.isol.xi[is[i - 1]];
+
+            // Newton iterations for amplification
+            let n_newton = 20;
+            for iter in 0..n_newton {
+                let (damp1, damp1_u) = get_damp(&u1, &param);
+                let (damp2, damp2_u) = get_damp(&u2, &param);
+                let (damp, damp_u) = upwind(0.5, &[0.0; 8], damp1, &damp1_u, damp2, &damp2_u);
+
+                let ramp = u2[2] - u1[2] - damp * dx;
+                if ramp.abs() < 1e-12 {
+                    break;
+                }
+                let ramp_u2 = 1.0 - damp_u[6] * dx;
+                let mut du = -ramp / ramp_u2.max(1e-12);
+                let dmax = 0.5 * (1.01 - iter as f64 / n_newton as f64);
+                if du.abs() > dmax {
+                    du *= dmax / du.abs();
+                }
+                u2[2] += du;
+            }
+
+            if u2[2] > param.ncrit {
+                // Store transition location (xi)
+                let xi0 = self.isol.xi[is[i - 1]];
+                let xi1 = self.isol.xi[is[i]];
+                self.vsol.xt[si][0] = 0.5 * (xi0 + xi1);
+                break;
+            } else {
+                self.glob.u[(2, is[i])] = u2[2];
+            }
+            i += 1;
+        }
+
+        i.saturating_sub(1)
+    }
+
+    /// Initialize wake state at first wake point.
+    fn wake_init(&mut self, ue: f64) -> [f64; 4] {
+        if self.vsol.is[0].is_empty() || self.vsol.is[1].is_empty() {
+            return [0.0, 0.0, 0.0, ue];
+        }
+
+        let il = *self.vsol.is[0].last().unwrap();
+        let iu = *self.vsol.is[1].last().unwrap();
+
+        let ul = self.glob.get_node(il);
+        let uu = self.glob.get_node(iu);
+
+        let mut param = self.param.clone();
+        param.turb = true;
+        param.wake = false;
+
+        let (ctl, _) = if self.vsol.turb[il] {
+            (ul[2], [0.0, 0.0, 1.0, 0.0])
+        } else {
+            get_cttr(&ul, &param)
+        };
+        let (ctu, _) = if self.vsol.turb[iu] {
+            (uu[2], [0.0, 0.0, 1.0, 0.0])
+        } else {
+            get_cttr(&uu, &param)
+        };
+
+        let thsum = (ul[0] + uu[0]).max(1e-12);
+        let ctw = (ctl * ul[0] + ctu * uu[0]) / thsum;
+
+        let h_te = 0.0;
+        [
+            ul[0] + uu[0],
+            ul[1] + uu[1] + h_te,
+            ctw,
+            ue,
+        ]
+    }
+
+    /// Store transition location for a surface.
+    fn store_transition(&mut self, si: usize, i: usize) {
+        let is = &self.vsol.is[si];
+        if i == 0 || i >= is.len() {
+            return;
+        }
+        let i0 = is[i - 1];
+        let i1 = is[i];
+        if i0 >= self.foil.n || i1 >= self.foil.n {
+            return;
+        }
+        let xi0 = self.isol.xi[i0];
+        let xi1 = self.isol.xi[i1];
+        let x0 = self.foil.x[(0, i0)];
+        let x1 = self.foil.x[(0, i1)];
+        let xt = self.vsol.xt[si][0];
+        let xf = if (xi1 - xi0).abs() < 1e-12 {
+            x0
+        } else {
+            x0 + (xt - xi0) / (xi1 - xi0) * (x1 - x0)
+        };
+        self.vsol.xt[si][1] = xf / self.geom.chord;
+    }
+
+    /// Compute stagnation state from two upstream states.
+    fn stagnation_state(
+        u: [[f64; 4]; 2],
+        x: [f64; 2],
+    ) -> ([f64; 4], [[f64; 8]; 4], [[f64; 2]; 4], f64) {
+        let u1 = u[0];
+        let u2 = u[1];
+        let x1 = x[0];
+        let x2 = x[1];
+        let dx = (x2 - x1).max(1e-12);
+
+        let w1 = x2 / dx;
+        let w2 = -x1 / dx;
+        let mut ust = [0.0; 4];
+        for k in 0..4 {
+            ust[k] = u1[k] * w1 + u2[k] * w2;
+        }
+
+        let rx = x2 / x1.max(1e-12);
+        let wk1 = rx / dx;
+        let wk2 = -1.0 / (rx * dx);
+        let k = wk1 * u1[3] + wk2 * u2[3];
+        let xst = 1e-6;
+        ust[3] = k * xst;
+
+        let mut ust_u = [[0.0; 8]; 4];
+        for k in 0..3 {
+            ust_u[k][k] = w1;
+            ust_u[k][4 + k] = w2;
+        }
+        ust_u[3][3] = wk1 * xst;
+        ust_u[3][7] = wk2 * xst;
+
+        let ust_x = [[0.0; 2]; 4];
+        (ust, ust_u, ust_x, xst)
     }
 
     /// Solve global system for update.
-    /// 
-    /// Uses a decoupled approach: solve the 3*nsys BL equations with fixed ue,
-    /// then update ue towards the inviscid value. This avoids large matrix allocations.
+    ///
+    /// Uses the augmented system with ue equation, matching mfoil.py:
+    ///   R = [R_bl; ue - (ueinv + ue_m @ (ds * ue))]
+    ///   J = [R_U; I - ue_m*diag(ds), -ue_m*diag(ue)]
     fn solve_glob(&mut self) {
         let nsys = self.glob.nsys;
         let ueinv = self.get_ueinv();
 
-        // Instead of building and solving a large dense system, use a sequential
-        // station-by-station march with local 3x3 solves (like XFOIL does)
-        // This is much more efficient and avoids stack overflow
-        
-        // For each surface, march from upstream to downstream
-        for si in 0..3 {
-            let is: Vec<usize> = self.vsol.is[si].clone();
-            if is.len() < 2 {
-                continue;
+        // Assemble residual vector
+        let mut r = DVector::zeros(4 * nsys);
+        for i in 0..(3 * nsys) {
+            r[i] = self.glob.r[i];
+        }
+
+        // Precompute mass defect term ds*ue
+        let mut ds_ue = vec![0.0; nsys];
+        for j in 0..nsys {
+            ds_ue[j] = self.glob.delta_star(j) * self.glob.ue(j);
+        }
+
+        // Augmented ue residual
+        for i in 0..nsys {
+            let mut mass_contrib = 0.0;
+            for j in 0..nsys {
+                mass_contrib += self.vsol.ue_m[(i, j)] * ds_ue[j];
             }
-            
-            // First point: similarity or wake init (already handled in residual)
-            let i0 = is[0];
-            self.glob.du[(0, i0)] = -self.glob.r[3 * i0] * 0.1;     // theta
-            self.glob.du[(1, i0)] = -self.glob.r[3 * i0 + 1] * 0.1; // ds
-            self.glob.du[(2, i0)] = -self.glob.r[3 * i0 + 2] * 0.1; // sa
-            
-            // March downstream
-            for ii in 1..is.len() {
-                let i = is[ii];
-                
-                // Simple gradient descent on residual
-                for k in 0..3 {
-                    self.glob.du[(k, i)] = -self.glob.r[3 * i + k] * 0.1;
-                }
+            r[3 * nsys + i] = self.glob.ue(i) - (ueinv[i] + mass_contrib);
+        }
+
+        // Assemble Jacobian
+        let mut j = DMatrix::zeros(4 * nsys, 4 * nsys);
+        // Upper block: R_U
+        for i in 0..(3 * nsys) {
+            for k in 0..(4 * nsys) {
+                j[(i, k)] = self.glob.r_u[(i, k)];
             }
         }
-        
-        // Update ue towards inviscid value
+
+        // Lower block: ue equation
         for i in 0..nsys {
-            let ue_curr = self.glob.ue(i);
-            let ue_target = ueinv[i];
-            self.glob.du[(3, i)] = 0.1 * (ue_target - ue_curr);
+            let row = 3 * nsys + i;
+            // dR/due = I - ue_m * diag(ds)
+            j[(row, 4 * i + 3)] = 1.0;
+            for jcol in 0..nsys {
+                let ds = self.glob.delta_star(jcol);
+                let ue = self.glob.ue(jcol);
+                j[(row, 4 * jcol + 3)] -= self.vsol.ue_m[(i, jcol)] * ds;
+                j[(row, 4 * jcol + 1)] -= self.vsol.ue_m[(i, jcol)] * ue;
+            }
+        }
+
+        // Solve system
+        let decomp = j.lu();
+        if let Some(dv) = decomp.solve(&(-&r)) {
+            for i in 0..nsys {
+                for k in 0..4 {
+                    self.glob.du[(k, i)] = dv[4 * i + k];
+                }
+            }
+        } else {
+            eprintln!("Global system solve failed");
         }
     }
     
@@ -1306,4 +1702,12 @@ impl MfoilSolver {
             }
         }
     }
+}
+
+/// Thwaites stagnation-point initialization.
+fn thwaites_init(k: f64, nu: f64) -> (f64, f64) {
+    let k = k.max(1e-12);
+    let th = (0.45 * nu / (6.0 * k)).sqrt();
+    let ds = 2.2 * th;
+    (th, ds)
 }
