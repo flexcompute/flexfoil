@@ -21,7 +21,13 @@ function HomepageHeader() {
           <Link
             className="button button--secondary button--lg"
             to="/docs/xfoil-architecture-spec">
-            Read the Architecture Spec
+            XFOIL Architecture
+          </Link>
+          <Link
+            className="button button--secondary button--lg"
+            style={{marginLeft: '1rem'}}
+            to="/docs/rustfoil-implementation-plan">
+            Implementation Plan
           </Link>
         </div>
       </div>

@@ -1,5 +1,282 @@
 # Viscous Boundary Layer Solver Implementation Plan
 
+## Quick Start: Copy-Paste Prompts
+
+Use these prompts in new Cursor chats to execute each wave of tasks.
+
+### Wave 1: Test Infrastructure
+
+```
+@docs/tasks/TASK_01_TESTKIT.md
+
+Implement this task completely. Create the rustfoil-testkit crate with:
+1. Cargo.toml with serde, serde_json, tempfile dependencies
+2. src/lib.rs exporting modules
+3. src/fortran_runner.rs for compiling/running FORTRAN
+4. src/approx.rs for float comparison
+5. fortran/Makefile for building test harnesses
+6. fortran/test_closures.f with HKIN test generation
+
+Update the workspace Cargo.toml to include the new crate.
+Verify with: cd crates/rustfoil-testkit/fortran && make
+```
+
+### Wave 2: Constants
+
+```
+@docs/tasks/TASK_02_BL_CONSTANTS.md
+
+Implement this task completely. Create the rustfoil-bl crate with:
+1. Cargo.toml depending on rustfoil-core
+2. src/lib.rs
+3. src/constants.rs with all BLPAR.INC constants (SCCON, GACON, GBCON, etc.)
+4. src/closures/mod.rs (empty, ready for closure functions)
+
+Update workspace Cargo.toml. Verify with: cargo build -p rustfoil-bl
+```
+
+### Wave 3: Closures (Run these 7 prompts in PARALLEL chats)
+
+**Chat 3A - HKIN:**
+```
+@docs/tasks/TASK_03_HKIN.md
+
+Implement the HKIN closure function in rustfoil-bl/src/closures/hkin.rs.
+Port XFOIL's xblsys.f line 2276 exactly. Include:
+1. HkinResult struct with hk, hk_h, hk_msq
+2. hkin(h, msq) function
+3. Unit tests with numerical derivative verification
+4. Update closures/mod.rs to export
+
+Verify with: cargo test -p rustfoil-bl hkin
+```
+
+**Chat 3B - HS:**
+```
+@docs/tasks/TASK_04_HS.md
+
+Implement HSL and HST closures in rustfoil-bl/src/closures/hs.rs.
+Port XFOIL's xblsys.f lines 2327 (HSL) and 2388 (HST). Include:
+1. HsResult struct with hs, hs_hk, hs_rt, hs_msq
+2. hs_laminar() and hs_turbulent() functions with full derivatives
+3. Unit tests
+4. Update closures/mod.rs
+
+Verify with: cargo test -p rustfoil-bl hs
+```
+
+**Chat 3C - CF:**
+```
+@docs/tasks/TASK_05_CF.md
+
+Implement CFL and CFT closures in rustfoil-bl/src/closures/cf.rs.
+Port XFOIL's xblsys.f lines 2354 (CFL) and 2483 (CFT). Include:
+1. CfResult struct with cf, cf_hk, cf_rt, cf_msq
+2. cf_laminar() and cf_turbulent() functions
+3. Unit tests with derivative verification
+4. Update closures/mod.rs
+
+Verify with: cargo test -p rustfoil-bl cf
+```
+
+**Chat 3D - Dissipation:**
+```
+@docs/tasks/TASK_06_DISSIPATION.md
+
+Implement DIL, DIT, DILW in rustfoil-bl/src/closures/dissipation.rs.
+Port XFOIL's xblsys.f lines 2290, 2375, 2308. Include:
+1. DissipationResult structs
+2. dissipation_laminar(), dissipation_turbulent(), dissipation_wake()
+3. Unit tests
+4. Update closures/mod.rs
+
+Verify with: cargo test -p rustfoil-bl dissipation
+```
+
+**Chat 3E - Density:**
+```
+@docs/tasks/TASK_07_DENSITY.md
+
+Implement HCT in rustfoil-bl/src/closures/density.rs.
+Port XFOIL's xblsys.f line 2514. Include:
+1. HctResult struct with hc, hc_hk, hc_msq
+2. density_shape() function (Whitfield correlation)
+3. Unit tests with numerical derivative checks
+4. Update closures/mod.rs
+
+Verify with: cargo test -p rustfoil-bl density
+```
+
+**Chat 3F - Transition:**
+```
+@docs/tasks/TASK_08_TRANSITION.md
+
+Implement DAMPL in rustfoil-bl/src/transition.rs.
+Port XFOIL's xblsys.f line 1981 (Drela-Giles correlation). Include:
+1. AmplificationResult struct with ax, ax_hk, ax_th, ax_rt
+2. amplification_rate() function
+3. check_transition() helper
+4. Unit tests
+5. Update lib.rs to export
+
+Verify with: cargo test -p rustfoil-bl transition
+```
+
+**Chat 3G - State:**
+```
+@docs/tasks/TASK_09_STATE.md
+
+Implement BlStation in rustfoil-bl/src/state.rs.
+Match XFOIL's XBL.INC common block. Include:
+1. BlStation struct with all primary variables (x, u, theta, delta_star, ctau, ampl)
+2. All secondary variables (h, hk, hs, hc, r_theta, cf, cd)
+3. BlDerivatives struct for Jacobian partials
+4. BlStation::new() and BlStation::stagnation() constructors
+5. Update lib.rs to export
+
+Verify with: cargo test -p rustfoil-bl state
+```
+
+### Wave 4: Equations
+
+```
+@docs/tasks/TASK_10_EQUATIONS.md
+
+Implement BLVAR and BLDIF in rustfoil-bl/src/equations.rs.
+Port XFOIL's xblsys.f lines 784 and 1552. Include:
+1. blvar() - compute all secondary variables from primary
+2. BlResiduals struct for equation residuals
+3. BlJacobian struct for Newton blocks
+4. bldif() - compute residuals and Jacobian between stations
+5. Unit tests
+6. Update lib.rs
+
+This requires all closures from Wave 3 to be complete.
+Verify with: cargo test -p rustfoil-bl equations
+```
+
+### Wave 5: Coupling Crate
+
+```
+@docs/tasks/TASK_11_COUPLING_DIJ.md
+
+Create rustfoil-coupling crate and implement QDCALC.
+1. Create crate structure with Cargo.toml (depends on rustfoil-core, rustfoil-bl, nalgebra)
+2. src/lib.rs exporting all modules
+3. src/dij.rs with build_dij_matrix() - mass defect influence
+4. Update workspace Cargo.toml
+
+Verify with: cargo build -p rustfoil-coupling
+```
+
+### Wave 6: Newton System
+
+```
+@docs/tasks/TASK_12_COUPLING_NEWTON.md
+
+Implement BLSYS in rustfoil-coupling/src/newton.rs.
+Port XFOIL's xblsys.f line 583. Include:
+1. BlNewtonSystem struct with VA, VB blocks and RHS
+2. CoupledNewtonSystem for full viscous-inviscid coupling
+3. build() method to construct system from stations
+4. max_residual() for convergence checking
+
+Verify with: cargo test -p rustfoil-coupling newton
+```
+
+### Wave 7: Block Solver
+
+```
+@docs/tasks/TASK_13_COUPLING_SOLVE.md
+
+Implement BLSOLV in rustfoil-coupling/src/solve.rs.
+Port XFOIL's xsolve.f line 283. Include:
+1. solve_bl_system() - block Gaussian elimination
+2. Forward sweep to eliminate lower diagonal
+3. Back substitution
+4. Helper functions: invert_3x3, multiply_3x3, multiply_3x3_vec
+
+Verify with: cargo test -p rustfoil-coupling solve
+```
+
+### Wave 8: BL Marching
+
+```
+@docs/tasks/TASK_14_COUPLING_MARCH.md
+
+Implement MRCHUE and MRCHDU in rustfoil-coupling/src/march.rs.
+Port XFOIL's xbl.f lines 542 and 875. Include:
+1. MarchResult struct with stations, x_transition, x_separation
+2. MarchConfig for ncrit, tolerance, max_iter
+3. march_fixed_ue() - BL march with prescribed Ue
+4. march_coupled() - BL march with Ue updates
+
+Verify with: cargo test -p rustfoil-coupling march
+```
+
+### Wave 9: Update Functions
+
+```
+@docs/tasks/TASK_15_COUPLING_UPDATE.md
+
+Implement UPDATE and UESET in rustfoil-coupling/src/update.rs.
+Port XFOIL's xbl.f line 1253 and xpanel.f line 1758. Include:
+1. UpdateConfig for limiting parameters
+2. update_stations() - apply Newton updates with limiting
+3. set_edge_velocities() - compute Ue from inviscid + mass defect
+4. limit_change() helper for stability
+
+Verify with: cargo test -p rustfoil-coupling update
+```
+
+### Wave 10: Main Solver
+
+```
+@docs/tasks/TASK_16_VISCAL.md
+
+Implement VISCAL in rustfoil-solver/src/viscous/.
+Port XFOIL's xoper.f line 2886. Create:
+1. src/viscous/mod.rs
+2. src/viscous/config.rs - ViscousSolverConfig
+3. src/viscous/viscal.rs - solve_viscous(), solve_viscous_polar_parallel()
+4. src/viscous/forces.rs - compute_forces(), AeroForces
+5. Update rustfoil-solver Cargo.toml to depend on rustfoil-coupling
+
+Verify with: cargo build -p rustfoil-solver
+```
+
+### Wave 11: CLI Commands
+
+```
+@docs/tasks/TASK_17_CLI.md
+
+Add viscous commands to rustfoil-cli/src/main.rs. Include:
+1. ViscousCmd struct with alpha, re, mach, ncrit options
+2. ViscousPolarCmd struct with alpha range, parallel flag
+3. run_viscous() and run_viscous_polar() implementations
+4. Add to Commands enum and main match
+
+Test with: cargo run -p rustfoil-cli -- viscous --help
+```
+
+### Wave 12: Integration Tests
+
+```
+@docs/tasks/TASK_18_INTEGRATION_TESTS.md
+
+Create end-to-end tests in rustfoil-solver/tests/. Include:
+1. xfoil_comparison.rs - compare with XFOIL binary
+2. XfoilRunner helper struct
+3. test_naca0012_vs_xfoil() (ignored, run manually)
+4. test_blasius_flat_plate() - analytical validation
+5. test_transition_location()
+6. test_separation_detection()
+
+Run with: cargo test -p rustfoil-solver --test xfoil_comparison
+```
+
+---
+
 ## Overview
 
 Implement XFOIL's viscous-inviscid coupling in Rust, building on the existing inviscid solver in `/Users/harry/flexfoil/crates`. Every new Rust function will be unit tested against its FORTRAN counterpart using gfortran-compiled test harnesses.
