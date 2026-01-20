@@ -610,3 +610,26 @@ button.primary:hover {
   font-weight: 500;
   margin-top: 8px;
 }
+
+.tour-challenge__panel-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  background: rgba(255, 193, 7, 0.15);
+  border: 1px solid rgba(255, 193, 7, 0.4);
+  border-radius: 6px;
+  font-size: 13px;
+  color: #b8860b;
+}
+
+[data-theme="light"] .tour-challenge__panel-warning {
+  background: rgba(255, 193, 7, 0.1);
+  color: #856404;
+}
+
+.tour-challenge__panel-warning .tour-challenge__icon {
+  font-size: 14px;
+  color: #ffc107;
+}

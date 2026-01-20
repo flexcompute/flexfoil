@@ -15,7 +15,7 @@ import { driver, type Driver, type DriveStep } from 'driver.js';
 import 'driver.js/dist/driver.css';
 
 import { tours, type TourId, type TourStep } from './tours';
-import { getChallenge, type Challenge } from './challenges';
+import { getChallenge, isPanelVisible, getPanelDisplayName, type Challenge } from './challenges';
 import { markTourComplete, hasCompletedTour as checkTourCompleted, resetOnboarding, saveTourProgress, getTourProgress, clearTourProgress } from './storage';
 import { useLayout } from '../contexts/LayoutContext';
 
@@ -63,12 +63,25 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
 
   // Build challenge HTML for popover
   const buildChallengeHTML = useCallback((challenge: Challenge, isComplete: boolean) => {
+    // Check if required panel is visible
+    const panelVisible = challenge.requiredPanel ? isPanelVisible(challenge.requiredPanel) : true;
+    const panelName = challenge.requiredPanel ? getPanelDisplayName(challenge.requiredPanel) : '';
+    
+    // If panel not visible, show panel requirement first
+    const panelWarning = !panelVisible && challenge.requiredPanel ? `
+      <div class="tour-challenge__panel-warning">
+        <span class="tour-challenge__icon">⚠</span>
+        <span>First, open the <strong>${panelName}</strong> panel from the Window menu</span>
+      </div>
+    ` : '';
+    
     return `
       <div class="tour-challenge ${isComplete ? 'tour-challenge--complete' : ''}">
         <div class="tour-challenge__header">
           <span class="tour-challenge__icon">${isComplete ? '✓' : '→'}</span>
           <span class="tour-challenge__label">${isComplete ? 'Complete!' : 'Try it'}</span>
         </div>
+        ${panelWarning}
         <div class="tour-challenge__instruction">${challenge.instruction}</div>
         ${challenge.targetValue ? `<div class="tour-challenge__target">Target: <strong>${challenge.targetValue}</strong></div>` : ''}
         ${challenge.hint && !isComplete ? `<div class="tour-challenge__hint">${challenge.hint}</div>` : ''}
@@ -151,24 +164,43 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
           if (challenge) {
             currentChallengeRef.current = challenge;
             
-            // Start polling for challenge completion
+            // Track previous state for change detection
+            let lastPanelVisible = challenge.requiredPanel ? isPanelVisible(challenge.requiredPanel) : true;
+            let lastComplete = challenge.validate();
+            
+            // Start polling for challenge completion and panel visibility
             challengeIntervalRef.current = setInterval(() => {
-              if (challenge.validate()) {
-                clearChallengePolling();
+              const panelVisible = challenge.requiredPanel ? isPanelVisible(challenge.requiredPanel) : true;
+              const isComplete = challenge.validate();
+              
+              // Update UI if state changed
+              if (panelVisible !== lastPanelVisible || isComplete !== lastComplete) {
+                lastPanelVisible = panelVisible;
+                lastComplete = isComplete;
                 
-                // Update the popover to show completion
+                // Update the popover content
                 const popoverEl = document.querySelector('.driver-popover-description');
                 if (popoverEl && originalStep.popover) {
                   const baseDesc = originalStep.popover.description ?? '';
-                  popoverEl.innerHTML = `${baseDesc}${buildChallengeHTML(challenge, true)}`;
+                  popoverEl.innerHTML = `${baseDesc}${buildChallengeHTML(challenge, isComplete)}`;
                 }
                 
-                // Enable the next button
+                // Enable/disable next button based on completion
                 const nextBtn = document.querySelector('.driver-popover-next-btn') as HTMLButtonElement;
                 if (nextBtn) {
-                  nextBtn.disabled = false;
-                  nextBtn.classList.remove('driver-popover-btn--disabled');
+                  if (isComplete) {
+                    nextBtn.disabled = false;
+                    nextBtn.classList.remove('driver-popover-btn--disabled');
+                  } else {
+                    nextBtn.disabled = true;
+                    nextBtn.classList.add('driver-popover-btn--disabled');
+                  }
                 }
+              }
+              
+              // Stop polling once complete
+              if (isComplete) {
+                clearChallengePolling();
               }
             }, 200);
           }

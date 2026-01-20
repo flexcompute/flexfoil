@@ -23,6 +23,33 @@ export interface Challenge {
   highlightElement?: string;
   /** If true, the skip button is not shown - user must complete the challenge */
   noSkip?: boolean;
+  /** Panel that must be visible for this challenge (will prompt to open if not visible) */
+  requiredPanel?: string;
+}
+
+/**
+ * Check if a panel is visible (exists and has non-zero dimensions)
+ */
+export function isPanelVisible(panelId: string): boolean {
+  const panel = document.querySelector(`[data-tour="panel-${panelId}"]`);
+  if (!panel) return false;
+  const rect = panel.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
+/**
+ * Get the display name for a panel
+ */
+export function getPanelDisplayName(panelId: string): string {
+  const names: Record<string, string> = {
+    'solve': 'Solve',
+    'library': 'Library', 
+    'visualization': 'Visualization',
+    'control-mode': 'Control Mode',
+    'polar': 'Polar Plot',
+    'info': 'Airfoil Info',
+  };
+  return names[panelId] || panelId;
 }
 
 /**
@@ -49,6 +76,7 @@ export const challenges: Record<string, Challenge> = {
       return Math.abs(airfoil.displayAlpha - 10) < 0.5;
     },
     highlightElement: '[data-tour="solve-alpha"]',
+    requiredPanel: 'solve',
   },
 
   'run-analysis': {
@@ -62,6 +90,7 @@ export const challenges: Record<string, Challenge> = {
       return true; // Auto-complete this challenge
     },
     highlightElement: '[data-tour="solve-run"]',
+    requiredPanel: 'solve',
   },
 
   'generate-polar': {
@@ -73,6 +102,7 @@ export const challenges: Record<string, Challenge> = {
       return airfoil.polarData.length > 5;
     },
     highlightElement: '[data-tour="solve-polar"]',
+    requiredPanel: 'solve',
   },
 
   // Library challenges
@@ -86,6 +116,7 @@ export const challenges: Record<string, Challenge> = {
       return airfoil.name.includes('2412');
     },
     highlightElement: '[data-tour="panel-library"]',
+    requiredPanel: 'library',
   },
 
   'change-airfoil': {
@@ -98,6 +129,7 @@ export const challenges: Record<string, Challenge> = {
       return !airfoil.name.includes('0012');
     },
     highlightElement: '[data-tour="panel-library"]',
+    requiredPanel: 'library',
   },
 
   // Control mode challenges
@@ -110,6 +142,7 @@ export const challenges: Record<string, Challenge> = {
       return airfoil.controlMode === 'camber-spline';
     },
     highlightElement: '[data-tour="control-mode-camber"]',
+    requiredPanel: 'control-mode',
   },
 
   'switch-to-thickness': {
@@ -121,6 +154,7 @@ export const challenges: Record<string, Challenge> = {
       return airfoil.controlMode === 'thickness-spline';
     },
     highlightElement: '[data-tour="control-mode-thickness"]',
+    requiredPanel: 'control-mode',
   },
 
   // Panel visibility challenges
@@ -169,6 +203,7 @@ export const challenges: Record<string, Challenge> = {
       return viz.showStreamlines;
     },
     highlightElement: '[data-tour="viz-streamlines"]',
+    requiredPanel: 'visualization',
   },
 
   'enable-psi': {
@@ -180,6 +215,7 @@ export const challenges: Record<string, Challenge> = {
       return viz.showPsiContours;
     },
     highlightElement: '[data-tour="viz-psi"]',
+    requiredPanel: 'visualization',
   },
 
   'enable-smoke': {
@@ -191,6 +227,7 @@ export const challenges: Record<string, Challenge> = {
       return viz.showSmoke;
     },
     highlightElement: '[data-tour="viz-smoke"]',
+    requiredPanel: 'visualization',
   },
 };
 
