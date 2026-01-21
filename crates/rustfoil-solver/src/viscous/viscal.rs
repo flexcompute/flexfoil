@@ -29,7 +29,7 @@ use rustfoil_coupling::update::{set_edge_velocities, update_stations, UpdateConf
 
 use super::config::ViscousSolverConfig;
 use super::forces::compute_forces;
-use crate::error::{SolverError, SolverResult};
+use crate::{SolverError, SolverResult};
 
 /// Result of viscous solution.
 ///

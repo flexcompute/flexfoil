@@ -15,9 +15,9 @@
 //! │  │             │                    │                                 │ │
 //! │  │  Panel      │                    │  VISCAL iteration:             │ │
 //! │  │  Method     │ ◄── mass defect ── │  • march BL                    │ │
-//! │  │  (Stub)     │                    │  • Newton update               │ │
-//! │  │             │                    │  • Ue coupling                 │ │
-//! │  │  CL, CM     │                    │  • forces (CD)                 │ │
+//! │  │             │                    │  • Newton update               │ │
+//! │  │  CL, CM     │                    │  • Ue coupling                 │ │
+//! │  │             │                    │  • forces (CD)                 │ │
 //! │  └─────────────┘                    └─────────────────────────────────┘ │
 //! │         │                                        │                      │
 //! │         └────────────────┬───────────────────────┘                      │
@@ -30,28 +30,16 @@
 //!
 //! # Modules
 //!
-//! - [`error`] - Error types for solver operations
-//! - [`inviscid`] - Inviscid panel method (stub - to be replaced after merge)
+//! - [`inviscid`] - Inviscid panel method (Linear Vorticity)
 //! - [`viscous`] - Viscous boundary layer solver (VISCAL)
 //!
-//! # MERGE NOTE
-//!
-//! This crate is designed to be merged with the `flexfoil` repository's
-//! `rustfoil-solver`. After merging:
-//!
-//! 1. Replace the `inviscid/` stub with flexfoil's real implementation
-//! 2. Merge the `error.rs` variants
-//! 3. Keep the `viscous/` module as-is
-//!
-//! See the plan file for detailed merge instructions.
-//!
-//! # Example (Post-Merge)
+//! # Example
 //!
 //! ```ignore
 //! use rustfoil_core::Body;
 //! use rustfoil_solver::{
 //!     inviscid::{InviscidSolver, FlowConditions},
-//!     viscous::{ViscousSolverConfig, solve_viscous, setup_from_inviscid},
+//!     viscous::{ViscousSolverConfig, solve_viscous},
 //! };
 //!
 //! // 1. Create airfoil and solve inviscid
@@ -61,25 +49,24 @@
 //! let inv_sol = factorized.solve_alpha(&FlowConditions::with_alpha_deg(4.0));
 //!
 //! // 2. Setup viscous from inviscid
-//! let setup = setup_from_inviscid(&body, &inv_sol);
+//! let setup = ViscousSetup::from_inviscid(&body, &inv_sol);
 //! let config = ViscousSolverConfig::with_reynolds(1e6);
 //!
-//! // 3. Initialize BL and solve
-//! let mut stations = initialize_bl_stations(...);
+//! // 3. Initialize BL and solve  
+//! let mut stations = setup.initialize_bl_stations();
 //! let result = solve_viscous(&mut stations, &setup.ue_inviscid, &setup.dij, &config)?;
 //!
 //! println!("CL = {:.4}, CD = {:.5}", result.cl, result.cd);
 //! ```
 
-pub mod error;
 pub mod inviscid;
 pub mod viscous;
 
 // Re-export main types for convenience
-pub use error::{SolverError, SolverResult};
+pub use inviscid::{SolverError, SolverResult};
 
-// Re-export inviscid types (stub for now)
-pub use inviscid::{FlowConditions, InviscidSolution, InviscidSolver};
+// Re-export inviscid types
+pub use inviscid::{FlowConditions, InviscidSolution, InviscidSolver, FactorizedSolution};
 
 // Re-export viscous types
 pub use viscous::{

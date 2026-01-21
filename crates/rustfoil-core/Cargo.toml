@@ -2,6 +2,12 @@
 name = "rustfoil-core"
 version.workspace = true
 edition.workspace = true
-description = "Core types for RustFoil (stub for future integration)"
+license.workspace = true
+authors.workspace = true
+description = "Core geometry and math types for RustFoil airfoil analysis"
 
 [dependencies]
+nalgebra.workspace = true
+
+[dev-dependencies]
+approx = "0.5"
