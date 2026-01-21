@@ -14,7 +14,7 @@ Create the boundary layer crate and implement BLPAR constants.
 ### 1. Create crate structure
 
 ```
-/Users/harry/flexfoil/crates/rustfoil-bl/
+/Users/harry/flexfoil-boundary-layer/crates/rustfoil-bl/
 ├── Cargo.toml
 └── src/
     ├── lib.rs
@@ -118,7 +118,7 @@ pub use constants::*;
 ```
 
 ### 6. Update workspace Cargo.toml
-Add to `/Users/harry/flexfoil/Cargo.toml`:
+Add to `/Users/harry/flexfoil-boundary-layer/Cargo.toml`:
 ```toml
 members = [
     # ... existing members ...
@@ -129,10 +129,18 @@ members = [
 
 ## Verification
 ```bash
-cd /Users/harry/flexfoil
+cd /Users/harry/flexfoil-boundary-layer
 cargo build -p rustfoil-bl
 cargo test -p rustfoil-bl
 ```
 
 ## Next Task
 After completion, proceed to TASK_03_HKIN.md
+
+---
+
+## Documentation Requirements
+
+Also ensure that you update Docusaurus with progress.
+
+Explain what tests were for, what they show, and how they passed/failed/worked and consequences.

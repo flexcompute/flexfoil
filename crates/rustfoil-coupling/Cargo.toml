@@ -1,0 +1,13 @@
+[package]
+name = "rustfoil-coupling"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rustfoil-core = { path = "../rustfoil-core" }
+rustfoil-bl = { path = "../rustfoil-bl" }
+nalgebra = "0.33"
+
+[dev-dependencies]
+rustfoil-testkit = { path = "../rustfoil-testkit" }
+approx = "0.5"

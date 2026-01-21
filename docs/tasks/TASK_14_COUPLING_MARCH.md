@@ -1,5 +1,8 @@
 # Task 14: Implement BL Marching (MRCHUE, MRCHDU)
 
+**Status:** COMPLETE  
+**Date:** 2026-01-21
+
 ## Objective
 Implement boundary layer marching from stagnation point.
 
@@ -185,3 +188,11 @@ mod tests {
 
 ## Next Task
 After completion, proceed to TASK_15_COUPLING_UPDATE.md
+
+---
+
+## Documentation Requirements
+
+Also ensure that you update Docusaurus with progress.
+
+Explain what tests were for, what they show, and how they passed/failed/worked and consequences.

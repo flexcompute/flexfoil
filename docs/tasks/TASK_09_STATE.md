@@ -144,3 +144,11 @@ impl Default for BlStation {
 
 ## Next Task
 After completion, proceed to TASK_10_EQUATIONS.md
+
+---
+
+## Documentation Requirements
+
+Also ensure that you update Docusaurus with progress.
+
+Explain what tests were for, what they show, and how they passed/failed/worked and consequences.

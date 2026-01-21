@@ -1,5 +1,9 @@
 # Task 12: Implement BLSYS Newton System Builder
 
+**Status:** Complete  
+**Date:** 2026-01-21  
+**Tests:** 15 passed, 0 failed
+
 ## Objective
 Implement the Newton system construction for viscous-inviscid coupling.
 
@@ -131,3 +135,11 @@ mod tests {
 
 ## Next Task
 After completion, proceed to TASK_13_COUPLING_SOLVE.md
+
+---
+
+## Documentation Requirements
+
+Also ensure that you update Docusaurus with progress.
+
+Explain what tests were for, what they show, and how they passed/failed/worked and consequences.

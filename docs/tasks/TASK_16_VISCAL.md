@@ -290,3 +290,11 @@ cargo test -p rustfoil-solver viscous
 
 ## Next Task
 After completion, proceed to TASK_17_CLI.md
+
+---
+
+## Documentation Requirements
+
+Also ensure that you update Docusaurus with progress.
+
+Explain what tests were for, what they show, and how they passed/failed/worked and consequences.

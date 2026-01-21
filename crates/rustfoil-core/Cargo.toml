@@ -1,0 +1,7 @@
+[package]
+name = "rustfoil-core"
+version.workspace = true
+edition.workspace = true
+description = "Core types for RustFoil (stub for future integration)"
+
+[dependencies]

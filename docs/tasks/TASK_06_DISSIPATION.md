@@ -1,5 +1,7 @@
 # Task 06: Implement Dissipation Closures
 
+**Status:** ✅ COMPLETE (2026-01-21)
+
 ## Objective
 Implement DIL, DIT, and DILW dissipation closures.
 
@@ -10,6 +12,20 @@ Implement DIL, DIT, and DILW dissipation closures.
 - DIL: xblsys.f line 2290 (laminar dissipation)
 - DIT: xblsys.f line 2375 (turbulent dissipation)  
 - DILW: xblsys.f line 2308 (wake dissipation)
+
+## Implementation Summary
+
+**Files created:**
+- `crates/rustfoil-bl/src/closures/dissipation.rs`
+- Updated `crates/rustfoil-bl/src/closures/mod.rs`
+
+**Test Results:** `cargo test -p rustfoil-bl dissipation` → 19 passed, 0 failed
+
+**Key Implementation Notes:**
+- DIL uses actual XFOIL formula from xblsys.f (different from template below)
+- DIT takes (hs, us, cf, st) as inputs, not (hk, rt)
+- DILW includes internal HSL helper for laminar H* calculation
+- XFOIL's RCD_HK formula is empirical - preserved exactly for compatibility
 
 ## FORTRAN Reference
 
@@ -98,3 +114,11 @@ mod tests {
 
 ## Next Task
 After completion, proceed to TASK_07_DENSITY.md
+
+---
+
+## Documentation Requirements
+
+Also ensure that you update Docusaurus with progress.
+
+Explain what tests were for, what they show, and how they passed/failed/worked and consequences.

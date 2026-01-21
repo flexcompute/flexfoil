@@ -127,7 +127,7 @@ mod tests {
 ```
 
 ### 2. Add FORTRAN test to test_closures.f
-Extend `/Users/harry/flexfoil/crates/rustfoil-testkit/fortran/test_closures.f` with HKIN tests (if not already done in Task 01).
+Extend `/Users/harry/flexfoil-boundary-layer/crates/rustfoil-testkit/fortran/test_closures.f` with HKIN tests (if not already done in Task 01).
 
 ### 3. Create FORTRAN comparison test
 Add to `rustfoil-bl/tests/fortran_comparison.rs`:
@@ -184,14 +184,22 @@ pub use hkin::{hkin, HkinResult};
 ## Verification
 ```bash
 # Generate reference data
-cd /Users/harry/flexfoil/crates/rustfoil-testkit/fortran
+cd /Users/harry/flexfoil-boundary-layer/crates/rustfoil-testkit/fortran
 make run
 
 # Run Rust tests
-cd /Users/harry/flexfoil
+cd /Users/harry/flexfoil-boundary-layer
 cargo test -p rustfoil-bl
 cargo test -p rustfoil-bl test_hkin_matches_fortran
 ```
 
 ## Next Task
 After completion, proceed to TASK_04_HS.md
+
+---
+
+## Documentation Requirements
+
+Also ensure that you update Docusaurus with progress.
+
+Explain what tests were for, what they show, and how they passed/failed/worked and consequences.

@@ -11,7 +11,7 @@ Create the viscous-inviscid coupling crate and implement the mass defect influen
 
 ## Crate Structure
 ```
-/Users/harry/flexfoil/crates/rustfoil-coupling/
+/Users/harry/flexfoil-boundary-layer/crates/rustfoil-coupling/
 ├── Cargo.toml
 └── src/
     ├── lib.rs
@@ -132,3 +132,11 @@ Add rustfoil-coupling to members.
 
 ## Next Task
 After completion, proceed to TASK_12_COUPLING_NEWTON.md
+
+---
+
+## Documentation Requirements
+
+Also ensure that you update Docusaurus with progress.
+
+Explain what tests were for, what they show, and how they passed/failed/worked and consequences.

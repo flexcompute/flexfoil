@@ -214,3 +214,11 @@ cargo test -p rustfoil-solver xfoil -- --ignored
 
 After this task, the viscous solver implementation is complete. 
 Run comprehensive validation and document any limitations.
+
+---
+
+## Documentation Requirements
+
+Also ensure that you update Docusaurus with progress.
+
+Explain what tests were for, what they show, and how they passed/failed/worked and consequences.

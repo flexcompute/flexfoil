@@ -182,3 +182,11 @@ rustfoil viscous naca0012.dat -a 5.0 -r 3e6 --ncrit 7.0
 
 ## Next Task
 After completion, proceed to TASK_18_INTEGRATION_TESTS.md
+
+---
+
+## Documentation Requirements
+
+Also ensure that you update Docusaurus with progress.
+
+Explain what tests were for, what they show, and how they passed/failed/worked and consequences.

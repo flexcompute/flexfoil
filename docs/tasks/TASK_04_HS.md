@@ -157,3 +157,11 @@ cargo test -p rustfoil-bl hs
 
 ## Next Task
 After completion, proceed to TASK_05_CF.md
+
+---
+
+## Documentation Requirements
+
+Also ensure that you update Docusaurus with progress.
+
+Explain what tests were for, what they show, and how they passed/failed/worked and consequences.

@@ -1,5 +1,8 @@
 # Task 13: Implement BLSOLV Block Solver
 
+**Status:** Complete  
+**Date:** 2026-01-21
+
 ## Objective
 Implement the block Gaussian elimination solver for the BL Newton system.
 
@@ -165,3 +168,30 @@ mod tests {
 
 ## Next Task
 After completion, proceed to TASK_14_COUPLING_MARCH.md
+
+---
+
+## Documentation Requirements
+
+Also ensure that you update Docusaurus with progress.
+
+Explain what tests were for, what they show, and how they passed/failed/worked and consequences.
+
+## Verification
+
+After completing implementation and documentation:
+
+```bash
+# Run all tests
+cargo test -p rustfoil-coupling solve
+
+# Build and serve docs to verify updates
+cd docs-site
+npm run build && npm run serve
+```
+
+Verify at `http://localhost:3000`:
+1. Task 13 section renders correctly
+2. Test tables display properly
+3. Links to Wave 6 tasks work
+4. Test Issues section is updated

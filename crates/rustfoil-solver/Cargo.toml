@@ -1,0 +1,15 @@
+[package]
+name = "rustfoil-solver"
+version = "0.1.0"
+edition = "2021"
+description = "Inviscid and viscous solvers for RustFoil"
+
+[dependencies]
+rustfoil-core = { path = "../rustfoil-core" }
+rustfoil-bl = { path = "../rustfoil-bl" }
+rustfoil-coupling = { path = "../rustfoil-coupling" }
+nalgebra = "0.33"
+rayon = "1.10"
+
+[dev-dependencies]
+approx = "0.5"

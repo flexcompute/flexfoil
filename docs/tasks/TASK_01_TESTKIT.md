@@ -4,7 +4,7 @@
 Create test infrastructure for comparing Rust implementations against FORTRAN.
 
 ## Context
-- Workspace: `/Users/harry/flexfoil/crates/` (existing Rust crates)
+- Workspace: `/Users/harry/flexfoil-boundary-layer/crates/` (Rust crates)
 - FORTRAN source: `/Users/harry/flexfoil-boundary-layer/Xfoil/src/`
 - gfortran: `/opt/homebrew/bin/gfortran`
 
@@ -13,7 +13,7 @@ Create test infrastructure for comparing Rust implementations against FORTRAN.
 ### 1. Create crate structure
 
 ```
-/Users/harry/flexfoil/crates/rustfoil-testkit/
+/Users/harry/flexfoil-boundary-layer/crates/rustfoil-testkit/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs
@@ -114,7 +114,7 @@ clean:
 ```
 
 ### 8. Update workspace Cargo.toml
-Add to `/Users/harry/flexfoil/Cargo.toml`:
+Add to `/Users/harry/flexfoil-boundary-layer/Cargo.toml`:
 ```toml
 members = [
     # ... existing members ...
@@ -124,7 +124,7 @@ members = [
 
 ## Verification
 ```bash
-cd /Users/harry/flexfoil/crates/rustfoil-testkit/fortran
+cd /Users/harry/flexfoil-boundary-layer/crates/rustfoil-testkit/fortran
 make run
 # Should produce JSON output
 cat ../testdata/closures_reference.json | head -20
@@ -132,3 +132,11 @@ cat ../testdata/closures_reference.json | head -20
 
 ## Next Task
 After completion, proceed to TASK_02_BL_CONSTANTS.md
+
+---
+
+## Documentation Requirements
+
+Also ensure that you update Docusaurus with progress.
+
+Explain what tests were for, what they show, and how they passed/failed/worked and consequences.
