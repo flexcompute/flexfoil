@@ -523,8 +523,13 @@ name = "rustfoil-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "nalgebra",
+ "rayon",
+ "rustfoil-bl",
  "rustfoil-core",
+ "rustfoil-inviscid",
  "rustfoil-solver",
+ "serde_json",
  "thiserror",
 ]
 
@@ -548,6 +553,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustfoil-inviscid"
+version = "0.1.0"
+dependencies = [
+ "approx",
+ "nalgebra",
+ "rustfoil-core",
+ "rustfoil-testkit",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "rustfoil-solver"
 version = "0.1.0"
 dependencies = [
@@ -557,6 +575,9 @@ dependencies = [
  "rustfoil-bl",
  "rustfoil-core",
  "rustfoil-coupling",
+ "rustfoil-inviscid",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

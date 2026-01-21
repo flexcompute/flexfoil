@@ -8,12 +8,17 @@
 //! - [`constants`] - BLPAR constants from XFOIL
 //! - [`state`] - BlStation struct for BL state at a single point
 //! - [`equations`] - BLVAR/BLDIF for computing secondary variables and residuals
+//! - [`debug`] - Debug output for XFOIL comparison
 
 pub mod closures;
 pub mod constants;
+pub mod debug;
 pub mod equations;
 pub mod state;
 
 pub use constants::*;
-pub use equations::{bldif, blvar, BlJacobian, BlResiduals, FlowType};
+pub use debug::{
+    add_event, finalize_debug, init_debug, is_debug_active, BlvarInput, BlvarOutput, DebugEvent,
+};
+pub use equations::{bldif, bldif_debug, blvar, blvar_debug, BlJacobian, BlResiduals, FlowType};
 pub use state::{BlDerivatives, BlStation};

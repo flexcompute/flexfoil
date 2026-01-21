@@ -1,0 +1,17 @@
+[package]
+name = "rustfoil-inviscid"
+version = "0.1.0"
+edition = "2021"
+description = "XFOIL-matching inviscid panel method solver"
+authors = ["RustFoil Contributors"]
+
+[dependencies]
+rustfoil-core = { path = "../rustfoil-core" }
+nalgebra = "0.33"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+rustfoil-testkit = { path = "../rustfoil-testkit" }
+approx = "0.5"

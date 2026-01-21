@@ -281,6 +281,169 @@ pub fn find_stagnation_by_sign_change(ue: &[f64]) -> usize {
     find_stagnation(ue)
 }
 
+/// Interpolate exact stagnation point location (XFOIL STFIND).
+///
+/// Finds where gamma changes from positive to negative and interpolates
+/// the exact arc length where Ue = 0. This is critical for proper BL setup
+/// because both surfaces must start at the true stagnation point with Ue ≈ 0
+/// and have monotonically increasing velocity downstream.
+///
+/// # Arguments
+/// * `gamma` - Surface velocities (signed, from inviscid solver)
+/// * `s` - Arc lengths along full airfoil (from `compute_arc_lengths`)
+///
+/// # Returns
+/// Tuple of (ist, sst, ue_stag):
+/// - `ist`: Panel index where sign change occurs (stagnation is between ist and ist+1)
+/// - `sst`: Interpolated arc length at exact stagnation point
+/// - `ue_stag`: Interpolated velocity at stagnation (should be ≈ 0)
+///
+/// # XFOIL Reference
+/// STFIND in xpanel.f (line 1357)
+pub fn interpolate_stagnation(gamma: &[f64], s: &[f64]) -> (usize, f64, f64) {
+    assert_eq!(gamma.len(), s.len(), "gamma and s must have same length");
+    
+    if gamma.len() < 2 {
+        return (0, s.get(0).copied().unwrap_or(0.0), gamma.get(0).copied().unwrap_or(0.0));
+    }
+    
+    // Find where gamma changes from positive to negative (XFOIL convention)
+    for i in 0..gamma.len() - 1 {
+        if gamma[i] >= 0.0 && gamma[i + 1] < 0.0 {
+            let dgam = gamma[i + 1] - gamma[i];
+            let ds = s[i + 1] - s[i];
+            
+            // Linear interpolation to find exact crossing point
+            // Use the formula that minimizes roundoff (from XFOIL)
+            let sst = if gamma[i] < -gamma[i + 1] {
+                s[i] - ds * (gamma[i] / dgam)
+            } else {
+                s[i + 1] - ds * (gamma[i + 1] / dgam)
+            };
+            
+            // Tweak if stagnation falls exactly on a node (very unlikely)
+            let sst = if sst <= s[i] {
+                s[i] + 1.0e-10
+            } else if sst >= s[i + 1] {
+                s[i + 1] - 1.0e-10
+            } else {
+                sst
+            };
+            
+            // Interpolate Ue at stagnation (should be very close to 0)
+            let frac = (sst - s[i]) / ds;
+            let ue_stag = gamma[i] + frac * dgam;
+            
+            return (i, sst, ue_stag);
+        }
+    }
+    
+    // No sign change found - fallback to minimum |gamma|
+    let ist = find_stagnation(gamma);
+    (ist, s[ist], gamma[ist])
+}
+
+/// Extract surface with XFOIL-style arc lengths from interpolated stagnation.
+///
+/// This function implements XFOIL's IBLPAN + XICALC approach:
+/// - Includes a virtual stagnation point at arc=0 (like XFOIL's IBL=1)
+/// - Upper surface: virtual stagnation + panels from IST down to 0
+/// - Lower surface: virtual stagnation + panels from IST+1 to N
+///
+/// Both surfaces start at arc=0 (stagnation) with Ue≈0 (interpolated) and have
+/// monotonically increasing arc lengths.
+///
+/// # Arguments
+/// * `ist` - Stagnation panel index (from `interpolate_stagnation`)
+/// * `sst` - Interpolated stagnation arc length
+/// * `ue_stag` - Interpolated Ue at stagnation (should be ≈0)
+/// * `s` - Full airfoil arc lengths
+/// * `x`, `y` - Full airfoil coordinates
+/// * `ue` - Edge velocities (signed)
+/// * `is_upper` - true for upper surface, false for lower
+///
+/// # Returns
+/// Tuple of (arc, x, y, ue) for the surface:
+/// - `arc`: Arc lengths from stagnation (starts at 0 for virtual stagnation point)
+/// - `x`, `y`: Surface coordinates
+/// - `ue`: Edge velocities (absolute values)
+///
+/// # XFOIL Reference
+/// IBLPAN (line 1395) + XICALC (line 1455) in xpanel.f
+pub fn extract_surface_xfoil(
+    ist: usize,
+    sst: f64,
+    ue_stag: f64,
+    s: &[f64],
+    x: &[f64],
+    y: &[f64],
+    ue: &[f64],
+    is_upper: bool,
+) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+    let n = s.len();
+    assert_eq!(n, x.len());
+    assert_eq!(n, y.len());
+    assert_eq!(n, ue.len());
+    
+    // Minimum arc length near stagnation (XFOIL XFEPS)
+    let xeps = 1.0e-10 * (s[n - 1] - s[0]).abs().max(1.0);
+    
+    // Interpolate position at stagnation point
+    // sst is between s[ist] and s[ist+1]
+    let ist_next = (ist + 1).min(n - 1);
+    let frac = if s[ist_next] != s[ist] {
+        ((sst - s[ist]) / (s[ist_next] - s[ist])).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let x_stag = x[ist] + frac * (x[ist_next] - x[ist]);
+    let y_stag = y[ist] + frac * (y[ist_next] - y[ist]);
+    
+    if is_upper {
+        // Upper surface: virtual stagnation + panels IST down to 0
+        // Arc length = SST - S[i] (S decreases as we go upstream, so arc increases)
+        // IST is the first real panel before stagnation, matching XFOIL's IBL=2
+        let indices: Vec<usize> = (0..=ist).rev().collect();
+        
+        // Start with virtual stagnation point (arc=0, Ue≈0)
+        let mut arc = vec![xeps]; // Very small arc, not exactly 0 to avoid division issues
+        let mut x_surf = vec![x_stag];
+        let mut y_surf = vec![y_stag];
+        let mut ue_surf = vec![ue_stag.abs().max(0.001)]; // Small but positive Ue
+        
+        // Add real panels
+        for &i in &indices {
+            arc.push((sst - s[i]).max(xeps));
+            x_surf.push(x[i]);
+            y_surf.push(y[i]);
+            ue_surf.push(ue[i].abs());
+        }
+        
+        (arc, x_surf, y_surf, ue_surf)
+    } else {
+        // Lower surface: virtual stagnation + panels IST+1 to N-1
+        // Arc length = S[i] - SST (S increases as we go downstream)
+        let start = (ist + 1).min(n - 1);
+        let indices: Vec<usize> = (start..n).collect();
+        
+        // Start with virtual stagnation point (arc=0, Ue≈0)
+        let mut arc = vec![xeps];
+        let mut x_surf = vec![x_stag];
+        let mut y_surf = vec![y_stag];
+        let mut ue_surf = vec![ue_stag.abs().max(0.001)];
+        
+        // Add real panels
+        for &i in &indices {
+            arc.push((s[i] - sst).max(xeps));
+            x_surf.push(x[i]);
+            y_surf.push(y[i]);
+            ue_surf.push(ue[i].abs());
+        }
+        
+        (arc, x_surf, y_surf, ue_surf)
+    }
+}
+
 /// Initialize BL stations from inviscid solution.
 ///
 /// Creates a vector of BlStation objects initialized with the inviscid
@@ -374,60 +537,211 @@ pub fn initialize_surface_stations(arc_lengths: &[f64], ue: &[f64], re: f64) -> 
 }
 
 // =============================================================================
-// Post-Merge Functions (uncomment after merging with flexfoil)
+// Integration with rustfoil-inviscid
 // =============================================================================
 
-// MERGE NOTE: Uncomment and use after merging with flexfoil.
-// The types Body and InviscidSolution will come from the real solver.
-//
-// use crate::inviscid::InviscidSolution;
-// use rustfoil_core::Body;
-//
-// /// Full setup from Body + InviscidSolution.
-// ///
-// /// This is the main entry point after merging with flexfoil.
-// /// It extracts all necessary data from the inviscid solution.
-// ///
-// /// # Arguments
-// /// * `body` - Airfoil body with panel geometry
-// /// * `solution` - Inviscid solution with gamma (= surface velocity)
-// ///
-// /// # Returns
-// /// ViscousSetup ready for solve_viscous()
-// pub fn setup_from_inviscid(body: &Body, solution: &InviscidSolution) -> ViscousSetup {
-//     let panels = body.panels();
-//     
-//     // Extract panel coordinates
-//     let panel_x: Vec<f64> = panels.iter().map(|p| p.midpoint().x).collect();
-//     let panel_y: Vec<f64> = panels.iter().map(|p| p.midpoint().y).collect();
-//     
-//     // Compute arc lengths from panel coordinates
-//     let arc_lengths = compute_arc_lengths(&panel_x, &panel_y);
-//     
-//     // gamma IS the surface velocity (edge velocity for BL)
-//     let ue_inviscid = solution.gamma.clone();
-//     
-//     // Build DIJ matrix from panel geometry
-//     let dij = build_dij_matrix(&panel_x, &panel_y);
-//     
-//     // Find stagnation point
-//     let stagnation_index = find_stagnation(&ue_inviscid);
-//     
-//     let n = arc_lengths.len();
-//     let n_upper = n - stagnation_index;
-//     let n_lower = stagnation_index;
-//     
-//     ViscousSetup {
-//         arc_lengths,
-//         ue_inviscid,
-//         dij,
-//         panel_x,
-//         panel_y,
-//         stagnation_index,
-//         n_upper,
-//         n_lower,
-//     }
-// }
+use rustfoil_core::Body;
+use rustfoil_inviscid::{FlowConditions as InviscidFlowConditions, InviscidSolution, InviscidSolver};
+
+/// Error type for setup operations
+#[derive(Debug)]
+pub enum SetupError {
+    /// Inviscid solver error
+    InviscidError(String),
+    /// Geometry error
+    GeometryError(String),
+}
+
+impl std::fmt::Display for SetupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SetupError::InviscidError(msg) => write!(f, "Inviscid solver error: {}", msg),
+            SetupError::GeometryError(msg) => write!(f, "Geometry error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for SetupError {}
+
+impl From<rustfoil_inviscid::InviscidError> for SetupError {
+    fn from(e: rustfoil_inviscid::InviscidError) -> Self {
+        SetupError::InviscidError(e.to_string())
+    }
+}
+
+/// Result of viscous setup from body.
+#[derive(Debug, Clone)]
+pub struct ViscousSetupResult {
+    /// Inviscid solution
+    pub inviscid: InviscidSolution,
+    /// Viscous solver setup data
+    pub setup: ViscousSetup,
+    /// Node x-coordinates
+    pub node_x: Vec<f64>,
+    /// Node y-coordinates  
+    pub node_y: Vec<f64>,
+    /// Stagnation panel index (IST)
+    pub ist: usize,
+    /// Interpolated stagnation arc length (SST)
+    pub sst: f64,
+}
+
+/// Setup viscous solver from Body and angle of attack.
+///
+/// This function:
+/// 1. Converts Body coordinates to the format expected by rustfoil-inviscid
+/// 2. Runs the inviscid solver at the given angle of attack
+/// 3. Extracts stagnation point using XFOIL's STFIND algorithm
+/// 4. Builds the ViscousSetup structure
+///
+/// # Arguments
+/// * `body` - Airfoil body with panel geometry
+/// * `alpha_deg` - Angle of attack in degrees
+///
+/// # Returns
+/// `ViscousSetupResult` containing the inviscid solution and viscous setup data.
+///
+/// # Example
+/// ```rust,ignore
+/// use rustfoil_core::Body;
+/// use rustfoil_solver::viscous::setup_from_body;
+///
+/// let body = Body::from_naca("0012", 160)?;
+/// let result = setup_from_body(&body, 4.0)?;
+/// println!("CL = {:.4}", result.inviscid.cl);
+/// ```
+pub fn setup_from_body(body: &Body, alpha_deg: f64) -> Result<ViscousSetupResult, SetupError> {
+    let panels = body.panels();
+    let n_panels = panels.len();
+    
+    if n_panels < 3 {
+        return Err(SetupError::GeometryError(
+            "Need at least 3 panels".to_string()
+        ));
+    }
+    
+    // Extract node coordinates (p1 of each panel)
+    let mut node_x: Vec<f64> = panels.iter().map(|p| p.p1.x).collect();
+    let mut node_y: Vec<f64> = panels.iter().map(|p| p.p1.y).collect();
+    
+    // Check if contour is closed (sharp TE) or open (blunt TE)
+    let last_p2 = panels.last().unwrap().p2;
+    let first_p1 = panels[0].p1;
+    let is_closed = (last_p2.x - first_p1.x).abs() < 1e-10 
+                 && (last_p2.y - first_p1.y).abs() < 1e-10;
+    
+    if !is_closed {
+        // Blunt TE: add the lower TE node
+        node_x.push(last_p2.x);
+        node_y.push(last_p2.y);
+    }
+    
+    // Convert to tuples for rustfoil-inviscid
+    let coords: Vec<(f64, f64)> = node_x.iter()
+        .zip(node_y.iter())
+        .map(|(&x, &y)| (x, y))
+        .collect();
+    
+    // Run inviscid solver
+    let solver = InviscidSolver::new();
+    let factorized = solver.factorize(&coords)?;
+    let flow = InviscidFlowConditions::with_alpha_deg(alpha_deg);
+    let inv_solution = factorized.solve_alpha(&flow);
+    
+    // gamma IS the surface velocity in XFOIL's formulation
+    let ue_inviscid = inv_solution.gamma.clone();
+    
+    // Compute arc lengths
+    let arc_lengths = compute_arc_lengths(&node_x, &node_y);
+    
+    // Find stagnation using XFOIL's interpolation method
+    let (ist, sst, _ue_stag) = interpolate_stagnation(&ue_inviscid, &arc_lengths);
+    
+    // Build DIJ matrix
+    let dij = build_dij_matrix(&node_x, &node_y);
+    
+    // Determine upper/lower counts based on stagnation
+    let n = arc_lengths.len();
+    let n_upper = n - ist;
+    let n_lower = ist + 1;
+    
+    let setup = ViscousSetup {
+        arc_lengths: arc_lengths.clone(),
+        ue_inviscid,
+        dij,
+        panel_x: node_x.clone(),
+        panel_y: node_y.clone(),
+        stagnation_index: ist,
+        n_upper,
+        n_lower,
+    };
+    
+    Ok(ViscousSetupResult {
+        inviscid: inv_solution,
+        setup,
+        node_x,
+        node_y,
+        ist,
+        sst,
+    })
+}
+
+/// Setup viscous solver from raw coordinates.
+///
+/// Alternative to `setup_from_body()` when you have coordinates directly
+/// (e.g., from XFOIL coordinate file).
+///
+/// # Arguments
+/// * `coords` - Airfoil coordinates as (x, y) pairs, counter-clockwise from upper TE
+/// * `alpha_deg` - Angle of attack in degrees
+///
+/// # Returns
+/// `ViscousSetupResult` containing the inviscid solution and viscous setup data.
+pub fn setup_from_coords(coords: &[(f64, f64)], alpha_deg: f64) -> Result<ViscousSetupResult, SetupError> {
+    if coords.len() < 4 {
+        return Err(SetupError::GeometryError(
+            "Need at least 4 coordinate points".to_string()
+        ));
+    }
+    
+    let node_x: Vec<f64> = coords.iter().map(|(x, _)| *x).collect();
+    let node_y: Vec<f64> = coords.iter().map(|(_, y)| *y).collect();
+    
+    // Run inviscid solver
+    let solver = InviscidSolver::new();
+    let factorized = solver.factorize(coords)?;
+    let flow = InviscidFlowConditions::with_alpha_deg(alpha_deg);
+    let inv_solution = factorized.solve_alpha(&flow);
+    
+    let ue_inviscid = inv_solution.gamma.clone();
+    let arc_lengths = compute_arc_lengths(&node_x, &node_y);
+    let (ist, sst, _) = interpolate_stagnation(&ue_inviscid, &arc_lengths);
+    let dij = build_dij_matrix(&node_x, &node_y);
+    
+    let n = arc_lengths.len();
+    let n_upper = n - ist;
+    let n_lower = ist + 1;
+    
+    let setup = ViscousSetup {
+        arc_lengths: arc_lengths.clone(),
+        ue_inviscid,
+        dij,
+        panel_x: node_x.clone(),
+        panel_y: node_y.clone(),
+        stagnation_index: ist,
+        n_upper,
+        n_lower,
+    };
+    
+    Ok(ViscousSetupResult {
+        inviscid: inv_solution,
+        setup,
+        node_x,
+        node_y,
+        ist,
+        sst,
+    })
+}
 
 #[cfg(test)]
 mod tests {

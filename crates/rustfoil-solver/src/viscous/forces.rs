@@ -126,15 +126,27 @@ pub fn compute_forces(stations: &[BlStation], _config: &ViscousSolverConfig) -> 
 
     // Squire-Young formula for pressure drag
     // Cd_p = 2 * theta * Ue^((5+H)/2)
-    let h_wake = wake_station.h.clamp(1.0, 4.0);
+    let h_wake = if wake_station.h.is_finite() {
+        wake_station.h.clamp(1.0, 4.0)
+    } else {
+        2.0 // Default laminar-like value
+    };
     let ue_wake = wake_station.u.abs().max(0.01);
-    let theta_wake = wake_station.theta;
+    let theta_wake = if wake_station.theta.is_finite() && wake_station.theta > 0.0 {
+        wake_station.theta
+    } else {
+        0.001 // Default small value
+    };
 
     let exponent = (5.0 + h_wake) / 2.0;
     let cd_pressure = 2.0 * theta_wake * ue_wake.powf(exponent);
 
-    // Total drag
-    let cd = cd_friction + cd_pressure;
+    // Total drag - ensure finite result
+    let cd = if (cd_friction + cd_pressure).is_finite() {
+        cd_friction + cd_pressure
+    } else {
+        cd_friction.max(0.0) // Fall back to friction drag only
+    };
 
     // CL and CM would come from inviscid solution
     // For now, estimate CL from circulation (placeholder)

@@ -72,4 +72,6 @@ pub use inviscid::{FlowConditions, InviscidSolution, InviscidSolver, FactorizedS
 pub use viscous::{
     compute_forces, solve_viscous, solve_viscous_polar_parallel, AeroForces, ViscousResult,
     ViscousSolverConfig, ViscousSetup,
+    // New integration with rustfoil-inviscid
+    setup_from_body, setup_from_coords, SetupError, ViscousSetupResult,
 };
