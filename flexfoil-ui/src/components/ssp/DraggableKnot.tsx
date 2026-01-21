@@ -4,6 +4,7 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import type { SpacingKnot } from '../../types';
+import { pauseHistory, resumeHistory } from '../../stores/airfoilStore';
 
 interface DraggableKnotProps {
   index: number;
@@ -83,6 +84,7 @@ export const DraggableKnot: React.FC<DraggableKnotProps> = ({
     
     e.preventDefault();
     e.stopPropagation();
+    pauseHistory(); // Pause history tracking during drag
     setIsDragging(true);
   }, [index, canRemove, isFirst, isLast, onRemoveKnot]);
 
@@ -91,6 +93,7 @@ export const DraggableKnot: React.FC<DraggableKnotProps> = ({
     e.preventDefault();
     e.stopPropagation();
     hasMoved.current = false;
+    pauseHistory(); // Pause history tracking during drag
     setIsDragging(true);
     
     // Start long press timer for removal
@@ -98,6 +101,7 @@ export const DraggableKnot: React.FC<DraggableKnotProps> = ({
       longPressTimerRef.current = window.setTimeout(() => {
         if (!hasMoved.current) {
           setIsDragging(false);
+          resumeHistory(); // Resume history if we're removing
           onRemoveKnot(index);
         }
       }, LONG_PRESS_DURATION);
@@ -159,11 +163,13 @@ export const DraggableKnot: React.FC<DraggableKnotProps> = ({
 
   const handleMouseUp = useCallback(() => {
     setIsDragging(false);
+    resumeHistory(); // Resume history tracking after drag
   }, []);
 
   const handleTouchEnd = useCallback(() => {
     setIsDragging(false);
     clearLongPress();
+    resumeHistory(); // Resume history tracking after drag
   }, [clearLongPress]);
 
   // Add global event listeners for drag
@@ -209,15 +215,17 @@ export const DraggableKnot: React.FC<DraggableKnotProps> = ({
   }
 
   // Color coding
-  let fillColor = 'var(--accent-primary, #2196F3)';
+  let fillColor = 'var(--accent-primary)';
+  let strokeColor = 'var(--accent-primary)';
+  
   if (isFirst || isLast) {
-    fillColor = 'var(--accent-success, #4CAF50)';
+    fillColor = 'var(--accent-success, var(--accent-primary))';
+    strokeColor = 'var(--accent-success, var(--accent-primary))';
   }
+  
   if (isHovered) {
-    fillColor = isDragging ? '#1565C0' : '#42A5F5';
-    if (isFirst || isLast) {
-      fillColor = isDragging ? '#2E7D32' : '#66BB6A';
-    }
+    fillColor = 'var(--accent-warning)';
+    strokeColor = 'var(--accent-warning)';
   }
 
   return (
@@ -241,7 +249,7 @@ export const DraggableKnot: React.FC<DraggableKnotProps> = ({
         cy={cy}
         r={isDragging ? KNOT_RADIUS + 2 : KNOT_RADIUS}
         fill={fillColor}
-        stroke={isDragging ? '#0D47A1' : 'var(--accent-primary, #1976D2)'}
+        stroke={strokeColor}
         strokeWidth={isDragging ? 3 : 2}
         style={{ 
           cursor,
@@ -256,7 +264,7 @@ export const DraggableKnot: React.FC<DraggableKnotProps> = ({
           y={cy - KNOT_RADIUS - 8}
           textAnchor="middle"
           fontSize="11"
-          fill="var(--text-primary, #333)"
+          fill="var(--text-primary)"
           fontWeight="500"
         >
           ({knot.S.toFixed(2)}, {knot.F.toFixed(2)})

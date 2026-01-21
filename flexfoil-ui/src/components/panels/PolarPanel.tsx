@@ -1,40 +1,24 @@
 /**
  * PolarPanel - Aerodynamic polar plot visualization
  * 
- * Displays polar data (Cl vs alpha, Cl vs Cd, Cl vs Cm, etc.) with configurable axes.
- * Supports both inviscid and viscous polars.
+ * Displays polar data (Cl vs alpha, Cl vs Cm, etc.) with configurable axes.
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
 import type { PolarPoint } from '../../types';
 
-type AxisVariable = 'alpha' | 'cl' | 'cd' | 'cm' | 'ld';
+type AxisVariable = 'alpha' | 'cl' | 'cm';
 
 const AXIS_LABELS: Record<AxisVariable, string> = {
   alpha: 'α (deg)',
   cl: 'Cl',
-  cd: 'Cd',
   cm: 'Cm',
-  ld: 'L/D',
 };
 
 // Get value from polar point by variable name
 function getValue(point: PolarPoint, variable: AxisVariable): number {
-  switch (variable) {
-    case 'alpha':
-      return point.alpha;
-    case 'cl':
-      return point.cl;
-    case 'cd':
-      return point.cd ?? 0;
-    case 'cm':
-      return point.cm;
-    case 'ld':
-      return point.cd && point.cd > 0 ? point.cl / point.cd : 0;
-    default:
-      return 0;
-  }
+  return point[variable];
 }
 
 // Auto-scale axis bounds with some padding
@@ -49,8 +33,6 @@ function getAxisBounds(values: number[]): [number, number] {
 // Generate nice tick values
 function generateTicks(min: number, max: number, count: number = 5): number[] {
   const range = max - min;
-  if (range <= 0) return [min];
-  
   const step = range / (count - 1);
   
   // Round step to nice value
@@ -69,19 +51,13 @@ function generateTicks(min: number, max: number, count: number = 5): number[] {
 }
 
 export function PolarPanel() {
-  const { polarData, solverMode } = useAirfoilStore();
+  const { polarData } = useAirfoilStore();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
-  // Default to Cl vs alpha, but Cl vs Cd for viscous
   const [xAxis, setXAxis] = useState<AxisVariable>('alpha');
   const [yAxis, setYAxis] = useState<AxisVariable>('cl');
   const [canvasSize, setCanvasSize] = useState({ width: 400, height: 300 });
-  
-  // Check if we have Cd data
-  const hasCdData = useMemo(() => {
-    return polarData.some(p => p.cd !== undefined && p.cd !== null);
-  }, [polarData]);
   
   // Margins for axis labels
   const margin = { top: 20, right: 20, bottom: 40, left: 50 };
@@ -127,7 +103,8 @@ export function PolarPanel() {
     };
     
     // Draw grid
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.strokeStyle = getComputedStyle(document.documentElement)
+      .getPropertyValue('--foil-grid').trim() || '#333333';
     ctx.lineWidth = 1;
     
     const xTicks = generateTicks(xBounds[0], xBounds[1]);
@@ -150,7 +127,9 @@ export function PolarPanel() {
     }
     
     // Draw axes
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.strokeStyle = getComputedStyle(document.documentElement)
+      .getPropertyValue('--text-secondary').trim() || '#888888';
+    ctx.globalAlpha = 0.3;
     ctx.lineWidth = 1;
     
     // X axis
@@ -165,27 +144,29 @@ export function PolarPanel() {
     ctx.lineTo(margin.left, height - margin.bottom);
     ctx.stroke();
     
+    ctx.globalAlpha = 1; // Reset alpha
+    
     // Draw tick labels
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+    ctx.fillStyle = getComputedStyle(document.documentElement)
+      .getPropertyValue('--text-secondary').trim() || '#888888';
     ctx.font = '10px sans-serif';
     ctx.textAlign = 'center';
     
     for (const x of xTicks) {
       const cx = toCanvasX(x);
-      const label = xAxis === 'cd' ? x.toFixed(4) : x.toFixed(1);
-      ctx.fillText(label, cx, height - margin.bottom + 15);
+      ctx.fillText(x.toFixed(1), cx, height - margin.bottom + 15);
     }
     
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
     for (const y of yTicks) {
       const cy = toCanvasY(y);
-      const label = yAxis === 'cd' ? y.toFixed(4) : y.toFixed(2);
-      ctx.fillText(label, margin.left - 5, cy);
+      ctx.fillText(y.toFixed(2), margin.left - 5, cy);
     }
     
     // Draw axis labels
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.fillStyle = getComputedStyle(document.documentElement)
+      .getPropertyValue('--text-primary').trim() || '#000000';
     ctx.font = '12px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
@@ -201,7 +182,9 @@ export function PolarPanel() {
     // Draw data points and line
     if (polarData.length > 0) {
       // Line
-      ctx.strokeStyle = hasCdData ? 'rgba(0, 200, 150, 0.8)' : 'rgba(100, 150, 255, 0.8)';
+      ctx.strokeStyle = getComputedStyle(document.documentElement)
+        .getPropertyValue('--foil-line').trim() || '#00d4aa';
+      ctx.globalAlpha = 0.8;
       ctx.lineWidth = 2;
       ctx.beginPath();
       
@@ -216,8 +199,11 @@ export function PolarPanel() {
       }
       ctx.stroke();
       
+      ctx.globalAlpha = 1; // Reset alpha
+      
       // Points
-      ctx.fillStyle = hasCdData ? '#00d4aa' : '#6b9fff';
+      ctx.fillStyle = getComputedStyle(document.documentElement)
+        .getPropertyValue('--foil-line').trim() || '#00d4aa';
       for (let i = 0; i < polarData.length; i++) {
         const x = toCanvasX(xValues[i]);
         const y = toCanvasY(yValues[i]);
@@ -225,50 +211,16 @@ export function PolarPanel() {
         ctx.arc(x, y, 4, 0, Math.PI * 2);
         ctx.fill();
       }
-      
-      // Highlight max L/D point if showing drag polar
-      if (xAxis === 'cd' && yAxis === 'cl' && hasCdData) {
-        let maxLD = 0;
-        let maxLDIdx = 0;
-        for (let i = 0; i < polarData.length; i++) {
-          const ld = getValue(polarData[i], 'ld');
-          if (ld > maxLD) {
-            maxLD = ld;
-            maxLDIdx = i;
-          }
-        }
-        
-        if (maxLD > 0) {
-          const x = toCanvasX(xValues[maxLDIdx]);
-          const y = toCanvasY(yValues[maxLDIdx]);
-          
-          ctx.strokeStyle = '#ffcc00';
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.arc(x, y, 8, 0, Math.PI * 2);
-          ctx.stroke();
-          
-          ctx.fillStyle = '#ffcc00';
-          ctx.font = '10px sans-serif';
-          ctx.textAlign = 'left';
-          ctx.fillText(`Max L/D = ${maxLD.toFixed(1)}`, x + 12, y);
-        }
-      }
     } else {
       // No data message
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+      ctx.fillStyle = getComputedStyle(document.documentElement)
+        .getPropertyValue('--text-secondary').trim() || '#888888';
       ctx.font = '14px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('No polar data. Run a polar sweep in the Solve panel.', width / 2, height / 2);
     }
-    
-    // Mode indicator
-    ctx.fillStyle = hasCdData ? '#00d4aa' : '#6b9fff';
-    ctx.font = '10px sans-serif';
-    ctx.textAlign = 'right';
-    ctx.fillText(hasCdData ? 'Viscous' : 'Inviscid', width - margin.right, margin.top - 5);
-  }, [canvasSize, polarData, xAxis, yAxis, xBounds, yBounds, xValues, yValues, hasCdData]);
+  }, [canvasSize, polarData, xAxis, yAxis, xBounds, yBounds, xValues, yValues]);
   
   // Resize observer
   useEffect(() => {
@@ -305,7 +257,6 @@ export function PolarPanel() {
         padding: '8px',
         borderBottom: '1px solid var(--border-color)',
         alignItems: 'center',
-        flexWrap: 'wrap',
       }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}>
           X:
@@ -316,9 +267,7 @@ export function PolarPanel() {
           >
             <option value="alpha">Alpha</option>
             <option value="cl">Cl</option>
-            <option value="cd" disabled={!hasCdData}>Cd {!hasCdData ? '(viscous only)' : ''}</option>
             <option value="cm">Cm</option>
-            <option value="ld" disabled={!hasCdData}>L/D {!hasCdData ? '(viscous only)' : ''}</option>
           </select>
         </label>
         
@@ -331,37 +280,9 @@ export function PolarPanel() {
           >
             <option value="alpha">Alpha</option>
             <option value="cl">Cl</option>
-            <option value="cd" disabled={!hasCdData}>Cd {!hasCdData ? '(viscous only)' : ''}</option>
             <option value="cm">Cm</option>
-            <option value="ld" disabled={!hasCdData}>L/D {!hasCdData ? '(viscous only)' : ''}</option>
           </select>
         </label>
-        
-        {/* Quick presets */}
-        <div style={{ display: 'flex', gap: '4px' }}>
-          <button
-            onClick={() => { setXAxis('alpha'); setYAxis('cl'); }}
-            style={{ padding: '2px 6px', fontSize: '10px' }}
-          >
-            Cl-α
-          </button>
-          {hasCdData && (
-            <>
-              <button
-                onClick={() => { setXAxis('cd'); setYAxis('cl'); }}
-                style={{ padding: '2px 6px', fontSize: '10px' }}
-              >
-                Drag Polar
-              </button>
-              <button
-                onClick={() => { setXAxis('alpha'); setYAxis('ld'); }}
-                style={{ padding: '2px 6px', fontSize: '10px' }}
-              >
-                L/D-α
-              </button>
-            </>
-          )}
-        </div>
         
         <span style={{ 
           marginLeft: 'auto', 

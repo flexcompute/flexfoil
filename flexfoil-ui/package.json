@@ -10,11 +10,17 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@types/d3-contour": "^3.0.6",
+    "@types/d3-geo": "^3.1.0",
+    "d3-contour": "^4.0.2",
+    "d3-geo": "^3.1.1",
+    "driver.js": "^1.4.0",
     "flexlayout-react": "^0.8.18",
     "lz-string": "^1.5.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "rustfoil-wasm": "file:../pkg",
+    "zundo": "^2.3.0",
     "zustand": "^5.0.10"
   },
   "devDependencies": {
@@ -24,6 +30,7 @@
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
+    "@webgpu/types": "^0.1.69",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",

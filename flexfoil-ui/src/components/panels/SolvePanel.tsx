@@ -4,58 +4,64 @@
  * Provides:
  * - Single-point analysis (run at alpha or CL)
  * - Alpha polar generation
- * - Inviscid/Viscous mode switch
- * - Reynolds number control
+ * - Inviscid/Viscous mode switch (viscous disabled for now)
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
-import { 
-  analyzeAirfoil, 
-  analyzeViscousExtended,
-  isWasmReady, 
-  type AnalysisResult,
-  type ViscousAnalysisResult,
-  TurbulentModelNames,
-  TurbulentModelDescriptions,
-  type TurbulentModel
-} from '../../lib/wasm';
-import type { PolarPoint, SolverMode } from '../../types';
+import { analyzeAirfoil, isWasmReady, type AnalysisResult } from '../../lib/wasm';
+import type { PolarPoint } from '../../types';
 
+type SolverMode = 'inviscid' | 'viscous';
 type RunMode = 'alpha' | 'cl';
 
 export function SolvePanel() {
-  const { 
-    panels, 
-    name, 
-    polarData, 
-    reynolds,
-    solverMode,
-    turbulentModel,
-    nCrit,
-    setDisplayAlpha, 
-    setPolarData, 
-    clearPolar,
-    setReynolds,
-    setSolverMode,
-    setTurbulentModel,
-    setNCrit,
-    setViscousSolution,
-    setBLData
-  } = useAirfoilStore();
+  const { panels, name, polarData, displayAlpha, setDisplayAlpha, setPolarData, clearPolar } = useAirfoilStore();
   
   // Solver settings
+  const [solverMode, setSolverMode] = useState<SolverMode>('inviscid');
   const [runMode, setRunMode] = useState<RunMode>('alpha');
   
-  // Single-point inputs
-  const [targetAlpha, setTargetAlphaLocal] = useState(5.0);
+  // Single-point inputs - initialize from store's displayAlpha
+  const [targetAlpha, setTargetAlphaLocal] = useState(displayAlpha);
   const [targetCl, setTargetCl] = useState(0.5);
   
-  // Wrapper to update both local state and store displayAlpha
+  // Debounce timer ref
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // Sync local targetAlpha with store on mount (respect store's initial value)
+  const initializedRef = useRef(false);
+  useEffect(() => {
+    if (!initializedRef.current) {
+      initializedRef.current = true;
+      // On first load, update store to match initial targetAlpha if different
+      if (displayAlpha !== targetAlpha) {
+        setDisplayAlpha(targetAlpha);
+      }
+    }
+  }, [displayAlpha, targetAlpha, setDisplayAlpha]);
+  
+  // Wrapper to update both local state and store displayAlpha (debounced)
   const setTargetAlpha = useCallback((alpha: number) => {
     setTargetAlphaLocal(alpha);
-    setDisplayAlpha(alpha);
+    
+    // Debounce the store update to avoid excessive recomputation while typing
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+    debounceRef.current = setTimeout(() => {
+      setDisplayAlpha(alpha);
+    }, 300); // 300ms debounce
   }, [setDisplayAlpha]);
+  
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, []);
   
   // Polar settings
   const [alphaStart, setAlphaStart] = useState(-5);
@@ -63,17 +69,13 @@ export function SolvePanel() {
   const [alphaStep, setAlphaStep] = useState(1);
   
   // Results
-  const [result, setResult] = useState<AnalysisResult | ViscousAnalysisResult | null>(null);
+  const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [resultAlpha, setResultAlpha] = useState<number | null>(null); // Alpha that was solved for
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
   // Use store's polarData instead of local state
   const polar = polarData;
-
-  // Helper to check if result is viscous
-  const isViscousResult = (r: AnalysisResult | ViscousAnalysisResult | null): r is ViscousAnalysisResult => {
-    return r !== null && 'cd' in r;
-  };
 
   // Run single-point analysis
   const runAnalysis = useCallback(() => {
@@ -84,42 +86,16 @@ export function SolvePanel() {
     
     setIsRunning(true);
     setError(null);
-    
-    // Helper to run viscous analysis with current settings
-    const runViscousAnalysis = (alpha: number) => 
-      analyzeViscousExtended(panels, alpha, reynolds, turbulentModel, nCrit);
+    setResultAlpha(null);
     
     try {
       if (runMode === 'alpha') {
         // Direct alpha analysis
-        if (solverMode === 'viscous') {
-          const res = runViscousAnalysis(targetAlpha);
-          setResult(res);
-          if (res.success) {
-            setViscousSolution({
-              cl: res.cl,
-              cd: res.cd,
-              cd_friction: res.cd_friction,
-              cd_pressure: res.cd_pressure,
-              cm: res.cm,
-              cp: res.cp,
-              cp_x: res.cp_x,
-              x_tr_upper: res.x_tr_upper,
-              x_tr_lower: res.x_tr_lower,
-              converged: res.converged,
-              iterations: res.iterations,
-              reynolds: res.reynolds,
-              alpha: res.alpha,
-            });
-          } else {
-            setError(res.error || 'Viscous analysis failed');
-          }
-        } else {
-          const res = analyzeAirfoil(panels, targetAlpha);
-          setResult(res);
-          if (!res.success) {
-            setError(res.error || 'Analysis failed');
-          }
+        const res = analyzeAirfoil(panels, targetAlpha);
+        setResult(res);
+        setResultAlpha(targetAlpha);
+        if (!res.success) {
+          setError(res.error || 'Analysis failed');
         }
       } else {
         // Iterate to find alpha for target CL
@@ -129,10 +105,7 @@ export function SolvePanel() {
         const tol = 0.001;
         
         for (let i = 0; i < maxIter; i++) {
-          const res = solverMode === 'viscous' 
-            ? runViscousAnalysis(alpha)
-            : analyzeAirfoil(panels, alpha);
-            
+          const res = analyzeAirfoil(panels, alpha);
           if (!res.success) {
             setError(res.error || 'Analysis failed during CL iteration');
             setIsRunning(false);
@@ -144,23 +117,9 @@ export function SolvePanel() {
           
           if (Math.abs(clError) < tol) {
             setResult(res);
-            if (solverMode === 'viscous' && isViscousResult(res)) {
-              setViscousSolution({
-                cl: res.cl,
-                cd: res.cd,
-                cd_friction: res.cd_friction,
-                cd_pressure: res.cd_pressure,
-                cm: res.cm,
-                cp: res.cp,
-                cp_x: res.cp_x,
-                x_tr_upper: res.x_tr_upper,
-                x_tr_lower: res.x_tr_lower,
-                converged: res.converged,
-                iterations: res.iterations,
-                reynolds: res.reynolds,
-                alpha: res.alpha,
-              });
-            }
+            setResultAlpha(alpha);
+            // Update display alpha to show the found alpha
+            setDisplayAlpha(alpha);
             break;
           }
           
@@ -173,10 +132,11 @@ export function SolvePanel() {
           
           if (i === maxIter - 1) {
             // Last iteration - use whatever we got
-            const finalRes = solverMode === 'viscous'
-              ? runViscousAnalysis(alpha)
-              : analyzeAirfoil(panels, alpha);
+            const finalRes = analyzeAirfoil(panels, alpha);
             setResult(finalRes);
+            setResultAlpha(alpha);
+            // Update display alpha even if not fully converged
+            setDisplayAlpha(alpha);
             if (Math.abs(targetCl - finalRes.cl) > 0.01) {
               setError(`Could not converge to CL=${targetCl.toFixed(3)}. Got CL=${finalRes.cl.toFixed(3)} at α=${alpha.toFixed(2)}°`);
             }
@@ -188,7 +148,7 @@ export function SolvePanel() {
     }
     
     setIsRunning(false);
-  }, [panels, runMode, targetAlpha, targetCl, solverMode, reynolds, turbulentModel, nCrit, setViscousSolution]);
+  }, [panels, runMode, targetAlpha, targetCl, setDisplayAlpha]);
 
   // Run polar sweep
   const runPolar = useCallback(() => {
@@ -204,35 +164,14 @@ export function SolvePanel() {
     try {
       const points: PolarPoint[] = [];
       
-      if (solverMode === 'viscous') {
-        // Use extended viscous analysis with selected model and nCrit
-        // Loop through alphas to support model/nCrit selection
-        for (let alpha = alphaStart; alpha <= alphaEnd + 0.001; alpha += alphaStep) {
-          const res = analyzeViscousExtended(panels, alpha, reynolds, turbulentModel, nCrit);
-          if (res.success) {
-            points.push({
-              alpha: res.alpha,
-              cl: res.cl,
-              cd: res.cd,
-              cm: res.cm,
-              x_tr_upper: res.x_tr_upper,
-              x_tr_lower: res.x_tr_lower,
-              converged: res.converged,
-              reynolds,
-            });
-          }
-        }
-      } else {
-        // Inviscid polar
-        for (let alpha = alphaStart; alpha <= alphaEnd; alpha += alphaStep) {
-          const res = analyzeAirfoil(panels, alpha);
-          if (res.success) {
-            points.push({
-              alpha,
-              cl: res.cl,
-              cm: res.cm,
-            });
-          }
+      for (let alpha = alphaStart; alpha <= alphaEnd; alpha += alphaStep) {
+        const res = analyzeAirfoil(panels, alpha);
+        if (res.success) {
+          points.push({
+            alpha,
+            cl: res.cl,
+            cm: res.cm,
+          });
         }
       }
       
@@ -246,7 +185,7 @@ export function SolvePanel() {
     }
     
     setIsRunning(false);
-  }, [panels, alphaStart, alphaEnd, alphaStep, solverMode, reynolds, turbulentModel, nCrit, clearPolar, setPolarData]);
+  }, [panels, alphaStart, alphaEnd, alphaStep, clearPolar, setPolarData]);
 
   // Compute cl_alpha from polar
   const clAlpha = useMemo(() => {
@@ -266,19 +205,12 @@ export function SolvePanel() {
     return slope; // per degree
   }, [polar]);
 
-  // Format Reynolds number for display
-  const formatRe = (re: number): string => {
-    if (re >= 1e6) return `${(re / 1e6).toFixed(2)}M`;
-    if (re >= 1e3) return `${(re / 1e3).toFixed(0)}k`;
-    return re.toFixed(0);
-  };
-
   return (
     <div className="panel">
       <div className="panel-header">Solve</div>
       <div className="panel-content">
         {/* Solver Mode */}
-        <div className="form-group">
+        <div className="form-group" data-tour="solve-mode">
           <div className="form-label">Solver Mode</div>
           <div style={{ display: 'flex', gap: '4px' }}>
             <button
@@ -291,101 +223,22 @@ export function SolvePanel() {
             <button
               onClick={() => setSolverMode('viscous')}
               className={solverMode === 'viscous' ? 'active' : ''}
-              style={{ flex: 1 }}
+              style={{ flex: 1, opacity: 0.5 }}
+              disabled
+              title="Viscous solver not yet implemented"
             >
               Viscous
             </button>
           </div>
+          {solverMode === 'viscous' && (
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+              Viscous solver coming in Phase 3
+            </div>
+          )}
         </div>
 
-        {/* Reynolds Number (only for viscous) */}
-        {solverMode === 'viscous' && (
-          <div className="form-group">
-            <div className="form-label">Reynolds Number</div>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <input
-                type="number"
-                value={reynolds}
-                onChange={(e) => setReynolds(parseFloat(e.target.value) || 1e6)}
-                step={1e5}
-                min={1e3}
-                max={1e9}
-                style={{ flex: 1 }}
-              />
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', minWidth: '50px' }}>
-                {formatRe(reynolds)}
-              </span>
-            </div>
-            {/* Quick Re presets */}
-            <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
-              {[1e5, 5e5, 1e6, 3e6, 6e6].map((re) => (
-                <button
-                  key={re}
-                  onClick={() => setReynolds(re)}
-                  style={{ 
-                    flex: 1, 
-                    padding: '2px 4px', 
-                    fontSize: '10px',
-                    opacity: reynolds === re ? 1 : 0.6 
-                  }}
-                >
-                  {formatRe(re)}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Turbulent Model (only for viscous) */}
-        {solverMode === 'viscous' && (
-          <div className="form-group">
-            <div className="form-label">Turbulent Model</div>
-            <select
-              value={turbulentModel}
-              onChange={(e) => setTurbulentModel(parseInt(e.target.value) as TurbulentModel)}
-              style={{ width: '100%', padding: '6px 8px' }}
-            >
-              {([0, 1, 2] as TurbulentModel[]).map((m) => (
-                <option key={m} value={m}>
-                  {TurbulentModelNames[m]} - {TurbulentModelDescriptions[m]}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {/* N_crit (only for viscous) */}
-        {solverMode === 'viscous' && (
-          <div className="form-group">
-            <div className="form-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>N_crit (Transition)</span>
-              <span style={{ fontWeight: 'normal', color: 'var(--text-secondary)' }}>{nCrit.toFixed(1)}</span>
-            </div>
-            <input
-              type="range"
-              min={1}
-              max={14}
-              step={0.5}
-              value={nCrit}
-              onChange={(e) => setNCrit(parseFloat(e.target.value))}
-              style={{ width: '100%' }}
-            />
-            <div style={{ 
-              display: 'flex', 
-              justifyContent: 'space-between', 
-              fontSize: '9px', 
-              color: 'var(--text-muted)',
-              marginTop: '2px'
-            }}>
-              <span>Turbulent (1)</span>
-              <span>Clean (9)</span>
-              <span>Sailplane (14)</span>
-            </div>
-          </div>
-        )}
-
         {/* Single Point Analysis */}
-        <div className="form-group">
+        <div className="form-group" data-tour="solve-alpha">
           <div className="form-label">Single Point</div>
           
           {/* Run mode toggle */}
@@ -429,6 +282,7 @@ export function SolvePanel() {
               onClick={runAnalysis}
               disabled={isRunning || !isWasmReady()}
               style={{ minWidth: '60px' }}
+              data-tour="solve-run"
             >
               {isRunning ? '...' : 'Run'}
             </button>
@@ -441,37 +295,20 @@ export function SolvePanel() {
             <div className="form-label">Results</div>
             <div style={{
               display: 'grid',
-              gridTemplateColumns: isViscousResult(result) ? '1fr 1fr 1fr' : '1fr 1fr',
+              gridTemplateColumns: runMode === 'cl' ? '1fr 1fr 1fr' : '1fr 1fr',
               gap: '8px',
             }}>
-              <ResultCard label="CL" value={result.cl.toFixed(4)} />
-              {isViscousResult(result) && (
-                <ResultCard label="CD" value={result.cd.toFixed(5)} highlight />
+              {runMode === 'cl' && resultAlpha !== null && (
+                <ResultCard label="α (°)" value={resultAlpha.toFixed(2)} highlight />
               )}
+              <ResultCard label="CL" value={result.cl.toFixed(4)} />
               <ResultCard label="CM" value={result.cm.toFixed(4)} />
             </div>
-            {isViscousResult(result) && (
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: '1fr 1fr',
-                gap: '8px',
-                marginTop: '8px',
-              }}>
-                <ResultCard 
-                  label="L/D" 
-                  value={result.cd > 0 ? (result.cl / result.cd).toFixed(1) : '-'} 
-                />
-                <ResultCard 
-                  label="Xtr (U/L)" 
-                  value={`${(result.x_tr_upper * 100).toFixed(0)}/${(result.x_tr_lower * 100).toFixed(0)}%`} 
-                />
-              </div>
-            )}
           </div>
         )}
 
         {/* Polar Sweep */}
-        <div className="form-group" style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-color)' }}>
+        <div className="form-group" style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-color)' }} data-tour="solve-polar">
           <div className="form-label">Alpha Polar</div>
           
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
@@ -538,7 +375,7 @@ export function SolvePanel() {
               {/* Header */}
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: solverMode === 'viscous' ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr',
+                gridTemplateColumns: '1fr 1fr 1fr',
                 gap: '4px',
                 padding: '4px 8px',
                 background: 'var(--bg-tertiary)',
@@ -548,7 +385,6 @@ export function SolvePanel() {
               }}>
                 <span>α (°)</span>
                 <span>CL</span>
-                {solverMode === 'viscous' && <span>CD</span>}
                 <span>CM</span>
               </div>
               
@@ -558,7 +394,7 @@ export function SolvePanel() {
                   key={i}
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: solverMode === 'viscous' ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr',
+                    gridTemplateColumns: '1fr 1fr 1fr',
                     gap: '4px',
                     padding: '2px 8px',
                     borderBottom: '1px solid var(--border-color)',
@@ -568,11 +404,6 @@ export function SolvePanel() {
                   <span style={{ color: p.cl >= 0 ? 'var(--accent-primary)' : 'var(--accent-secondary)' }}>
                     {p.cl.toFixed(4)}
                   </span>
-                  {solverMode === 'viscous' && (
-                    <span style={{ color: 'var(--text-secondary)' }}>
-                      {(p.cd ?? 0).toFixed(5)}
-                    </span>
-                  )}
                   <span>{p.cm.toFixed(4)}</span>
                 </div>
               ))}
@@ -581,13 +412,9 @@ export function SolvePanel() {
             {/* Export polar */}
             <button
               onClick={() => {
-                const header = solverMode === 'viscous'
-                  ? `# ${name} - Viscous Polar (Re=${formatRe(reynolds)})\n# Alpha(deg)  CL        CD         CM\n`
-                  : `# ${name} - Inviscid Polar\n# Alpha(deg)  CL        CM\n`;
+                const header = `# ${name} - Inviscid Polar\n# Alpha(deg)  CL        CM\n`;
                 const data = polar.map(p => 
-                  solverMode === 'viscous'
-                    ? `${p.alpha.toFixed(2).padStart(8)} ${p.cl.toFixed(6).padStart(10)} ${(p.cd ?? 0).toFixed(7).padStart(11)} ${p.cm.toFixed(6).padStart(10)}`
-                    : `${p.alpha.toFixed(2).padStart(8)} ${p.cl.toFixed(6).padStart(10)} ${p.cm.toFixed(6).padStart(10)}`
+                  `${p.alpha.toFixed(2).padStart(8)} ${p.cl.toFixed(6).padStart(10)} ${p.cm.toFixed(6).padStart(10)}`
                 ).join('\n');
                 const blob = new Blob([header + data], { type: 'text/plain' });
                 const url = URL.createObjectURL(blob);
@@ -598,6 +425,7 @@ export function SolvePanel() {
                 URL.revokeObjectURL(url);
               }}
               style={{ width: '100%', marginTop: '8px' }}
+              data-tour="solve-export"
             >
               Export Polar
             </button>
@@ -608,11 +436,11 @@ export function SolvePanel() {
         {error && (
           <div style={{
             padding: '8px',
-            background: 'rgba(255, 100, 100, 0.1)',
-            border: '1px solid rgba(255, 100, 100, 0.3)',
+            background: 'var(--bg-tertiary)',
+            border: '1px solid var(--accent-danger)',
             borderRadius: '4px',
             fontSize: '11px',
-            color: '#ff6b6b',
+            color: 'var(--accent-danger)',
             marginTop: '8px',
           }}>
             {error}
@@ -629,9 +457,7 @@ export function SolvePanel() {
           color: 'var(--text-muted)',
         }}>
           <div>Panels: {panels.length - 1}</div>
-          <div>Solver: {solverMode === 'inviscid' 
-            ? 'Linear Vorticity Panel' 
-            : `Viscous (Re=${formatRe(reynolds)}, ${TurbulentModelNames[turbulentModel]})`}</div>
+          <div>Solver: {solverMode === 'inviscid' ? 'Linear Vorticity Panel Method' : 'N/A'}</div>
           <div>WASM: {isWasmReady() ? '✓ Ready' : '⏳ Loading...'}</div>
         </div>
       </div>
@@ -643,15 +469,19 @@ function ResultCard({ label, value, highlight }: { label: string; value: string;
   return (
     <div style={{
       padding: '8px',
-      background: highlight ? 'rgba(0, 200, 150, 0.1)' : 'var(--bg-tertiary)',
+      background: highlight ? 'var(--accent-primary)' : 'var(--bg-tertiary)',
       borderRadius: '4px',
       textAlign: 'center',
-      border: highlight ? '1px solid rgba(0, 200, 150, 0.3)' : 'none',
     }}>
-      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px' }}>
+      <div style={{ fontSize: '10px', color: highlight ? 'var(--bg-primary)' : 'var(--text-muted)', marginBottom: '2px' }}>
         {label}
       </div>
-      <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: '14px' }}>
+      <div style={{ 
+        fontFamily: 'var(--font-mono)', 
+        fontWeight: 600, 
+        fontSize: '14px',
+        color: highlight ? 'var(--bg-primary)' : 'inherit',
+      }}>
         {value}
       </div>
     </div>

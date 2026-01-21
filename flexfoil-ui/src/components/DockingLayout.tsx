@@ -14,8 +14,9 @@ import { SpacingPanel } from './panels/SpacingPanel';
 import { PropertiesPanel } from './panels/PropertiesPanel';
 import { SolvePanel } from './panels/SolvePanel';
 import { PolarPanel } from './panels/PolarPanel';
-import { BoundaryLayerPanel } from './panels/BoundaryLayerPanel';
+import { VisualizationPanel } from './panels/VisualizationPanel';
 import { MenuBar } from './MenuBar';
+import { LayoutProvider } from '../contexts/LayoutContext';
 
 // Storage keys
 const LAYOUT_STORAGE_KEY = 'flexfoil-layout-v1';
@@ -29,7 +30,7 @@ export const PANELS = [
   { id: 'properties', name: 'Properties', component: 'properties' },
   { id: 'solve', name: 'Solve', component: 'solve' },
   { id: 'polar', name: 'Polar Plot', component: 'polar' },
-  { id: 'boundary-layer', name: 'Boundary Layer', component: 'boundary-layer' },
+  { id: 'visualization', name: 'Visualization', component: 'visualization' },
 ];
 
 // Default layout configuration
@@ -66,10 +67,23 @@ const defaultLayoutJson: IJsonModel = {
         ],
       },
       {
-        type: 'tabset',
+        type: 'row',
         weight: 50,
         children: [
-          { type: 'tab', id: 'canvas', name: 'Airfoil Canvas', component: 'canvas' },
+          {
+            type: 'tabset',
+            weight: 70,
+            children: [
+              { type: 'tab', id: 'canvas', name: 'Airfoil Canvas', component: 'canvas' },
+            ],
+          },
+          {
+            type: 'tabset',
+            weight: 30,
+            children: [
+              { type: 'tab', id: 'polar', name: 'Polar Plot', component: 'polar' },
+            ],
+          },
         ],
       },
       {
@@ -89,6 +103,7 @@ const defaultLayoutJson: IJsonModel = {
             weight: 50,
             children: [
               { type: 'tab', id: 'control', name: 'Control Mode', component: 'control' },
+              { type: 'tab', id: 'visualization', name: 'Visualization', component: 'visualization' },
             ],
           },
         ],
@@ -99,9 +114,10 @@ const defaultLayoutJson: IJsonModel = {
 
 interface DockingLayoutProps {
   wasmStatus: 'loading' | 'ready' | 'error';
+  initialViewport?: { centerX: number; centerY: number; zoom: number } | null;
 }
 
-export function DockingLayout({ wasmStatus }: DockingLayoutProps) {
+export function DockingLayout({ wasmStatus, initialViewport }: DockingLayoutProps) {
   // Initialize model from localStorage or default
   const [model, setModel] = useState(() => {
     try {
@@ -158,6 +174,37 @@ export function DockingLayout({ wasmStatus }: DockingLayoutProps) {
     localStorage.removeItem(LAYOUT_STORAGE_KEY);
   }, []);
 
+  // Focus/select an existing panel (bring to front)
+  const handleOpenPanel = useCallback(
+    (panelId: string) => {
+      const root = model.getRoot();
+      let existingTabId: string | null = null;
+      
+      const findTab = (node: any) => {
+        if (node.getType?.() === 'tab' && node.getComponent?.() === panelId) {
+          existingTabId = node.getId();
+          return true;
+        }
+        if (node.getChildren) {
+          for (const child of node.getChildren()) {
+            if (findTab(child)) return true;
+          }
+        }
+        return false;
+      };
+      findTab(root);
+
+      if (existingTabId) {
+        try {
+          model.doAction(Actions.selectTab(existingTabId));
+        } catch (e) {
+          console.warn('Failed to select tab:', e);
+        }
+      }
+    },
+    [model]
+  );
+
   // Restore a closed panel
   const handleRestorePanel = useCallback(
     (panelId: string) => {
@@ -206,26 +253,59 @@ export function DockingLayout({ wasmStatus }: DockingLayoutProps) {
   );
 
   // Factory function to create panel components
+  // Each panel is wrapped with data-tour attribute for onboarding targeting
   const factory = useCallback((node: any) => {
     const component = node.getComponent();
 
     switch (component) {
       case 'canvas':
-        return <AirfoilCanvas />;
+        return (
+          <div data-tour="panel-canvas" style={{ width: '100%', height: '100%' }}>
+            <AirfoilCanvas initialViewport={initialViewport} />
+          </div>
+        );
       case 'library':
-        return <AirfoilLibraryPanel />;
+        return (
+          <div data-tour="panel-library" style={{ width: '100%', height: '100%' }}>
+            <AirfoilLibraryPanel />
+          </div>
+        );
       case 'control':
-        return <ControlModePanel />;
+        return (
+          <div data-tour="panel-control" style={{ width: '100%', height: '100%' }}>
+            <ControlModePanel />
+          </div>
+        );
       case 'spacing':
-        return <SpacingPanel />;
+        return (
+          <div data-tour="panel-spacing" style={{ width: '100%', height: '100%' }}>
+            <SpacingPanel />
+          </div>
+        );
       case 'properties':
-        return <PropertiesPanel />;
+        return (
+          <div data-tour="panel-properties" style={{ width: '100%', height: '100%' }}>
+            <PropertiesPanel />
+          </div>
+        );
       case 'solve':
-        return <SolvePanel />;
+        return (
+          <div data-tour="panel-solve" style={{ width: '100%', height: '100%' }}>
+            <SolvePanel />
+          </div>
+        );
       case 'polar':
-        return <PolarPanel />;
-      case 'boundary-layer':
-        return <BoundaryLayerPanel />;
+        return (
+          <div data-tour="panel-polar" style={{ width: '100%', height: '100%' }}>
+            <PolarPanel />
+          </div>
+        );
+      case 'visualization':
+        return (
+          <div data-tour="panel-visualization" style={{ width: '100%', height: '100%' }}>
+            <VisualizationPanel />
+          </div>
+        );
       default:
         return <div className="panel">Unknown panel: {component}</div>;
     }
@@ -259,26 +339,29 @@ export function DockingLayout({ wasmStatus }: DockingLayoutProps) {
   );
 
   return (
-    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* Menu bar */}
-      <MenuBar
-        panels={PANELS}
-        closedPanels={closedPanels}
-        onRestorePanel={handleRestorePanel}
-        onResetLayout={handleResetLayout}
-        wasmStatus={wasmStatus}
-      />
-
-      {/* FlexLayout container */}
-      <div style={{ flex: 1, position: 'relative' }}>
-        <Layout
-          ref={layoutRef}
-          model={model}
-          factory={factory}
-          onModelChange={handleModelChange}
-          onRenderTabSet={onRenderTabSet}
+    <LayoutProvider model={model} panels={PANELS}>
+      <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+        {/* Menu bar */}
+        <MenuBar
+          panels={PANELS}
+          closedPanels={closedPanels}
+          onRestorePanel={handleRestorePanel}
+          onOpenPanel={handleOpenPanel}
+          onResetLayout={handleResetLayout}
+          wasmStatus={wasmStatus}
         />
+
+        {/* FlexLayout container */}
+        <div style={{ flex: 1, position: 'relative' }}>
+          <Layout
+            ref={layoutRef}
+            model={model}
+            factory={factory}
+            onModelChange={handleModelChange}
+            onRenderTabSet={onRenderTabSet}
+          />
+        </div>
       </div>
-    </div>
+    </LayoutProvider>
   );
 }
