@@ -6,7 +6,14 @@ import { useMemo } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
 
 export function PropertiesPanel() {
-  const { name, coordinates, nPanels, controlMode, bsplineControlPoints } = useAirfoilStore();
+  const { 
+    name, 
+    coordinates, 
+    nPanels, 
+    controlMode, 
+    camberControlPoints,
+    thicknessControlPoints,
+  } = useAirfoilStore();
 
   // Compute basic airfoil properties
   const properties = useMemo(() => {
@@ -131,8 +138,11 @@ export function PropertiesPanel() {
           }}>
             <PropertyCard label="Input" value={coordinates.length.toString()} />
             <PropertyCard label="Panels" value={nPanels.toString()} />
-            {controlMode === 'bspline' && (
-              <PropertyCard label="Control" value={bsplineControlPoints.length.toString()} />
+            {controlMode === 'camber-spline' && (
+              <PropertyCard label="Camber Pts" value={camberControlPoints.length.toString()} />
+            )}
+            {controlMode === 'thickness-spline' && (
+              <PropertyCard label="Thick Pts" value={thicknessControlPoints.length.toString()} />
             )}
           </div>
         </div>

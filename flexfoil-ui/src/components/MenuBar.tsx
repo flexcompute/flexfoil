@@ -1,9 +1,11 @@
 /**
- * MenuBar - Top menu bar with File/Edit/Window menus
+ * MenuBar - Top menu bar with File/Edit/Window/Help menus
  */
 
 import { useState, useRef, useEffect } from 'react';
 import { DarkModeToggle } from './DarkModeToggle';
+import { useUndoRedo } from '../hooks/useUndoRedo';
+import { useOnboarding } from '../onboarding';
 
 interface PanelInfo {
   id: string;
@@ -14,6 +16,7 @@ interface MenuBarProps {
   panels: PanelInfo[];
   closedPanels: Set<string>;
   onRestorePanel: (panelId: string) => void;
+  onOpenPanel: (panelId: string) => void;  // Focus/select an existing panel
   onResetLayout: () => void;
   wasmStatus: 'loading' | 'ready' | 'error';
 }
@@ -22,11 +25,18 @@ export function MenuBar({
   panels,
   closedPanels,
   onRestorePanel,
+  onOpenPanel,
   onResetLayout,
   wasmStatus,
 }: MenuBarProps) {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  
+  // Undo/redo functionality
+  const { undo, redo, canUndo, canRedo } = useUndoRedo();
+  
+  // Onboarding
+  const { startTour, resetAllTours } = useOnboarding();
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -47,7 +57,11 @@ export function MenuBar({
 
   const handleTogglePanel = (panelId: string) => {
     if (closedPanels.has(panelId)) {
+      // Panel is closed - restore it
       onRestorePanel(panelId);
+    } else {
+      // Panel exists but might be hidden behind another tab - bring to front
+      onOpenPanel(panelId);
     }
     setActiveMenu(null);
   };
@@ -109,11 +123,28 @@ export function MenuBar({
         label="Edit"
         isActive={activeMenu === 'edit'}
         onClick={() => toggleMenu('edit')}
+        dataTour="menu-edit"
       />
       {activeMenu === 'edit' && (
         <MenuDropdown style={{ left: '120px' }}>
-          <MenuItem label="Undo" shortcut="Cmd+Z" disabled />
-          <MenuItem label="Redo" shortcut="Cmd+Shift+Z" disabled />
+          <MenuItem 
+            label="Undo" 
+            shortcut="Cmd+Z" 
+            disabled={!canUndo}
+            onClick={() => {
+              undo();
+              setActiveMenu(null);
+            }}
+          />
+          <MenuItem 
+            label="Redo" 
+            shortcut="Cmd+Shift+Z" 
+            disabled={!canRedo}
+            onClick={() => {
+              redo();
+              setActiveMenu(null);
+            }}
+          />
         </MenuDropdown>
       )}
 
@@ -122,6 +153,7 @@ export function MenuBar({
         label="Window"
         isActive={activeMenu === 'window'}
         onClick={() => toggleMenu('window')}
+        dataTour="menu-window"
       />
       {activeMenu === 'window' && (
         <MenuDropdown style={{ left: '168px' }}>
@@ -143,11 +175,65 @@ export function MenuBar({
               label={panel.name}
               checked={isPanelVisible(panel.id)}
               onClick={() => handleTogglePanel(panel.id)}
-              disabled={isPanelVisible(panel.id)}
             />
           ))}
           <MenuDivider />
           <MenuItem label="Reset Layout" onClick={handleResetLayout} />
+        </MenuDropdown>
+      )}
+
+      {/* Help Menu */}
+      <MenuButton
+        label="Help"
+        isActive={activeMenu === 'help'}
+        onClick={() => toggleMenu('help')}
+        dataTour="menu-help"
+      />
+      {activeMenu === 'help' && (
+        <MenuDropdown style={{ left: '232px' }}>
+          <div
+            style={{
+              padding: '4px 12px',
+              fontSize: '11px',
+              fontWeight: 600,
+              color: 'var(--text-muted)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+            }}
+          >
+            Tutorials
+          </div>
+          <MenuItem
+            label="Welcome Tour"
+            onClick={() => {
+              startTour('welcome');
+              setActiveMenu(null);
+            }}
+          />
+          <MenuItem
+            label="Airfoil Editing Guide"
+            onClick={() => {
+              startTour('airfoilEditing');
+              setActiveMenu(null);
+            }}
+          />
+          <MenuItem
+            label="Solving Guide"
+            onClick={() => {
+              startTour('solving');
+              setActiveMenu(null);
+            }}
+          />
+          <MenuDivider />
+          <MenuItem
+            label="Reset Tutorial Progress"
+            onClick={() => {
+              resetAllTours();
+              setActiveMenu(null);
+            }}
+          />
+          <MenuDivider />
+          <MenuItem label="About FlexFoil" disabled />
         </MenuDropdown>
       )}
 
@@ -198,10 +284,12 @@ function MenuButton({
   label,
   isActive,
   onClick,
+  dataTour,
 }: {
   label: string;
   isActive: boolean;
   onClick: () => void;
+  dataTour?: string;
 }) {
   const [isHovered, setIsHovered] = useState(false);
 
@@ -210,6 +298,7 @@ function MenuButton({
       onClick={onClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      data-tour={dataTour}
       style={{
         padding: '0 12px',
         height: '100%',

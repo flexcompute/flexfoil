@@ -17,10 +17,16 @@ export interface AirfoilPoint extends Point {
 }
 
 /** Control modes for airfoil manipulation */
-export type ControlMode = 'surface' | 'bezier' | 'bspline';
+export type ControlMode = 'parameters' | 'camber-spline' | 'thickness-spline';
 
-/** Spacing/paneling modes */
-export type SpacingMode = 'ssp' | 'xfoil';
+/** Spacing panel modes */
+export type SpacingPanelMode = 'simple' | 'advanced';
+
+/** SSP interpolation modes */
+export type SSPInterpolation = 'linear' | 'spline';
+
+/** Advanced SSP visualization modes */
+export type SSPVisualization = 'plot' | 'foil';
 
 /** A Bezier handle attached to an airfoil point */
 export interface BezierHandle {
@@ -38,6 +44,26 @@ export interface BSplineControlPoint extends Point {
   id: string;
   /** Weight for NURBS (default 1.0 for B-spline) */
   weight?: number;
+}
+
+/** A camber line control point */
+export interface CamberControlPoint {
+  /** Unique identifier */
+  id: string;
+  /** Chord position (0 to 1, LE to TE) */
+  x: number;
+  /** Camber value (typically -0.1 to 0.1) */
+  y: number;
+}
+
+/** A thickness distribution control point */
+export interface ThicknessControlPoint {
+  /** Unique identifier */
+  id: string;
+  /** Chord position (0 to 1, LE to TE) */
+  x: number;
+  /** Half-thickness value (typically 0 to 0.15) */
+  t: number;
 }
 
 /** SSP spacing knot for repaneling */
@@ -70,9 +96,9 @@ export interface AirfoilState {
   panels: AirfoilPoint[];
   /** Current control mode */
   controlMode: ControlMode;
-  /** Bezier handles (when in bezier mode) */
+  /** Bezier handles (legacy, kept for compatibility) */
   bezierHandles: BezierHandle[];
-  /** B-spline control points (when in bspline mode) */
+  /** B-spline control points (legacy, kept for compatibility) */
   bsplineControlPoints: BSplineControlPoint[];
   /** B-spline degree */
   bsplineDegree: number;
@@ -86,81 +112,32 @@ export interface AirfoilState {
   displayAlpha: number;
   /** Polar sweep data */
   polarData: PolarPoint[];
+  /** Spacing panel mode: simple (curvature-based) or advanced (SSP) */
+  spacingPanelMode: SpacingPanelMode;
+  /** SSP interpolation mode: linear (piecewise) or spline */
+  sspInterpolation: SSPInterpolation;
+  /** Advanced SSP visualization: plot (F vs S) or foil (normal displacement) */
+  sspVisualization: SSPVisualization;
   
-  // Viscous analysis state
-  /** Reynolds number */
-  reynolds: number;
-  /** Solver mode (inviscid or viscous) */
-  solverMode: SolverMode;
-  /** Turbulent boundary layer model */
-  turbulentModel: TurbulentModel;
-  /** Critical N-factor for transition prediction (typically 9.0) */
-  nCrit: number;
-  /** Cached viscous solution */
-  viscousSolution: ViscousSolution | null;
-  /** Boundary layer distribution data */
-  blData: BLDistribution | null;
-  /** Whether to auto-recompute on geometry change */
-  isAutoCompute: boolean;
+  // Camber/thickness editing state
+  /** Camber line control points (when in camber-spline mode) */
+  camberControlPoints: CamberControlPoint[];
+  /** Thickness distribution control points (when in thickness-spline mode) */
+  thicknessControlPoints: ThicknessControlPoint[];
+  /** Thickness scale factor (1.0 = original) */
+  thicknessScale: number;
+  /** Camber scale factor (1.0 = original) */
+  camberScale: number;
+  /** Original airfoil for scaling reference */
+  baseCoordinates: AirfoilPoint[];
 }
 
 /** A polar data point */
 export interface PolarPoint {
   alpha: number;
   cl: number;
-  cd?: number;
   cm: number;
-  reynolds?: number;
-  x_tr_upper?: number;
-  x_tr_lower?: number;
-  converged?: boolean;
 }
-
-/** Boundary layer distribution data */
-export interface BLDistribution {
-  s_upper: number[];
-  s_lower: number[];
-  x_upper: number[];
-  x_lower: number[];
-  theta_upper: number[];
-  theta_lower: number[];
-  delta_star_upper: number[];
-  delta_star_lower: number[];
-  h_upper: number[];
-  h_lower: number[];
-  cf_upper: number[];
-  cf_lower: number[];
-  x_tr_upper: number;
-  x_tr_lower: number;
-}
-
-/** Viscous solution result */
-export interface ViscousSolution {
-  cl: number;
-  cd: number;
-  cd_friction: number;
-  cd_pressure: number;
-  cm: number;
-  cp: number[];
-  cp_x: number[];
-  x_tr_upper: number;
-  x_tr_lower: number;
-  converged: boolean;
-  iterations: number;
-  reynolds: number;
-  alpha: number;
-}
-
-/** Solver mode */
-export type SolverMode = 'inviscid' | 'viscous';
-
-/** 
- * Turbulent boundary layer model selection.
- * - 0: Head's entrainment method (fast, good for attached flows)
- * - 1: XFOIL's Cτ lag-dissipation method (accurate, good for separation)
- * - 2: Green's lag-entrainment method (best history effects)
- */
-export type TurbulentModel = 0 | 1 | 2;
 
 /** Panel configuration for FlexLayout */
 export interface PanelConfig {
@@ -179,4 +156,62 @@ export interface ViewportState {
   width: number;
   /** Canvas height in pixels */
   height: number;
+}
+
+/** Performance metrics for visualization */
+export interface PerfMetrics {
+  /** Last frame duration in milliseconds */
+  frameTime: number;
+  /** Rolling average frame time */
+  avgFrameTime: number;
+  /** Number of active smoke particles */
+  particleCount: number;
+  /** Frames per second */
+  fps: number;
+}
+
+/** Visualization settings state */
+export interface VisualizationState {
+  // Display toggles
+  showGrid: boolean;
+  showCurve: boolean;
+  showPanels: boolean;
+  showPoints: boolean;
+  showControls: boolean;
+  showStreamlines: boolean;
+  showSmoke: boolean;
+  showPsiContours: boolean;
+  showCp: boolean;
+  showForces: boolean;
+  
+  // Animation options
+  enableMorphing: boolean;
+  morphDuration: number;
+  
+  // Streamline options
+  streamlineDensity: number;
+  adaptiveStreamlines: boolean;
+  
+  // Smoke options
+  smokeDensity: number;
+  smokeParticlesPerBlob: number;
+  smokeSpawnInterval: number;
+  smokeMaxAge: number;
+  smokeWaveSpacing: number;  // Distance between smoke waves in chord lengths
+  smokeResetCounter: number; // Incremented to trigger smoke reset
+  
+  // Flow speed multiplier
+  flowSpeed: number;
+  
+  // Cp visualization options
+  cpDisplayMode: 'color' | 'bars' | 'both';
+  cpBarScale: number;
+  
+  // Force vector options
+  forceScale: number;
+  
+  // GPU acceleration
+  useGPU: boolean;
+  gpuAvailable: boolean;
+  perfMetrics: PerfMetrics;
 }

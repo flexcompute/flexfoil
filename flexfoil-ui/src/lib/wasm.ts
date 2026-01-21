@@ -11,16 +11,16 @@ import init, {
     repanel_xfoil_with_params,
     compute_curvature_spacing,
     analyze_airfoil,
-    analyze_viscous,
-    analyze_viscous_extended,
-    get_bl_distribution,
-    get_turbulent_model_info,
-    run_re_sweep,
-    run_viscous_polar,
     compute_streamlines,
+    compute_psi_grid,
     WasmSmokeSystem,
     greet,
     RustFoil,
+    // Morphing interpolation functions
+    lerp_points,
+    lerp_array,
+    lerp_streamlines,
+    lerp_morph_state,
 } from 'rustfoil-wasm';
 
 let initialized = false;
@@ -285,6 +285,8 @@ export interface AnalysisResult {
     cm: number;
     cp: number[];
     cp_x: number[];
+    gamma: number[];  // Now always returned from solver
+    psi_0: number;    // Dividing streamline value
     success: boolean;
     error?: string;
 }
@@ -299,6 +301,54 @@ export function analyzeAirfoil(
     
     const coordsFlat = pointsToFlat(coordinates);
     return analyze_airfoil(coordsFlat, alphaDeg) as AnalysisResult;
+}
+
+/**
+ * Compute gamma (circulation) values for each panel node.
+ * 
+ * This calls the actual panel method solver to get the correct gamma values
+ * needed for velocity field computation (GPU visualization).
+ * Returns an array of gamma values at each panel node.
+ */
+export interface GammaResult {
+    gamma: Float64Array | null;
+    psi_0: number;
+    success: boolean;
+    error?: string;
+}
+
+export function computeGamma(
+    coordinates: { x: number; y: number }[],
+    alphaDeg: number
+): GammaResult {
+    if (!initialized) {
+        return { gamma: null, psi_0: 0, success: false, error: 'WASM not initialized' };
+    }
+    
+    try {
+        // Call the actual solver to get real gamma values
+        const result = analyzeAirfoil(coordinates, alphaDeg);
+        
+        if (!result.success || !result.gamma || result.gamma.length === 0) {
+            return { 
+                gamma: null, 
+                psi_0: 0, 
+                success: false, 
+                error: result.error || 'Solver returned no gamma values' 
+            };
+        }
+        
+        // Convert to Float64Array
+        const gamma = new Float64Array(result.gamma);
+        
+        return { 
+            gamma, 
+            psi_0: result.psi_0 || 0,
+            success: true 
+        };
+    } catch (e) {
+        return { gamma: null, psi_0: 0, success: false, error: String(e) };
+    }
 }
 
 /**
@@ -333,6 +383,56 @@ export function computeStreamlines(
 }
 
 /**
+ * Stream function grid result from WASM.
+ */
+export interface PsiGridResult {
+    /** Stream function values in row-major order (ny rows, nx columns) */
+    grid: number[];
+    /** Internal stream function value (contour at this value = dividing streamline) */
+    psi_0: number;
+    /** Grid width */
+    nx: number;
+    /** Grid height */
+    ny: number;
+    /** Minimum psi value (excluding interior NaN) */
+    psi_min: number;
+    /** Maximum psi value (excluding interior NaN) */
+    psi_max: number;
+    success: boolean;
+    error?: string;
+}
+
+/**
+ * Compute stream function values on a grid.
+ * 
+ * The stream function ψ is constant along streamlines. The contour ψ = psi_0
+ * represents the dividing streamline that passes through the stagnation point.
+ * 
+ * @param coordinates - Airfoil coordinates
+ * @param alphaDeg - Angle of attack in degrees
+ * @param bounds - [xMin, xMax, yMin, yMax] for grid domain
+ * @param resolution - [nx, ny] grid resolution
+ */
+export function computePsiGrid(
+    coordinates: { x: number; y: number }[],
+    alphaDeg: number,
+    bounds: [number, number, number, number] = [-1.0, 2.0, -1.0, 1.0],
+    resolution: [number, number] = [100, 80]
+): PsiGridResult {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+    
+    const coordsFlat = pointsToFlat(coordinates);
+    return compute_psi_grid(
+        coordsFlat, 
+        alphaDeg, 
+        new Float64Array(bounds), 
+        new Uint32Array(resolution)
+    ) as PsiGridResult;
+}
+
+/**
  * Create a smoke visualization system.
  * 
  * @param spawnY - Y coordinates for spawn points
@@ -352,233 +452,167 @@ export function createSmokeSystem(
 }
 
 // ============================================================================
-// Viscous Analysis
+// Morphing Interpolation (WASM-accelerated)
 // ============================================================================
 
 /**
- * Turbulent boundary layer model selection.
- * 
- * - Head (0): Head's entrainment method (1958) - fast, good for attached flows
- * - XfoilCtau (1): XFOIL's Cτ lag-dissipation method (Drela 1987) - accurate, good for separation
- * - GreenLag (2): Green's lag-entrainment method (1977) - best history effects
+ * Interpolate between two point arrays using WASM.
+ * Much faster than JavaScript for large arrays.
  */
-export type TurbulentModel = 0 | 1 | 2;
-
-export const TurbulentModelNames: Record<TurbulentModel, string> = {
-    0: 'Head',
-    1: 'XFOIL Cτ',
-    2: 'Green Lag',
-};
-
-export const TurbulentModelDescriptions: Record<TurbulentModel, string> = {
-    0: 'Fast, good for attached flows',
-    1: 'Accurate, good for separation',
-    2: 'Best for history effects',
-};
-
-/**
- * Information about available turbulent models.
- */
-export interface TurbulentModelInfo {
-    models: {
-        id: number;
-        name: string;
-        fullName: string;
-        description: string;
-        equations: string[];
-        recommended: string;
-    }[];
-    default: string;
+export function wasmLerpPoints(
+    from: { x: number; y: number }[],
+    to: { x: number; y: number }[],
+    t: number
+): { x: number; y: number }[] {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+    
+    const fromFlat = pointsToFlat(from);
+    const toFlat = pointsToFlat(to);
+    const result = lerp_points(fromFlat, toFlat, t);
+    return flatToPoints(result);
 }
 
 /**
- * Result of a viscous analysis.
+ * Interpolate between two number arrays using WASM.
  */
-export interface ViscousAnalysisResult {
-    cl: number;
-    cd: number;
-    cd_friction: number;
-    cd_pressure: number;
-    cm: number;
+export function wasmLerpArray(
+    from: number[],
+    to: number[],
+    t: number
+): number[] {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+    
+    const result = lerp_array(new Float64Array(from), new Float64Array(to), t);
+    return Array.from(result);
+}
+
+/**
+ * Encode streamlines to flat array format for WASM.
+ * Format: [n_lines, n_pts_0, x0, y0, x1, y1, ..., n_pts_1, x0, y0, ...]
+ */
+export function encodeStreamlines(streamlines: [number, number][][]): Float64Array {
+    // Calculate total size
+    const totalPts = streamlines.reduce((sum, line) => sum + line.length, 0);
+    const totalSize = 1 + streamlines.length + totalPts * 2;
+    
+    const result = new Float64Array(totalSize);
+    result[0] = streamlines.length;
+    
+    let idx = 1;
+    for (const line of streamlines) {
+        result[idx++] = line.length;
+        for (const [x, y] of line) {
+            result[idx++] = x;
+            result[idx++] = y;
+        }
+    }
+    
+    return result;
+}
+
+/**
+ * Decode streamlines from flat array format.
+ */
+export function decodeStreamlines(data: Float64Array | number[]): [number, number][][] {
+    if (data.length === 0) {
+        return [];
+    }
+    
+    const nLines = data[0];
+    const result: [number, number][][] = [];
+    let idx = 1;
+    
+    for (let i = 0; i < nLines; i++) {
+        if (idx >= data.length) break;
+        
+        const nPts = data[idx++];
+        const line: [number, number][] = [];
+        
+        for (let j = 0; j < nPts; j++) {
+            if (idx + 1 >= data.length) break;
+            line.push([data[idx], data[idx + 1]]);
+            idx += 2;
+        }
+        result.push(line);
+    }
+    
+    return result;
+}
+
+/**
+ * Interpolate between two streamline arrays using WASM.
+ */
+export function wasmLerpStreamlines(
+    from: [number, number][][],
+    to: [number, number][][],
+    t: number
+): [number, number][][] {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+    
+    const fromEncoded = encodeStreamlines(from);
+    const toEncoded = encodeStreamlines(to);
+    const result = lerp_streamlines(fromEncoded, toEncoded, t);
+    return decodeStreamlines(result);
+}
+
+/**
+ * Result of WASM morph interpolation.
+ */
+export interface MorphResult {
+    coordinates: number[];
+    panels: number[];
     cp: number[];
     cp_x: number[];
-    x_tr_upper: number;
-    x_tr_lower: number;
-    converged: boolean;
-    iterations: number;
-    reynolds: number;
-    alpha: number;
-    success: boolean;
-    error?: string;
 }
 
 /**
- * Boundary layer distribution data for plotting.
+ * Batch interpolation for morphing - interpolates coordinates, panels, cp, cpX
+ * in a single WASM call for maximum performance.
  */
-export interface BLDistribution {
-    s_upper: number[];
-    s_lower: number[];
-    x_upper: number[];
-    x_lower: number[];
-    theta_upper: number[];
-    theta_lower: number[];
-    delta_star_upper: number[];
-    delta_star_lower: number[];
-    h_upper: number[];
-    h_lower: number[];
-    cf_upper: number[];
-    cf_lower: number[];
-    x_tr_upper: number;
-    x_tr_lower: number;
-}
-
-/**
- * Point in a Reynolds number sweep.
- */
-export interface ReSweepPoint {
-    reynolds: number;
-    cl: number;
-    cd: number;
-    cm: number;
-    x_tr_upper: number;
-    x_tr_lower: number;
-    converged: boolean;
-}
-
-/**
- * Viscous polar point.
- */
-export interface ViscousPolarPoint {
-    alpha: number;
-    cl: number;
-    cd: number;
-    cm: number;
-    x_tr_upper: number;
-    x_tr_lower: number;
-    converged: boolean;
-}
-
-/**
- * Analyze airfoil with viscous boundary layer.
- * 
- * @param coordinates - Airfoil coordinates
- * @param alphaDeg - Angle of attack in degrees
- * @param reynolds - Chord Reynolds number
- */
-export function analyzeViscous(
-    coordinates: { x: number; y: number }[],
-    alphaDeg: number,
-    reynolds: number
-): ViscousAnalysisResult {
+export function wasmLerpMorphState(
+    fromCoords: { x: number; y: number }[],
+    toCoords: { x: number; y: number }[],
+    fromPanels: { x: number; y: number }[],
+    toPanels: { x: number; y: number }[],
+    fromCp: number[],
+    toCp: number[],
+    fromCpX: number[],
+    toCpX: number[],
+    t: number
+): {
+    coordinates: { x: number; y: number }[];
+    panels: { x: number; y: number }[];
+    cp: number[];
+    cpX: number[];
+} {
     if (!initialized) {
         throw new Error('WASM not initialized. Call initWasm() first.');
     }
     
-    const coordsFlat = pointsToFlat(coordinates);
-    return analyze_viscous(coordsFlat, alphaDeg, reynolds) as ViscousAnalysisResult;
-}
-
-/**
- * Analyze airfoil with viscous boundary layer and extended options.
- * 
- * @param coordinates - Airfoil coordinates
- * @param alphaDeg - Angle of attack in degrees
- * @param reynolds - Chord Reynolds number
- * @param model - Turbulent BL model (0=Head, 1=XfoilCtau, 2=GreenLag)
- * @param nCrit - Critical N-factor for transition (typically 9.0, range 5-12)
- */
-export function analyzeViscousExtended(
-    coordinates: { x: number; y: number }[],
-    alphaDeg: number,
-    reynolds: number,
-    model: TurbulentModel,
-    nCrit: number
-): ViscousAnalysisResult {
-    if (!initialized) {
-        throw new Error('WASM not initialized. Call initWasm() first.');
-    }
+    const result = lerp_morph_state(
+        pointsToFlat(fromCoords),
+        pointsToFlat(toCoords),
+        pointsToFlat(fromPanels),
+        pointsToFlat(toPanels),
+        new Float64Array(fromCp),
+        new Float64Array(toCp),
+        new Float64Array(fromCpX),
+        new Float64Array(toCpX),
+        t
+    ) as MorphResult;
     
-    const coordsFlat = pointsToFlat(coordinates);
-    return analyze_viscous_extended(coordsFlat, alphaDeg, reynolds, model, nCrit) as ViscousAnalysisResult;
-}
-
-/**
- * Get information about available turbulent models.
- */
-export function getTurbulentModelInfo(): TurbulentModelInfo {
-    if (!initialized) {
-        throw new Error('WASM not initialized. Call initWasm() first.');
-    }
-    
-    return get_turbulent_model_info() as TurbulentModelInfo;
-}
-
-/**
- * Get boundary layer distribution data for plotting.
- * 
- * @param coordinates - Airfoil coordinates
- * @param alphaDeg - Angle of attack in degrees
- * @param reynolds - Chord Reynolds number
- */
-export function getBLDistribution(
-    coordinates: { x: number; y: number }[],
-    alphaDeg: number,
-    reynolds: number
-): BLDistribution | null {
-    if (!initialized) {
-        throw new Error('WASM not initialized. Call initWasm() first.');
-    }
-    
-    const coordsFlat = pointsToFlat(coordinates);
-    return get_bl_distribution(coordsFlat, alphaDeg, reynolds) as BLDistribution | null;
-}
-
-/**
- * Run a Reynolds number sweep at fixed alpha.
- * 
- * @param coordinates - Airfoil coordinates
- * @param alphaDeg - Angle of attack in degrees
- * @param reStart - Starting Reynolds number
- * @param reEnd - Ending Reynolds number
- * @param reCount - Number of Reynolds numbers to evaluate
- */
-export function runReSweep(
-    coordinates: { x: number; y: number }[],
-    alphaDeg: number,
-    reStart: number,
-    reEnd: number,
-    reCount: number
-): ReSweepPoint[] {
-    if (!initialized) {
-        throw new Error('WASM not initialized. Call initWasm() first.');
-    }
-    
-    const coordsFlat = pointsToFlat(coordinates);
-    return run_re_sweep(coordsFlat, alphaDeg, reStart, reEnd, reCount) as ReSweepPoint[];
-}
-
-/**
- * Run a viscous alpha polar sweep.
- * 
- * @param coordinates - Airfoil coordinates
- * @param reynolds - Chord Reynolds number
- * @param alphaStart - Starting alpha (degrees)
- * @param alphaEnd - Ending alpha (degrees)
- * @param alphaStep - Alpha step (degrees)
- */
-export function runViscousPolar(
-    coordinates: { x: number; y: number }[],
-    reynolds: number,
-    alphaStart: number,
-    alphaEnd: number,
-    alphaStep: number
-): ViscousPolarPoint[] {
-    if (!initialized) {
-        throw new Error('WASM not initialized. Call initWasm() first.');
-    }
-    
-    const coordsFlat = pointsToFlat(coordinates);
-    return run_viscous_polar(coordsFlat, reynolds, alphaStart, alphaEnd, alphaStep) as ViscousPolarPoint[];
+    return {
+        coordinates: flatToPoints(result.coordinates),
+        panels: flatToPoints(result.panels),
+        cp: Array.from(result.cp),
+        cpX: Array.from(result.cp_x),
+    };
 }
 
 // Re-export the RustFoil class and WasmSmokeSystem for advanced usage
