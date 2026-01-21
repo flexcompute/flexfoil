@@ -172,6 +172,10 @@ fn init_stagnation(x: f64, ue: f64, re: f64) -> BlStation {
 ///
 /// For laminar flow with favorable/zero pressure gradient, this gives
 /// Blasius-like growth. For adverse pressure gradient, H increases.
+///
+/// Note: Near the leading edge, velocity gradients are very strong (dUe/dx >> 1)
+/// which can cause numerical instability with forward Euler. We use a stabilized
+/// scheme that limits the maximum relative change in θ per step.
 fn step_momentum(
     prev: &BlStation,
     x_new: f64,
@@ -198,10 +202,28 @@ fn step_momentum(
 
     // Momentum thickness growth: dθ/dx = Cf/2 - (H+2-M²) θ/Ue dUe/dx
     let h_term = h + 2.0 - msq;
-    let dtheta_dx = cf / 2.0 - h_term * theta / ue_avg * due_dx;
+    
+    // For strong favorable gradients (accelerating flow near LE), use stabilized scheme
+    // The pressure gradient term can dominate, causing theta to go negative
+    // Limit the relative change to prevent instability
+    let pressure_term = h_term * theta / ue_avg * due_dx;
+    let friction_term = cf / 2.0;
+    
+    // Use implicit-like stabilization for strong acceleration
+    // If pressure term would make theta decrease by more than 50% per step, limit it
+    let max_decrease_rate = 0.5 * theta / dx;  // Max rate that gives 50% decrease
+    let pressure_term_limited = pressure_term.min(friction_term + max_decrease_rate);
+    
+    let dtheta_dx = friction_term - pressure_term_limited;
 
     // Integrate θ with limiting to prevent blow-up
-    let theta_new = (theta + dtheta_dx * dx).clamp(1e-12, 0.1);
+    // Use min of:
+    // 1. Forward Euler result
+    // 2. Maximum relative increase (2x per step for stability)
+    let theta_euler = theta + dtheta_dx * dx;
+    let theta_max = theta * 2.0;  // Don't more than double per step
+    let theta_min = theta * 0.5;  // Don't reduce by more than half per step
+    let theta_new = theta_euler.clamp(theta_min.max(1e-12), theta_max.min(0.1));
 
     // For H (shape factor), use empirical correlations
     // In attached laminar flow, H ≈ 2.59 (Blasius)
