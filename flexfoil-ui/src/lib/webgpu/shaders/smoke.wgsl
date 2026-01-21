@@ -181,6 +181,9 @@ fn advect(@builtin(global_invocation_id) id: vec3u) {
     // A particle "just spawned" if its new age is less than its stored age (plus some tolerance)
     let just_spawned = age < p.age - dt * 2.0;
     
+    // Check if particle hit airfoil (psi > 1e9 indicates interior)
+    let hit_airfoil = p.psi > 1e9;
+    
     if (just_spawned || (is_dead && age < spawn_interval)) {
         // Respawn at spawn point
         let blob_id = (idx / ppb) % sim_params.spawn_count;
@@ -196,6 +199,11 @@ fn advect(@builtin(global_invocation_id) id: vec3u) {
         
         p.pos = spawn_pos + vec2f(cos(angle), sin(angle)) * r;
         p.psi = sample_psi(p.pos);
+    } else if (hit_airfoil) {
+        // Particle hit airfoil - move off-screen to prevent smearing
+        // It will respawn when its wave comes around again
+        p.pos = vec2f(-1000.0, -1000.0);
+        p.psi = 0.0;  // Reset psi so it's not stuck in "dead" state
     } else if (!is_dead) {
         // RK2 midpoint integration with velocity from texture
         let v1 = sample_velocity(p.pos);

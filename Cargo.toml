@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/rustfoil-bl",
+    "crates/rustfoil-coupling",
     "crates/rustfoil-core",
     "crates/rustfoil-solver",
     "crates/rustfoil-wasm",
