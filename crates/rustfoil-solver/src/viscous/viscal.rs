@@ -419,11 +419,47 @@ pub fn solve_viscous_two_surfaces(
     let upper_arc: Vec<f64> = upper_stations.iter().map(|s| s.x).collect();
     let lower_arc: Vec<f64> = lower_stations.iter().map(|s| s.x).collect();
 
+    // Debug: Print initial setup values
+    if rustfoil_bl::is_debug_active() {
+        eprintln!("[DEBUG viscal] Upper surface: {} stations", upper_arc.len());
+        if upper_arc.len() >= 3 {
+            eprintln!("[DEBUG viscal]   arc[0..3] = {:?}", &upper_arc[0..3]);
+            eprintln!("[DEBUG viscal]   ue[0..3]  = {:?}", &upper_ue[0..3]);
+        }
+        eprintln!("[DEBUG viscal] Lower surface: {} stations", lower_arc.len());
+        if lower_arc.len() >= 3 {
+            eprintln!("[DEBUG viscal]   arc[0..3] = {:?}", &lower_arc[0..3]);
+            eprintln!("[DEBUG viscal]   ue[0..3]  = {:?}", &lower_ue[0..3]);
+        }
+    }
+
     // March upper surface (side 1)
     let upper_result = march_surface(&upper_arc, upper_ue, re, msq, &march_config, 1);
 
+    // Debug: Print march results
+    if rustfoil_bl::is_debug_active() && !upper_result.stations.is_empty() {
+        eprintln!("[DEBUG viscal] Upper march results:");
+        for (i, s) in upper_result.stations.iter().take(5).enumerate() {
+            eprintln!("[DEBUG viscal]   [{i}] theta={:.6e}, dstar={:.6e}, Hk={:.3}, Cf={:.6e}",
+                s.theta, s.delta_star, s.hk, s.cf);
+        }
+        eprintln!("[DEBUG viscal]   x_tr={:?}, x_sep={:?}",
+            upper_result.x_transition, upper_result.x_separation);
+    }
+
     // March lower surface (side 2)
     let lower_result = march_surface(&lower_arc, lower_ue, re, msq, &march_config, 2);
+
+    // Debug: Print lower march results
+    if rustfoil_bl::is_debug_active() && !lower_result.stations.is_empty() {
+        eprintln!("[DEBUG viscal] Lower march results:");
+        for (i, s) in lower_result.stations.iter().take(5).enumerate() {
+            eprintln!("[DEBUG viscal]   [{i}] theta={:.6e}, dstar={:.6e}, Hk={:.3}, Cf={:.6e}",
+                s.theta, s.delta_star, s.hk, s.cf);
+        }
+        eprintln!("[DEBUG viscal]   x_tr={:?}, x_sep={:?}",
+            lower_result.x_transition, lower_result.x_separation);
+    }
 
     // Copy results back to stations
     for (i, station) in upper_result.stations.iter().enumerate() {
@@ -471,6 +507,20 @@ pub fn solve_viscous_two_surfaces(
     // For now, compute from upper surface (CD is dominated by friction drag anyway)
     let forces = compute_forces(upper_stations, config);
     let lower_forces = compute_forces(lower_stations, config);
+
+    // Debug: Print force computation
+    if rustfoil_bl::is_debug_active() {
+        eprintln!("[DEBUG viscal] Upper forces: cd_f={:.6e}, cd_p={:.6e}",
+            forces.cd_friction, forces.cd_pressure);
+        eprintln!("[DEBUG viscal] Lower forces: cd_f={:.6e}, cd_p={:.6e}",
+            lower_forces.cd_friction, lower_forces.cd_pressure);
+        
+        // Check last station values (used in Squire-Young)
+        if let Some(last) = upper_stations.last() {
+            eprintln!("[DEBUG viscal] Upper last: theta={:.6e}, H={:.3}, Ue={:.3}, is_wake={}",
+                last.theta, last.h, last.u, last.is_wake);
+        }
+    }
 
     // Combine CD (friction from both surfaces)
     let total_cd_friction = forces.cd_friction + lower_forces.cd_friction;
