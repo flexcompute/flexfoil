@@ -30,7 +30,7 @@ jobs:
       - name: Build WASM
         run: |
           cd crates/rustfoil-wasm
-          wasm-pack build --target web --release --out-dir ../../pkg
+          wasm-pack build --target web --release --out-dir ../../flexfoil-ui/src/wasm
 
       - name: Setup Node
         uses: actions/setup-node@v4
