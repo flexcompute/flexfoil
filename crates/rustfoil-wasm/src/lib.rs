@@ -586,6 +586,10 @@ pub struct AnalysisResult {
     pub cp: Vec<f64>,
     /// X-coordinates of Cp sample points
     pub cp_x: Vec<f64>,
+    /// Gamma (vorticity) values at each node - needed for velocity field computation
+    pub gamma: Vec<f64>,
+    /// Dividing streamline value (psi_0)
+    pub psi_0: f64,
     /// Whether the analysis succeeded
     pub success: bool,
     /// Error message (if any)
@@ -614,6 +618,8 @@ fn analyze_airfoil_impl(coords: &[f64], alpha_deg: f64) -> AnalysisResult {
             cm: 0.0,
             cp: vec![],
             cp_x: vec![],
+            gamma: vec![],
+            psi_0: 0.0,
             success: false,
             error: Some("Invalid coordinates: need at least 3 points (6 values)".to_string()),
         };
@@ -630,6 +636,8 @@ fn analyze_airfoil_impl(coords: &[f64], alpha_deg: f64) -> AnalysisResult {
                 cm: 0.0,
                 cp: vec![],
                 cp_x: vec![],
+                gamma: vec![],
+                psi_0: 0.0,
                 success: false,
                 error: Some(format!("Geometry error: {}", e)),
             }
@@ -649,6 +657,8 @@ fn analyze_airfoil_impl(coords: &[f64], alpha_deg: f64) -> AnalysisResult {
                 cm: solution.cm,
                 cp: solution.cp,
                 cp_x,
+                gamma: solution.gamma,
+                psi_0: solution.psi_0,
                 success: true,
                 error: None,
             }
@@ -658,6 +668,8 @@ fn analyze_airfoil_impl(coords: &[f64], alpha_deg: f64) -> AnalysisResult {
             cm: 0.0,
             cp: vec![],
             cp_x: vec![],
+            gamma: vec![],
+            psi_0: 0.0,
             success: false,
             error: Some(format!("Solver error: {}", e)),
         },
@@ -1533,6 +1545,8 @@ impl RustFoil {
                     cm: 0.0,
                     cp: vec![],
                     cp_x: vec![],
+                    gamma: vec![],
+                    psi_0: 0.0,
                     success: false,
                     error: Some("No geometry set".to_string()),
                 }
@@ -1550,6 +1564,8 @@ impl RustFoil {
                     cm: solution.cm,
                     cp: solution.cp,
                     cp_x,
+                    gamma: solution.gamma,
+                    psi_0: solution.psi_0,
                     success: true,
                     error: None,
                 }
@@ -1559,6 +1575,8 @@ impl RustFoil {
                 cm: 0.0,
                 cp: vec![],
                 cp_x: vec![],
+                gamma: vec![],
+                psi_0: 0.0,
                 success: false,
                 error: Some(format!("Solver error: {}", e)),
             },

@@ -406,6 +406,7 @@ button.primary:hover {
 }
 
 /* Driver.js onboarding tour styling */
+
 .driver-popover {
   background: var(--bg-secondary) !important;
   color: var(--text-primary) !important;
@@ -632,4 +633,57 @@ button.primary:hover {
 .tour-challenge__panel-warning .tour-challenge__icon {
   font-size: 14px;
   color: #ffc107;
+}
+
+/* Element not visible warning (when tour element is hidden behind a tab) */
+.tour-element-warning {
+  margin-bottom: 12px;
+  padding: 12px;
+  background: rgba(255, 152, 0, 0.15);
+  border: 1px solid rgba(255, 152, 0, 0.4);
+  border-radius: 6px;
+  border-left: 3px solid #ff9800;
+}
+
+[data-theme="light"] .tour-element-warning {
+  background: rgba(255, 152, 0, 0.1);
+}
+
+.tour-element-warning__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.tour-element-warning__icon {
+  font-size: 16px;
+  color: #ff9800;
+}
+
+.tour-element-warning__label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #ff9800;
+}
+
+.tour-element-warning__message {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.tour-element-warning__message strong {
+  color: var(--text-primary);
+}
+
+.tour-element-warning__message ul {
+  margin: 8px 0 0 0;
+  padding-left: 20px;
+}
+
+.tour-element-warning__message li {
+  margin-bottom: 4px;
 }

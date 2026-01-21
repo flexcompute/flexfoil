@@ -69,6 +69,12 @@ export function getTourProgress(tourId: string): number {
   return state.tourProgress[tourId] ?? 0;
 }
 
+/** Check if a tour has any saved progress (even at step 0) */
+export function hasTourProgress(tourId: string): boolean {
+  const state = getOnboardingState();
+  return tourId in state.tourProgress;
+}
+
 /** Clear progress for a specific tour (when restarting from beginning) */
 export function clearTourProgress(tourId: string): void {
   const state = getOnboardingState();

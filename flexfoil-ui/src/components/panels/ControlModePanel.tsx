@@ -2,21 +2,27 @@
  * ControlModePanel - Switch between parameters, camber-spline, and thickness-spline modes
  */
 
-import { useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
+import { useVisualizationStore } from '../../stores/visualizationStore';
 import type { ControlMode } from '../../types';
+
+// Debounce delay for repaneling after slider changes (ms)
+const REPANEL_DEBOUNCE_MS = 150;
 
 export function ControlModePanel() {
   const { 
     controlMode, 
     setControlMode,
     coordinates,
+    baseCoordinates,
     // Parameters mode
     thicknessScale,
     camberScale,
     setThicknessScale,
     setCamberScale,
     applyScaling,
+    repanelCoordinates,
     // Camber spline mode
     camberControlPoints,
     addCamberControlPoint,
@@ -26,35 +32,98 @@ export function ControlModePanel() {
     addThicknessControlPoint,
     initializeThicknessControlPoints,
   } = useAirfoilStore();
+  
+  // Check if the base airfoil is symmetric (no camber to scale)
+  // A symmetric airfoil has max camber < 0.1% of chord
+  const isSymmetric = useMemo(() => {
+    if (baseCoordinates.length < 10) return false;
+    
+    // Quick check: find max |y| among upper surface points (x > 0.1)
+    // For symmetric airfoils, the mean y at each x should be ~0
+    let maxCamber = 0;
+    const midChord = baseCoordinates.filter(p => p.x > 0.2 && p.x < 0.8);
+    if (midChord.length < 4) return false;
+    
+    // Group by approximate x and check if mean y is near zero
+    for (const p of midChord) {
+      // Find corresponding point on opposite surface (approximate)
+      const opposite = midChord.find(q => Math.abs(q.x - p.x) < 0.05 && q !== p);
+      if (opposite) {
+        const meanY = (p.y + opposite.y) / 2;
+        maxCamber = Math.max(maxCamber, Math.abs(meanY));
+      }
+    }
+    
+    return maxCamber < 0.001; // Less than 0.1% chord
+  }, [baseCoordinates]);
+
+  const { showControls, setShowControls } = useVisualizationStore();
+
+  // Auto-enable control point visibility when in spline modes
+  useEffect(() => {
+    if ((controlMode === 'camber-spline' || controlMode === 'thickness-spline') && !showControls) {
+      setShowControls(true);
+    }
+  }, [controlMode, showControls, setShowControls]);
 
   const handleModeChange = useCallback((mode: ControlMode) => {
     setControlMode(mode);
     
+    // Auto-enable control point visibility for spline modes
+    if (mode === 'camber-spline' || mode === 'thickness-spline') {
+      setShowControls(true);
+    }
+    
     // Initialize camber control points if switching to camber-spline mode
     if (mode === 'camber-spline' && camberControlPoints.length === 0 && coordinates.length > 0) {
       initializeCamberControlPoints();
-      // Also initialize thickness points if not already done
-      if (thicknessControlPoints.length === 0) {
-        initializeThicknessControlPoints();
-      }
     }
     
     // Initialize thickness control points if switching to thickness-spline mode
     if (mode === 'thickness-spline' && thicknessControlPoints.length === 0 && coordinates.length > 0) {
       initializeThicknessControlPoints();
-      // Also initialize camber points if not already done
-      if (camberControlPoints.length === 0) {
-        initializeCamberControlPoints();
-      }
     }
   }, [
     setControlMode, 
+    setShowControls,
     coordinates, 
     camberControlPoints.length, 
     thicknessControlPoints.length,
     initializeCamberControlPoints,
     initializeThicknessControlPoints,
   ]);
+
+  // Debounced repaneling for smooth slider interaction
+  const repanelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  const debouncedRepanel = useCallback(() => {
+    if (repanelTimeoutRef.current) {
+      clearTimeout(repanelTimeoutRef.current);
+    }
+    repanelTimeoutRef.current = setTimeout(() => {
+      repanelCoordinates();
+    }, REPANEL_DEBOUNCE_MS);
+  }, [repanelCoordinates]);
+  
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (repanelTimeoutRef.current) {
+        clearTimeout(repanelTimeoutRef.current);
+      }
+    };
+  }, []);
+  
+  // Real-time slider handlers - update shape immediately, debounce repaneling
+  const handleThicknessChange = useCallback((value: number) => {
+    setThicknessScale(value, true); // skipRepanel=true for immediate visual update
+    debouncedRepanel();
+  }, [setThicknessScale, debouncedRepanel]);
+  
+  const handleCamberChange = useCallback((value: number) => {
+    setCamberScale(value, true); // skipRepanel=true for immediate visual update
+    debouncedRepanel();
+  }, [setCamberScale, debouncedRepanel]);
 
   const handleAddCamberPoint = useCallback(() => {
     const id = `camber-${Date.now()}`;
@@ -149,7 +218,7 @@ export function ControlModePanel() {
         {/* Parameters mode controls */}
         {controlMode === 'parameters' && (
           <>
-            <div className="form-group">
+            <div className="form-group" data-tour="thickness-slider">
               <div className="form-label">Thickness Scale</div>
               <div className="form-row">
                 <input
@@ -158,7 +227,7 @@ export function ControlModePanel() {
                   max={3.0}
                   step={0.01}
                   value={thicknessScale}
-                  onChange={(e) => setThicknessScale(parseFloat(e.target.value))}
+                  onChange={(e) => handleThicknessChange(parseFloat(e.target.value))}
                   style={{ flex: 1 }}
                 />
                 <span style={{ 
@@ -171,7 +240,7 @@ export function ControlModePanel() {
               </div>
             </div>
 
-            <div className="form-group">
+            <div className="form-group" data-tour="camber-slider">
               <div className="form-label">Camber Scale</div>
               <div className="form-row">
                 <input
@@ -180,17 +249,29 @@ export function ControlModePanel() {
                   max={3.0}
                   step={0.01}
                   value={camberScale}
-                  onChange={(e) => setCamberScale(parseFloat(e.target.value))}
-                  style={{ flex: 1 }}
+                  onChange={(e) => handleCamberChange(parseFloat(e.target.value))}
+                  style={{ flex: 1, opacity: isSymmetric ? 0.5 : 1 }}
+                  disabled={isSymmetric}
                 />
                 <span style={{ 
                   width: '50px', 
                   textAlign: 'right',
                   fontFamily: 'var(--font-mono)',
+                  opacity: isSymmetric ? 0.5 : 1,
                 }}>
                   {(camberScale * 100).toFixed(0)}%
                 </span>
               </div>
+              {isSymmetric && (
+                <p style={{ 
+                  fontSize: '11px', 
+                  color: 'var(--text-muted)', 
+                  marginTop: '4px',
+                  fontStyle: 'italic',
+                }}>
+                  Symmetric airfoil has no camber to scale. Try a cambered airfoil like 2412.
+                </p>
+              )}
             </div>
 
             <button 

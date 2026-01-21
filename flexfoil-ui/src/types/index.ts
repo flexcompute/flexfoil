@@ -158,6 +158,18 @@ export interface ViewportState {
   height: number;
 }
 
+/** Performance metrics for visualization */
+export interface PerfMetrics {
+  /** Last frame duration in milliseconds */
+  frameTime: number;
+  /** Rolling average frame time */
+  avgFrameTime: number;
+  /** Number of active smoke particles */
+  particleCount: number;
+  /** Frames per second */
+  fps: number;
+}
+
 /** Visualization settings state */
 export interface VisualizationState {
   // Display toggles
@@ -185,6 +197,8 @@ export interface VisualizationState {
   smokeParticlesPerBlob: number;
   smokeSpawnInterval: number;
   smokeMaxAge: number;
+  smokeWaveSpacing: number;  // Distance between smoke waves in chord lengths
+  smokeResetCounter: number; // Incremented to trigger smoke reset
   
   // Flow speed multiplier
   flowSpeed: number;
@@ -195,4 +209,9 @@ export interface VisualizationState {
   
   // Force vector options
   forceScale: number;
+  
+  // GPU acceleration
+  useGPU: boolean;
+  gpuAvailable: boolean;
+  perfMetrics: PerfMetrics;
 }

@@ -285,6 +285,8 @@ export interface AnalysisResult {
     cm: number;
     cp: number[];
     cp_x: number[];
+    gamma: number[];  // Now always returned from solver
+    psi_0: number;    // Dividing streamline value
     success: boolean;
     error?: string;
 }
@@ -299,6 +301,54 @@ export function analyzeAirfoil(
     
     const coordsFlat = pointsToFlat(coordinates);
     return analyze_airfoil(coordsFlat, alphaDeg) as AnalysisResult;
+}
+
+/**
+ * Compute gamma (circulation) values for each panel node.
+ * 
+ * This calls the actual panel method solver to get the correct gamma values
+ * needed for velocity field computation (GPU visualization).
+ * Returns an array of gamma values at each panel node.
+ */
+export interface GammaResult {
+    gamma: Float64Array | null;
+    psi_0: number;
+    success: boolean;
+    error?: string;
+}
+
+export function computeGamma(
+    coordinates: { x: number; y: number }[],
+    alphaDeg: number
+): GammaResult {
+    if (!initialized) {
+        return { gamma: null, psi_0: 0, success: false, error: 'WASM not initialized' };
+    }
+    
+    try {
+        // Call the actual solver to get real gamma values
+        const result = analyzeAirfoil(coordinates, alphaDeg);
+        
+        if (!result.success || !result.gamma || result.gamma.length === 0) {
+            return { 
+                gamma: null, 
+                psi_0: 0, 
+                success: false, 
+                error: result.error || 'Solver returned no gamma values' 
+            };
+        }
+        
+        // Convert to Float64Array
+        const gamma = new Float64Array(result.gamma);
+        
+        return { 
+            gamma, 
+            psi_0: result.psi_0 || 0,
+            success: true 
+        };
+    } catch (e) {
+        return { gamma: null, psi_0: 0, success: false, error: String(e) };
+    }
 }
 
 /**

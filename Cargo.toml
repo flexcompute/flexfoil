@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/*"]
+members = [
+    "crates/rustfoil-core",
+    "crates/rustfoil-solver",
+    "crates/rustfoil-wasm",
+    "crates/rustfoil-cli",
+]
 
 [workspace.package]
 version = "0.1.0"

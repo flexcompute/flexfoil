@@ -132,9 +132,10 @@ interface AirfoilStore extends AirfoilState {
   setBSplineDegree: (degree: number) => void;
   
   // Camber/thickness scaling (parameters mode)
-  setThicknessScale: (scale: number) => void;
-  setCamberScale: (scale: number) => void;
+  setThicknessScale: (scale: number, skipRepanel?: boolean) => void;
+  setCamberScale: (scale: number, skipRepanel?: boolean) => void;
   applyScaling: () => void;
+  repanelCoordinates: () => void;
   
   // Camber control points (camber-spline mode)
   setCamberControlPoints: (points: CamberControlPoint[]) => void;
@@ -341,13 +342,22 @@ export const useAirfoilStore = create<AirfoilStore>()(
       setSSPVisualization: (viz) => set({ sspVisualization: viz }),
 
       // Thickness/camber scaling actions
-      // Pattern: fine spline resolution in decomposition → transform → repanel
-      setThicknessScale: (scale) => set((state) => {
+      // Pattern: immediate coordinate update for responsiveness, debounced repanel for flow
+      setThicknessScale: (scale, skipRepanel = false) => set((state) => {
         const newScale = Math.max(0.1, Math.min(3.0, scale));
         // Apply scaling to base coordinates
         if (state.baseCoordinates.length > 0) {
           // scaleAirfoil uses high-resolution cosine decomposition to preserve LE
           const scaledCoords = scaleAirfoil(state.baseCoordinates, newScale, state.camberScale);
+          
+          // Skip repanel if requested (for real-time slider dragging)
+          if (skipRepanel) {
+            return { 
+              thicknessScale: newScale, 
+              coordinates: scaledCoords,
+              // Keep existing panels - will be updated by debounced repanel
+            };
+          }
           
           // Auto-repanel after warping for proper curvature-based distribution
           let panels = scaledCoords;
@@ -371,12 +381,21 @@ export const useAirfoilStore = create<AirfoilStore>()(
         return { thicknessScale: newScale };
       }),
       
-      setCamberScale: (scale) => set((state) => {
+      setCamberScale: (scale, skipRepanel = false) => set((state) => {
         const newScale = Math.max(0, Math.min(3.0, scale));
         // Apply scaling to base coordinates
         if (state.baseCoordinates.length > 0) {
           // scaleAirfoil uses high-resolution cosine decomposition to preserve LE
           const scaledCoords = scaleAirfoil(state.baseCoordinates, state.thicknessScale, newScale);
+          
+          // Skip repanel if requested (for real-time slider dragging)
+          if (skipRepanel) {
+            return { 
+              camberScale: newScale, 
+              coordinates: scaledCoords,
+              // Keep existing panels - will be updated by debounced repanel
+            };
+          }
           
           // Auto-repanel after warping for proper curvature-based distribution
           let panels = scaledCoords;
@@ -400,6 +419,22 @@ export const useAirfoilStore = create<AirfoilStore>()(
         return { camberScale: newScale };
       }),
       
+      // Trigger repaneling of current coordinates (for debounced use after slider changes)
+      repanelCoordinates: () => set((state) => {
+        if (state.coordinates.length < 5 || !isWasmReady()) {
+          return { panels: state.coordinates };
+        }
+        try {
+          const repaneled = repanelXfoil(state.coordinates, state.nPanels);
+          if (repaneled.length > 0) {
+            return { panels: repaneled.map(pt => ({ x: pt.x, y: pt.y })) };
+          }
+        } catch (e) {
+          console.warn('Repanel failed:', e);
+        }
+        return { panels: state.coordinates };
+      }),
+      
       applyScaling: () => set((state) => {
         // Save current scaled airfoil as the new base
         return {
@@ -416,12 +451,15 @@ export const useAirfoilStore = create<AirfoilStore>()(
         const newPoints = state.camberControlPoints.map((p) =>
           p.id === id ? { ...p, ...point } : p
         );
-        // Reconstruct airfoil using ORIGINAL thickness distribution
-        // This preserves the exact NACA formula for thickness
-        if (newPoints.length >= 2 && state.baseCoordinates.length >= 5) {
+        // Reconstruct airfoil using the new camber line with CURRENT thickness.
+        // Using state.coordinates (not baseCoordinates) preserves any thickness
+        // modifications the user has made in thickness-spline mode.
+        // The thickness is extracted via dense decomposition (200+ cosine samples),
+        // which accurately captures any modifications including the LE profile.
+        if (newPoints.length >= 2 && state.coordinates.length >= 5) {
           const newCoords = reconstructWithOriginalThickness(
             newPoints,
-            state.baseCoordinates,
+            state.coordinates,
             state.nPanels + 1
           );
           
@@ -449,11 +487,11 @@ export const useAirfoilStore = create<AirfoilStore>()(
       
       addCamberControlPoint: (point) => set((state) => {
         const newPoints = [...state.camberControlPoints, point].sort((a, b) => a.x - b.x);
-        // Reconstruct using original thickness
-        if (newPoints.length >= 2 && state.baseCoordinates.length >= 5) {
+        // Reconstruct using current thickness (preserves any thickness modifications)
+        if (newPoints.length >= 2 && state.coordinates.length >= 5) {
           const newCoords = reconstructWithOriginalThickness(
             newPoints,
-            state.baseCoordinates,
+            state.coordinates,
             state.nPanels + 1
           );
           return { 
@@ -468,11 +506,11 @@ export const useAirfoilStore = create<AirfoilStore>()(
       removeCamberControlPoint: (id) => set((state) => {
         if (state.camberControlPoints.length <= 2) return state;
         const newPoints = state.camberControlPoints.filter((p) => p.id !== id);
-        // Reconstruct using original thickness
-        if (newPoints.length >= 2 && state.baseCoordinates.length >= 5) {
+        // Reconstruct using current thickness (preserves any thickness modifications)
+        if (newPoints.length >= 2 && state.coordinates.length >= 5) {
           const newCoords = reconstructWithOriginalThickness(
             newPoints,
-            state.baseCoordinates,
+            state.coordinates,
             state.nPanels + 1
           );
           return { 
@@ -496,12 +534,14 @@ export const useAirfoilStore = create<AirfoilStore>()(
         const newPoints = state.thicknessControlPoints.map((p) =>
           p.id === id ? { ...p, ...point } : p
         );
-        // Reconstruct airfoil using ORIGINAL camber distribution
-        // This preserves the exact camber line, only modifying thickness
-        if (newPoints.length >= 2 && state.baseCoordinates.length >= 5) {
+        // Reconstruct airfoil with new thickness, preserving CURRENT camber.
+        // Using current coordinates (not baseCoordinates) preserves any camber
+        // modifications the user has made in camber-spline mode.
+        if (newPoints.length >= 2 && state.coordinates.length >= 5) {
+          // Use camber from current coordinates (may have been modified)
           const newCoords = reconstructWithOriginalCamber(
             newPoints,
-            state.baseCoordinates,
+            state.coordinates,
             state.nPanels + 1
           );
           
@@ -529,11 +569,11 @@ export const useAirfoilStore = create<AirfoilStore>()(
       
       addThicknessControlPoint: (point) => set((state) => {
         const newPoints = [...state.thicknessControlPoints, point].sort((a, b) => a.x - b.x);
-        // Reconstruct using original camber
-        if (newPoints.length >= 2 && state.baseCoordinates.length >= 5) {
+        // Reconstruct using current camber (preserves any camber modifications)
+        if (newPoints.length >= 2 && state.coordinates.length >= 5) {
           const newCoords = reconstructWithOriginalCamber(
             newPoints,
-            state.baseCoordinates,
+            state.coordinates,
             state.nPanels + 1
           );
           return { 
@@ -548,11 +588,11 @@ export const useAirfoilStore = create<AirfoilStore>()(
       removeThicknessControlPoint: (id) => set((state) => {
         if (state.thicknessControlPoints.length <= 2) return state;
         const newPoints = state.thicknessControlPoints.filter((p) => p.id !== id);
-        // Reconstruct using original camber
-        if (newPoints.length >= 2 && state.baseCoordinates.length >= 5) {
+        // Reconstruct using current camber (preserves any camber modifications)
+        if (newPoints.length >= 2 && state.coordinates.length >= 5) {
           const newCoords = reconstructWithOriginalCamber(
             newPoints,
-            state.baseCoordinates,
+            state.coordinates,
             state.nPanels + 1
           );
           return { 

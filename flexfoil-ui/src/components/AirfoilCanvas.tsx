@@ -22,10 +22,11 @@ import { useVisualizationStore } from '../stores/visualizationStore';
 import { useTheme } from '../contexts/ThemeContext';
 import { useLayout } from '../contexts/LayoutContext';
 import type { Point, ViewportState, AirfoilPoint } from '../types';
-import { computeStreamlines, computePsiGrid, createSmokeSystem, isWasmReady, WasmSmokeSystem, analyzeAirfoil } from '../lib/wasm';
+import { computeStreamlines, computePsiGrid, createSmokeSystem, isWasmReady, WasmSmokeSystem, analyzeAirfoil, computeGamma } from '../lib/wasm';
 import { useMorphingAnimation, getCpColor, computeForceVectors } from '../hooks/useMorphingAnimation';
 import { generateCamberSplineCurve } from '../lib/airfoilGeometry';
 import { syncToUrl, getCompleteUrlState } from '../lib/urlState';
+import { WebGPURenderer, checkWebGPUSupport } from '../lib/webgpu';
 // Removed d3-contour - using efficient cell-based rendering instead
 
 /**
@@ -500,7 +501,12 @@ interface AirfoilCanvasProps {
 export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const smokeCanvasRef = useRef<HTMLCanvasElement>(null);  // Overlay canvas for smoke (redraws every frame)
+  const gpuCanvasRef = useRef<HTMLCanvasElement>(null);    // WebGPU canvas
   const containerRef = useRef<HTMLDivElement>(null);
+  
+  // WebGPU renderer
+  const gpuRendererRef = useRef<WebGPURenderer | null>(null);
+  const gpuAnimationRef = useRef<number | null>(null);
   
   // Theme context
   const { isDark } = useTheme();
@@ -587,10 +593,14 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       adaptiveStreamlines: state.adaptiveStreamlines,
       smokeDensity: state.smokeDensity,
       smokeParticlesPerBlob: state.smokeParticlesPerBlob,
+      smokeWaveSpacing: state.smokeWaveSpacing,
+      smokeResetCounter: state.smokeResetCounter,
       flowSpeed: state.flowSpeed,
       cpDisplayMode: state.cpDisplayMode,
       cpBarScale: state.cpBarScale,
       forceScale: state.forceScale,
+      useGPU: state.useGPU,
+      gpuAvailable: state.gpuAvailable,
     }))
   );
   
@@ -611,14 +621,21 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     adaptiveStreamlines,
     smokeDensity,
     smokeParticlesPerBlob,
+    smokeWaveSpacing,
+    smokeResetCounter,
     flowSpeed,
     cpDisplayMode,
     cpBarScale,
     forceScale,
+    useGPU,
+    gpuAvailable: _gpuAvailable, // Used for conditional WebGPU setup
   } = visualizationState;
+  void _gpuAvailable; // Suppress unused warning (used implicitly in GPU init)
   
-  // Get setSmokeDensity separately (not needed for URL sync)
+  // Get store actions separately (not needed for URL sync)
   const setSmokeDensity = useVisualizationStore((state) => state.setSmokeDensity);
+  const setGPUAvailable = useVisualizationStore((state) => state.setGPUAvailable);
+  const updatePerfMetrics = useVisualizationStore((state) => state.updatePerfMetrics);
   
   // Sync all state to URL (debounced)
   useEffect(() => {
@@ -1658,7 +1675,8 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     
     // Draw streamlines (behind airfoil) - rotated by alpha to match airfoil
     // Uses morphed streamlines for smooth animation
-    if (showStreamlines && morphState.streamlines.length > 0) {
+    // Skip CPU streamlines when GPU mode is enabled - GPU uses same data
+    if (showStreamlines && morphState.streamlines.length > 0 && !useGPU) {
       ctx.strokeStyle = colors.accentSecondary;
       ctx.globalAlpha = 0.5;
       ctx.lineWidth = 1;
@@ -2076,6 +2094,238 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     return () => resizeObserver.disconnect();
   }, []);
 
+  // Initialize WebGPU renderer
+  useEffect(() => {
+    const initGPU = async () => {
+      // Check WebGPU support first
+      const support = await checkWebGPUSupport();
+      setGPUAvailable(support.available);
+      
+      if (!support.available) {
+        console.log('WebGPU not available:', support.info);
+        return;
+      }
+      
+      console.log('WebGPU available:', support.info);
+      
+      // Wait for canvas to be ready
+      const canvas = gpuCanvasRef.current;
+      if (!canvas) return;
+      
+      // Initialize renderer
+      const renderer = await WebGPURenderer.create(canvas);
+      if (renderer) {
+        gpuRendererRef.current = renderer;
+        renderer.setTheme(isDark);
+        console.log('WebGPU renderer initialized');
+      }
+    };
+    
+    initGPU();
+    
+    return () => {
+      if (gpuAnimationRef.current) {
+        cancelAnimationFrame(gpuAnimationRef.current);
+      }
+      gpuRendererRef.current?.destroy();
+      gpuRendererRef.current = null;
+    };
+  }, [setGPUAvailable, isDark]);
+
+  // Update WebGPU renderer theme
+  useEffect(() => {
+    gpuRendererRef.current?.setTheme(isDark);
+  }, [isDark]);
+
+  // Update WebGPU geometry when panels change
+  useEffect(() => {
+    if (!useGPU || !gpuRendererRef.current || panels.length < 10 || !isWasmReady()) return;
+    
+    try {
+      // Compute gamma values from WASM solver (real values, not approximations)
+      const gammaResult = computeGamma(panels, displayAlpha);
+      if (!gammaResult.success || !gammaResult.gamma) {
+        console.warn('GPU gamma computation failed:', gammaResult.error);
+        return;
+      }
+      
+      const gamma = Array.from(gammaResult.gamma);
+      
+      // Use psi_0 from solver (dividing streamline value)
+      // Fall back to psiContours values if needed
+      const psi0 = gammaResult.psi_0 || psiContours.psi0 || 0;
+      const psiMin = psiContours.psiMin || -1;
+      const psiMax = psiContours.psiMax || 1;
+      
+      // Update GPU renderer geometry with real solver values
+      gpuRendererRef.current.updateGeometry(
+        panels,
+        gamma,
+        displayAlpha,
+        streamlineBounds,
+        psi0,
+        psiMin,
+        psiMax
+      );
+      
+    } catch (e) {
+      console.error('GPU geometry update failed:', e);
+    }
+  }, [useGPU, panels, displayAlpha, streamlineBounds, psiContours.psi0, psiContours.psiMin, psiContours.psiMax]);
+
+  // Update GPU smoke spawn points (separate from geometry since spawn doesn't need gamma)
+  useEffect(() => {
+    if (!useGPU || !gpuRendererRef.current) return;
+    
+    // Create spawn points as vertical line in DISPLAY frame, then rotate to BODY frame
+    // This matches CPU smoke - spawn line appears vertical when viewed
+    const { yMin, yMax, spawnX } = smokeBounds;
+    const yRange = yMax - yMin;
+    
+    // Rotation center (quarter chord) and angle
+    const cx = 0.25;
+    const cy = 0;
+    const rad = displayAlpha * Math.PI / 180;  // +alpha to rotate from display to body
+    const cosA = Math.cos(rad);
+    const sinA = Math.sin(rad);
+    
+    const spawnPoints: { x: number; y: number }[] = [];
+    for (let i = 0; i < smokeDensity; i++) {
+      // Desired position in DISPLAY frame (vertical line at spawnX)
+      const displayX = spawnX;
+      const displayY = yMin + (i * yRange) / Math.max(1, smokeDensity - 1);
+      
+      // Rotate by +alpha around quarter chord to get BODY frame position
+      const dx = displayX - cx;
+      const dy = displayY - cy;
+      const bodyX = cx + dx * cosA - dy * sinA;
+      const bodyY = cy + dx * sinA + dy * cosA;
+      
+      spawnPoints.push({ x: bodyX, y: bodyY });
+    }
+    gpuRendererRef.current.setSpawnPoints(spawnPoints);
+  }, [useGPU, smokeBounds, smokeDensity, displayAlpha]);
+  
+  // Update GPU smoke wave spacing and timing parameters
+  useEffect(() => {
+    if (!useGPU || !gpuRendererRef.current) return;
+    
+    // Calculate spawn interval from wave spacing (distance / speed = time)
+    // waveSpacing is in chord lengths, flowSpeed is chord lengths per second
+    const spawnInterval = smokeWaveSpacing / flowSpeed;
+    
+    // Calculate max age based on domain traversal time
+    // Particles should live long enough to cross the visible domain
+    const { spawnX, exitX } = smokeBounds;
+    const domainWidth = exitX - spawnX;
+    const traversalTime = domainWidth / flowSpeed;
+    const maxAge = traversalTime * 1.3; // 30% margin
+    
+    gpuRendererRef.current.setSmokeParams(spawnInterval, maxAge);
+    gpuRendererRef.current.resetSmoke(); // Reset to redistribute particles
+  }, [useGPU, smokeWaveSpacing, flowSpeed, smokeBounds, displayAlpha]);
+
+  // Handle manual smoke reset request (from UI button)
+  useEffect(() => {
+    if (smokeResetCounter === 0) return; // Skip initial mount
+    
+    // Reset CPU smoke
+    if (smokeSystemRef.current) {
+      smokeSystemRef.current.reset();
+    }
+    
+    // Reset GPU smoke
+    if (gpuRendererRef.current) {
+      gpuRendererRef.current.resetSmoke();
+    }
+  }, [smokeResetCounter]);
+
+  // WebGPU render loop
+  useEffect(() => {
+    if (!useGPU || !gpuRendererRef.current) {
+      // Clean up any existing GPU animation
+      if (gpuAnimationRef.current) {
+        cancelAnimationFrame(gpuAnimationRef.current);
+        gpuAnimationRef.current = null;
+      }
+      return;
+    }
+    
+    let lastTime = performance.now();
+    
+    const animate = (time: number) => {
+      const dt = Math.min((time - lastTime) / 1000, 0.05);
+      lastTime = time;
+      
+      if (!gpuRendererRef.current) return;
+      
+      // Update smoke if enabled
+      if (showSmoke) {
+        gpuRendererRef.current.updateSmoke(dt * flowSpeed);
+      }
+      
+      // Render
+      gpuRendererRef.current.render(
+        {
+          centerX: viewport.center.x,
+          centerY: viewport.center.y,
+          zoom: viewport.zoom,
+          width: viewport.width,
+          height: viewport.height,
+        },
+        {
+          smoke: showSmoke,
+          contours: showPsiContours,
+          streamlines: showStreamlines,
+          alpha: displayAlpha,
+          isDark,
+        }
+      );
+      
+      // Update performance metrics
+      const metrics = gpuRendererRef.current.getPerformanceMetrics();
+      updatePerfMetrics(metrics);
+      
+      gpuAnimationRef.current = requestAnimationFrame(animate);
+    };
+    
+    gpuAnimationRef.current = requestAnimationFrame(animate);
+    
+    return () => {
+      if (gpuAnimationRef.current) {
+        cancelAnimationFrame(gpuAnimationRef.current);
+        gpuAnimationRef.current = null;
+      }
+    };
+  }, [useGPU, showSmoke, showPsiContours, showStreamlines, flowSpeed, viewport, displayAlpha, isDark, updatePerfMetrics]);
+
+  // Update GPU streamlines when streamlines state changes
+  // Use direct streamlines state, not morphState, to avoid timing issues
+  useEffect(() => {
+    if (!useGPU || !gpuRendererRef.current) return;
+    if (!showStreamlines || streamlines.length === 0) return;
+    
+    // Transform streamlines to display coordinates (apply rotation)
+    const rad = displayAlpha * Math.PI / 180;
+    const cosA = Math.cos(rad);
+    const sinA = Math.sin(rad);
+    const cx = 0.25;
+    const cy = 0;
+    
+    const transformedStreamlines: [number, number][][] = streamlines.map(line => 
+      line.map(([x, y]) => {
+        // Rotate around quarter chord
+        const dx = x - cx;
+        const dy = y - cy;
+        const rx = cx + dx * cosA + dy * sinA;
+        const ry = cy - dx * sinA + dy * cosA;
+        return [rx, ry] as [number, number];
+      })
+    );
+    
+    gpuRendererRef.current.setStreamlines(transformedStreamlines);
+  }, [useGPU, showStreamlines, streamlines, displayAlpha]);
+
   // Redraw when state changes
   useEffect(() => {
     draw();
@@ -2384,6 +2634,21 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
           top: 0,
           left: 0,
           pointerEvents: 'none',  // Let clicks pass through to main canvas
+          display: useGPU ? 'none' : 'block',  // Hide when using GPU
+        }}
+      />
+      
+      {/* WebGPU canvas - GPU-accelerated rendering for smoke, contours, streamlines */}
+      <canvas
+        ref={gpuCanvasRef}
+        width={viewport.width}
+        height={viewport.height}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          pointerEvents: 'none',
+          display: useGPU ? 'block' : 'none',  // Show only when using GPU
         }}
       />
       

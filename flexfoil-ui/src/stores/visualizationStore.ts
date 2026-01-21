@@ -1,11 +1,12 @@
 /**
  * Zustand store for visualization state management
  * 
- * Manages display toggles, streamline options, smoke options, and flow speed.
+ * Manages display toggles, streamline options, smoke options, flow speed,
+ * and GPU acceleration settings.
  */
 
 import { create } from 'zustand';
-import type { VisualizationState } from '../types';
+import type { VisualizationState, PerfMetrics } from '../types';
 
 interface VisualizationStore extends VisualizationState {
   // Display toggle actions
@@ -33,6 +34,8 @@ interface VisualizationStore extends VisualizationState {
   setSmokeParticlesPerBlob: (count: number) => void;
   setSmokeSpawnInterval: (interval: number) => void;
   setSmokeMaxAge: (age: number) => void;
+  setSmokeWaveSpacing: (spacing: number) => void;
+  requestSmokeReset: () => void;
   
   // Flow speed action
   setFlowSpeed: (speed: number) => void;
@@ -44,9 +47,21 @@ interface VisualizationStore extends VisualizationState {
   // Force vector options actions
   setForceScale: (scale: number) => void;
   
+  // GPU acceleration actions
+  setUseGPU: (use: boolean) => void;
+  setGPUAvailable: (available: boolean) => void;
+  updatePerfMetrics: (metrics: Partial<PerfMetrics>) => void;
+  
   // Reset
   resetVisualization: () => void;
 }
+
+const DEFAULT_PERF_METRICS: PerfMetrics = {
+  frameTime: 0,
+  avgFrameTime: 0,
+  particleCount: 0,
+  fps: 0,
+};
 
 const DEFAULT_STATE: VisualizationState = {
   // Display toggles
@@ -74,6 +89,8 @@ const DEFAULT_STATE: VisualizationState = {
   smokeParticlesPerBlob: 15, // Particles per blob
   smokeSpawnInterval: 2.0,   // Seconds between blob spawns (for clear separation)
   smokeMaxAge: 6.0,          // Particle lifetime in seconds
+  smokeWaveSpacing: 0.5,     // Distance between smoke waves in chord lengths
+  smokeResetCounter: 0,      // Incremented to trigger smoke reset
   
   // Flow speed
   flowSpeed: 1.0,
@@ -84,6 +101,11 @@ const DEFAULT_STATE: VisualizationState = {
   
   // Force vector options
   forceScale: 0.15,
+  
+  // GPU acceleration
+  useGPU: false,             // Default to CPU, enable when detected
+  gpuAvailable: false,       // Set by feature detection
+  perfMetrics: DEFAULT_PERF_METRICS,
 };
 
 export const useVisualizationStore = create<VisualizationStore>((set) => ({
@@ -126,6 +148,12 @@ export const useVisualizationStore = create<VisualizationStore>((set) => ({
   setSmokeMaxAge: (age) => set({ 
     smokeMaxAge: Math.max(0.5, Math.min(30.0, age)) 
   }),
+  setSmokeWaveSpacing: (spacing) => set({ 
+    smokeWaveSpacing: Math.max(0.2, Math.min(2.0, spacing)) 
+  }),
+  requestSmokeReset: () => set((state) => ({ 
+    smokeResetCounter: state.smokeResetCounter + 1 
+  })),
   
   // Flow speed action
   setFlowSpeed: (speed) => set({ 
@@ -142,6 +170,15 @@ export const useVisualizationStore = create<VisualizationStore>((set) => ({
   setForceScale: (scale) => set({ 
     forceScale: Math.max(0.05, Math.min(0.5, scale)) 
   }),
+  
+  // GPU acceleration actions
+  setUseGPU: (use) => set((state) => ({ 
+    useGPU: use && state.gpuAvailable  // Can only enable if GPU is available
+  })),
+  setGPUAvailable: (available) => set({ gpuAvailable: available }),
+  updatePerfMetrics: (metrics) => set((state) => ({
+    perfMetrics: { ...state.perfMetrics, ...metrics }
+  })),
   
   // Reset
   resetVisualization: () => set(DEFAULT_STATE),

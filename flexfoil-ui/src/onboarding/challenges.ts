@@ -38,6 +38,16 @@ export function isPanelVisible(panelId: string): boolean {
 }
 
 /**
+ * Check if any DOM element is visible (exists and has non-zero dimensions)
+ */
+export function isElementVisible(selector: string): boolean {
+  const element = document.querySelector(selector);
+  if (!element) return false;
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
+/**
  * Get the display name for a panel
  */
 export function getPanelDisplayName(panelId: string): string {
@@ -45,11 +55,101 @@ export function getPanelDisplayName(panelId: string): string {
     'solve': 'Solve',
     'library': 'Library', 
     'visualization': 'Visualization',
+    'control': 'Control Mode',
     'control-mode': 'Control Mode',
     'polar': 'Polar Plot',
+    'canvas': 'Canvas',
+    'spacing': 'Spacing',
+    'properties': 'Properties',
     'info': 'Airfoil Info',
   };
   return names[panelId] || panelId;
+}
+
+/**
+ * Map of element selectors to their parent panel IDs
+ * Used to determine which panel to focus when an element isn't visible
+ */
+const ELEMENT_TO_PANEL: Record<string, string> = {
+  // Control panel elements
+  '[data-tour="thickness-slider"]': 'control',
+  '[data-tour="camber-slider"]': 'control',
+  '[data-tour="control-mode-parameters"]': 'control',
+  '[data-tour="control-mode-camber"]': 'control',
+  '[data-tour="control-mode-thickness"]': 'control',
+  '[data-tour="panel-control"]': 'control',
+  // Solve panel elements
+  '[data-tour="solve-alpha"]': 'solve',
+  '[data-tour="solve-run"]': 'solve',
+  '[data-tour="solve-polar"]': 'solve',
+  '[data-tour="panel-solve"]': 'solve',
+  // Visualization panel elements
+  '[data-tour="viz-streamlines"]': 'visualization',
+  '[data-tour="viz-psi"]': 'visualization',
+  '[data-tour="viz-smoke"]': 'visualization',
+  '[data-tour="panel-visualization"]': 'visualization',
+  // Other panels
+  '[data-tour="panel-library"]': 'library',
+  '[data-tour="panel-spacing"]': 'spacing',
+  '[data-tour="panel-polar"]': 'polar',
+  '[data-tour="panel-canvas"]': 'canvas',
+  '[data-tour="panel-properties"]': 'properties',
+};
+
+/**
+ * Get the parent panel ID for a given element selector
+ */
+export function getParentPanel(selector: string): string | null {
+  // Direct lookup
+  if (ELEMENT_TO_PANEL[selector]) {
+    return ELEMENT_TO_PANEL[selector];
+  }
+  
+  // Try to find panel from element's data-tour attribute pattern
+  // e.g., [data-tour="panel-solve"] -> solve
+  const panelMatch = selector.match(/\[data-tour="panel-([^"]+)"\]/);
+  if (panelMatch) {
+    return panelMatch[1];
+  }
+  
+  // Try to find by checking actual DOM element's parent
+  const element = document.querySelector(selector);
+  if (element) {
+    // Walk up the DOM tree looking for a panel container
+    let current = element.parentElement;
+    while (current) {
+      const tourAttr = current.getAttribute('data-tour');
+      if (tourAttr?.startsWith('panel-')) {
+        return tourAttr.replace('panel-', '');
+      }
+      current = current.parentElement;
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Build HTML for element not visible warning
+ */
+export function buildElementNotVisibleHTML(panelId: string | null): string {
+  const panelName = panelId ? getPanelDisplayName(panelId) : 'the required panel';
+  
+  return `
+    <div class="tour-element-warning">
+      <div class="tour-element-warning__header">
+        <span class="tour-element-warning__icon">⚠</span>
+        <span class="tour-element-warning__label">Element not visible</span>
+      </div>
+      <div class="tour-element-warning__message">
+        The element for this step is hidden. Please open the <strong>${panelName}</strong> panel:
+        <ul style="margin: 8px 0 0 0; padding-left: 20px;">
+          <li>Click on the <strong>${panelName}</strong> tab if you see it</li>
+          <li>Or use <strong>Window</strong> menu → <strong>${panelName}</strong></li>
+        </ul>
+      </div>
+    </div>
+  `;
 }
 
 /**
@@ -132,7 +232,34 @@ export const challenges: Record<string, Challenge> = {
     requiredPanel: 'library',
   },
 
-  // Control mode challenges
+  // Parameter slider challenges
+  'adjust-thickness': {
+    id: 'adjust-thickness',
+    instruction: 'Adjust the Thickness Scale slider',
+    hint: 'Drag the slider to make the airfoil thicker or thinner',
+    validate: () => {
+      const { airfoil } = getState();
+      // Check if thickness scale has been changed from default (1.0)
+      return Math.abs(airfoil.thicknessScale - 1.0) > 0.05;
+    },
+    highlightElement: '[data-tour="thickness-slider"]',
+    requiredPanel: 'control',
+  },
+
+  'adjust-camber': {
+    id: 'adjust-camber',
+    instruction: 'Adjust the Camber Scale slider',
+    hint: 'Drag the slider to change the airfoil curvature',
+    validate: () => {
+      const { airfoil } = getState();
+      // Check if camber scale has been changed from default (1.0)
+      return Math.abs(airfoil.camberScale - 1.0) > 0.05;
+    },
+    highlightElement: '[data-tour="camber-slider"]',
+    requiredPanel: 'control',
+  },
+
+  // Spline control mode challenges (for advanced editing tour)
   'switch-to-camber': {
     id: 'switch-to-camber',
     instruction: 'Switch to Camber editing mode',
@@ -145,6 +272,25 @@ export const challenges: Record<string, Challenge> = {
     requiredPanel: 'control-mode',
   },
 
+  'modify-camber': {
+    id: 'modify-camber',
+    instruction: 'Drag a camber control point on the canvas',
+    hint: 'Click and drag any blue control point up or down to change the camber line',
+    validate: () => {
+      const { airfoil } = getState();
+      // Check if in camber mode and any middle control point has been moved
+      if (airfoil.controlMode !== 'camber-spline') return false;
+      // Check if any control point (not at endpoints) has non-zero camber
+      const middlePoints = airfoil.camberControlPoints.filter(
+        (p) => p.x > 0.05 && p.x < 0.95
+      );
+      // If any middle point has |y| > 0.005, user has modified the camber
+      return middlePoints.some((p) => Math.abs(p.y) > 0.005);
+    },
+    highlightElement: '[data-tour="panel-canvas"]',
+    requiredPanel: 'control',
+  },
+
   'switch-to-thickness': {
     id: 'switch-to-thickness',
     instruction: 'Switch to Thickness editing mode',
@@ -155,6 +301,23 @@ export const challenges: Record<string, Challenge> = {
     },
     highlightElement: '[data-tour="control-mode-thickness"]',
     requiredPanel: 'control-mode',
+  },
+
+  'modify-thickness': {
+    id: 'modify-thickness',
+    instruction: 'Drag a thickness control point on the canvas',
+    hint: 'Click and drag any orange control point up or down to change thickness',
+    validate: () => {
+      const { airfoil } = getState();
+      // Check if in thickness mode
+      if (airfoil.controlMode !== 'thickness-spline') return false;
+      // Check if the max thickness differs from the original ~0.06 (NACA 0012 is 12% thick, half-thickness ~0.06)
+      const maxT = Math.max(...airfoil.thicknessControlPoints.map((p) => p.t));
+      // Original NACA 0012 max half-thickness is about 0.06, allow some tolerance
+      return Math.abs(maxT - 0.06) > 0.005;
+    },
+    highlightElement: '[data-tour="panel-canvas"]',
+    requiredPanel: 'control',
   },
 
   // Panel visibility challenges

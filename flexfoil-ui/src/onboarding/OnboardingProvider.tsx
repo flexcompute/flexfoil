@@ -15,8 +15,8 @@ import { driver, type Driver, type DriveStep } from 'driver.js';
 import 'driver.js/dist/driver.css';
 
 import { tours, type TourId, type TourStep } from './tours';
-import { getChallenge, isPanelVisible, getPanelDisplayName, type Challenge } from './challenges';
-import { markTourComplete, hasCompletedTour as checkTourCompleted, resetOnboarding, saveTourProgress, getTourProgress, clearTourProgress } from './storage';
+import { getChallenge, isPanelVisible, isElementVisible, getPanelDisplayName, getParentPanel, buildElementNotVisibleHTML, type Challenge } from './challenges';
+import { markTourComplete, hasCompletedTour as checkTourCompleted, resetOnboarding, saveTourProgress, getTourProgress, clearTourProgress, hasTourProgress } from './storage';
 import { useLayout } from '../contexts/LayoutContext';
 
 export interface OnboardingContextType {
@@ -145,11 +145,13 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
         // Save progress so user can resume if they close the tour
         saveTourProgress(tourId, stepIndex);
         
-        // Focus panel if specified (brings tab to front)
-        if (originalStep?.focusPanel) {
-          openPanel(originalStep.focusPanel);
-          // Small delay to let the panel render before driver.js positions the highlight
-          // Driver.js will automatically reposition after this
+        // Determine the parent panel for this element (from focusPanel or by detection)
+        const elementSelector = originalStep?.element as string | undefined;
+        const parentPanel = originalStep?.focusPanel || (elementSelector ? getParentPanel(elementSelector) : null);
+        
+        // Focus panel if specified or detected (brings tab to front)
+        if (parentPanel) {
+          openPanel(parentPanel);
         }
         
         // Run onBeforeHighlight callback if provided
@@ -157,52 +159,93 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
           originalStep.onBeforeHighlight();
         }
         
-        // Handle challenge if present
-        if (originalStep?.challengeId) {
-          const challenge = getChallenge(originalStep.challengeId);
-          if (challenge) {
-            currentChallengeRef.current = challenge;
+        // Check if element is visible after panel focus, show warning if not
+        const checkAndUpdateElementVisibility = () => {
+          if (!elementSelector) return true; // No element to check
+          
+          const visible = isElementVisible(elementSelector);
+          const popoverEl = document.querySelector('.driver-popover-description');
+          
+          if (!visible && popoverEl && originalStep?.popover) {
+            // Element not visible - add warning to popover
+            const baseDesc = originalStep.popover.description ?? '';
+            const challenge = originalStep.challengeId ? getChallenge(originalStep.challengeId) : null;
+            const challengeHTML = challenge ? buildChallengeHTML(challenge, challenge.validate()) : '';
+            const warningHTML = buildElementNotVisibleHTML(parentPanel);
+            popoverEl.innerHTML = `${warningHTML}${baseDesc}${challengeHTML}`;
+            return false;
+          } else if (visible && popoverEl && originalStep?.popover) {
+            // Element is now visible - remove warning if it was shown
+            const baseDesc = originalStep.popover.description ?? '';
+            const challenge = originalStep.challengeId ? getChallenge(originalStep.challengeId) : null;
+            const challengeHTML = challenge ? buildChallengeHTML(challenge, challenge.validate()) : '';
+            popoverEl.innerHTML = `${baseDesc}${challengeHTML}`;
             
-            // Track previous state for change detection
-            let lastPanelVisible = challenge.requiredPanel ? isPanelVisible(challenge.requiredPanel) : true;
-            let lastComplete = challenge.validate();
-            
-            // Start polling for challenge completion and panel visibility
-            challengeIntervalRef.current = setInterval(() => {
-              const panelVisible = challenge.requiredPanel ? isPanelVisible(challenge.requiredPanel) : true;
-              const isComplete = challenge.validate();
-              
-              // Update UI if state changed
-              if (panelVisible !== lastPanelVisible || isComplete !== lastComplete) {
-                lastPanelVisible = panelVisible;
-                lastComplete = isComplete;
-                
-                // Update the popover content
-                const popoverEl = document.querySelector('.driver-popover-description');
-                if (popoverEl && originalStep.popover) {
-                  const baseDesc = originalStep.popover.description ?? '';
-                  popoverEl.innerHTML = `${baseDesc}${buildChallengeHTML(challenge, isComplete)}`;
-                }
-                
-                // Enable/disable next button based on completion
-                const nextBtn = document.querySelector('.driver-popover-next-btn') as HTMLButtonElement;
-                if (nextBtn) {
-                  if (isComplete) {
-                    nextBtn.disabled = false;
-                    nextBtn.classList.remove('driver-popover-btn--disabled');
-                  } else {
-                    nextBtn.disabled = true;
-                    nextBtn.classList.add('driver-popover-btn--disabled');
-                  }
-                }
-              }
-              
-              // Stop polling once complete
-              if (isComplete) {
-                clearChallengePolling();
-              }
-            }, 200);
+            // Refresh driver.js highlight position since element may have moved
+            driverRef.current?.refresh();
           }
+          return visible;
+        };
+        
+        // Initial check after a short delay for layout to settle
+        setTimeout(() => {
+          checkAndUpdateElementVisibility();
+        }, 100);
+        
+        // Handle challenge if present, also poll for element visibility
+        const challenge = originalStep?.challengeId ? getChallenge(originalStep.challengeId) : null;
+        
+        if (challenge || elementSelector) {
+          currentChallengeRef.current = challenge;
+          
+          // Track previous state for change detection
+          let lastPanelVisible = challenge?.requiredPanel ? isPanelVisible(challenge.requiredPanel) : true;
+          let lastComplete = challenge?.validate() ?? true;
+          let lastElementVisible = elementSelector ? isElementVisible(elementSelector) : true;
+          
+          // Start polling for challenge completion, panel visibility, AND element visibility
+          challengeIntervalRef.current = setInterval(() => {
+            const panelVisible = challenge?.requiredPanel ? isPanelVisible(challenge.requiredPanel) : true;
+            const isComplete = challenge?.validate() ?? true;
+            const elementVisible = elementSelector ? isElementVisible(elementSelector) : true;
+            
+            // Check if element visibility changed
+            if (elementVisible !== lastElementVisible) {
+              lastElementVisible = elementVisible;
+              checkAndUpdateElementVisibility();
+            }
+            
+            // Update UI if challenge state changed
+            if (challenge && (panelVisible !== lastPanelVisible || isComplete !== lastComplete)) {
+              lastPanelVisible = panelVisible;
+              lastComplete = isComplete;
+              
+              // Update the popover content
+              const popoverEl = document.querySelector('.driver-popover-description');
+              if (popoverEl && originalStep?.popover) {
+                const baseDesc = originalStep.popover.description ?? '';
+                const warningHTML = !elementVisible ? buildElementNotVisibleHTML(parentPanel) : '';
+                popoverEl.innerHTML = `${warningHTML}${baseDesc}${buildChallengeHTML(challenge, isComplete)}`;
+              }
+              
+              // Enable/disable next button based on completion
+              const nextBtn = document.querySelector('.driver-popover-next-btn') as HTMLButtonElement;
+              if (nextBtn) {
+                if (isComplete) {
+                  nextBtn.disabled = false;
+                  nextBtn.classList.remove('driver-popover-btn--disabled');
+                } else {
+                  nextBtn.disabled = true;
+                  nextBtn.classList.add('driver-popover-btn--disabled');
+                }
+              }
+            }
+            
+            // Stop polling once challenge complete (but keep polling for element visibility if needed)
+            if (challenge && isComplete && elementVisible) {
+              clearChallengePolling();
+            }
+          }, 200);
         }
       },
 
@@ -276,6 +319,11 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
   }, [clearChallengePolling]);
 
   const startTour = useCallback((tourId: TourId, fromBeginning = false) => {
+    // Prevent double-starting
+    if (isActive) {
+      return;
+    }
+    
     const tourSteps = tours[tourId];
     if (!tourSteps) {
       console.warn(`Tour "${tourId}" not found`);
@@ -286,11 +334,17 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
     if (fromBeginning) {
       clearTourProgress(tourId);
     }
+    
+    // Immediately mark as started (only if no progress exists)
+    // This prevents re-triggering from auto-start effects
+    if (!hasTourProgress(tourId)) {
+      saveTourProgress(tourId, 0);
+    }
 
     setCurrentTour(tourId);
     setIsActive(true);
 
-    // Small delay to ensure DOM is ready
+    // Delay to ensure DOM is ready before starting
     setTimeout(() => {
       const driverInstance = getDriverInstance(tourSteps, tourId);
       const driverSteps = convertToDriverSteps(tourSteps);
@@ -301,8 +355,8 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
       const startStep = Math.min(savedStep, tourSteps.length - 1);
       
       driverInstance.drive(startStep);
-    }, 100);
-  }, [getDriverInstance, convertToDriverSteps]);
+    }, 150);
+  }, [getDriverInstance, convertToDriverSteps, isActive]);
 
   const endTour = useCallback(() => {
     clearChallengePolling();
@@ -325,7 +379,7 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
   // Check if a tour has been started (has progress or is complete)
   // Useful for preventing auto-start on tours user has already seen
   const hasStartedTour = useCallback((tourId: TourId): boolean => {
-    return checkTourCompleted(tourId) || getTourProgress(tourId) > 0;
+    return checkTourCompleted(tourId) || hasTourProgress(tourId);
   }, []);
 
   const resetAllTours = useCallback(() => {

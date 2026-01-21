@@ -2,6 +2,7 @@
  * VisualizationPanel - Controls for flow visualization options
  * 
  * Contains:
+ * - GPU acceleration toggle with performance metrics
  * - Display toggles (Grid, Curve, Panels, Points, Controls, Streamlines, Smoke)
  * - Aerodynamic overlays (Cp pressure, Force vectors)
  * - Streamline options (density, adaptive)
@@ -51,8 +52,11 @@ export function VisualizationPanel() {
     // Smoke options (spawn interval and max age are now auto-calculated)
     smokeDensity,
     smokeParticlesPerBlob,
+    smokeWaveSpacing,
     setSmokeDensity,
     setSmokeParticlesPerBlob,
+    setSmokeWaveSpacing,
+    requestSmokeReset,
     
     // Flow speed
     flowSpeed,
@@ -68,6 +72,12 @@ export function VisualizationPanel() {
     forceScale,
     setForceScale,
     
+    // GPU acceleration
+    useGPU,
+    gpuAvailable,
+    perfMetrics,
+    setUseGPU,
+    
     // Reset
     resetVisualization,
   } = useVisualizationStore();
@@ -81,6 +91,97 @@ export function VisualizationPanel() {
       overflowY: 'auto',
       height: '100%',
     }}>
+      {/* GPU Acceleration Section */}
+      <section style={{
+        background: useGPU ? 'rgba(76, 175, 80, 0.1)' : 'transparent',
+        borderRadius: '6px',
+        padding: '8px',
+        margin: '-8px',
+        marginBottom: '8px',
+      }}>
+        <h4 style={{ 
+          margin: '0 0 8px 0', 
+          fontSize: '12px', 
+          fontWeight: 600,
+          color: 'var(--text-primary)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.5px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+        }}>
+          {useGPU && <span style={{ color: '#4CAF50' }}>⚡</span>}
+          Performance
+        </h4>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'space-between',
+          }}>
+            <label style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '6px',
+              fontSize: '12px',
+              color: gpuAvailable ? 'var(--text-secondary)' : 'var(--text-tertiary)',
+              cursor: gpuAvailable ? 'pointer' : 'not-allowed',
+              opacity: gpuAvailable ? 1 : 0.6,
+            }}>
+              <input 
+                type="checkbox" 
+                checked={useGPU} 
+                onChange={(e) => setUseGPU(e.target.checked)}
+                disabled={!gpuAvailable}
+                style={{ 
+                  width: '14px', 
+                  height: '14px',
+                  accentColor: '#4CAF50',
+                }}
+              />
+              GPU Acceleration
+            </label>
+            {!gpuAvailable && (
+              <span style={{ 
+                fontSize: '10px', 
+                color: 'var(--text-tertiary)',
+                fontStyle: 'italic',
+              }}>
+                (not available)
+              </span>
+            )}
+          </div>
+          
+          {/* Performance Metrics */}
+          {(showSmoke || showPsiContours || showStreamlines) && (
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(2, 1fr)',
+              gap: '4px',
+              fontSize: '10px',
+              fontFamily: 'monospace',
+              color: 'var(--text-tertiary)',
+              background: 'var(--bg-tertiary)',
+              padding: '6px 8px',
+              borderRadius: '4px',
+            }}>
+              <div>Frame: <span style={{ color: 'var(--text-secondary)' }}>
+                {perfMetrics.frameTime.toFixed(1)}ms
+              </span></div>
+              <div>FPS: <span style={{ color: 'var(--text-secondary)' }}>
+                {perfMetrics.fps.toFixed(0)}
+              </span></div>
+              <div>Avg: <span style={{ color: 'var(--text-secondary)' }}>
+                {perfMetrics.avgFrameTime.toFixed(1)}ms
+              </span></div>
+              <div>Particles: <span style={{ color: 'var(--text-secondary)' }}>
+                {perfMetrics.particleCount}
+              </span></div>
+            </div>
+          )}
+        </div>
+      </section>
+
       {/* Display Toggles Section */}
       <section>
         <h4 style={{ 
@@ -306,7 +407,34 @@ export function VisualizationPanel() {
               onChange={setSmokeParticlesPerBlob}
               formatValue={(v) => `${v}`}
             />
-            {/* Spawn Interval and Max Age are now auto-calculated based on visible domain */}
+            <SliderItem
+              label="Wave Spacing"
+              value={smokeWaveSpacing}
+              min={0.2}
+              max={2.0}
+              step={0.1}
+              onChange={setSmokeWaveSpacing}
+              formatValue={(v) => `${v.toFixed(1)}c`}
+            />
+            <button
+              onClick={requestSmokeReset}
+              style={{
+                width: '100%',
+                padding: '6px 12px',
+                marginTop: '4px',
+                background: 'var(--bg-tertiary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '4px',
+                color: 'var(--text-primary)',
+                fontSize: '12px',
+                cursor: 'pointer',
+                transition: 'background 0.15s',
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-hover)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'var(--bg-tertiary)'}
+            >
+              Reset Smoke
+            </button>
           </div>
         </section>
       )}

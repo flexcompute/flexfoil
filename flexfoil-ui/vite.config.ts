@@ -14,8 +14,8 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      // WASM package is built to ../pkg by wasm-pack
-      'rustfoil-wasm': path.resolve(__dirname, '../pkg/rustfoil_wasm.js'),
+      // WASM package is built to src/wasm by wasm-pack
+      'rustfoil-wasm': path.resolve(__dirname, 'src/wasm/rustfoil_wasm.js'),
     },
   },
   optimizeDeps: {

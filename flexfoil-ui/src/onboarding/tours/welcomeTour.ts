@@ -14,7 +14,10 @@ export const welcomeTour: TourStep[] = [
   {
     popover: {
       title: 'Welcome to FlexFoil',
-      description: 'Interactive airfoil analysis in your browser. Let\'s take a quick tour of the interface.',
+      description: `Interactive airfoil analysis in your browser. Let's take a quick tour of the interface!
+        <div style="margin-top: 12px; padding: 10px; background: var(--bg-tertiary); border-radius: 6px; border-left: 3px solid var(--accent-secondary);">
+          <strong>Tip:</strong> You can restart this tutorial anytime from the <strong>Help → Tutorial</strong> menu.
+        </div>`,
       side: 'over',
       align: 'center',
     },
@@ -29,11 +32,16 @@ export const welcomeTour: TourStep[] = [
     },
   },
   {
-    element: '.flexlayout__splitter',
+    // NOTE: We intentionally don't highlight .flexlayout__splitter directly because
+    // dragging it causes layout changes that can break the tour. Instead, we show
+    // a centered popover explaining the concept.
     popover: {
       title: 'Resize Panels',
-      description: 'Drag these dividers to resize panels. Make the canvas larger for detailed editing, or expand the solve panel when analyzing results.',
-      side: 'right',
+      description: `The thin lines between panels are <strong>splitters</strong>. You can drag them to resize any panel.
+        <div style="margin-top: 12px; padding: 10px; background: var(--bg-tertiary); border-radius: 6px; font-size: 13px; color: var(--text-secondary);">
+          <strong>Try it:</strong> After this tour, drag any divider to resize panels. Make the canvas larger for detailed editing!
+        </div>`,
+      side: 'over',
       align: 'center',
     },
   },
@@ -72,7 +80,10 @@ export const welcomeTour: TourStep[] = [
     focusPanel: 'canvas',
     popover: {
       title: 'Main Canvas',
-      description: 'Your airfoil visualization workspace. Pan with middle-mouse, zoom with scroll wheel. The pressure distribution (Cp) is shown by default.',
+      description: `Your airfoil visualization workspace. <strong>Pan</strong> with middle-mouse, <strong>zoom</strong> with scroll wheel.
+        <div style="margin-top: 10px; font-size: 13px; color: var(--text-secondary);">
+          Notice the <strong>Vis Options</strong> button in the bottom-right corner — it's a quick shortcut to the Visualization panel we'll cover later.
+        </div>`,
       side: 'left',
       align: 'center',
     },
@@ -81,11 +92,37 @@ export const welcomeTour: TourStep[] = [
     element: '[data-tour="panel-control"]',
     focusPanel: 'control',
     popover: {
-      title: 'Control Modes',
-      description: 'Switch between editing modes: Camber Spline to adjust the centerline curvature, Thickness Spline to control the airfoil thickness distribution.',
+      title: 'Control Mode',
+      description: 'The <strong>Parameters</strong> tab lets you quickly adjust thickness and camber using sliders. The Camber and Thickness tabs provide finer control with draggable spline points.',
       side: 'left',
       align: 'start',
     },
+  },
+  // Parameter editing exercise
+  {
+    element: '[data-tour="thickness-slider"]',
+    focusPanel: 'control',
+    popover: {
+      title: 'Try: Adjust Thickness',
+      description: 'Drag the <strong>Thickness Scale</strong> slider to make the airfoil thicker or thinner. Watch the shape update in real-time on the canvas!',
+      side: 'left',
+      align: 'start',
+    },
+    challengeId: 'adjust-thickness',
+  },
+  {
+    element: '[data-tour="camber-slider"]',
+    focusPanel: 'control',
+    popover: {
+      title: 'Try: Adjust Camber',
+      description: `Now try the <strong>Camber Scale</strong> slider. Increasing camber curves the airfoil for more lift. Setting it to 0% makes a symmetric airfoil.
+        <div style="margin-top: 10px; font-size: 13px; color: var(--text-secondary);">
+          <strong>Tip:</strong> Click "Apply & Reset Sliders" to save your changes as the new base shape.
+        </div>`,
+      side: 'left',
+      align: 'start',
+    },
+    challengeId: 'adjust-camber',
   },
   {
     element: '[data-tour="panel-spacing"]',
