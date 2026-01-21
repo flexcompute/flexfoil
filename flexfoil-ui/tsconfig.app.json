@@ -19,7 +19,7 @@
     /* Path mapping for WASM module */
     "baseUrl": ".",
     "paths": {
-      "rustfoil-wasm": ["./src/lib/wasm/rustfoil_wasm.d.ts"]
+      "rustfoil-wasm": ["./src/wasm/rustfoil_wasm.d.ts"]
     },
 
     /* Linting */
