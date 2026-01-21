@@ -17,9 +17,17 @@
 //! ```
 
 use clap::{Parser, Subcommand};
-use rustfoil_core::{point, Body, CubicSpline, GeometryError, Point};
+use rayon::prelude::*;
+use rustfoil_bl;
+use rustfoil_core::{point, Body, CubicSpline, GeometryError, PanelingParams, Point};
 use rustfoil_solver::inviscid::{FlowConditions, InviscidSolver};
-use std::fs;
+use rustfoil_solver::viscous::{
+    compute_arc_from_stagnation, compute_arc_lengths, extract_surface,
+    find_stagnation_by_sign_change, initialize_surface_stations, solve_viscous_two_surfaces,
+    ViscousResult, ViscousSolverConfig, ViscousSetup,
+};
+use std::fs::{self, File};
+use std::io::Write;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -105,6 +113,80 @@ enum Commands {
         #[arg(value_name = "FILE")]
         file: PathBuf,
     },
+
+    /// Viscous analysis at a single angle of attack
+    Viscous(ViscousCmd),
+
+    /// Generate viscous polar (Cl, Cd vs alpha sweep)
+    ViscousPolar(ViscousPolarCmd),
+}
+
+/// Viscous analysis at single angle of attack
+#[derive(Parser)]
+struct ViscousCmd {
+    /// Input airfoil file (.dat)
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+
+    /// Angle of attack (degrees)
+    #[arg(short, long)]
+    alpha: f64,
+
+    /// Reynolds number
+    #[arg(short, long)]
+    re: f64,
+
+    /// Mach number
+    #[arg(short, long, default_value = "0.0")]
+    mach: f64,
+
+    /// Critical N factor for transition
+    #[arg(short, long, default_value = "9.0")]
+    ncrit: f64,
+
+    /// Number of panels (repanels to XFOIL-style distribution)
+    #[arg(short = 'p', long, default_value = "160")]
+    panels: usize,
+
+    /// Output format (json, table)
+    #[arg(long, default_value = "table")]
+    format: String,
+
+    /// Debug output file for XFOIL comparison
+    #[arg(long)]
+    debug: Option<PathBuf>,
+}
+
+/// Viscous polar generation
+#[derive(Parser)]
+struct ViscousPolarCmd {
+    /// Input airfoil file (.dat)
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+
+    /// Alpha range (start:end:step)
+    #[arg(short, long)]
+    alpha: String,
+
+    /// Reynolds number
+    #[arg(short, long)]
+    re: f64,
+
+    /// Mach number
+    #[arg(short, long, default_value = "0.0")]
+    mach: f64,
+
+    /// Critical N factor for transition
+    #[arg(short, long, default_value = "9.0")]
+    ncrit: f64,
+
+    /// Output file (csv)
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    /// Use parallel execution
+    #[arg(long)]
+    parallel: bool,
 }
 
 fn main() {
@@ -128,6 +210,8 @@ fn main() {
             output,
         } => run_repanel(&file, panels, output),
         Commands::Info { file } => run_info(&file),
+        Commands::Viscous(cmd) => run_viscous(cmd),
+        Commands::ViscousPolar(cmd) => run_viscous_polar(cmd),
     };
 
     if let Err(e) = result {
@@ -267,6 +351,353 @@ fn run_info(file: &PathBuf) -> Result<(), CliError> {
     println!("  X: [{:.6}, {:.6}]", x_min, x_max);
     println!("  Y: [{:.6}, {:.6}]", y_min, y_max);
     println!("  Thickness: {:.4} (max)", y_max - y_min);
+
+    Ok(())
+}
+
+/// Run viscous analysis at a single angle of attack.
+///
+/// This bridges the inviscid solver to the viscous BL solver:
+/// 1. Run inviscid solution at alpha
+/// 2. Extract panel geometry and edge velocities
+/// 3. Split into upper/lower surfaces at stagnation
+/// 4. Initialize BL stations for each surface
+/// 5. Run viscous solver
+fn run_viscous_analysis(
+    body: &Body,
+    alpha: f64,
+    config: &ViscousSolverConfig,
+) -> Result<ViscousResult, CliError> {
+    // Step 1: Run inviscid solver
+    let solver = InviscidSolver::new();
+    let factorized = solver
+        .factorize(&[body.clone()])
+        .map_err(|e| CliError::Solver(e.to_string()))?;
+
+    let flow = FlowConditions::with_alpha_deg(alpha);
+    let inv_solution = factorized.solve_alpha(&flow);
+
+    // Step 2: Extract node positions (p1 of each panel)
+    // The inviscid solver uses node-based gamma, so we need node positions
+    let panels = body.panels();
+    let n_panels = panels.len();
+    
+    // Extract node coordinates (p1 of each panel)
+    let mut node_x: Vec<f64> = panels.iter().map(|p| p.p1.x).collect();
+    let mut node_y: Vec<f64> = panels.iter().map(|p| p.p1.y).collect();
+    
+    // Check if we need to add the closing node (blunt TE)
+    let gamma_len = inv_solution.gamma.len();
+    if gamma_len == n_panels + 1 {
+        // Blunt TE - add the last node (p2 of last panel)
+        let last_panel = panels.last().unwrap();
+        node_x.push(last_panel.p2.x);
+        node_y.push(last_panel.p2.y);
+    }
+
+    // In XFOIL's linear vortex panel method, gamma IS the surface velocity
+    // QINV = GAMU (inviscid tangential velocity equals vortex strength)
+    let ue_inviscid = inv_solution.gamma.clone();
+
+    // Debug: check inviscid solution
+    eprintln!(
+        "Inviscid: CL={:.4}, CM={:.4}",
+        inv_solution.cl, inv_solution.cm
+    );
+    
+    // Check gamma/Ue values around LE
+    let min_ue_idx = ue_inviscid
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| a.abs().partial_cmp(&b.abs()).unwrap())
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let max_ue_idx = ue_inviscid
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.abs().partial_cmp(&b.abs()).unwrap())
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    eprintln!(
+        "Gamma: min={:.4} at idx={} (x={:.4}), max={:.4} at idx={} (x={:.4})",
+        ue_inviscid[min_ue_idx], min_ue_idx, node_x[min_ue_idx],
+        ue_inviscid[max_ue_idx], max_ue_idx, node_x[max_ue_idx]
+    );
+
+    // Step 3: Find stagnation and split surfaces
+    // Find the leading edge (minimum x) for reference
+    let le_idx = node_x
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+
+    // Use sign change for velocity-based stagnation 
+    let stag_by_sign = find_stagnation_by_sign_change(&ue_inviscid);
+
+    // Debug: show both methods
+    eprintln!(
+        "LE at idx={} (x={:.6}), Sign-change at idx={} (x={:.6}, Ue={:.6})",
+        le_idx, node_x[le_idx], stag_by_sign, node_x[stag_by_sign], ue_inviscid[stag_by_sign]
+    );
+
+    // Split at the velocity stagnation point (where Ue changes sign)
+    // This ensures neither surface includes the stagnation region
+    let stag_idx = stag_by_sign;
+
+    eprintln!(
+        "Splitting at stagnation: idx={}, x={:.6}",
+        stag_idx, node_x[stag_idx]
+    );
+
+    // Extract upper surface (stag to TE, going downstream)
+    let (upper_x, upper_y, upper_ue) =
+        extract_surface(stag_idx, &node_x, &node_y, &ue_inviscid, true);
+    let upper_arc = compute_arc_from_stagnation(&upper_x, &upper_y);
+
+    eprintln!(
+        "Upper: {} pts, arc[0]={:.6}, arc[1]={:.6}, Ue[0]={:.6}, Ue[1]={:.6}",
+        upper_arc.len(),
+        upper_arc.get(0).unwrap_or(&0.0),
+        upper_arc.get(1).unwrap_or(&0.0),
+        upper_ue.get(0).unwrap_or(&0.0),
+        upper_ue.get(1).unwrap_or(&0.0),
+    );
+
+    // Extract lower surface (stag to TE, reversed to go downstream)
+    let (lower_x, lower_y, lower_ue) =
+        extract_surface(stag_idx, &node_x, &node_y, &ue_inviscid, false);
+    let lower_arc = compute_arc_from_stagnation(&lower_x, &lower_y);
+
+    eprintln!(
+        "Lower: {} pts, arc[0]={:.6}, arc[1]={:.6}, Ue[0]={:.6}, Ue[1]={:.6}",
+        lower_arc.len(),
+        lower_arc.get(0).unwrap_or(&0.0),
+        lower_arc.get(1).unwrap_or(&0.0),
+        lower_ue.get(0).unwrap_or(&0.0),
+        lower_ue.get(1).unwrap_or(&0.0),
+    );
+
+    // Debug: show first few lower surface values
+    eprintln!("Lower first 5: x={:?}, Ue={:?}",
+        &lower_x[..5.min(lower_x.len())],
+        &lower_ue[..5.min(lower_ue.len())]
+    );
+
+    // Step 4: Initialize BL stations for each surface
+    // Handle edge case where a surface has fewer than 2 stations
+    if upper_arc.len() < 2 || lower_arc.len() < 2 {
+        return Err(CliError::Solver(format!(
+            "Surface extraction failed: upper={} lower={} stations (need >= 2 each)",
+            upper_arc.len(),
+            lower_arc.len()
+        )));
+    }
+
+    let mut upper_stations = initialize_surface_stations(&upper_arc, &upper_ue, config.reynolds);
+    let mut lower_stations = initialize_surface_stations(&lower_arc, &lower_ue, config.reynolds);
+
+    // Step 5: Build DIJ matrix for Newton iteration (full airfoil)
+    let arc_lengths = compute_arc_lengths(&node_x, &node_y);
+    let setup = ViscousSetup::from_raw(
+        arc_lengths.clone(),
+        ue_inviscid.clone(),
+        node_x.clone(),
+        node_y.clone(),
+    );
+
+    // Step 6: Solve viscous for both surfaces
+    // For now, use the new two-surface solver that marches each surface separately
+    let mut result = solve_viscous_two_surfaces(
+        &mut upper_stations,
+        &mut lower_stations,
+        &upper_ue,
+        &lower_ue,
+        &setup.dij,
+        config,
+    )
+    .map_err(|e| CliError::Solver(e.to_string()))?;
+
+    // Set alpha in result
+    result.alpha = alpha;
+
+    Ok(result)
+}
+
+fn run_viscous(cmd: ViscousCmd) -> Result<(), CliError> {
+    let (name, points) = load_airfoil(&cmd.file)?;
+
+    // Repanel using XFOIL-style curvature-based distribution
+    let spline = CubicSpline::from_points(&points)
+        .map_err(|e| CliError::Geometry(e))?;
+    let repaneled = spline.resample_xfoil(cmd.panels, &PanelingParams::default());
+    
+    eprintln!(
+        "Repaneled from {} to {} points (XFOIL-style distribution)",
+        points.len(),
+        repaneled.len()
+    );
+
+    let body = Body::from_points(&name, &repaneled)?;
+
+    // Initialize debug output if requested
+    if let Some(ref debug_path) = cmd.debug {
+        rustfoil_bl::init_debug(debug_path);
+        eprintln!("Debug output enabled: {}", debug_path.display());
+    }
+
+    let config = ViscousSolverConfig {
+        reynolds: cmd.re,
+        mach: cmd.mach,
+        ncrit: cmd.ncrit,
+        ..Default::default()
+    };
+
+    let result = run_viscous_analysis(&body, cmd.alpha, &config)?;
+
+    // Finalize debug output
+    if cmd.debug.is_some() {
+        rustfoil_bl::finalize_debug();
+        eprintln!("Debug output written");
+    }
+
+    match cmd.format.as_str() {
+        "json" => {
+            // Create a JSON-serializable struct
+            let json_output = serde_json::json!({
+                "alpha": result.alpha,
+                "cl": result.cl,
+                "cd": result.cd,
+                "cm": result.cm,
+                "x_tr_upper": result.x_tr_upper,
+                "x_tr_lower": result.x_tr_lower,
+                "converged": result.converged,
+                "iterations": result.iterations,
+                "residual": result.residual,
+                "cd_friction": result.cd_friction,
+                "cd_pressure": result.cd_pressure,
+                "x_separation": result.x_separation
+            });
+            println!("{}", serde_json::to_string_pretty(&json_output).unwrap());
+        }
+        _ => {
+            println!("Viscous Analysis Results");
+            println!("========================");
+            println!("Airfoil:   {}", name);
+            println!("Re:        {:.2e}", cmd.re);
+            println!("Mach:      {:.2}", cmd.mach);
+            println!("Ncrit:     {:.1}", cmd.ncrit);
+            println!();
+            println!("Alpha:     {:>8.3}°", result.alpha);
+            println!("CL:        {:>8.4}", result.cl);
+            println!("CD:        {:>8.5}", result.cd);
+            println!("CM:        {:>8.4}", result.cm);
+            println!("x_tr (U):  {:>8.4}", result.x_tr_upper);
+            println!("x_tr (L):  {:>8.4}", result.x_tr_lower);
+            println!("Converged: {}", result.converged);
+            println!("Iters:     {}", result.iterations);
+            if let Some(x_sep) = result.x_separation {
+                println!("x_sep:     {:>8.4}", x_sep);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn run_viscous_polar(cmd: ViscousPolarCmd) -> Result<(), CliError> {
+    let (name, points) = load_airfoil(&cmd.file)?;
+    let body = Body::from_points(&name, &points)?;
+
+    // Parse alpha range "start:end:step"
+    let parts: Vec<f64> = cmd
+        .alpha
+        .split(':')
+        .map(|s| {
+            s.parse().map_err(|_| CliError::Parse {
+                line: 0,
+                message: format!("Invalid alpha range format: {}", cmd.alpha),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if parts.len() != 3 {
+        return Err(CliError::Parse {
+            line: 0,
+            message: format!(
+                "Alpha range must be 'start:end:step', got: {}",
+                cmd.alpha
+            ),
+        });
+    }
+
+    let (start, end, step) = (parts[0], parts[1], parts[2]);
+
+    let alphas: Vec<f64> = (0..)
+        .map(|i| start + i as f64 * step)
+        .take_while(|&a| a <= end + 0.001)
+        .collect();
+
+    let config = ViscousSolverConfig {
+        reynolds: cmd.re,
+        mach: cmd.mach,
+        ncrit: cmd.ncrit,
+        ..Default::default()
+    };
+
+    // Compute results
+    let results: Vec<Result<ViscousResult, CliError>> = if cmd.parallel {
+        alphas
+            .par_iter()
+            .map(|&alpha| run_viscous_analysis(&body, alpha, &config))
+            .collect()
+    } else {
+        alphas
+            .iter()
+            .map(|&alpha| run_viscous_analysis(&body, alpha, &config))
+            .collect()
+    };
+
+    // Output header
+    let header = "alpha,CL,CD,CM,x_tr_u,x_tr_l,converged";
+
+    // Build output lines
+    let mut output_lines = vec![header.to_string()];
+    for result in results {
+        match result {
+            Ok(r) => {
+                output_lines.push(format!(
+                    "{:.2},{:.4},{:.5},{:.4},{:.4},{:.4},{}",
+                    r.alpha, r.cl, r.cd, r.cm, r.x_tr_upper, r.x_tr_lower, r.converged
+                ));
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+            }
+        }
+    }
+
+    // Write to file or stdout
+    if let Some(output_path) = cmd.output {
+        let mut file = File::create(&output_path)?;
+        for line in &output_lines {
+            writeln!(file, "{}", line)?;
+        }
+        println!(
+            "Wrote {} polar points to {:?}",
+            output_lines.len() - 1,
+            output_path
+        );
+    } else {
+        // Print header info
+        println!("# Viscous Polar: {}", name);
+        println!("# Re = {:.2e}, M = {:.2}, Ncrit = {:.1}", cmd.re, cmd.mach, cmd.ncrit);
+        println!();
+        for line in &output_lines {
+            println!("{}", line);
+        }
+    }
 
     Ok(())
 }

@@ -22,7 +22,7 @@ use nalgebra::DMatrix;
 use rayon::prelude::*;
 use rustfoil_bl::equations::{blvar, FlowType};
 use rustfoil_bl::state::BlStation;
-use rustfoil_coupling::march::{march_fixed_ue, MarchConfig, MarchResult};
+use rustfoil_coupling::march::{march_fixed_ue, march_surface, MarchConfig, MarchResult};
 use rustfoil_coupling::newton::BlNewtonSystem;
 use rustfoil_coupling::solve::solve_bl_system;
 use rustfoil_coupling::update::{set_edge_velocities, update_stations, UpdateConfig};
@@ -104,6 +104,17 @@ pub fn solve_viscous(
     let msq = config.msq();
     let re = config.reynolds;
 
+    // Emit debug event at start of VISCAL
+    if rustfoil_bl::is_debug_active() {
+        rustfoil_bl::add_event(rustfoil_bl::DebugEvent::viscal(
+            0,
+            0.0, // alpha_rad - would be passed separately
+            re,
+            config.mach,
+            config.ncrit,
+        ));
+    }
+
     // === Step 1: Direct BL march with inviscid Ue ===
     // Extract arc lengths and velocities
     let x: Vec<f64> = stations.iter().map(|s| s.x).collect();
@@ -178,6 +189,57 @@ pub fn solve_viscous(
                 FlowType::Laminar
             };
             blvar(&mut stations[i], flow_type, msq, re);
+
+            // Emit BLVAR debug event
+            if rustfoil_bl::is_debug_active() {
+                let flow_type_num = match flow_type {
+                    FlowType::Laminar => 1,
+                    FlowType::Turbulent => 2,
+                    FlowType::Wake => 3,
+                };
+                let input = rustfoil_bl::BlvarInput {
+                    x: stations[i].x,
+                    u: stations[i].u,
+                    theta: stations[i].theta,
+                    delta_star: stations[i].delta_star,
+                    ctau: stations[i].ctau,
+                    ampl: stations[i].ampl,
+                };
+                let output = rustfoil_bl::BlvarOutput {
+                    H: stations[i].h,
+                    Hk: stations[i].hk,
+                    Hs: stations[i].hs,
+                    Hc: 0.0, // Not stored
+                    Rtheta: stations[i].r_theta,
+                    Cf: stations[i].cf,
+                    Cd: stations[i].cd,
+                    Us: 0.0, // Not stored
+                    Cq: 0.0, // Not stored
+                    De: 0.0, // Not stored
+                };
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::blvar(
+                    iteration,
+                    1, // side
+                    i,
+                    flow_type_num,
+                    input,
+                    output,
+                ));
+            }
+        }
+
+        // Validate station states before building Newton system
+        let valid_stations = stations.iter().all(|s| {
+            s.theta.is_finite()
+                && s.theta > 0.0
+                && s.delta_star.is_finite()
+                && s.delta_star > 0.0
+                && s.u.is_finite()
+        });
+
+        if !valid_stations {
+            // If stations have become invalid, stop iteration
+            break;
         }
 
         // Build Newton system from current BL state
@@ -185,6 +247,13 @@ pub fn solve_viscous(
 
         // Solve block-tridiagonal system
         let deltas_raw = solve_bl_system(&newton_system);
+
+        // Check if solution contains NaN - if so, reduce step size or skip
+        let deltas_valid = deltas_raw.iter().all(|d| d.iter().all(|v| v.is_finite()));
+        if !deltas_valid {
+            // Newton system produced invalid solution, continue with zero update
+            continue;
+        }
 
         // Convert to update format [ctau/ampl, theta, mass_defect]
         let deltas: Vec<[f64; 3]> = deltas_raw
@@ -214,6 +283,23 @@ pub fn solve_viscous(
         residual = update_result.rms_change;
         if residual < config.tolerance {
             converged = true;
+        }
+
+        // Emit debug event for iteration result (forces computed later, use 0 for now)
+        if rustfoil_bl::is_debug_active() {
+            rustfoil_bl::add_event(rustfoil_bl::DebugEvent::viscal_result(
+                iteration,
+                residual,
+                update_result.max_change,
+                0.0, // CL computed later
+                0.0, // CD computed later
+                0.0, // CM computed later
+            ));
+        }
+
+        // Check for stalled iteration (no progress)
+        if !residual.is_finite() || residual > 1e10 {
+            break;
         }
     }
 
@@ -279,6 +365,130 @@ pub fn solve_surface(
     let result = march_fixed_ue(arc_lengths, ue, config.reynolds, config.msq(), &march_config);
 
     Ok(result)
+}
+
+/// Solve viscous flow for two surfaces (upper and lower) separately.
+///
+/// This function handles the proper XFOIL-style approach where each surface
+/// is marched from the stagnation point toward the trailing edge independently.
+///
+/// # Arguments
+/// * `upper_stations` - Initialized BL stations for upper surface (from stagnation to TE)
+/// * `lower_stations` - Initialized BL stations for lower surface (from stagnation to TE)
+/// * `upper_ue` - Edge velocities for upper surface
+/// * `lower_ue` - Edge velocities for lower surface
+/// * `dij` - Mass defect influence matrix (for future Newton iteration)
+/// * `config` - Solver configuration
+///
+/// # Returns
+/// `ViscousResult` with combined data from both surfaces.
+pub fn solve_viscous_two_surfaces(
+    upper_stations: &mut [BlStation],
+    lower_stations: &mut [BlStation],
+    upper_ue: &[f64],
+    lower_ue: &[f64],
+    _dij: &DMatrix<f64>,
+    config: &ViscousSolverConfig,
+) -> SolverResult<ViscousResult> {
+    if config.reynolds <= 0.0 {
+        return Err(SolverError::InvalidReynolds);
+    }
+
+    let re = config.reynolds;
+    let msq = config.msq();
+
+    // Emit debug event at start
+    if rustfoil_bl::is_debug_active() {
+        rustfoil_bl::add_event(rustfoil_bl::DebugEvent::viscal(
+            0,
+            0.0, // alpha set by caller
+            re,
+            config.mach,
+            config.ncrit,
+        ));
+    }
+
+    let march_config = MarchConfig {
+        ncrit: config.ncrit,
+        hlmax: config.hk_max_laminar,
+        htmax: config.hk_max_turbulent,
+        ..Default::default()
+    };
+
+    // Extract arc lengths from stations
+    let upper_arc: Vec<f64> = upper_stations.iter().map(|s| s.x).collect();
+    let lower_arc: Vec<f64> = lower_stations.iter().map(|s| s.x).collect();
+
+    // March upper surface (side 1)
+    let upper_result = march_surface(&upper_arc, upper_ue, re, msq, &march_config, 1);
+
+    // March lower surface (side 2)
+    let lower_result = march_surface(&lower_arc, lower_ue, re, msq, &march_config, 2);
+
+    // Copy results back to stations
+    for (i, station) in upper_result.stations.iter().enumerate() {
+        if i < upper_stations.len() {
+            upper_stations[i].theta = station.theta;
+            upper_stations[i].delta_star = station.delta_star;
+            upper_stations[i].h = station.h;
+            upper_stations[i].hk = station.hk;
+            upper_stations[i].cf = station.cf;
+            upper_stations[i].ctau = station.ctau;
+            upper_stations[i].ampl = station.ampl;
+            upper_stations[i].is_laminar = station.is_laminar;
+            upper_stations[i].is_turbulent = station.is_turbulent;
+            upper_stations[i].mass_defect = station.mass_defect;
+            upper_stations[i].r_theta = station.r_theta;
+        }
+    }
+
+    for (i, station) in lower_result.stations.iter().enumerate() {
+        if i < lower_stations.len() {
+            lower_stations[i].theta = station.theta;
+            lower_stations[i].delta_star = station.delta_star;
+            lower_stations[i].h = station.h;
+            lower_stations[i].hk = station.hk;
+            lower_stations[i].cf = station.cf;
+            lower_stations[i].ctau = station.ctau;
+            lower_stations[i].ampl = station.ampl;
+            lower_stations[i].is_laminar = station.is_laminar;
+            lower_stations[i].is_turbulent = station.is_turbulent;
+            lower_stations[i].mass_defect = station.mass_defect;
+            lower_stations[i].r_theta = station.r_theta;
+        }
+    }
+
+    // Get transition locations from march results
+    let x_tr_upper = upper_result.x_transition.unwrap_or(1.0);
+    let x_tr_lower = lower_result.x_transition.unwrap_or(1.0);
+
+    // Check for separation on either surface
+    let x_separation = upper_result
+        .x_separation
+        .or(lower_result.x_separation);
+
+    // Compute forces from both surfaces
+    // For now, compute from upper surface (CD is dominated by friction drag anyway)
+    let forces = compute_forces(upper_stations, config);
+    let lower_forces = compute_forces(lower_stations, config);
+
+    // Combine CD (friction from both surfaces)
+    let total_cd_friction = forces.cd_friction + lower_forces.cd_friction;
+
+    Ok(ViscousResult {
+        alpha: 0.0, // Will be set by caller
+        cl: forces.cl, // CL from pressure distribution (need full airfoil)
+        cd: total_cd_friction, // For now, just friction drag
+        cm: forces.cm,
+        x_tr_upper,
+        x_tr_lower,
+        iterations: 1, // Only direct march, no Newton iteration yet
+        residual: 0.0,
+        converged: true, // March always "converges"
+        cd_friction: total_cd_friction,
+        cd_pressure: 0.0, // Need pressure integration for this
+        x_separation,
+    })
 }
 
 /// Solve viscous flow for multiple angles of attack in parallel.

@@ -155,6 +155,78 @@ pub fn cumulative_arc_length(ds: &[f64]) -> Vec<f64> {
     s
 }
 
+/// Compute arc lengths from stagnation point for one surface.
+///
+/// This computes cumulative arc length starting from 0 at the first point
+/// (which should be the stagnation point) and increasing downstream.
+///
+/// # Arguments
+/// * `x` - x-coordinates (stagnation first, then downstream)
+/// * `y` - y-coordinates
+///
+/// # Returns
+/// Arc lengths starting at 0 at stagnation, increasing downstream.
+pub fn compute_arc_from_stagnation(x: &[f64], y: &[f64]) -> Vec<f64> {
+    assert_eq!(x.len(), y.len(), "x and y must have same length");
+    let n = x.len();
+
+    if n == 0 {
+        return vec![];
+    }
+
+    let mut s = vec![0.0; n];
+
+    for i in 1..n {
+        let dx = x[i] - x[i - 1];
+        let dy = y[i] - y[i - 1];
+        s[i] = s[i - 1] + (dx * dx + dy * dy).sqrt();
+    }
+
+    s
+}
+
+/// Extract one surface from stagnation to trailing edge.
+///
+/// Splits the airfoil at the stagnation point and extracts coordinates
+/// and velocities for either the upper or lower surface, ordered from
+/// stagnation downstream toward the trailing edge.
+///
+/// # Arguments
+/// * `stag_idx` - Index of the stagnation point
+/// * `x`, `y` - Full airfoil coordinates
+/// * `ue` - Edge velocities from inviscid solution
+/// * `is_upper` - true for upper surface, false for lower
+///
+/// # Returns
+/// (x, y, ue) arrays for the surface, ordered from stagnation downstream.
+/// Edge velocities are converted to positive (absolute) values.
+pub fn extract_surface(
+    stag_idx: usize,
+    x: &[f64],
+    y: &[f64],
+    ue: &[f64],
+    is_upper: bool,
+) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    // For Selig format airfoils: TE(upper) → upper surface → LE → lower surface → TE(lower)
+    // Indices 0..stag_idx: TE-upper to LE (upper surface, needs reversal for LE→TE direction)
+    // Indices stag_idx..: LE to TE-lower (lower surface, already correct direction)
+    if is_upper {
+        // Upper surface: indices 0 to stag_idx, reversed to go LE → TE (downstream)
+        (
+            x[..=stag_idx].iter().rev().cloned().collect(),
+            y[..=stag_idx].iter().rev().cloned().collect(),
+            ue[..=stag_idx].iter().rev().map(|u| u.abs()).collect(),
+        )
+    } else {
+        // Lower surface: indices stag_idx to end, LE → TE (already downstream direction)
+        (
+            x[stag_idx..].to_vec(),
+            y[stag_idx..].to_vec(),
+            ue[stag_idx..].iter().map(|u| u.abs()).collect(),
+        )
+    }
+}
+
 /// Find stagnation point index (where Ue is minimum or changes sign).
 ///
 /// The stagnation point is where the surface velocity is approximately zero.
@@ -481,5 +553,67 @@ mod tests {
         assert!((s[1] - 0.15).abs() < 1e-10);
         assert!((s[2] - 0.25).abs() < 1e-10);
         assert!((s[3] - 0.35).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_compute_arc_from_stagnation() {
+        // Simple horizontal line from stagnation
+        let x = vec![0.0, 0.1, 0.2, 0.3];
+        let y = vec![0.0, 0.0, 0.0, 0.0];
+
+        let s = compute_arc_from_stagnation(&x, &y);
+
+        assert_eq!(s.len(), 4);
+        assert!((s[0] - 0.0).abs() < 1e-10); // Starts at 0 (stagnation)
+        assert!((s[1] - 0.1).abs() < 1e-10);
+        assert!((s[2] - 0.2).abs() < 1e-10);
+        assert!((s[3] - 0.3).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_extract_surface_upper() {
+        // Airfoil-like geometry: TE -> LE (lower) -> LE (stag) -> TE (upper)
+        // Indices:                 0       1           2           3      4
+        let x = vec![1.0, 0.5, 0.0, 0.5, 1.0];
+        let y = vec![-0.05, -0.08, 0.0, 0.08, 0.05];
+        let ue = vec![-0.5, -0.3, 0.05, 0.3, 0.5]; // Signed velocities
+
+        let stag_idx = 2;
+
+        let (ux, uy, u_ue) = extract_surface(stag_idx, &x, &y, &ue, true);
+
+        // Upper surface: indices 2, 3, 4
+        assert_eq!(ux.len(), 3);
+        assert!((ux[0] - 0.0).abs() < 1e-10); // Starts at stagnation
+        assert!((ux[1] - 0.5).abs() < 1e-10);
+        assert!((ux[2] - 1.0).abs() < 1e-10);
+
+        // Ue should be absolute values
+        assert!((u_ue[0] - 0.05).abs() < 1e-10);
+        assert!((u_ue[1] - 0.3).abs() < 1e-10);
+        assert!((u_ue[2] - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_extract_surface_lower() {
+        // Same geometry as above
+        let x = vec![1.0, 0.5, 0.0, 0.5, 1.0];
+        let y = vec![-0.05, -0.08, 0.0, 0.08, 0.05];
+        let ue = vec![-0.5, -0.3, 0.05, 0.3, 0.5];
+
+        let stag_idx = 2;
+
+        let (lx, ly, l_ue) = extract_surface(stag_idx, &x, &y, &ue, false);
+
+        // Lower surface: indices 2, 1, 0 (reversed to go downstream)
+        assert_eq!(lx.len(), 3);
+        assert!((lx[0] - 0.0).abs() < 1e-10); // Starts at stagnation
+        assert!((lx[1] - 0.5).abs() < 1e-10);
+        assert!((lx[2] - 1.0).abs() < 1e-10);
+
+        // Ue should be absolute values (reversed order)
+        assert!((l_ue[0] - 0.05).abs() < 1e-10);
+        assert!((l_ue[1] - 0.3).abs() < 1e-10);
+        assert!((l_ue[2] - 0.5).abs() < 1e-10);
     }
 }

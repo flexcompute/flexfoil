@@ -180,28 +180,28 @@ fn step_momentum(
     msq: f64,
     is_laminar: bool,
 ) -> (f64, f64) {
-    let dx = x_new - prev.x;
-    if dx <= 0.0 {
+    let dx = (x_new - prev.x).abs(); // Use absolute value for arc length
+    if dx <= 1e-12 {
         return (prev.theta, prev.delta_star);
     }
 
-    // Use upwind values for stability
-    let h = prev.h;
-    let _hk = prev.hk;
-    let theta = prev.theta;
-    let ue = prev.u;
-    let cf = prev.cf;
+    // Use upwind values for stability, with safeguards
+    let h = prev.h.clamp(1.0, 4.0);
+    let theta = prev.theta.max(1e-12);
+    let ue = prev.u.abs().max(1e-10);
+    let cf = prev.cf.max(1e-6);
 
-    // Velocity gradient term
-    let due_dx = (ue_new - ue) / dx;
-    let ue_avg = 0.5 * (ue + ue_new);
+    // Velocity gradient term - use magnitude for signed velocities
+    let ue_new_abs = ue_new.abs().max(1e-10);
+    let due_dx = (ue_new_abs - ue) / dx;
+    let ue_avg = 0.5 * (ue + ue_new_abs);
 
     // Momentum thickness growth: dθ/dx = Cf/2 - (H+2-M²) θ/Ue dUe/dx
     let h_term = h + 2.0 - msq;
-    let dtheta_dx = cf / 2.0 - h_term * theta / ue_avg.max(1e-10) * due_dx;
+    let dtheta_dx = cf / 2.0 - h_term * theta / ue_avg * due_dx;
 
-    // Integrate θ
-    let theta_new = (theta + dtheta_dx * dx).max(1e-12);
+    // Integrate θ with limiting to prevent blow-up
+    let theta_new = (theta + dtheta_dx * dx).clamp(1e-12, 0.1);
 
     // For H (shape factor), use empirical correlations
     // In attached laminar flow, H ≈ 2.59 (Blasius)
@@ -209,7 +209,7 @@ fn step_momentum(
     // In turbulent flow, H ≈ 1.4
 
     // Compute equilibrium H based on pressure gradient parameter
-    let lambda = theta * theta * re * due_dx / ue_avg.max(1e-10);
+    let lambda = (theta * theta * re * due_dx / ue_avg).clamp(-0.5, 0.5);
 
     let h_new = if is_laminar {
         // Thwaites correlation for laminar H
@@ -229,7 +229,7 @@ fn step_momentum(
     } else {
         // Turbulent: H tends toward ~1.4 for equilibrium
         let h_eq = 1.4 + 0.5 * lambda.abs().min(0.2);
-        0.8 * h + 0.2 * h_eq
+        (0.8 * h + 0.2 * h_eq).clamp(1.2, 3.0)
     };
 
     let delta_star_new = h_new * theta_new;
@@ -419,6 +419,312 @@ pub fn march_fixed_ue(
 
         // Store mass defect
         station.mass_defect = station.u * station.delta_star;
+
+        result.stations.push(station);
+    }
+
+    result
+}
+
+/// March boundary layer for a specific surface with debug output.
+///
+/// This is the main entry point for surface-specific marching that properly
+/// tracks which surface (upper=1, lower=2) is being processed for debug output.
+///
+/// # Arguments
+/// * `x` - Arc lengths from stagnation (should start at 0 or near 0)
+/// * `ue` - Edge velocities (should be positive, increasing from stagnation)
+/// * `re` - Reynolds number
+/// * `msq` - Mach number squared
+/// * `config` - March configuration
+/// * `side` - Surface identifier (1 = upper, 2 = lower)
+///
+/// # Returns
+/// MarchResult with computed BL stations
+pub fn march_surface(
+    x: &[f64],
+    ue: &[f64],
+    re: f64,
+    msq: f64,
+    config: &MarchConfig,
+    side: usize,
+) -> MarchResult {
+    let n = x.len();
+    assert_eq!(n, ue.len(), "x and ue arrays must have same length");
+    assert!(n >= 2, "Need at least 2 stations");
+
+    let mut result = MarchResult::new(n);
+
+    // XFOIL skips the stagnation point itself (IBL=1) and starts from IBL=2
+    // If first point is at/near stagnation (x≈0, Ue≈0), start from second point
+    let start_idx = if x[0] < 1e-6 || ue[0].abs() < 1e-6 {
+        // Skip stagnation point - use second station as initial
+        if n < 3 {
+            // Not enough points after skipping
+            return MarchResult::new(0);
+        }
+        1
+    } else {
+        0
+    };
+
+    // Initialize first BL station using Thwaites formula
+    let x_init = x[start_idx].max(1e-6); // Ensure x > 0 for Thwaites
+    let ue_init = ue[start_idx].abs().max(0.01); // Ensure Ue > 0
+    let mut prev = init_stagnation(x_init, ue_init, re);
+    prev.x = x[start_idx]; // Use actual x
+    prev.u = ue[start_idx].abs();
+    blvar(&mut prev, FlowType::Laminar, msq, re);
+
+    // Emit debug event for first BL station
+    if rustfoil_bl::is_debug_active() {
+        rustfoil_bl::add_event(rustfoil_bl::DebugEvent::mrchue(
+            side,
+            2, // IBL=2 is first station after stagnation in XFOIL
+            prev.x,
+            prev.u,
+            prev.theta,
+            prev.delta_star,
+            prev.hk,
+            prev.cf,
+        ));
+    }
+
+    result.stations.push(prev.clone());
+
+    // Track state
+    let mut is_laminar = true;
+
+    // March downstream (starting from station after initial)
+    for i in (start_idx + 1)..n {
+        let ds = x[i] - x[i - 1];
+        let station_idx = i - start_idx; // Index into result.stations
+        let prev_station = &result.stations[station_idx - 1];
+
+        // Initialize current station
+        let mut station = BlStation::new();
+        station.x = x[i];
+        station.u = ue[i].abs();
+        station.is_laminar = is_laminar;
+        station.is_turbulent = !is_laminar;
+        station.is_wake = false;
+
+        // Determine flow type
+        let flow_type = if is_laminar {
+            FlowType::Laminar
+        } else {
+            FlowType::Turbulent
+        };
+
+        // Step the momentum and shape equations
+        let (theta_new, delta_star_new) =
+            step_momentum(prev_station, x[i], ue[i].abs(), re, msq, is_laminar);
+
+        station.theta = theta_new;
+        station.delta_star = delta_star_new;
+        station.ctau = prev_station.ctau;
+        station.ampl = prev_station.ampl;
+
+        // Compute all secondary variables
+        blvar(&mut station, flow_type, msq, re);
+
+        // Check if Hk is too high (approaching separation)
+        let hmax = if is_laminar { config.hlmax } else { config.htmax };
+        if station.hk > hmax {
+            let h_limit = hmax * 0.95;
+            station.delta_star = h_limit * station.theta;
+            blvar(&mut station, flow_type, msq, re);
+        }
+
+        // Check for transition (laminar only)
+        if is_laminar && result.x_transition.is_none() {
+            let hk_mid = 0.5 * (prev_station.hk + station.hk);
+            let th_mid = 0.5 * (prev_station.theta + station.theta);
+            let rt_mid = 0.5 * (prev_station.r_theta + station.r_theta);
+
+            let amp_result = amplification_rate(hk_mid, th_mid, rt_mid);
+            station.ampl = prev_station.ampl + amp_result.ax * ds;
+
+            if check_transition(station.ampl, config.ncrit).is_some() {
+                let ampl_prev = prev_station.ampl;
+                let ampl_curr = station.ampl;
+                let frac = (config.ncrit - ampl_prev) / (ampl_curr - ampl_prev).max(1e-20);
+                let x_trans = prev_station.x + frac * ds;
+
+                result.x_transition = Some(x_trans);
+                result.transition_index = Some(station_idx);
+
+                is_laminar = false;
+                station.is_laminar = false;
+                station.is_turbulent = true;
+                station.ctau = 0.03;
+
+                blvar(&mut station, FlowType::Turbulent, msq, re);
+            }
+        }
+
+        // Check for separation
+        if station.cf < 0.0 && result.x_separation.is_none() {
+            result.x_separation = Some(station.x);
+        }
+
+        // Store mass defect
+        station.mass_defect = station.u * station.delta_star;
+
+        // Emit debug event
+        if rustfoil_bl::is_debug_active() {
+            rustfoil_bl::add_event(rustfoil_bl::DebugEvent::mrchue(
+                side,
+                station_idx + 2, // IBL is 1-indexed, +1 for skipped stagnation
+                station.x,
+                station.u,
+                station.theta,
+                station.delta_star,
+                station.hk,
+                station.cf,
+            ));
+        }
+
+        result.stations.push(station);
+    }
+
+    result
+}
+
+/// March boundary layer with debug output (for XFOIL comparison)
+///
+/// Same as [`march_fixed_ue`] but emits MRCHUE debug events when debug
+/// collection is active. Use this for comparing RustFoil against XFOIL's
+/// instrumented output.
+pub fn march_fixed_ue_debug(
+    x: &[f64],
+    ue: &[f64],
+    re: f64,
+    msq: f64,
+    config: &MarchConfig,
+    side: usize,
+) -> MarchResult {
+    let n = x.len();
+    assert_eq!(n, ue.len(), "x and ue arrays must have same length");
+    assert!(n >= 2, "Need at least 2 stations");
+
+    let mut result = MarchResult::new(n);
+
+    // Initialize stagnation point (first station)
+    let mut prev = init_stagnation(x[0], ue[0], re);
+    blvar(&mut prev, FlowType::Laminar, msq, re);
+    result.stations.push(prev.clone());
+
+    // Emit debug event for first station
+    if rustfoil_bl::is_debug_active() {
+        rustfoil_bl::add_event(rustfoil_bl::DebugEvent::mrchue(
+            side,
+            0,
+            prev.x,
+            prev.u,
+            prev.theta,
+            prev.delta_star,
+            prev.hk,
+            prev.cf,
+        ));
+    }
+
+    // Track state
+    let mut is_laminar = true;
+
+    // March downstream
+    for i in 1..n {
+        let ds = x[i] - x[i - 1];
+        let prev_station = &result.stations[i - 1];
+
+        // Initialize current station
+        let mut station = BlStation::new();
+        station.x = x[i];
+        station.u = ue[i];
+        station.is_laminar = is_laminar;
+        station.is_turbulent = !is_laminar;
+        station.is_wake = false;
+
+        // Determine flow type
+        let flow_type = if is_laminar {
+            FlowType::Laminar
+        } else {
+            FlowType::Turbulent
+        };
+
+        // Step the momentum and shape equations
+        let (theta_new, delta_star_new) = step_momentum(prev_station, x[i], ue[i], re, msq, is_laminar);
+        
+        station.theta = theta_new;
+        station.delta_star = delta_star_new;
+        station.ctau = if is_laminar { prev_station.ctau } else { prev_station.ctau };
+        station.ampl = prev_station.ampl;
+
+        // Compute all secondary variables
+        blvar(&mut station, flow_type, msq, re);
+
+        // Check if Hk is too high (approaching separation)
+        let hmax = if is_laminar { config.hlmax } else { config.htmax };
+        if station.hk > hmax {
+            // Limit H to prevent singularity
+            let h_limit = hmax * 0.95;
+            station.delta_star = h_limit * station.theta;
+            blvar(&mut station, flow_type, msq, re);
+        }
+
+        // Check for transition (laminar only)
+        if is_laminar && result.x_transition.is_none() {
+            // Compute amplification rate at midpoint
+            let hk_mid = 0.5 * (prev_station.hk + station.hk);
+            let th_mid = 0.5 * (prev_station.theta + station.theta);
+            let rt_mid = 0.5 * (prev_station.r_theta + station.r_theta);
+
+            let amp_result = amplification_rate(hk_mid, th_mid, rt_mid);
+            station.ampl = prev_station.ampl + amp_result.ax * ds;
+
+            // Check if transition occurred
+            if let Some(_) = check_transition(station.ampl, config.ncrit) {
+                // Interpolate transition location
+                let ampl_prev = prev_station.ampl;
+                let ampl_curr = station.ampl;
+                let frac = (config.ncrit - ampl_prev) / (ampl_curr - ampl_prev).max(1e-20);
+                let x_trans = prev_station.x + frac * ds;
+
+                result.x_transition = Some(x_trans);
+                result.transition_index = Some(i);
+
+                // Transition to turbulent
+                is_laminar = false;
+                station.is_laminar = false;
+                station.is_turbulent = true;
+                station.ctau = 0.03; // Initialize shear stress
+
+                // Recompute with turbulent closures
+                blvar(&mut station, FlowType::Turbulent, msq, re);
+            }
+        }
+
+        // Check for separation (Cf < 0)
+        if station.cf < 0.0 && result.x_separation.is_none() {
+            result.x_separation = Some(station.x);
+        }
+
+        // Store mass defect
+        station.mass_defect = station.u * station.delta_star;
+
+        // Emit debug event
+        if rustfoil_bl::is_debug_active() {
+            rustfoil_bl::add_event(rustfoil_bl::DebugEvent::mrchue(
+                side,
+                i,
+                station.x,
+                station.u,
+                station.theta,
+                station.delta_star,
+                station.hk,
+                station.cf,
+            ));
+        }
 
         result.stations.push(station);
     }
