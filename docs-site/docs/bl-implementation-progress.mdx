@@ -2173,3 +2173,146 @@ XFOIL Reference (α=4°):
 3. ✓ Coupled solver implements BLSOLV algorithm
 4. ✓ UPDATE relaxation behavior matches XFOIL pattern
 5. ✓ Integration test validates against XFOIL reference
+
+---
+
+## Wave 8: Newton Iteration Debugging (2026-01-22)
+
+This section documents the ongoing investigation into why the boundary layer march produces divergent θ evolution despite validated closure functions.
+
+### Investigation Summary
+
+#### What Works (Validated)
+
+| Component | Test | Error |
+|-----------|------|-------|
+| `blvar` closure functions | 60 test vectors | 0.00% |
+| `bldif` residual (IBL=3 step) | Direct comparison | 0.2% |
+| `solve_4x4` Gaussian elimination | NumPy comparison | Exact |
+| Jacobian δ* entry (vs2[1][2]) | XFOIL comparison | ~0.1% |
+
+#### What's Broken
+
+The boundary layer march produces wildly incorrect θ evolution:
+
+```
+Station   θ_xfoil       θ_rust      Error
+0         4.12e-5       3.88e-5     -6%    (init only, no Newton)
+1         3.67e-5       7.75e-5     +111%  ***
+2         3.47e-5       3.88e-5     +12%   ***
+...oscillating values with >100% errors...
+```
+
+### Key Finding: IBL Index Mapping
+
+**The most important discovery was an indexing mismatch between our test code and XFOIL's internal station numbering.**
+
+#### XFOIL's IBL Numbering Convention
+
+In XFOIL's FORTRAN code, stations are numbered as:
+- **IBL=1**: Stagnation point (theoretical, x≈0)
+- **IBL=2**: First post-stagnation marching station
+- **IBL=3**: Second marching station
+- etc.
+
+#### Our mrchue_iterations.json Indexing
+
+The extracted debug data uses 0-based indexing:
+- **stations[0]**: Corresponds to XFOIL's IBL=2 (x=0.0023)
+- **stations[1]**: Corresponds to XFOIL's IBL=3 (x=0.0047)
+- **stations[2]**: Corresponds to XFOIL's IBL=4 (x=0.0070)
+
+#### Why This Matters
+
+When comparing BLDIF residuals, we must use the correct station pairs:
+
+| XFOIL Step | prev station | curr station | BLDIF Output | res_mom |
+|------------|--------------|--------------|--------------|---------|
+| IBL=2 | stagnation | stations[0] | BLDIF IBL=2 | -0.569 |
+| IBL=3 | stations[0] | stations[1] | BLDIF IBL=3 | -0.130 |
+| IBL=4 | stations[1] | stations[2] | BLDIF IBL=4 | ... |
+
+**Critical**: Our early tests used `stations[0]` → `stations[1]` and got res_mom = -0.569, but incorrectly compared this to XFOIL's IBL=3 residual (-0.130). In fact, -0.569 matches IBL=2's residual exactly, confirming our `bldif` implementation is correct!
+
+**This is NOT a Rust vs FORTRAN 0-based vs 1-based indexing issue.** The offset is 2 indices, not 1. XFOIL's IBL=2 = our stations[0], because XFOIL reserves IBL=1 for the stagnation point itself.
+
+### Fixes Applied During Investigation
+
+#### 1. Jacobian Rθ Derivatives (Partial Fix)
+
+**Problem**: The momentum equation Jacobian w.r.t. θ was missing Reynolds number (Rθ) contributions.
+
+**XFOIL formula** (xblsys.f line 1910):
+```fortran
+VS2(2,2) = 0.5*Z_HA*H2_T2 + Z_CFM*CFM_T2 + Z_CF2*CF2_T2 + Z_T2
+```
+
+Where `CFM_T2 = CFM_HK*HK_T + CFM_RT*RT_T` includes both shape factor AND Reynolds derivatives.
+
+**Fix**: Added `cfm_rt1`, `cfm_rt2` terms to the Jacobian:
+```rust
+jac.vs2[1][1] = 0.5 * z_ha * h2_t
+    + z_cfm * (cfm_hk2 * hk2_t + cfm_rt2 * rt2_t)  // Added RT term
+    + z_cf2 * (s2.derivs.cf_hk * hk2_t + s2.derivs.cf_rt * rt2_t)
+    + z_t2;
+```
+
+**Result**: Jacobian now closer to XFOIL, but Newton iteration still doesn't converge.
+
+#### 2. solve_4x4 Numerical Stability (Fixed)
+
+**Problem**: The 4x4 Gaussian elimination returned garbage values (1e43 scale).
+
+**Root cause**: Division by near-zero diagonal elements after pivoting.
+
+**Fix**: Added proper guards for near-zero pivots:
+```rust
+let a22 = if a[2][2].abs() < 1e-20 { 
+    1e-20_f64.copysign(a[2][2]) 
+} else { 
+    a[2][2] 
+};
+```
+
+**Result**: Solver now returns correct values matching NumPy.
+
+### Remaining Issues
+
+#### Newton Iteration Diverges
+
+Even with correct residuals and solver, the Newton iteration produces wrong updates:
+
+| Iteration | θ_current | dθ (ours) | dθ (XFOIL) | Direction |
+|-----------|-----------|-----------|------------|-----------|
+| 1 | 4.12e-5 | +1.57e-5 | -5.0e-6 | **WRONG** |
+| 2 | 5.69e-5 | +2.35e-5 | N/A | diverging |
+
+XFOIL's first Newton iteration at IBL=3 **decreases** θ by 5.0e-6, but our solver **increases** it by 15.7e-6.
+
+#### Potential Root Causes
+
+1. **Sign convention mismatch** in how we build the 4x4 system from the 3×5 Jacobian
+2. **Missing Jacobian terms** (shape equation derivatives incomplete)
+3. **First station initialization** doesn't run Newton (XFOIL does)
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/rustfoil-bl/src/equations.rs` | Added Rθ derivatives to momentum Jacobian |
+| `crates/rustfoil-coupling/src/solve.rs` | Fixed solve_4x4 numerical stability |
+| `crates/rustfoil-coupling/tests/bldif_comparison.rs` | Direct BLDIF validation |
+| `crates/rustfoil-coupling/tests/theta_evolution.rs` | θ march comparison |
+| `crates/rustfoil-coupling/tests/newton_debug.rs` | Newton iteration tracing |
+| `crates/rustfoil-bl/tests/ibl3_check.rs` | IBL=3 residual validation (0.2% match) |
+
+### Test Data Generated
+
+| File | Content |
+|------|---------|
+| `testdata/mrchue_iterations.json` | Station-by-station θ evolution from XFOIL |
+| `Xfoil-instrumented/bin/xfoil_debug.json` | Full XFOIL debug trace |
+
+### Next Steps: Newton Iteration Fix Plan
+
+See the plan below for systematic debugging approach.
