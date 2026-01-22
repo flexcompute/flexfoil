@@ -73,9 +73,9 @@ xfoil_instrumented: $(XFOILOBJ) $(XUTILOBJ) $(OSOBJ)
 	$(FC) -o xfoil_instrumented $(XFOILOBJ) $(XUTILOBJ) $(OSOBJ) $(PLTOBJ) $(PLTLIB) $(FTNLIB)
 
 
-# Debug module (new)
-xfoil_debug.o: $(SRC)/xfoil_debug.f
-	$(FC) -c $(FFLAGS)  $(SRC)/xfoil_debug.f
+# Debug module (new) - needs include path for XBL.INC
+xfoil_debug.o: $(SRC)/xfoil_debug.f $(SRC)/XBL.INC $(SRC)/BLPAR.INC
+	$(FC) -c $(FFLAGS) -I$(SRC) $(SRC)/xfoil_debug.f
 
 xfoil.o: $(SRC)/xfoil.f  $(SRC)/XFOIL.INC $(SRC)/XBL.INC
 	$(FC) -c $(FFLAGS)  $(SRC)/xfoil.f

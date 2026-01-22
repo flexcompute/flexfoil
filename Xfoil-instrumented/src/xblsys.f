@@ -140,6 +140,10 @@ C
       AX_RT2 = AXA_AX2*AX2_RT2
       AX_A2  =                   DAX_A2
 C
+C---- Debug output
+      CALL DBGAXSET(HK1, T1, RT1, A1, HK2, T2, RT2, A2, ACRIT,
+     &              AX1, AX2, AXA, DAX, AX)
+C
       RETURN
       END
 

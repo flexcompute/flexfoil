@@ -1,6 +1,7 @@
-NACA 0012
-OPER
-V 1000000
-ALFA 4
-
-QUIT
+naca 0012
+pane
+oper
+v 1000000
+iter 100
+alfa 5
+quit

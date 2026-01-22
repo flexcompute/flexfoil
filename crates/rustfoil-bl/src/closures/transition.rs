@@ -162,6 +162,124 @@ pub fn amplification_rate(hk: f64, th: f64, rt: f64) -> AmplificationResult {
     }
 }
 
+/// Result of AXSET RMS averaging computation
+///
+/// Contains the averaged amplification rate and intermediate values for debugging.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AxsetResult {
+    /// Individual amplification rate at station 1 (from DAMPL)
+    pub ax1: f64,
+    /// Individual amplification rate at station 2 (from DAMPL)
+    pub ax2: f64,
+    /// RMS average of AX1 and AX2
+    pub axa_rms: f64,
+    /// Near-Ncrit correction term
+    pub dax: f64,
+    /// Final averaged amplification rate (AXA + DAX)
+    pub ax: f64,
+}
+
+impl Default for AxsetResult {
+    fn default() -> Self {
+        Self {
+            ax1: 0.0,
+            ax2: 0.0,
+            axa_rms: 0.0,
+            dax: 0.0,
+            ax: 0.0,
+        }
+    }
+}
+
+/// Compute averaged amplification rate over interval using RMS averaging
+///
+/// This is a direct port of XFOIL's AXSET subroutine (xblsys.f:35-144),
+/// which computes an RMS-averaged amplification rate between two stations.
+///
+/// XFOIL uses this instead of simple midpoint averaging because RMS averaging
+/// performs better on coarse grids and provides smoother transition prediction.
+///
+/// # Arguments
+/// * `hk1`, `th1`, `rt1` - Boundary layer state at station 1
+/// * `ampl1` - Current N-factor at station 1
+/// * `hk2`, `th2`, `rt2` - Boundary layer state at station 2
+/// * `ampl2` - Current N-factor at station 2
+/// * `ncrit` - Critical N-factor for transition
+///
+/// # Returns
+/// `AxsetResult` containing the averaged amplification rate and intermediate values
+///
+/// # Physics
+///
+/// The function computes:
+/// 1. Individual amplification rates AX1 and AX2 at each station using DAMPL
+/// 2. RMS average: AXA = sqrt(0.5*(AX1² + AX2²))
+/// 3. A small correction DAX to ensure positive dN/dx near Ncrit:
+///    DAX = exp(-20*(Ncrit - 0.5*(N1+N2))) * 0.002/(θ1+θ2)
+/// 4. Final rate: AX = AXA + DAX
+///
+/// The DAX term prevents the solver from getting stuck when N is very close
+/// to Ncrit and both AX1 and AX2 are near zero.
+///
+/// # Reference
+/// XFOIL xblsys.f lines 35-144
+pub fn axset(
+    hk1: f64,
+    th1: f64,
+    rt1: f64,
+    ampl1: f64,
+    hk2: f64,
+    th2: f64,
+    rt2: f64,
+    ampl2: f64,
+    ncrit: f64,
+) -> AxsetResult {
+    // Compute individual amplification rates at each station
+    let result1 = amplification_rate(hk1, th1, rt1);
+    let result2 = amplification_rate(hk2, th2, rt2);
+
+    let ax1 = result1.ax;
+    let ax2 = result2.ax;
+
+    // RMS average (XFOIL style - better on coarse grids)
+    // AXSQ = 0.5*(AX1**2 + AX2**2)
+    // AXA = SQRT(AXSQ)
+    let axsq = 0.5 * (ax1 * ax1 + ax2 * ax2);
+    let axa_rms = if axsq > 0.0 { axsq.sqrt() } else { 0.0 };
+
+    // Small additional term to ensure dN/dx > 0 near N = Ncrit
+    // This prevents the solver from stalling when we're very close to transition
+    //
+    // ARG = MIN(20.0*(ACRIT - 0.5*(A1+A2)), 20.0)
+    // EXN = EXP(-ARG)
+    // DAX = EXN * 0.002/(T1+T2)
+    let avg_ampl = 0.5 * (ampl1 + ampl2);
+    let arg = (20.0 * (ncrit - avg_ampl)).min(20.0);
+    let exn = if arg <= 0.0 {
+        1.0 // When N >= Ncrit, exn = 1
+    } else {
+        (-arg).exp()
+    };
+    
+    let th_sum = th1 + th2;
+    let dax = if th_sum > 0.0 {
+        exn * 0.002 / th_sum
+    } else {
+        0.0
+    };
+
+    // Final averaged amplification rate
+    let ax = axa_rms + dax;
+
+    AxsetResult {
+        ax1,
+        ax2,
+        axa_rms,
+        dax,
+        ax,
+    }
+}
+
 /// Check for laminar-turbulent transition
 ///
 /// Compares the current amplification factor N against the critical value.
@@ -195,6 +313,101 @@ mod tests {
 
     const EPS: f64 = 1e-7;
     const DERIV_TOL: f64 = 1e-5;
+
+    // ========== AXSET Tests ==========
+
+    #[test]
+    fn test_axset_zero_amplification() {
+        // When both stations are subcritical, all amplification should be ~0
+        // (except for the small DAX term near Ncrit)
+        let result = axset(2.5, 0.001, 50.0, 0.0, 2.5, 0.001, 60.0, 0.0, 9.0);
+        
+        assert_eq!(result.ax1, 0.0, "AX1 should be 0 below critical");
+        assert_eq!(result.ax2, 0.0, "AX2 should be 0 below critical");
+        assert_eq!(result.axa_rms, 0.0, "RMS should be 0 when both are 0");
+        assert!(result.dax > 0.0, "DAX should be positive (near-Ncrit term)");
+        assert!(result.ax > 0.0, "Final AX should be positive due to DAX");
+    }
+
+    #[test]
+    fn test_axset_supercritical() {
+        // When both stations are supercritical, RMS should be positive
+        let result = axset(
+            2.6, 0.001, 1000.0, 3.0,  // station 1: supercritical
+            2.7, 0.001, 1200.0, 4.0,  // station 2: supercritical
+            9.0,                       // Ncrit
+        );
+        
+        assert!(result.ax1 > 0.0, "AX1 should be positive");
+        assert!(result.ax2 > 0.0, "AX2 should be positive");
+        assert!(result.axa_rms > 0.0, "RMS average should be positive");
+        
+        // RMS should be between min and max of individual values
+        let min_ax = result.ax1.min(result.ax2);
+        let max_ax = result.ax1.max(result.ax2);
+        assert!(result.axa_rms >= min_ax * 0.9, "RMS >= 0.9*min");
+        assert!(result.axa_rms <= max_ax * 1.1, "RMS <= 1.1*max");
+    }
+
+    #[test]
+    fn test_axset_rms_averaging() {
+        // Verify RMS formula: sqrt(0.5*(a² + b²))
+        let result = axset(
+            2.6, 0.001, 2000.0, 5.0,  // station 1
+            2.6, 0.001, 2000.0, 5.0,  // station 2 (same)
+            9.0,
+        );
+        
+        // When both stations are identical, RMS = individual value
+        assert!(
+            (result.axa_rms - result.ax1).abs() < 1e-10,
+            "When stations are identical, RMS should equal individual: {} vs {}",
+            result.axa_rms,
+            result.ax1
+        );
+    }
+
+    #[test]
+    fn test_axset_dax_near_ncrit() {
+        // DAX term should be larger when close to Ncrit
+        let result_close = axset(
+            2.6, 0.001, 1000.0, 8.5,  // N close to Ncrit=9
+            2.6, 0.001, 1000.0, 8.5,
+            9.0,
+        );
+        
+        let result_far = axset(
+            2.6, 0.001, 1000.0, 2.0,  // N far from Ncrit=9
+            2.6, 0.001, 1000.0, 2.0,
+            9.0,
+        );
+        
+        assert!(
+            result_close.dax > result_far.dax,
+            "DAX should be larger near Ncrit: {} vs {}",
+            result_close.dax,
+            result_far.dax
+        );
+    }
+
+    #[test]
+    fn test_axset_dax_at_ncrit() {
+        // When N >= Ncrit, DAX should be at maximum (exn = 1)
+        let result = axset(
+            2.6, 0.001, 1000.0, 10.0,  // N > Ncrit
+            2.6, 0.001, 1000.0, 10.0,
+            9.0,
+        );
+        
+        // DAX = 0.002 / (th1 + th2) when exn = 1
+        let expected_dax = 0.002 / (0.001 + 0.001);
+        assert!(
+            (result.dax - expected_dax).abs() < 1e-10,
+            "DAX at N>=Ncrit: {} vs {}",
+            result.dax,
+            expected_dax
+        );
+    }
 
     /// Helper to compute numerical derivative
     fn numerical_deriv<F: Fn(f64) -> f64>(f: F, x: f64, h: f64) -> f64 {

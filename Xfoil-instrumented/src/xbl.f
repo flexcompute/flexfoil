@@ -222,6 +222,7 @@ C
 C---- check for transition and set TRAN, XT, etc. if found
       IF(TRAN) THEN
         CALL TRCHEK
+        CALL DBGTRCHEK(IS, IBL)
         AMI = AMPL2
       ENDIF
       IF(IBL.EQ.ITRAN(IS) .AND. .NOT.TRAN) THEN
@@ -641,6 +642,7 @@ C
 C-------- check for transition and set appropriate flags and things
           IF((.NOT.SIMI) .AND. (.NOT.TURB)) THEN
            CALL TRCHEK
+           CALL DBGTRCHEK(IS, IBL)
            AMI = AMPL2
 C
            IF(TRAN) THEN
@@ -839,6 +841,7 @@ C
 C------- check for transition and set appropriate flags and things
          IF((.NOT.SIMI) .AND. (.NOT.TURB)) THEN
           CALL TRCHEK
+          CALL DBGTRCHEK(IS, IBL)
           AMI = AMPL2
           IF(     TRAN) ITRAN(IS) = IBL
           IF(.NOT.TRAN) ITRAN(IS) = IBL+2
@@ -997,6 +1000,7 @@ C
 C-------- check for transition and set appropriate flags and things
           IF((.NOT.SIMI) .AND. (.NOT.TURB)) THEN
            CALL TRCHEK
+           CALL DBGTRCHEK(IS, IBL)
            AMI = AMPL2
            IF(     TRAN) ITRAN(IS) = IBL
            IF(.NOT.TRAN) ITRAN(IS) = IBL+2
@@ -1166,6 +1170,7 @@ C
 C------- check for transition and set appropriate flags and things
          IF((.NOT.SIMI) .AND. (.NOT.TURB)) THEN
           CALL TRCHEK
+          CALL DBGTRCHEK(IS, IBL)
           AMI = AMPL2
           IF(     TRAN) ITRAN(IS) = IBL
           IF(.NOT.TRAN) ITRAN(IS) = IBL+2

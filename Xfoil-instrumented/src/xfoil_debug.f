@@ -466,6 +466,83 @@ C
       END
 
 
+C---- Dump AXSET RMS averaging (transition detection)
+      SUBROUTINE DBGAXSET(HK1, T1, RT1, A1, HK2, T2, RT2, A2, ACRIT,
+     &                    AX1, AX2, AXA, DAX, AX)
+      REAL HK1, T1, RT1, A1, HK2, T2, RT2, A2, ACRIT
+      REAL AX1, AX2, AXA, DAX, AX
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+C
+      IF(.NOT.LDBG) RETURN
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "AXSET",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+C---- Station 1 inputs
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Hk1": ', HK1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "theta1": ', T1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Rtheta1": ', RT1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ampl1": ', A1, ','
+C---- Station 2 inputs
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Hk2": ', HK2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "theta2": ', T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Rtheta2": ', RT2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ampl2": ', A2, ','
+C---- Critical N
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Ncrit": ', ACRIT, ','
+C---- Individual amplification rates
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Ax1": ', AX1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Ax2": ', AX2, ','
+C---- RMS average
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Axa_rms": ', AXA, ','
+C---- Near-Ncrit correction
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Dax": ', DAX, ','
+C---- Final output
+      WRITE(LUDBG,'(A,E15.8)') '  "Ax_final": ', AX
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump TRCHEK transition check result (call with IS, IBL from caller)
+      SUBROUTINE DBGTRCHEK(IS, IBL)
+      INTEGER IS, IBL
+      INCLUDE 'XBL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+C
+      IF(.NOT.LDBG) RETURN
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "TRCHEK",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "side": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "x1": ', X1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "x2": ', X2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ampl1": ', AMPL1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ampl2": ', AMPL2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Hk1": ', HK1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Hk2": ', HK2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Rt1": ', RT1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Rt2": ', RT2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Ncrit": ', AMCRIT, ','
+      IF(TRAN) THEN
+        WRITE(LUDBG,'(A)') '  "transition": true,'
+      ELSE
+        WRITE(LUDBG,'(A)') '  "transition": false,'
+      ENDIF
+      WRITE(LUDBG,'(A,E15.8)') '  "x_transition": ', XT
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
 C---- Dump BLSOLV Newton solve state
       SUBROUTINE DBGBLSOLV(NSYS)
       INTEGER NSYS

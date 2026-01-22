@@ -11,7 +11,7 @@
 //! - MRCHDU: xbl.f line 875 - coupled BL march with Ue updates
 
 use nalgebra::DMatrix;
-use rustfoil_bl::closures::{amplification_rate, check_transition};
+use rustfoil_bl::closures::{axset, check_transition};
 use rustfoil_bl::equations::{bldif, blvar, FlowType};
 use rustfoil_bl::state::BlStation;
 
@@ -549,13 +549,19 @@ pub fn march_fixed_ue(
 
         // Check for transition (laminar only)
         if is_laminar && result.x_transition.is_none() {
-            // Compute amplification rate at midpoint
-            let hk_mid = 0.5 * (prev_station.hk + station.hk);
-            let th_mid = 0.5 * (prev_station.theta + station.theta);
-            let rt_mid = 0.5 * (prev_station.r_theta + station.r_theta);
-
-            let amp_result = amplification_rate(hk_mid, th_mid, rt_mid);
-            station.ampl = prev_station.ampl + amp_result.ax * ds;
+            // Compute amplification rate using XFOIL's AXSET (RMS averaging)
+            let ax_result = axset(
+                prev_station.hk,
+                prev_station.theta,
+                prev_station.r_theta,
+                prev_station.ampl,
+                station.hk,
+                station.theta,
+                station.r_theta,
+                station.ampl,
+                config.ncrit,
+            );
+            station.ampl = prev_station.ampl + ax_result.ax * ds;
 
             // Check if transition occurred
             if let Some(_) = check_transition(station.ampl, config.ncrit) {
@@ -711,12 +717,19 @@ pub fn march_surface(
 
         // Check for transition (laminar only)
         if is_laminar && result.x_transition.is_none() {
-            let hk_mid = 0.5 * (prev_station.hk + station.hk);
-            let th_mid = 0.5 * (prev_station.theta + station.theta);
-            let rt_mid = 0.5 * (prev_station.r_theta + station.r_theta);
-
-            let amp_result = amplification_rate(hk_mid, th_mid, rt_mid);
-            station.ampl = prev_station.ampl + amp_result.ax * ds;
+            // Compute amplification rate using XFOIL's AXSET (RMS averaging)
+            let ax_result = axset(
+                prev_station.hk,
+                prev_station.theta,
+                prev_station.r_theta,
+                prev_station.ampl,
+                station.hk,
+                station.theta,
+                station.r_theta,
+                station.ampl,
+                config.ncrit,
+            );
+            station.ampl = prev_station.ampl + ax_result.ax * ds;
 
             if check_transition(station.ampl, config.ncrit).is_some() {
                 let ampl_prev = prev_station.ampl;
@@ -847,13 +860,19 @@ pub fn march_fixed_ue_debug(
 
         // Check for transition (laminar only)
         if is_laminar && result.x_transition.is_none() {
-            // Compute amplification rate at midpoint
-            let hk_mid = 0.5 * (prev_station.hk + station.hk);
-            let th_mid = 0.5 * (prev_station.theta + station.theta);
-            let rt_mid = 0.5 * (prev_station.r_theta + station.r_theta);
-
-            let amp_result = amplification_rate(hk_mid, th_mid, rt_mid);
-            station.ampl = prev_station.ampl + amp_result.ax * ds;
+            // Compute amplification rate using XFOIL's AXSET (RMS averaging)
+            let ax_result = axset(
+                prev_station.hk,
+                prev_station.theta,
+                prev_station.r_theta,
+                prev_station.ampl,
+                station.hk,
+                station.theta,
+                station.r_theta,
+                station.ampl,
+                config.ncrit,
+            );
+            station.ampl = prev_station.ampl + ax_result.ax * ds;
 
             // Check if transition occurred
             if let Some(_) = check_transition(station.ampl, config.ncrit) {
@@ -1010,12 +1029,19 @@ pub fn march_coupled(
 
         // Check for transition
         if is_laminar && result.x_transition.is_none() {
-            let hk_mid = 0.5 * (prev_station.hk + station.hk);
-            let th_mid = 0.5 * (prev_station.theta + station.theta);
-            let rt_mid = 0.5 * (prev_station.r_theta + station.r_theta);
-
-            let amp_result = amplification_rate(hk_mid, th_mid, rt_mid);
-            station.ampl = prev_station.ampl + amp_result.ax * ds;
+            // Compute amplification rate using XFOIL's AXSET (RMS averaging)
+            let ax_result = axset(
+                prev_station.hk,
+                prev_station.theta,
+                prev_station.r_theta,
+                prev_station.ampl,
+                station.hk,
+                station.theta,
+                station.r_theta,
+                station.ampl,
+                config.ncrit,
+            );
+            station.ampl = prev_station.ampl + ax_result.ax * ds;
 
             if let Some(_) = check_transition(station.ampl, config.ncrit) {
                 let ampl_prev = prev_station.ampl;
