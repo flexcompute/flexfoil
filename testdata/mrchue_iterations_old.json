@@ -1,0 +1,4229 @@
+{
+  "metadata": {
+    "reynolds": 1000000.0,
+    "mach": 0.0,
+    "ncrit": 9.0,
+    "alpha_rad": 0.087266463
+  },
+  "source": "xfoil_instrumented",
+  "description": "MRCHUE Newton iteration data for BL march debugging",
+  "sides": {
+    "1": {
+      "stations": [
+        {
+          "side": 1,
+          "ibl": 2,
+          "x": 0.0023096903,
+          "Ue": 0.11533632,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 3.8754707e-05,
+            "delta_star": 8.5260356e-05,
+            "ctau": 0.03,
+            "ampl": 0.0
+          },
+          "final": {
+            "theta": 4.1213327e-05,
+            "delta_star": 9.1885432e-05,
+            "ctau": 0.03,
+            "ampl": 0.0,
+            "dmax": 1.0740245e-08,
+            "Hk": 2.2045837,
+            "Rtheta": 9.4791585
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 3,
+          "x": 0.0047039501,
+          "Ue": 0.25849892,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 4.1213327e-05,
+            "delta_star": 9.1885432e-05,
+            "ctau": 0.03,
+            "ampl": 0.0
+          },
+          "final": {
+            "theta": 3.6670012e-05,
+            "delta_star": 8.0842118e-05,
+            "ctau": 0.03,
+            "ampl": 1.2672639e-10,
+            "dmax": 1.29462e-07,
+            "Hk": 2.2287743,
+            "Rtheta": 14.452468
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 4,
+          "x": 0.0069607249,
+          "Ue": 0.41664526,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 3.6670012e-05,
+            "delta_star": 8.0842118e-05,
+            "ctau": 0.03,
+            "ampl": 1.2672639e-10
+          },
+          "final": {
+            "theta": 3.4687928e-05,
+            "delta_star": 7.7311139e-05,
+            "ctau": 0.03,
+            "ampl": 2.5709938e-10,
+            "dmax": 6.4192056e-06,
+            "Hk": 2.2029184,
+            "Rtheta": 19.218574
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 5,
+          "x": 0.0090994366,
+          "Ue": 0.58682015,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 3.4687928e-05,
+            "delta_star": 7.7311139e-05,
+            "ctau": 0.03,
+            "ampl": 2.5709938e-10
+          },
+          "final": {
+            "theta": 3.2750365e-05,
+            "delta_star": 7.2146383e-05,
+            "ctau": 0.03,
+            "ampl": 3.8783263e-10,
+            "dmax": 4.6898504e-10,
+            "Hk": 2.2247788,
+            "Rtheta": 24.155442
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 6,
+          "x": 0.011135764,
+          "Ue": 0.76308215,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 3.2750365e-05,
+            "delta_star": 7.2146383e-05,
+            "ctau": 0.03,
+            "ampl": 3.8783263e-10
+          },
+          "final": {
+            "theta": 3.1655121e-05,
+            "delta_star": 7.0425575e-05,
+            "ctau": 0.03,
+            "ampl": 5.1816886e-10,
+            "dmax": 6.6534845e-07,
+            "Hk": 2.2182692,
+            "Rtheta": 29.105102
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 7,
+          "x": 0.013085309,
+          "Ue": 0.93733769,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 3.1655121e-05,
+            "delta_star": 7.0425575e-05,
+            "ctau": 0.03,
+            "ampl": 5.1816886e-10
+          },
+          "final": {
+            "theta": 3.105082e-05,
+            "delta_star": 6.8879086e-05,
+            "ctau": 0.03,
+            "ampl": 6.4633253e-10,
+            "dmax": 1.9552814e-07,
+            "Hk": 2.2383026,
+            "Rtheta": 34.306516
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 8,
+          "x": 0.01495383,
+          "Ue": 1.1003934,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 3.105082e-05,
+            "delta_star": 6.8879086e-05,
+            "ctau": 0.03,
+            "ampl": 6.4633253e-10
+          },
+          "final": {
+            "theta": 3.1176591e-05,
+            "delta_star": 6.9782646e-05,
+            "ctau": 0.03,
+            "ampl": 7.7011433e-10,
+            "dmax": 1.8396101e-08,
+            "Hk": 2.2412265,
+            "Rtheta": 39.530515
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 9,
+          "x": 0.01676511,
+          "Ue": 1.2495801,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 3.1176591e-05,
+            "delta_star": 6.9782646e-05,
+            "ctau": 0.03,
+            "ampl": 7.7011433e-10
+          },
+          "final": {
+            "theta": 3.1635039e-05,
+            "delta_star": 7.090129e-05,
+            "ctau": 0.03,
+            "ampl": 8.8898807e-10,
+            "dmax": 4.0198741e-08,
+            "Hk": 2.2609383,
+            "Rtheta": 45.309736
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 10,
+          "x": 0.018633632,
+          "Ue": 1.3882169,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 3.1635039e-05,
+            "delta_star": 7.090129e-05,
+            "ctau": 0.03,
+            "ampl": 8.8898807e-10
+          },
+          "final": {
+            "theta": 3.2638813e-05,
+            "delta_star": 7.3794446e-05,
+            "ctau": 0.03,
+            "ampl": 1.0088287e-09,
+            "dmax": 1.7312306e-06,
+            "Hk": 2.2884575,
+            "Rtheta": 51.881124
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 11,
+          "x": 0.020583177,
+          "Ue": 1.5072066,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 3.2638813e-05,
+            "delta_star": 7.3794446e-05,
+            "ctau": 0.03,
+            "ampl": 1.0088287e-09
+          },
+          "final": {
+            "theta": 3.4422039e-05,
+            "delta_star": 7.8773374e-05,
+            "ctau": 0.03,
+            "ampl": 1.1286695e-09,
+            "dmax": 1.0476195e-10,
+            "Hk": 2.3227074,
+            "Rtheta": 59.277752
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 12,
+          "x": 0.022619504,
+          "Ue": 1.6009739,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 3.4422039e-05,
+            "delta_star": 7.8773374e-05,
+            "ctau": 0.03,
+            "ampl": 1.1286695e-09
+          },
+          "final": {
+            "theta": 3.7026057e-05,
+            "delta_star": 8.6000698e-05,
+            "ctau": 0.03,
+            "ampl": 1.2461585e-09,
+            "dmax": 9.4426742e-10,
+            "Hk": 2.3631303,
+            "Rtheta": 67.496489
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 13,
+          "x": 0.024758216,
+          "Ue": 1.6688096,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 3.7026057e-05,
+            "delta_star": 8.6000698e-05,
+            "ctau": 0.03,
+            "ampl": 1.2461585e-09
+          },
+          "final": {
+            "theta": 4.0445891e-05,
+            "delta_star": 9.5578911e-05,
+            "ctau": 0.03,
+            "ampl": 1.35996e-09,
+            "dmax": 3.6064245e-09,
+            "Hk": 2.4085092,
+            "Rtheta": 76.475618
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 14,
+          "x": 0.027014991,
+          "Ue": 1.7133362,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 4.0445891e-05,
+            "delta_star": 9.5578911e-05,
+            "ctau": 0.03,
+            "ampl": 1.35996e-09
+          },
+          "final": {
+            "theta": 4.4635499e-05,
+            "delta_star": 0.00010750501,
+            "ctau": 0.03,
+            "ampl": 1.4693038e-09,
+            "dmax": 7.663671e-09,
+            "Hk": 2.4578537,
+            "Rtheta": 86.13812
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 15,
+          "x": 0.029409251,
+          "Ue": 1.7389115,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 4.4635499e-05,
+            "delta_star": 0.00010750501,
+            "ctau": 0.03,
+            "ampl": 1.4693038e-09
+          },
+          "final": {
+            "theta": 4.9535656e-05,
+            "delta_star": 0.00012175139,
+            "ctau": 0.03,
+            "ampl": 1.5741116e-09,
+            "dmax": 1.1209555e-08,
+            "Hk": 2.5103467,
+            "Rtheta": 96.411469
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 16,
+          "x": 0.03196364,
+          "Ue": 1.7500759,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 4.9535656e-05,
+            "delta_star": 0.00012175139,
+            "ctau": 0.03,
+            "ampl": 1.5741116e-09
+          },
+          "final": {
+            "theta": 5.5089879e-05,
+            "delta_star": 0.00013829469,
+            "ctau": 0.03,
+            "ampl": 1.6747561e-09,
+            "dmax": 1.2976887e-08,
+            "Hk": 2.5653677,
+            "Rtheta": 107.24251
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 17,
+          "x": 0.034705125,
+          "Ue": 1.7507605,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 5.5089879e-05,
+            "delta_star": 0.00013829469,
+            "ctau": 0.03,
+            "ampl": 1.6747561e-09
+          },
+          "final": {
+            "theta": 6.1254812e-05,
+            "delta_star": 0.00015714112,
+            "ctau": 0.03,
+            "ampl": 1.771892e-09,
+            "dmax": 1.3098783e-08,
+            "Hk": 2.62251,
+            "Rtheta": 118.60331
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 18,
+          "x": 0.037665939,
+          "Ue": 1.7440349,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 6.1254812e-05,
+            "delta_star": 0.00015714112,
+            "ctau": 0.03,
+            "ampl": 1.771892e-09
+          },
+          "final": {
+            "theta": 6.8005125e-05,
+            "delta_star": 0.00017834412,
+            "ctau": 0.03,
+            "ampl": 1.8663171e-09,
+            "dmax": 1.2334985e-08,
+            "Hk": 2.6815385,
+            "Rtheta": 130.49212
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 19,
+          "x": 0.040884983,
+          "Ue": 1.7321562,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 6.8005125e-05,
+            "delta_star": 0.00017834412,
+            "ctau": 0.03,
+            "ampl": 1.8663171e-09
+          },
+          "final": {
+            "theta": 7.5335078e-05,
+            "delta_star": 0.00020201391,
+            "ctau": 0.03,
+            "ampl": 0.00092043272,
+            "dmax": 1.1341365e-08,
+            "Hk": 2.7423685,
+            "Rtheta": 142.93223
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 20,
+          "x": 0.044409547,
+          "Ue": 1.7167233,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 7.5335078e-05,
+            "delta_star": 0.00020201391,
+            "ctau": 0.03,
+            "ampl": 0.00092043272
+          },
+          "final": {
+            "theta": 8.3258748e-05,
+            "delta_star": 0.00022832617,
+            "ctau": 0.03,
+            "ampl": 0.1323866,
+            "dmax": 1.0502314e-08,
+            "Hk": 2.8050485,
+            "Rtheta": 155.9702
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 21,
+          "x": 0.048297421,
+          "Ue": 1.6988412,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 8.3258748e-05,
+            "delta_star": 0.00022832617,
+            "ctau": 0.03,
+            "ampl": 0.1323866
+          },
+          "final": {
+            "theta": 9.1809761e-05,
+            "delta_star": 0.00025753083,
+            "ctau": 0.03,
+            "ampl": 0.35216325,
+            "dmax": 1.0004669e-08,
+            "Hk": 2.8696758,
+            "Rtheta": 169.67255
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 22,
+          "x": 0.052619313,
+          "Ue": 1.6792653,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 9.1809761e-05,
+            "delta_star": 0.00025753083,
+            "ctau": 0.03,
+            "ampl": 0.35216325
+          },
+          "final": {
+            "theta": 0.00010103975,
+            "delta_star": 0.00028995133,
+            "ctau": 0.03,
+            "ampl": 0.62703243,
+            "dmax": 9.9008419e-09,
+            "Hk": 2.9363513,
+            "Rtheta": 184.12186
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 23,
+          "x": 0.057461302,
+          "Ue": 1.6585121,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00010103975,
+            "delta_star": 0.00028995133,
+            "ctau": 0.03,
+            "ampl": 0.62703243
+          },
+          "final": {
+            "theta": 0.00011101629,
+            "delta_star": 0.00032598282,
+            "ctau": 0.03,
+            "ampl": 0.96649207,
+            "dmax": 1.0197132e-08,
+            "Hk": 3.0058398,
+            "Rtheta": 199.42042
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 24,
+          "x": 0.06292656,
+          "Ue": 1.6369165,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00011101629,
+            "delta_star": 0.00032598282,
+            "ctau": 0.03,
+            "ampl": 0.96649207
+          },
+          "final": {
+            "theta": 0.00012182688,
+            "delta_star": 0.00036619207,
+            "ctau": 0.03,
+            "ampl": 1.3813298,
+            "dmax": 1.1426614e-08,
+            "Hk": 3.0786045,
+            "Rtheta": 215.66569
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 25,
+          "x": 0.069134736,
+          "Ue": 1.614733,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00012182688,
+            "delta_star": 0.00036619207,
+            "ctau": 0.03,
+            "ampl": 1.3813298
+          },
+          "final": {
+            "theta": 0.0001335612,
+            "delta_star": 0.00041118212,
+            "ctau": 0.03,
+            "ampl": 1.8835972,
+            "dmax": 1.362709e-08,
+            "Hk": 3.1550768,
+            "Rtheta": 232.93265
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 26,
+          "x": 0.076216258,
+          "Ue": 1.5921895,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.0001335612,
+            "delta_star": 0.00041118212,
+            "ctau": 0.03,
+            "ampl": 1.8835972
+          },
+          "final": {
+            "theta": 0.00014629707,
+            "delta_star": 0.00046157849,
+            "ctau": 0.03,
+            "ampl": 2.4858312,
+            "dmax": 1.7194699e-08,
+            "Hk": 3.2377313,
+            "Rtheta": 251.26421
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 27,
+          "x": 0.08429795,
+          "Ue": 1.5694945,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00014629707,
+            "delta_star": 0.00046157849,
+            "ctau": 0.03,
+            "ampl": 2.4858312
+          },
+          "final": {
+            "theta": 0.00016009244,
+            "delta_star": 0.00051833632,
+            "ctau": 0.03,
+            "ampl": 3.2005522,
+            "dmax": 2.6920521e-08,
+            "Hk": 3.3296606,
+            "Rtheta": 270.60999
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 28,
+          "x": 0.093477885,
+          "Ue": 1.5469181,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00016009244,
+            "delta_star": 0.00051833632,
+            "ctau": 0.03,
+            "ampl": 3.2005522
+          },
+          "final": {
+            "theta": 0.00017493492,
+            "delta_star": 0.00058247394,
+            "ctau": 0.03,
+            "ampl": 4.0391749,
+            "dmax": 5.5961669e-08,
+            "Hk": 3.4397329,
+            "Rtheta": 290.8219
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 29,
+          "x": 0.10379445,
+          "Ue": 1.524767,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00017493492,
+            "delta_star": 0.00058247394,
+            "ctau": 0.03,
+            "ampl": 4.0391749
+          },
+          "final": {
+            "theta": 0.00019073203,
+            "delta_star": 0.0006560674,
+            "ctau": 0.03,
+            "ampl": 5.01197,
+            "dmax": 2.3935115e-07,
+            "Hk": 3.5977018,
+            "Rtheta": 311.66487
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 30,
+          "x": 0.11520466,
+          "Ue": 1.5033556,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00019073203,
+            "delta_star": 0.0006560674,
+            "ctau": 0.03,
+            "ampl": 5.01197
+          },
+          "final": {
+            "theta": 0.00020731281,
+            "delta_star": 0.00074585434,
+            "ctau": 0.03,
+            "ampl": 6.1372382,
+            "dmax": 6.2710554e-06,
+            "Hk": 5.3897938,
+            "Rtheta": 329.8927
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 31,
+          "x": 0.12758861,
+          "Ue": 1.4829479,
+          "n_iterations": 5,
+          "converged": true,
+          "initial": {
+            "theta": 0.00020731281,
+            "delta_star": 0.00074585434,
+            "ctau": 0.03,
+            "ampl": 6.1372382
+          },
+          "final": {
+            "theta": 0.0002218496,
+            "delta_star": 0.0011957233,
+            "ctau": 0.03,
+            "ampl": 7.8795768,
+            "dmax": 2.4372645e-07,
+            "Hk": 3.4983639,
+            "Rtheta": 347.37696
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 32,
+          "x": 0.14078099,
+          "Ue": 1.4566387,
+          "n_iterations": 6,
+          "converged": true,
+          "initial": {
+            "theta": 0.0002218496,
+            "delta_star": 0.0011957233,
+            "ctau": 0.03,
+            "ampl": 10.138657
+          },
+          "final": {
+            "theta": 0.00024398928,
+            "delta_star": 0.0006099732,
+            "ctau": 0.054620823,
+            "ampl": 9.6504187,
+            "dmax": 3.3455561e-06,
+            "Hk": 1.7415342,
+            "Rtheta": 395.58999
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 33,
+          "x": 0.15461087,
+          "Ue": 1.4456724,
+          "n_iterations": 5,
+          "converged": true,
+          "initial": {
+            "theta": 0.00024398928,
+            "delta_star": 0.0006099732,
+            "ctau": 0.054620823,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.00027363738,
+            "delta_star": 0.00047654885,
+            "ctau": 0.053598338,
+            "ampl": 9.6504187,
+            "dmax": 1.0506375e-08,
+            "Hk": 1.5333523,
+            "Rtheta": 448.78378
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 34,
+          "x": 0.16892976,
+          "Ue": 1.428808,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00027363738,
+            "delta_star": 0.00047654885,
+            "ctau": 0.053598338,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.00031409664,
+            "delta_star": 0.00048162084,
+            "ctau": 0.048612108,
+            "ampl": 9.6504187,
+            "dmax": 5.0681797e-07,
+            "Hk": 1.4822147,
+            "Rtheta": 509.91721
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 35,
+          "x": 0.18362178,
+          "Ue": 1.4130162,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00031409664,
+            "delta_star": 0.00048162084,
+            "ctau": 0.048612108,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.00036087145,
+            "delta_star": 0.00053488898,
+            "ctau": 0.045336124,
+            "ampl": 9.6504187,
+            "dmax": 1.7730967e-07,
+            "Hk": 1.473386,
+            "Rtheta": 572.57461
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 36,
+          "x": 0.19860187,
+          "Ue": 1.3981814,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00036087145,
+            "delta_star": 0.00053488898,
+            "ctau": 0.045336124,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.00040951383,
+            "delta_star": 0.00060337196,
+            "ctau": 0.04351396,
+            "ampl": 9.6504187,
+            "dmax": 1.2763088e-07,
+            "Hk": 1.4744864,
+            "Rtheta": 634.82559
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 37,
+          "x": 0.2138092,
+          "Ue": 1.3841872,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00040951383,
+            "delta_star": 0.00060337196,
+            "ctau": 0.04351396,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.00045862697,
+            "delta_star": 0.00067623926,
+            "ctau": 0.042493879,
+            "ampl": 9.6504187,
+            "dmax": 7.1467218e-08,
+            "Hk": 1.4772615,
+            "Rtheta": 696.32167
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 38,
+          "x": 0.22920032,
+          "Ue": 1.3709272,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00045862697,
+            "delta_star": 0.00067623926,
+            "ctau": 0.042493879,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.00050792024,
+            "delta_star": 0.00075033101,
+            "ctau": 0.041903317,
+            "ampl": 9.6504187,
+            "dmax": 4.0169163e-08,
+            "Hk": 1.479554,
+            "Rtheta": 757.11343
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 39,
+          "x": 0.2447438,
+          "Ue": 1.3583083,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00050792024,
+            "delta_star": 0.00075033101,
+            "ctau": 0.041903317,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.00055739441,
+            "delta_star": 0.00082469513,
+            "ctau": 0.041546792,
+            "ampl": 9.6504187,
+            "dmax": 2.3602368e-08,
+            "Hk": 1.4809387,
+            "Rtheta": 817.32994
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 40,
+          "x": 0.2604163,
+          "Ue": 1.3462512,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00055739441,
+            "delta_star": 0.00082469513,
+            "ctau": 0.041546792,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.00060711937,
+            "delta_star": 0.00089910818,
+            "ctau": 0.041319826,
+            "ampl": 9.6504187,
+            "dmax": 8.2370314e-06,
+            "Hk": 1.4815021,
+            "Rtheta": 877.11702
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 41,
+          "x": 0.27620007,
+          "Ue": 1.3346892,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00060711937,
+            "delta_star": 0.00089910818,
+            "ctau": 0.041319826,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.00065717263,
+            "delta_star": 0.00097360376,
+            "ctau": 0.041165613,
+            "ampl": 9.6504187,
+            "dmax": 5.9722197e-06,
+            "Hk": 1.481447,
+            "Rtheta": 936.58106
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 42,
+          "x": 0.29208123,
+          "Ue": 1.3235661,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00065717263,
+            "delta_star": 0.00097360376,
+            "ctau": 0.041165613,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.00070762195,
+            "delta_star": 0.0010483052,
+            "ctau": 0.041053038,
+            "ampl": 9.6504187,
+            "dmax": 4.5736534e-06,
+            "Hk": 1.4809695,
+            "Rtheta": 995.81233
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 43,
+          "x": 0.30804864,
+          "Ue": 1.3128355,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00070762195,
+            "delta_star": 0.0010483052,
+            "ctau": 0.041053038,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0007585224,
+            "delta_star": 0.0011233491,
+            "ctau": 0.040964953,
+            "ampl": 9.6504187,
+            "dmax": 3.5772812e-06,
+            "Hk": 1.4802283,
+            "Rtheta": 1054.8826
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 44,
+          "x": 0.32409319,
+          "Ue": 1.3024578,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0007585224,
+            "delta_star": 0.0011233491,
+            "ctau": 0.040964953,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.00080991872,
+            "delta_star": 0.0011988651,
+            "ctau": 0.040891922,
+            "ampl": 9.6504187,
+            "dmax": 2.8473984e-06,
+            "Hk": 1.4793418,
+            "Rtheta": 1113.849
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 45,
+          "x": 0.34020724,
+          "Ue": 1.2923999,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00080991872,
+            "delta_star": 0.0011988651,
+            "ctau": 0.040891922,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.000861847,
+            "delta_star": 0.0012749666,
+            "ctau": 0.040828769,
+            "ampl": 9.6504187,
+            "dmax": 2.3001071e-06,
+            "Hk": 1.4783934,
+            "Rtheta": 1172.7562
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 46,
+          "x": 0.35638435,
+          "Ue": 1.2826337,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.000861847,
+            "delta_star": 0.0012749666,
+            "ctau": 0.040828769,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.00091433581,
+            "delta_star": 0.0013517483,
+            "ctau": 0.040772657,
+            "ampl": 9.6504187,
+            "dmax": 1.8815326e-06,
+            "Hk": 1.4774414,
+            "Rtheta": 1231.642
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 47,
+          "x": 0.37261894,
+          "Ue": 1.2731348,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00091433581,
+            "delta_star": 0.0013517483,
+            "ctau": 0.040772657,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.00096741012,
+            "delta_star": 0.0014292919,
+            "ctau": 0.040722065,
+            "ampl": 9.6504187,
+            "dmax": 1.5560823e-06,
+            "Hk": 1.476524,
+            "Rtheta": 1290.5366
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 48,
+          "x": 0.38890616,
+          "Ue": 1.2638825,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00096741012,
+            "delta_star": 0.0014292919,
+            "ctau": 0.040722065,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0010210901,
+            "delta_star": 0.0015076642,
+            "ctau": 0.040676165,
+            "ampl": 9.6504187,
+            "dmax": 1.2993192e-06,
+            "Hk": 1.4756667,
+            "Rtheta": 1349.4667
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 49,
+          "x": 0.40524176,
+          "Ue": 1.2548584,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0010210901,
+            "delta_star": 0.0015076642,
+            "ctau": 0.040676165,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0010753945,
+            "delta_star": 0.0015869241,
+            "ctau": 0.040634522,
+            "ampl": 9.6504187,
+            "dmax": 1.0942473e-06,
+            "Hk": 1.4748853,
+            "Rtheta": 1408.4552
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 50,
+          "x": 0.42162191,
+          "Ue": 1.2460463,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0010753945,
+            "delta_star": 0.0015869241,
+            "ctau": 0.040634522,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0011303402,
+            "delta_star": 0.0016671222,
+            "ctau": 0.040596897,
+            "ampl": 9.6504187,
+            "dmax": 9.2863215e-07,
+            "Hk": 1.4741896,
+            "Rtheta": 1467.5232
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 51,
+          "x": 0.43804322,
+          "Ue": 1.2374317,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0011303402,
+            "delta_star": 0.0016671222,
+            "ctau": 0.040596897,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0011859436,
+            "delta_star": 0.0017483057,
+            "ctau": 0.040563162,
+            "ampl": 9.6504187,
+            "dmax": 7.9359571e-07,
+            "Hk": 1.4735851,
+            "Rtheta": 1526.6905
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 52,
+          "x": 0.45450258,
+          "Ue": 1.2290015,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0011859436,
+            "delta_star": 0.0017483057,
+            "ctau": 0.040563162,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.001242221,
+            "delta_star": 0.0018305184,
+            "ctau": 0.040533243,
+            "ampl": 9.6504187,
+            "dmax": 6.8252364e-07,
+            "Hk": 1.4730749,
+            "Rtheta": 1585.9767
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 53,
+          "x": 0.47099718,
+          "Ue": 1.2207432,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.001242221,
+            "delta_star": 0.0018305184,
+            "ctau": 0.040533243,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0012991901,
+            "delta_star": 0.0019138045,
+            "ctau": 0.040507099,
+            "ampl": 9.6504187,
+            "dmax": 5.9046042e-07,
+            "Hk": 1.4726608,
+            "Rtheta": 1645.4013
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 54,
+          "x": 0.48752442,
+          "Ue": 1.2126458,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0012991901,
+            "delta_star": 0.0019138045,
+            "ctau": 0.040507099,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0013568694,
+            "delta_star": 0.0019982085,
+            "ctau": 0.040484701,
+            "ampl": 9.6504187,
+            "dmax": 5.1360413e-07,
+            "Hk": 1.4723438,
+            "Rtheta": 1704.9852
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 55,
+          "x": 0.5040819,
+          "Ue": 1.204698,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0013568694,
+            "delta_star": 0.0019982085,
+            "ctau": 0.040484701,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0014152808,
+            "delta_star": 0.0020837799,
+            "ctau": 0.040466046,
+            "ampl": 9.6504187,
+            "dmax": 4.4904581e-07,
+            "Hk": 1.4721247,
+            "Rtheta": 1764.7506
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 56,
+          "x": 0.52066738,
+          "Ue": 1.1968896,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0014152808,
+            "delta_star": 0.0020837799,
+            "ctau": 0.040466046,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0014744478,
+            "delta_star": 0.0021705711,
+            "ctau": 0.040451137,
+            "ampl": 9.6504187,
+            "dmax": 3.9448966e-07,
+            "Hk": 1.4720052,
+            "Rtheta": 1824.7226
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 57,
+          "x": 0.53727876,
+          "Ue": 1.18921,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0014744478,
+            "delta_star": 0.0021705711,
+            "ctau": 0.040451137,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0015343994,
+            "delta_star": 0.002258644,
+            "ctau": 0.04044001,
+            "ampl": 9.6504187,
+            "dmax": 3.4815667e-07,
+            "Hk": 1.4719871,
+            "Rtheta": 1884.9288
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 58,
+          "x": 0.55391409,
+          "Ue": 1.1816492,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0015343994,
+            "delta_star": 0.002258644,
+            "ctau": 0.04044001,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0015951683,
+            "delta_star": 0.0023480673,
+            "ctau": 0.040432711,
+            "ampl": 9.6504187,
+            "dmax": 3.0860679e-07,
+            "Hk": 1.4720737,
+            "Rtheta": 1945.4013
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 59,
+          "x": 0.57057148,
+          "Ue": 1.1741965,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0015951683,
+            "delta_star": 0.0023480673,
+            "ctau": 0.040432711,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.001656794,
+            "delta_star": 0.0024389231,
+            "ctau": 0.040429325,
+            "ampl": 9.6504187,
+            "dmax": 2.7683262e-07,
+            "Hk": 1.4722693,
+            "Rtheta": 2006.1767
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 60,
+          "x": 0.58724918,
+          "Ue": 1.1668414,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.001656794,
+            "delta_star": 0.0024389231,
+            "ctau": 0.040429325,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0017193229,
+            "delta_star": 0.0025313063,
+            "ctau": 0.040429966,
+            "ampl": 9.6504187,
+            "dmax": 2.5381976e-07,
+            "Hk": 1.4725795,
+            "Rtheta": 2067.2975
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 61,
+          "x": 0.60394548,
+          "Ue": 1.1595728,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0017193229,
+            "delta_star": 0.0025313063,
+            "ctau": 0.040429966,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.00178281,
+            "delta_star": 0.0026253295,
+            "ctau": 0.040434789,
+            "ampl": 9.6504187,
+            "dmax": 2.3431226e-07,
+            "Hk": 1.473012,
+            "Rtheta": 2128.8138
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 62,
+          "x": 0.62065878,
+          "Ue": 1.152379,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00178281,
+            "delta_star": 0.0026253295,
+            "ctau": 0.040434789,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0018473213,
+            "delta_star": 0.0027211265,
+            "ctau": 0.040443999,
+            "ampl": 9.6504187,
+            "dmax": 2.1786572e-07,
+            "Hk": 1.4735764,
+            "Rtheta": 2190.7833
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 63,
+          "x": 0.63738751,
+          "Ue": 1.1452478,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0018473213,
+            "delta_star": 0.0027211265,
+            "ctau": 0.040443999,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0019129341,
+            "delta_star": 0.0028188546,
+            "ctau": 0.040457847,
+            "ampl": 9.6504187,
+            "dmax": 2.041128e-07,
+            "Hk": 1.4742846,
+            "Rtheta": 2253.2747
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 64,
+          "x": 0.65413019,
+          "Ue": 1.1381661,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0019129341,
+            "delta_star": 0.0028188546,
+            "ctau": 0.040457847,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0019797419,
+            "delta_star": 0.0029187031,
+            "ctau": 0.040476654,
+            "ampl": 9.6504187,
+            "dmax": 1.9280883e-07,
+            "Hk": 1.4751513,
+            "Rtheta": 2316.368
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 65,
+          "x": 0.67088535,
+          "Ue": 1.1311195,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0019797419,
+            "delta_star": 0.0029187031,
+            "ctau": 0.040476654,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0020478547,
+            "delta_star": 0.0030208956,
+            "ctau": 0.040500806,
+            "ampl": 9.6504187,
+            "dmax": 1.8374942e-07,
+            "Hk": 1.4761945,
+            "Rtheta": 2380.1584
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 66,
+          "x": 0.68765161,
+          "Ue": 1.1240927,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0020478547,
+            "delta_star": 0.0030208956,
+            "ctau": 0.040500806,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0021174044,
+            "delta_star": 0.0031257008,
+            "ctau": 0.040530774,
+            "ampl": 9.6504187,
+            "dmax": 1.7682947e-07,
+            "Hk": 1.4774363,
+            "Rtheta": 2444.7583
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 67,
+          "x": 0.7044276,
+          "Ue": 1.1170685,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0021174044,
+            "delta_star": 0.0031257008,
+            "ctau": 0.040530774,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0021885484,
+            "delta_star": 0.0032334409,
+            "ctau": 0.040567131,
+            "ampl": 9.6504187,
+            "dmax": 1.7200779e-07,
+            "Hk": 1.4789031,
+            "Rtheta": 2510.3009
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 68,
+          "x": 0.72121199,
+          "Ue": 1.1100283,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0021885484,
+            "delta_star": 0.0032334409,
+            "ctau": 0.040567131,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0022614751,
+            "delta_star": 0.0033445025,
+            "ctau": 0.040610556,
+            "ampl": 9.6504187,
+            "dmax": 1.6931871e-07,
+            "Hk": 1.4806276,
+            "Rtheta": 2576.946
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 69,
+          "x": 0.73800349,
+          "Ue": 1.1029506,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0022614751,
+            "delta_star": 0.0033445025,
+            "ctau": 0.040610556,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0023364113,
+            "delta_star": 0.0034593551,
+            "ctau": 0.040661878,
+            "ampl": 9.6504187,
+            "dmax": 1.689147e-07,
+            "Hk": 1.4826493,
+            "Rtheta": 2644.8844
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 70,
+          "x": 0.75480085,
+          "Ue": 1.0958118,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0023364113,
+            "delta_star": 0.0034593551,
+            "ctau": 0.040661878,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0024136304,
+            "delta_star": 0.0035785675,
+            "ctau": 0.04072208,
+            "ampl": 9.6504187,
+            "dmax": 1.7104802e-07,
+            "Hk": 1.4850172,
+            "Rtheta": 2714.3475
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 71,
+          "x": 0.7716028,
+          "Ue": 1.0885846,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0024136304,
+            "delta_star": 0.0035785675,
+            "ctau": 0.04072208,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0024934651,
+            "delta_star": 0.0037028389,
+            "ctau": 0.04079236,
+            "ampl": 9.6504187,
+            "dmax": 1.7617364e-07,
+            "Hk": 1.4877919,
+            "Rtheta": 2785.6158
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 72,
+          "x": 0.78840811,
+          "Ue": 1.0812377,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0024934651,
+            "delta_star": 0.0037028389,
+            "ctau": 0.04079236,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0025763219,
+            "delta_star": 0.0038330309,
+            "ctau": 0.040874162,
+            "ampl": 9.6504187,
+            "dmax": 1.8497647e-07,
+            "Hk": 1.4910491,
+            "Rtheta": 2859.0347
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 73,
+          "x": 0.80521553,
+          "Ue": 1.0737343,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0025763219,
+            "delta_star": 0.0038330309,
+            "ctau": 0.040874162,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0026627027,
+            "delta_star": 0.0039702206,
+            "ctau": 0.040969256,
+            "ampl": 9.6504187,
+            "dmax": 1.9854569e-07,
+            "Hk": 1.4948851,
+            "Rtheta": 2935.0321
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 74,
+          "x": 0.82202371,
+          "Ue": 1.0660311,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0026627027,
+            "delta_star": 0.0039702206,
+            "ctau": 0.040969256,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0027532335,
+            "delta_star": 0.0041157678,
+            "ctau": 0.041079817,
+            "ampl": 9.6504187,
+            "dmax": 2.1857663e-07,
+            "Hk": 1.4994237,
+            "Rtheta": 3014.1464
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 75,
+          "x": 0.83883116,
+          "Ue": 1.0580763,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0027532335,
+            "delta_star": 0.0041157678,
+            "ctau": 0.041079817,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0028487047,
+            "delta_star": 0.0042714158,
+            "ctau": 0.041208561,
+            "ampl": 9.6504187,
+            "dmax": 2.4779431e-07,
+            "Hk": 1.5048276,
+            "Rtheta": 3097.0643
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 76,
+          "x": 0.85563596,
+          "Ue": 1.0498064,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0028487047,
+            "delta_star": 0.0042714158,
+            "ctau": 0.041208561,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0029501296,
+            "delta_star": 0.0044394371,
+            "ctau": 0.041358921,
+            "ampl": 9.6504187,
+            "dmax": 2.9070745e-07,
+            "Hk": 1.5113147,
+            "Rtheta": 3184.6773
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 77,
+          "x": 0.87243527,
+          "Ue": 1.0411427,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0029501296,
+            "delta_star": 0.0044394371,
+            "ctau": 0.041358921,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0030588295,
+            "delta_star": 0.0046228546,
+            "ctau": 0.041535304,
+            "ampl": 9.6504187,
+            "dmax": 3.5509455e-07,
+            "Hk": 1.5191843,
+            "Rtheta": 3278.1658
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 78,
+          "x": 0.88922429,
+          "Ue": 1.0319857,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0030588295,
+            "delta_star": 0.0046228546,
+            "ctau": 0.041535304,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0031765621,
+            "delta_star": 0.0048257841,
+            "ctau": 0.041743487,
+            "ampl": 9.6504187,
+            "dmax": 4.5505903e-07,
+            "Hk": 1.5288603,
+            "Rtheta": 3379.1287
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 79,
+          "x": 0.90599401,
+          "Ue": 1.0222066,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0031765621,
+            "delta_star": 0.0048257841,
+            "ctau": 0.041743487,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0033057208,
+            "delta_star": 0.0050539869,
+            "ctau": 0.041991199,
+            "ampl": 9.6504187,
+            "dmax": 6.1780436e-07,
+            "Hk": 1.5409639,
+            "Rtheta": 3489.7856
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 80,
+          "x": 0.92272644,
+          "Ue": 1.0116358,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0033057208,
+            "delta_star": 0.0050539869,
+            "ctau": 0.041991199,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0034496478,
+            "delta_star": 0.0053157852,
+            "ctau": 0.042289031,
+            "ampl": 9.6504187,
+            "dmax": 8.9967767e-07,
+            "Hk": 1.5564413,
+            "Rtheta": 3613.3037
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 81,
+          "x": 0.93938484,
+          "Ue": 1.0000445,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0034496478,
+            "delta_star": 0.0053157852,
+            "ctau": 0.042289031,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0036131449,
+            "delta_star": 0.0056236529,
+            "ctau": 0.042651856,
+            "ampl": 9.6504187,
+            "dmax": 1.4280421e-06,
+            "Hk": 1.5768041,
+            "Rtheta": 3754.3395
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 82,
+          "x": 0.9558944,
+          "Ue": 0.98711997,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0036131449,
+            "delta_star": 0.0056236529,
+            "ctau": 0.042651856,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0038033296,
+            "delta_star": 0.005997116,
+            "ctau": 0.04310107,
+            "ampl": 9.6504187,
+            "dmax": 2.522921e-06,
+            "Hk": 1.6045927,
+            "Rtheta": 3919.9448
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 83,
+          "x": 0.9721082,
+          "Ue": 0.97243129,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0038033296,
+            "delta_star": 0.005997116,
+            "ctau": 0.04310107,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0040310819,
+            "delta_star": 0.0064682686,
+            "ctau": 0.043667957,
+            "ampl": 9.6504187,
+            "dmax": 5.0963532e-06,
+            "Hk": 1.6445002,
+            "Rtheta": 4121.6028
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 84,
+          "x": 0.98776015,
+          "Ue": 0.95535019,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.0040310819,
+            "delta_star": 0.0064682686,
+            "ctau": 0.043667957,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0043142325,
+            "delta_star": 0.0070947564,
+            "ctau": 0.044400425,
+            "ampl": 9.6504187,
+            "dmax": 1.8068884e-10,
+            "Hk": 1.7056642,
+            "Rtheta": 4378.1114
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 85,
+          "x": 1.0024389,
+          "Ue": 0.9350328,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.0043142325,
+            "delta_star": 0.0070947564,
+            "ctau": 0.044400425,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0046823078,
+            "delta_star": 0.0079864448,
+            "ctau": 0.045369044,
+            "ampl": 9.6504187,
+            "dmax": 1.3964339e-09,
+            "Hk": 1.817698,
+            "Rtheta": 4744.462
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 86,
+          "x": 1.0156622,
+          "Ue": 0.90887179,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.0046823078,
+            "delta_star": 0.0079864448,
+            "ctau": 0.045369044,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0052201665,
+            "delta_star": 0.0094886867,
+            "ctau": 0.046760217,
+            "ampl": 9.6504187,
+            "dmax": 5.5096124e-08,
+            "Hk": 2.0472438,
+            "Rtheta": 5269.5402
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 87,
+          "x": 1.0270797,
+          "Ue": 0.87724732,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.0052201665,
+            "delta_star": 0.0094886867,
+            "ctau": 0.046760217,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.0060069049,
+            "delta_star": 0.012297669,
+            "ctau": 0.04866618,
+            "ampl": 9.6504187,
+            "dmax": 5.8847003e-06,
+            "Hk": 2.4999971,
+            "Rtheta": 5806.5708
+          }
+        },
+        {
+          "side": 1,
+          "ibl": 88,
+          "x": 1.0354807,
+          "Ue": 0.76413694,
+          "n_iterations": 10,
+          "converged": true,
+          "initial": {
+            "theta": 0.0060069049,
+            "delta_star": 0.012297669,
+            "ctau": 0.04866618,
+            "ampl": 9.6504187
+          },
+          "final": {
+            "theta": 0.006817384,
+            "delta_star": 0.01704346,
+            "ctau": 0.050492366,
+            "ampl": 9.6504187,
+            "dmax": 6.418389e-06,
+            "Hk": 2.2295078,
+            "Rtheta": 0.50359693
+          }
+        }
+      ]
+    },
+    "2": {
+      "stations": [
+        {
+          "side": 2,
+          "ibl": 2,
+          "x": 0.00024469949,
+          "Ue": 0.012219274,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 3.8754707e-05,
+            "delta_star": 8.5260356e-05,
+            "ctau": 0.03,
+            "ampl": 0.0
+          },
+          "final": {
+            "theta": 4.1213327e-05,
+            "delta_star": 9.1885432e-05,
+            "ctau": 0.03,
+            "ampl": 0.0,
+            "dmax": 1.0740245e-08,
+            "Hk": 2.2382214,
+            "Rtheta": 5.9607946
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 3,
+          "x": 0.0029861841,
+          "Ue": 0.12500325,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 4.1213327e-05,
+            "delta_star": 9.1885432e-05,
+            "ctau": 0.03,
+            "ampl": 0.0
+          },
+          "final": {
+            "theta": 4.7685129e-05,
+            "delta_star": 0.0001067299,
+            "ctau": 0.03,
+            "ampl": 1.271253e-10,
+            "dmax": 4.1764684e-07,
+            "Hk": 2.2384167,
+            "Rtheta": 11.3996
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 4,
+          "x": 0.0059469979,
+          "Ue": 0.22454715,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 4.7685129e-05,
+            "delta_star": 0.0001067299,
+            "ctau": 0.03,
+            "ampl": 1.271253e-10
+          },
+          "final": {
+            "theta": 5.0767068e-05,
+            "delta_star": 0.00011363785,
+            "ctau": 0.03,
+            "ampl": 2.51098e-10,
+            "dmax": 1.7019855e-10,
+            "Hk": 2.2644846,
+            "Rtheta": 17.321553
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 5,
+          "x": 0.0091660422,
+          "Ue": 0.31259101,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 5.0767068e-05,
+            "delta_star": 0.00011363785,
+            "ctau": 0.03,
+            "ampl": 2.51098e-10
+          },
+          "final": {
+            "theta": 5.541283e-05,
+            "delta_star": 0.0001254815,
+            "ctau": 0.03,
+            "ampl": 3.7607353e-10,
+            "dmax": 5.0656719e-09,
+            "Hk": 2.2596343,
+            "Rtheta": 23.514945
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 6,
+          "x": 0.012690606,
+          "Ue": 0.39081781,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 5.541283e-05,
+            "delta_star": 0.0001254815,
+            "ctau": 0.03,
+            "ampl": 3.7607353e-10
+          },
+          "final": {
+            "theta": 6.0168562e-05,
+            "delta_star": 0.00013595895,
+            "ctau": 0.03,
+            "ampl": 5.0178007e-10,
+            "dmax": 5.0199502e-10,
+            "Hk": 2.2802151,
+            "Rtheta": 30.180354
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 7,
+          "x": 0.01657848,
+          "Ue": 0.46073267,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 6.0168562e-05,
+            "delta_star": 0.00013595895,
+            "ctau": 0.03,
+            "ampl": 5.0178007e-10
+          },
+          "final": {
+            "theta": 6.5505131e-05,
+            "delta_star": 0.00014936579,
+            "ctau": 0.03,
+            "ampl": 6.2930882e-10,
+            "dmax": 2.2684618e-09,
+            "Hk": 2.2825016,
+            "Rtheta": 37.248058
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 8,
+          "x": 0.020900372,
+          "Ue": 0.52362255,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 6.5505131e-05,
+            "delta_star": 0.00014936579,
+            "ctau": 0.03,
+            "ampl": 6.2930882e-10
+          },
+          "final": {
+            "theta": 7.1135321e-05,
+            "delta_star": 0.00016236648,
+            "ctau": 0.03,
+            "ampl": 7.5969604e-10,
+            "dmax": 5.7925154e-10,
+            "Hk": 2.297182,
+            "Rtheta": 44.915358
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 9,
+          "x": 0.025742361,
+          "Ue": 0.58055324,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 7.1135321e-05,
+            "delta_star": 0.00016236648,
+            "ctau": 0.03,
+            "ampl": 7.5969604e-10
+          },
+          "final": {
+            "theta": 7.7366475e-05,
+            "delta_star": 0.00017772488,
+            "ctau": 0.03,
+            "ampl": 8.9410629e-10,
+            "dmax": 1.2226894e-09,
+            "Hk": 2.3044475,
+            "Rtheta": 53.171412
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 10,
+          "x": 0.031207619,
+          "Ue": 0.63236767,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 7.7366475e-05,
+            "delta_star": 0.00017772488,
+            "ctau": 0.03,
+            "ampl": 8.9410629e-10
+          },
+          "final": {
+            "theta": 8.4083065e-05,
+            "delta_star": 0.00019376501,
+            "ctau": 0.03,
+            "ampl": 1.0336513e-09,
+            "dmax": 6.686061e-10,
+            "Hk": 2.3160256,
+            "Rtheta": 62.171235
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 11,
+          "x": 0.037415796,
+          "Ue": 0.67970522,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 8.4083065e-05,
+            "delta_star": 0.00019376501,
+            "ctau": 0.03,
+            "ampl": 1.0336513e-09
+          },
+          "final": {
+            "theta": 9.1467939e-05,
+            "delta_star": 0.00021184209,
+            "ctau": 0.03,
+            "ampl": 1.1794323e-09,
+            "dmax": 8.5590562e-10,
+            "Hk": 2.3255079,
+            "Rtheta": 71.952249
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 12,
+          "x": 0.044497317,
+          "Ue": 0.72301023,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 9.1467939e-05,
+            "delta_star": 0.00021184209,
+            "ctau": 0.03,
+            "ampl": 1.1794323e-09
+          },
+          "final": {
+            "theta": 9.9517608e-05,
+            "delta_star": 0.00023142899,
+            "ctau": 0.03,
+            "ampl": 1.3322827e-09,
+            "dmax": 6.9534557e-10,
+            "Hk": 2.3361404,
+            "Rtheta": 82.594385
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 13,
+          "x": 0.052579009,
+          "Ue": 0.76252373,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 9.9517608e-05,
+            "delta_star": 0.00023142899,
+            "ctau": 0.03,
+            "ampl": 1.3322827e-09
+          },
+          "final": {
+            "theta": 0.00010831713,
+            "delta_star": 0.00025304403,
+            "ctau": 0.03,
+            "ampl": 1.4925794e-09,
+            "dmax": 7.0805345e-10,
+            "Hk": 2.3463281,
+            "Rtheta": 94.084876
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 14,
+          "x": 0.061758944,
+          "Ue": 0.79833102,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00010831713,
+            "delta_star": 0.00025304403,
+            "ctau": 0.03,
+            "ampl": 1.4925794e-09
+          },
+          "final": {
+            "theta": 0.00011785196,
+            "delta_star": 0.00027651937,
+            "ctau": 0.03,
+            "ampl": 1.6598989e-09,
+            "dmax": 6.1082697e-10,
+            "Hk": 2.3566532,
+            "Rtheta": 106.3549
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 15,
+          "x": 0.072075504,
+          "Ue": 0.83041331,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00011785196,
+            "delta_star": 0.00027651937,
+            "ctau": 0.03,
+            "ampl": 1.6598989e-09
+          },
+          "final": {
+            "theta": 0.00012807466,
+            "delta_star": 0.00030182756,
+            "ctau": 0.03,
+            "ampl": 1.8328287e-09,
+            "dmax": 5.0860833e-10,
+            "Hk": 2.3667717,
+            "Rtheta": 119.24653
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 16,
+          "x": 0.083485717,
+          "Ue": 0.85874822,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00012807466,
+            "delta_star": 0.00030182756,
+            "ctau": 0.03,
+            "ampl": 1.8328287e-09
+          },
+          "final": {
+            "theta": 0.00013886088,
+            "delta_star": 0.000328652,
+            "ctau": 0.03,
+            "ampl": 2.0090375e-09,
+            "dmax": 3.7110689e-10,
+            "Hk": 2.3766733,
+            "Rtheta": 132.55231
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 17,
+          "x": 0.095869672,
+          "Ue": 0.8834083,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00013886088,
+            "delta_star": 0.000328652,
+            "ctau": 0.03,
+            "ampl": 2.0090375e-09
+          },
+          "final": {
+            "theta": 0.00015004648,
+            "delta_star": 0.00035661146,
+            "ctau": 0.03,
+            "ampl": 2.1857394e-09,
+            "dmax": 2.4213673e-10,
+            "Hk": 2.3862893,
+            "Rtheta": 146.05768
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 18,
+          "x": 0.10906204,
+          "Ue": 0.90460532,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00015004648,
+            "delta_star": 0.00035661146,
+            "ctau": 0.03,
+            "ampl": 2.1857394e-09
+          },
+          "final": {
+            "theta": 0.00016146012,
+            "delta_star": 0.00038529055,
+            "ctau": 0.03,
+            "ampl": 2.36032e-09,
+            "dmax": 1.42852e-10,
+            "Hk": 2.3956094,
+            "Rtheta": 159.58264
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 19,
+          "x": 0.12289193,
+          "Ue": 0.92266846,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00016146012,
+            "delta_star": 0.00038529055,
+            "ctau": 0.03,
+            "ampl": 2.36032e-09
+          },
+          "final": {
+            "theta": 0.00017295843,
+            "delta_star": 0.00041434294,
+            "ctau": 0.03,
+            "ampl": 2.5307985e-09,
+            "dmax": 9.1492391e-06,
+            "Hk": 2.4046892,
+            "Rtheta": 173.00171
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 20,
+          "x": 0.13721082,
+          "Ue": 0.93798522,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00017295843,
+            "delta_star": 0.00041434294,
+            "ctau": 0.03,
+            "ampl": 2.5307985e-09
+          },
+          "final": {
+            "theta": 0.00018444026,
+            "delta_star": 0.00044352314,
+            "ctau": 0.03,
+            "ampl": 2.6959556e-09,
+            "dmax": 6.7172285e-06,
+            "Hk": 2.4135572,
+            "Rtheta": 186.23645
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 21,
+          "x": 0.15190284,
+          "Ue": 0.95094483,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00018444026,
+            "delta_star": 0.00044352314,
+            "ctau": 0.03,
+            "ampl": 2.6959556e-09
+          },
+          "final": {
+            "theta": 0.00019584403,
+            "delta_star": 0.00047268204,
+            "ctau": 0.03,
+            "ampl": 2.8552183e-09,
+            "dmax": 4.9313872e-06,
+            "Hk": 2.4222626,
+            "Rtheta": 199.2466
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 22,
+          "x": 0.16688293,
+          "Ue": 0.96190303,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00019584403,
+            "delta_star": 0.00047268204,
+            "ctau": 0.03,
+            "ampl": 2.8552183e-09
+          },
+          "final": {
+            "theta": 0.00020713827,
+            "delta_star": 0.00050174429,
+            "ctau": 0.03,
+            "ampl": 3.0084572e-09,
+            "dmax": 3.6546563e-06,
+            "Hk": 2.4308502,
+            "Rtheta": 212.01628
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 23,
+          "x": 0.18209026,
+          "Ue": 0.97116781,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00020713827,
+            "delta_star": 0.00050174429,
+            "ctau": 0.03,
+            "ampl": 3.0084572e-09
+          },
+          "final": {
+            "theta": 0.00021831092,
+            "delta_star": 0.00053068194,
+            "ctau": 0.03,
+            "ampl": 3.1558057e-09,
+            "dmax": 2.7482822e-06,
+            "Hk": 2.4393581,
+            "Rtheta": 224.54405
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 24,
+          "x": 0.19748138,
+          "Ue": 0.97899819,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00021831092,
+            "delta_star": 0.00053068194,
+            "ctau": 0.03,
+            "ampl": 3.1558057e-09
+          },
+          "final": {
+            "theta": 0.00022936127,
+            "delta_star": 0.00055949492,
+            "ctau": 0.03,
+            "ampl": 3.2975322e-09,
+            "dmax": 2.101857e-06,
+            "Hk": 2.4478172,
+            "Rtheta": 236.83639
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 25,
+          "x": 0.21302486,
+          "Ue": 0.98560915,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00022936127,
+            "delta_star": 0.00055949492,
+            "ctau": 0.03,
+            "ampl": 3.2975322e-09
+          },
+          "final": {
+            "theta": 0.00024029461,
+            "delta_star": 0.00058819778,
+            "ctau": 0.03,
+            "ampl": 3.4339618e-09,
+            "dmax": 1.6355431e-06,
+            "Hk": 2.4562509,
+            "Rtheta": 248.90356
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 26,
+          "x": 0.22869736,
+          "Ue": 0.99117853,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00024029461,
+            "delta_star": 0.00058819778,
+            "ctau": 0.03,
+            "ampl": 3.4339618e-09
+          },
+          "final": {
+            "theta": 0.00025111895,
+            "delta_star": 0.00061681156,
+            "ctau": 0.03,
+            "ampl": 3.5654334e-09,
+            "dmax": 1.2941106e-06,
+            "Hk": 2.4646799,
+            "Rtheta": 260.75756
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 27,
+          "x": 0.24448113,
+          "Ue": 0.99585343,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00025111895,
+            "delta_star": 0.00061681156,
+            "ctau": 0.03,
+            "ampl": 3.5654334e-09
+          },
+          "final": {
+            "theta": 0.00026184344,
+            "delta_star": 0.00064536063,
+            "ctau": 0.03,
+            "ampl": 3.6922761e-09,
+            "dmax": 1.0403675e-06,
+            "Hk": 2.4731183,
+            "Rtheta": 272.41059
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 28,
+          "x": 0.26036229,
+          "Ue": 0.99975631,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00026184344,
+            "delta_star": 0.00064536063,
+            "ctau": 0.03,
+            "ampl": 3.6922761e-09
+          },
+          "final": {
+            "theta": 0.00027247709,
+            "delta_star": 0.00067386838,
+            "ctau": 0.03,
+            "ampl": 3.8148e-09,
+            "dmax": 8.4857884e-07,
+            "Hk": 2.4815732,
+            "Rtheta": 283.87429
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 29,
+          "x": 0.2763297,
+          "Ue": 1.0029899,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00027247709,
+            "delta_star": 0.00067386838,
+            "ctau": 0.03,
+            "ampl": 3.8148e-09
+          },
+          "final": {
+            "theta": 0.00028302815,
+            "delta_star": 0.00070235536,
+            "ctau": 0.03,
+            "ampl": 3.9332914e-09,
+            "dmax": 7.0115039e-07,
+            "Hk": 2.4900541,
+            "Rtheta": 295.15983
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 30,
+          "x": 0.29237424,
+          "Ue": 1.0056406,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00028302815,
+            "delta_star": 0.00070235536,
+            "ctau": 0.03,
+            "ampl": 3.9332914e-09
+          },
+          "final": {
+            "theta": 0.00029350436,
+            "delta_star": 0.00073084199,
+            "ctau": 0.03,
+            "ampl": 4.0480127e-09,
+            "dmax": 5.8641382e-07,
+            "Hk": 2.4985668,
+            "Rtheta": 306.2775
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 31,
+          "x": 0.3084883,
+          "Ue": 1.0077817,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00029350436,
+            "delta_star": 0.00073084199,
+            "ctau": 0.03,
+            "ampl": 4.0480127e-09
+          },
+          "final": {
+            "theta": 0.00030391262,
+            "delta_star": 0.00075934619,
+            "ctau": 0.03,
+            "ampl": 4.1592032e-09,
+            "dmax": 4.9584014e-07,
+            "Hk": 2.5071105,
+            "Rtheta": 317.23645
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 32,
+          "x": 0.3246654,
+          "Ue": 1.0094759,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00030391262,
+            "delta_star": 0.00075934619,
+            "ctau": 0.03,
+            "ampl": 4.1592032e-09
+          },
+          "final": {
+            "theta": 0.00031425863,
+            "delta_star": 0.00078788128,
+            "ctau": 0.03,
+            "ampl": 4.2670811e-09,
+            "dmax": 4.2320945e-07,
+            "Hk": 2.5156924,
+            "Rtheta": 328.04548
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 33,
+          "x": 0.34089999,
+          "Ue": 1.0107769,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00031425863,
+            "delta_star": 0.00078788128,
+            "ctau": 0.03,
+            "ampl": 4.2670811e-09
+          },
+          "final": {
+            "theta": 0.00032454793,
+            "delta_star": 0.00081646293,
+            "ctau": 0.03,
+            "ampl": 4.3718452e-09,
+            "dmax": 3.6464505e-07,
+            "Hk": 2.5243102,
+            "Rtheta": 338.71216
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 34,
+          "x": 0.35718722,
+          "Ue": 1.0117311,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00032454793,
+            "delta_star": 0.00081646293,
+            "ctau": 0.03,
+            "ampl": 4.3718452e-09
+          },
+          "final": {
+            "theta": 0.00033478481,
+            "delta_star": 0.00084510087,
+            "ctau": 0.03,
+            "ampl": 4.4736768e-09,
+            "dmax": 3.1661375e-07,
+            "Hk": 2.532969,
+            "Rtheta": 349.24378
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 35,
+          "x": 0.37352282,
+          "Ue": 1.0123786,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00033478481,
+            "delta_star": 0.00084510087,
+            "ctau": 0.03,
+            "ampl": 4.4736768e-09
+          },
+          "final": {
+            "theta": 0.00034497352,
+            "delta_star": 0.00087380738,
+            "ctau": 0.03,
+            "ampl": 4.572742e-09,
+            "dmax": 2.7709741e-07,
+            "Hk": 2.5416694,
+            "Rtheta": 359.6468
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 36,
+          "x": 0.38990297,
+          "Ue": 1.0127545,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00034497352,
+            "delta_star": 0.00087380738,
+            "ctau": 0.03,
+            "ampl": 4.572742e-09
+          },
+          "final": {
+            "theta": 0.0003551175,
+            "delta_star": 0.00090259141,
+            "ctau": 0.03,
+            "ampl": 4.6691923e-09,
+            "dmax": 2.4417895e-07,
+            "Hk": 2.550417,
+            "Rtheta": 369.92739
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 37,
+          "x": 0.40632428,
+          "Ue": 1.0128889,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0003551175,
+            "delta_star": 0.00090259141,
+            "ctau": 0.03,
+            "ampl": 4.6691923e-09
+          },
+          "final": {
+            "theta": 0.00036522013,
+            "delta_star": 0.00093146377,
+            "ctau": 0.03,
+            "ampl": 0.0052484079,
+            "dmax": 2.1667592e-07,
+            "Hk": 2.5592164,
+            "Rtheta": 380.09123
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 38,
+          "x": 0.42278364,
+          "Ue": 1.0128085,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00036522013,
+            "delta_star": 0.00093146377,
+            "ctau": 0.03,
+            "ampl": 0.0052484079
+          },
+          "final": {
+            "theta": 0.00037528442,
+            "delta_star": 0.00096043413,
+            "ctau": 0.03,
+            "ampl": 0.03574566,
+            "dmax": 1.9350988e-07,
+            "Hk": 2.5680774,
+            "Rtheta": 390.1439
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 39,
+          "x": 0.43927824,
+          "Ue": 1.0125364,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00037528442,
+            "delta_star": 0.00096043413,
+            "ctau": 0.03,
+            "ampl": 0.03574566
+          },
+          "final": {
+            "theta": 0.00038531349,
+            "delta_star": 0.00098951499,
+            "ctau": 0.03,
+            "ampl": 0.09868674,
+            "dmax": 1.7399732e-07,
+            "Hk": 2.5770099,
+            "Rtheta": 400.09061
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 40,
+          "x": 0.45580548,
+          "Ue": 1.0120926,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00038531349,
+            "delta_star": 0.00098951499,
+            "ctau": 0.03,
+            "ampl": 0.09868674
+          },
+          "final": {
+            "theta": 0.00039531031,
+            "delta_star": 0.0010187187,
+            "ctau": 0.03,
+            "ampl": 0.18217289,
+            "dmax": 1.5746716e-07,
+            "Hk": 2.5860321,
+            "Rtheta": 409.9368
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 41,
+          "x": 0.47236296,
+          "Ue": 1.0114945,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00039531031,
+            "delta_star": 0.0010187187,
+            "ctau": 0.03,
+            "ampl": 0.18217289
+          },
+          "final": {
+            "theta": 0.00040527833,
+            "delta_star": 0.0010480629,
+            "ctau": 0.03,
+            "ampl": 0.27150615,
+            "dmax": 1.435677e-07,
+            "Hk": 2.5951617,
+            "Rtheta": 419.68767
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 42,
+          "x": 0.48894844,
+          "Ue": 1.0107574,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00040527833,
+            "delta_star": 0.0010480629,
+            "ctau": 0.03,
+            "ampl": 0.27150615
+          },
+          "final": {
+            "theta": 0.00041522098,
+            "delta_star": 0.0010775657,
+            "ctau": 0.03,
+            "ampl": 0.36270353,
+            "dmax": 1.3183887e-07,
+            "Hk": 2.6044291,
+            "Rtheta": 429.34896
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 43,
+          "x": 0.50555982,
+          "Ue": 1.009894,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00041522098,
+            "delta_star": 0.0010775657,
+            "ctau": 0.03,
+            "ampl": 0.36270353
+          },
+          "final": {
+            "theta": 0.00042514264,
+            "delta_star": 0.0011072539,
+            "ctau": 0.03,
+            "ampl": 0.4558955,
+            "dmax": 1.2214414e-07,
+            "Hk": 2.6138653,
+            "Rtheta": 438.92637
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 44,
+          "x": 0.52219515,
+          "Ue": 1.0089152,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00042514264,
+            "delta_star": 0.0011072539,
+            "ctau": 0.03,
+            "ampl": 0.4558955
+          },
+          "final": {
+            "theta": 0.00043504785,
+            "delta_star": 0.0011371566,
+            "ctau": 0.03,
+            "ampl": 0.55122079,
+            "dmax": 1.1418114e-07,
+            "Hk": 2.6235162,
+            "Rtheta": 448.42637
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 45,
+          "x": 0.53885254,
+          "Ue": 1.00783,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00043504785,
+            "delta_star": 0.0011371566,
+            "ctau": 0.03,
+            "ampl": 0.55122079
+          },
+          "final": {
+            "theta": 0.00044494247,
+            "delta_star": 0.0011673139,
+            "ctau": 0.03,
+            "ampl": 0.64883076,
+            "dmax": 1.0792892e-07,
+            "Hk": 2.6334348,
+            "Rtheta": 457.85582
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 46,
+          "x": 0.55553024,
+          "Ue": 1.0066458,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00044494247,
+            "delta_star": 0.0011673139,
+            "ctau": 0.03,
+            "ampl": 0.64883076
+          },
+          "final": {
+            "theta": 0.0004548331,
+            "delta_star": 0.0011977734,
+            "ctau": 0.03,
+            "ampl": 0.74889522,
+            "dmax": 1.0327464e-07,
+            "Hk": 2.6436885,
+            "Rtheta": 467.22245
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 47,
+          "x": 0.57222654,
+          "Ue": 1.0053681,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0004548331,
+            "delta_star": 0.0011977734,
+            "ctau": 0.03,
+            "ampl": 0.74889522
+          },
+          "final": {
+            "theta": 0.00046472775,
+            "delta_star": 0.0012285955,
+            "ctau": 0.03,
+            "ampl": 0.85160844,
+            "dmax": 1.0026056e-07,
+            "Hk": 2.6543629,
+            "Rtheta": 476.53505
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 48,
+          "x": 0.58893984,
+          "Ue": 1.0040008,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00046472775,
+            "delta_star": 0.0012285955,
+            "ctau": 0.03,
+            "ampl": 0.85160844
+          },
+          "final": {
+            "theta": 0.00047463612,
+            "delta_star": 0.0012598566,
+            "ctau": 0.03,
+            "ampl": 0.95719793,
+            "dmax": 9.9025289e-08,
+            "Hk": 2.6655596,
+            "Rtheta": 485.80341
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 49,
+          "x": 0.60566857,
+          "Ue": 1.0025464,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00047463612,
+            "delta_star": 0.0012598566,
+            "ctau": 0.03,
+            "ampl": 0.95719793
+          },
+          "final": {
+            "theta": 0.00048456953,
+            "delta_star": 0.0012916491,
+            "ctau": 0.03,
+            "ampl": 1.0659338,
+            "dmax": 9.9746498e-08,
+            "Hk": 2.677411,
+            "Rtheta": 495.03912
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 50,
+          "x": 0.62241125,
+          "Ue": 1.0010053,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00048456953,
+            "delta_star": 0.0012916491,
+            "ctau": 0.03,
+            "ampl": 1.0659338
+          },
+          "final": {
+            "theta": 0.00049454196,
+            "delta_star": 0.0013240922,
+            "ctau": 0.03,
+            "ampl": 1.1781415,
+            "dmax": 1.0291514e-07,
+            "Hk": 2.6900766,
+            "Rtheta": 504.25532
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 51,
+          "x": 0.63916641,
+          "Ue": 0.99937666,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00049454196,
+            "delta_star": 0.0013240922,
+            "ctau": 0.03,
+            "ampl": 1.1781415
+          },
+          "final": {
+            "theta": 0.00050456985,
+            "delta_star": 0.0013573317,
+            "ctau": 0.03,
+            "ampl": 1.2942181,
+            "dmax": 1.0915302e-07,
+            "Hk": 2.7037602,
+            "Rtheta": 513.46761
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 52,
+          "x": 0.65593267,
+          "Ue": 0.99765763,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00050456985,
+            "delta_star": 0.0013573317,
+            "ctau": 0.03,
+            "ampl": 1.2942181
+          },
+          "final": {
+            "theta": 0.00051467317,
+            "delta_star": 0.001391553,
+            "ctau": 0.03,
+            "ampl": 1.4146516,
+            "dmax": 1.1964929e-07,
+            "Hk": 2.7187199,
+            "Rtheta": 522.69431
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 53,
+          "x": 0.67270866,
+          "Ue": 0.99584345,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00051467317,
+            "delta_star": 0.001391553,
+            "ctau": 0.03,
+            "ampl": 1.4146516
+          },
+          "final": {
+            "theta": 0.000524876,
+            "delta_star": 0.001426991,
+            "ctau": 0.03,
+            "ampl": 1.5400492,
+            "dmax": 1.3633013e-07,
+            "Hk": 2.7352836,
+            "Rtheta": 531.95712
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 54,
+          "x": 0.68949305,
+          "Ue": 0.99392738,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.000524876,
+            "delta_star": 0.001426991,
+            "ctau": 0.03,
+            "ampl": 1.5400492
+          },
+          "final": {
+            "theta": 0.00053520725,
+            "delta_star": 0.0014639438,
+            "ctau": 0.03,
+            "ampl": 1.6711718,
+            "dmax": 1.6249287e-07,
+            "Hk": 2.7538837,
+            "Rtheta": 541.2823
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 55,
+          "x": 0.70628455,
+          "Ue": 0.99190017,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00053520725,
+            "delta_star": 0.0014639438,
+            "ctau": 0.03,
+            "ampl": 1.6711718
+          },
+          "final": {
+            "theta": 0.00054570241,
+            "delta_star": 0.0015028012,
+            "ctau": 0.03,
+            "ampl": 1.8089838,
+            "dmax": 2.0428578e-07,
+            "Hk": 2.7750879,
+            "Rtheta": 550.70134
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 56,
+          "x": 0.72308191,
+          "Ue": 0.98975007,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00054570241,
+            "delta_star": 0.0015028012,
+            "ctau": 0.03,
+            "ampl": 1.8089838
+          },
+          "final": {
+            "theta": 0.00055640446,
+            "delta_star": 0.0015440717,
+            "ctau": 0.03,
+            "ampl": 1.9547205,
+            "dmax": 2.7315158e-07,
+            "Hk": 2.7996747,
+            "Rtheta": 560.25311
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 57,
+          "x": 0.73988386,
+          "Ue": 0.98746201,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00055640446,
+            "delta_star": 0.0015440717,
+            "ctau": 0.03,
+            "ampl": 1.9547205
+          },
+          "final": {
+            "theta": 0.00056736676,
+            "delta_star": 0.0015884429,
+            "ctau": 0.03,
+            "ampl": 2.1099866,
+            "dmax": 3.9287111e-07,
+            "Hk": 2.8287309,
+            "Rtheta": 569.9856
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 58,
+          "x": 0.75668917,
+          "Ue": 0.98501731,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00056736676,
+            "delta_star": 0.0015884429,
+            "ctau": 0.03,
+            "ampl": 2.1099866
+          },
+          "final": {
+            "theta": 0.00057865543,
+            "delta_star": 0.0016368615,
+            "ctau": 0.03,
+            "ampl": 2.2769004,
+            "dmax": 6.1567342e-07,
+            "Hk": 2.8638458,
+            "Rtheta": 579.95949
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 59,
+          "x": 0.77349658,
+          "Ue": 0.98239262,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00057865543,
+            "delta_star": 0.0016368615,
+            "ctau": 0.03,
+            "ampl": 2.2769004
+          },
+          "final": {
+            "theta": 0.00059035409,
+            "delta_star": 0.0016906849,
+            "ctau": 0.03,
+            "ampl": 2.4583161,
+            "dmax": 1.0702097e-06,
+            "Hk": 2.907459,
+            "Rtheta": 590.25266
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 60,
+          "x": 0.79030477,
+          "Ue": 0.9795589,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00059035409,
+            "delta_star": 0.0016906849,
+            "ctau": 0.03,
+            "ampl": 2.4583161
+          },
+          "final": {
+            "theta": 0.00060256986,
+            "delta_star": 0.0017519509,
+            "ctau": 0.03,
+            "ampl": 2.658182,
+            "dmax": 2.1158137e-06,
+            "Hk": 2.963595,
+            "Rtheta": 600.96771
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 61,
+          "x": 0.80711222,
+          "Ue": 0.97647978,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00060256986,
+            "delta_star": 0.0017519509,
+            "ctau": 0.03,
+            "ampl": 2.658182
+          },
+          "final": {
+            "theta": 0.00061544308,
+            "delta_star": 0.001823933,
+            "ctau": 0.03,
+            "ampl": 2.882158,
+            "dmax": 4.9499335e-06,
+            "Hk": 3.0396588,
+            "Rtheta": 612.24433
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 62,
+          "x": 0.82391702,
+          "Ue": 0.97310929,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00061544308,
+            "delta_star": 0.001823933,
+            "ctau": 0.03,
+            "ampl": 2.882158
+          },
+          "final": {
+            "theta": 0.00062916297,
+            "delta_star": 0.0019124408,
+            "ctau": 0.03,
+            "ampl": 3.1388041,
+            "dmax": 6.0498948e-10,
+            "Hk": 3.1516804,
+            "Rtheta": 624.28239
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 63,
+          "x": 0.84071633,
+          "Ue": 0.96938861,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00062916297,
+            "delta_star": 0.0019124408,
+            "ctau": 0.03,
+            "ampl": 3.1388041
+          },
+          "final": {
+            "theta": 0.00064399601,
+            "delta_star": 0.0020296696,
+            "ctau": 0.03,
+            "ampl": 3.4422354,
+            "dmax": 1.3219571e-08,
+            "Hk": 3.3492357,
+            "Rtheta": 637.39813
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 64,
+          "x": 0.85750535,
+          "Ue": 0.96524118,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00064399601,
+            "delta_star": 0.0020296696,
+            "ctau": 0.03,
+            "ampl": 3.4422354
+          },
+          "final": {
+            "theta": 0.00066035116,
+            "delta_star": 0.0022116753,
+            "ctau": 0.03,
+            "ampl": 3.8207866,
+            "dmax": 1.6423649e-06,
+            "Hk": 4.1110973,
+            "Rtheta": 650.89653
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 65,
+          "x": 0.87427507,
+          "Ue": 0.96056539,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00066035116,
+            "delta_star": 0.0022116753,
+            "ctau": 0.03,
+            "ampl": 3.8207866
+          },
+          "final": {
+            "theta": 0.00067726697,
+            "delta_star": 0.0027843094,
+            "ctau": 0.03,
+            "ampl": 4.3953722,
+            "dmax": 5.312431e-06,
+            "Hk": 4.8522742,
+            "Rtheta": 658.65751
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 66,
+          "x": 0.8910075,
+          "Ue": 0.95522353,
+          "n_iterations": 6,
+          "converged": true,
+          "initial": {
+            "theta": 0.00067726697,
+            "delta_star": 0.0027843094,
+            "ctau": 0.03,
+            "ampl": 4.3953722
+          },
+          "final": {
+            "theta": 0.00068694513,
+            "delta_star": 0.0033332434,
+            "ctau": 0.03,
+            "ampl": 5.168802,
+            "dmax": 4.9642155e-07,
+            "Hk": 5.5797641,
+            "Rtheta": 664.21907
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 67,
+          "x": 0.90766589,
+          "Ue": 0.94902453,
+          "n_iterations": 5,
+          "converged": true,
+          "initial": {
+            "theta": 0.00068694513,
+            "delta_star": 0.0033332434,
+            "ctau": 0.03,
+            "ampl": 5.168802
+          },
+          "final": {
+            "theta": 0.00069382696,
+            "delta_star": 0.0038713942,
+            "ctau": 0.03,
+            "ampl": 6.0584336,
+            "dmax": 7.6857726e-06,
+            "Hk": 6.2936086,
+            "Rtheta": 668.24111
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 68,
+          "x": 0.92417546,
+          "Ue": 0.95724298,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00069382696,
+            "delta_star": 0.0038713942,
+            "ctau": 0.03,
+            "ampl": 6.9846118
+          },
+          "final": {
+            "theta": 0.00069875853,
+            "delta_star": 0.0043977187,
+            "ctau": 0.03,
+            "ampl": 7.0145498,
+            "dmax": 4.375425e-06,
+            "Hk": 6.9897262,
+            "Rtheta": 671.18216
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 69,
+          "x": 0.94038926,
+          "Ue": 0.95678376,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.00069875853,
+            "delta_star": 0.0043977187,
+            "ctau": 0.03,
+            "ampl": 7.9820435
+          },
+          "final": {
+            "theta": 0.00070234648,
+            "delta_star": 0.0049092115,
+            "ctau": 0.03,
+            "ampl": 8.0014661,
+            "dmax": 9.2361544e-06,
+            "Hk": 7.6582854,
+            "Rtheta": 673.3385
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 70,
+          "x": 0.95604121,
+          "Ue": 0.95634989,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.00070234648,
+            "delta_star": 0.0049092115,
+            "ctau": 0.03,
+            "ampl": 8.972562
+          },
+          "final": {
+            "theta": 0.00070495626,
+            "delta_star": 0.0053987562,
+            "ctau": 0.03,
+            "ampl": 8.9849858,
+            "dmax": 1.3134627e-10,
+            "Hk": 7.5731919,
+            "Rtheta": 680.82722
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 71,
+          "x": 0.97071993,
+          "Ue": 0.90672598,
+          "n_iterations": 8,
+          "converged": true,
+          "initial": {
+            "theta": 0.00070495626,
+            "delta_star": 0.0053987562,
+            "ctau": 0.03,
+            "ampl": 9.936775
+          },
+          "final": {
+            "theta": 0.0012467573,
+            "delta_star": 0.0057277056,
+            "ctau": 0.11795525,
+            "ampl": 9.9296319,
+            "dmax": 1.6070508e-06,
+            "Hk": 3.003152,
+            "Rtheta": 1472.1713
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 72,
+          "x": 0.98394329,
+          "Ue": 0.84956971,
+          "n_iterations": 5,
+          "converged": true,
+          "initial": {
+            "theta": 0.0012467573,
+            "delta_star": 0.0057277056,
+            "ctau": 0.11795525,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0017539507,
+            "delta_star": 0.0052673806,
+            "ctau": 0.10999805,
+            "ampl": 9.9296319,
+            "dmax": 1.0860769e-08,
+            "Hk": 1.7612333,
+            "Rtheta": 1340.9207
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 73,
+          "x": 0.99536077,
+          "Ue": 0.86370271,
+          "n_iterations": 5,
+          "converged": true,
+          "initial": {
+            "theta": 0.0017539507,
+            "delta_star": 0.0052673806,
+            "ctau": 0.10999805,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0015525256,
+            "delta_star": 0.0027343707,
+            "ctau": 0.093960003,
+            "ampl": 9.9296319,
+            "dmax": 3.8630163e-06,
+            "Hk": 2.5,
+            "Rtheta": 1837.6917
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 74,
+          "x": 1.0037618,
+          "Ue": 0.76413694,
+          "n_iterations": 6,
+          "converged": true,
+          "initial": {
+            "theta": 0.0015525256,
+            "delta_star": 0.0027343707,
+            "ctau": 0.093960003,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.002350914,
+            "delta_star": 0.005877285,
+            "ctau": 0.097043122,
+            "ampl": 9.9296319,
+            "dmax": 4.5887716e-08,
+            "Hk": 2.5,
+            "Rtheta": 7005.8352
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 75,
+          "x": 1.0037618,
+          "Ue": 0.76413694,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.009168298,
+            "delta_star": 0.025416303,
+            "ctau": 0.097043122,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.009168298,
+            "delta_star": 0.025416303,
+            "ctau": 0.062428805,
+            "ampl": 9.9296319,
+            "dmax": 6.8252391e-17,
+            "Hk": 1.4819308,
+            "Rtheta": 5014.3379
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 76,
+          "x": 1.0121628,
+          "Ue": 0.85039239,
+          "n_iterations": 6,
+          "converged": true,
+          "initial": {
+            "theta": 0.009168298,
+            "delta_star": 0.025416303,
+            "ctau": 0.062428805,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0058964991,
+            "delta_star": 0.0087382036,
+            "ctau": 0.055870173,
+            "ampl": 9.9296319,
+            "dmax": 3.532502e-08,
+            "Hk": 1.3956785,
+            "Rtheta": 4606.5425
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 77,
+          "x": 1.0217326,
+          "Ue": 0.88049018,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.0058964991,
+            "delta_star": 0.0087382036,
+            "ctau": 0.055870173,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0052317932,
+            "delta_star": 0.0073019015,
+            "ctau": 0.053466488,
+            "ampl": 9.9296319,
+            "dmax": 3.9495029e-08,
+            "Hk": 1.3444062,
+            "Rtheta": 4385.4468
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 78,
+          "x": 1.0326337,
+          "Ue": 0.89895413,
+          "n_iterations": 4,
+          "converged": true,
+          "initial": {
+            "theta": 0.0052317932,
+            "delta_star": 0.0073019015,
+            "ctau": 0.053466488,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0048783877,
+            "delta_star": 0.0065585346,
+            "ctau": 0.051776561,
+            "ampl": 9.9296319,
+            "dmax": 5.2137009e-10,
+            "Hk": 1.3052879,
+            "Rtheta": 4235.5216
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 79,
+          "x": 1.0450514,
+          "Ue": 0.91250534,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0048783877,
+            "delta_star": 0.0065585346,
+            "ctau": 0.051776561,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.004641644,
+            "delta_star": 0.0060587237,
+            "ctau": 0.050331938,
+            "ampl": 9.9296319,
+            "dmax": 7.6952181e-06,
+            "Hk": 1.2722944,
+            "Rtheta": 4122.9415
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 80,
+          "x": 1.0591966,
+          "Ue": 0.92330938,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.004641644,
+            "delta_star": 0.0060587237,
+            "ctau": 0.050331938,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0044653967,
+            "delta_star": 0.005681316,
+            "ctau": 0.048989427,
+            "ampl": 9.9296319,
+            "dmax": 3.2635278e-06,
+            "Hk": 1.2430713,
+            "Rtheta": 4033.3812
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 81,
+          "x": 1.0753096,
+          "Ue": 0.93233484,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0044653967,
+            "delta_star": 0.005681316,
+            "ctau": 0.048989427,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0043261085,
+            "delta_star": 0.0053776696,
+            "ctau": 0.047689186,
+            "ampl": 9.9296319,
+            "dmax": 1.6874257e-06,
+            "Hk": 1.2165374,
+            "Rtheta": 3959.5069
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 82,
+          "x": 1.0936643,
+          "Ue": 0.94009623,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0043261085,
+            "delta_star": 0.0053776696,
+            "ctau": 0.047689186,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0042118105,
+            "delta_star": 0.0051238298,
+            "ctau": 0.046394866,
+            "ampl": 9.9296319,
+            "dmax": 1.009756e-06,
+            "Hk": 1.1921704,
+            "Rtheta": 3897.0841
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 83,
+          "x": 1.1145724,
+          "Ue": 0.94689775,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0042118105,
+            "delta_star": 0.0051238298,
+            "ctau": 0.046394866,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0041156336,
+            "delta_star": 0.0049065398,
+            "ctau": 0.045064244,
+            "ampl": 9.9296319,
+            "dmax": 6.8873418e-07,
+            "Hk": 1.1697327,
+            "Rtheta": 3843.4559
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 84,
+          "x": 1.1383893,
+          "Ue": 0.95293302,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0041156336,
+            "delta_star": 0.0049065398,
+            "ctau": 0.045064244,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0040332908,
+            "delta_star": 0.0047178741,
+            "ctau": 0.043663541,
+            "ampl": 9.9296319,
+            "dmax": 4.5166584e-07,
+            "Hk": 1.1491303,
+            "Rtheta": 3796.8492
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 85,
+          "x": 1.1655195,
+          "Ue": 0.95833215,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0040332908,
+            "delta_star": 0.0047178741,
+            "ctau": 0.043663541,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0039619345,
+            "delta_star": 0.0045527803,
+            "ctau": 0.042180801,
+            "ampl": 9.9296319,
+            "dmax": 2.9512639e-07,
+            "Hk": 1.1303336,
+            "Rtheta": 3756.0216
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 86,
+          "x": 1.196424,
+          "Ue": 0.9631865,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0039619345,
+            "delta_star": 0.0045527803,
+            "ctau": 0.042180801,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0038995788,
+            "delta_star": 0.0044078256,
+            "ctau": 0.040608949,
+            "ampl": 9.9296319,
+            "dmax": 1.8662812e-07,
+            "Hk": 1.1133337,
+            "Rtheta": 3720.0672
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 87,
+          "x": 1.231628,
+          "Ue": 0.96756267,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0038995788,
+            "delta_star": 0.0044078256,
+            "ctau": 0.040608949,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0038447816,
+            "delta_star": 0.0042805256,
+            "ctau": 0.038945572,
+            "ampl": 9.9296319,
+            "dmax": 1.1807283e-07,
+            "Hk": 1.098116,
+            "Rtheta": 3688.3023
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 88,
+          "x": 1.2717295,
+          "Ue": 0.97151106,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0038447816,
+            "delta_star": 0.0042805256,
+            "ctau": 0.038945572,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0037964594,
+            "delta_star": 0.004168953,
+            "ctau": 0.037192975,
+            "ampl": 9.9296319,
+            "dmax": 2.4388713e-07,
+            "Hk": 1.0846436,
+            "Rtheta": 3660.1947
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 89,
+          "x": 1.3174098,
+          "Ue": 0.97507119,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0037964594,
+            "delta_star": 0.004168953,
+            "ctau": 0.037192975,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0037537718,
+            "delta_star": 0.0040715045,
+            "ctau": 0.035358241,
+            "ampl": 9.9296319,
+            "dmax": 4.3801132e-07,
+            "Hk": 1.0728505,
+            "Rtheta": 3635.3183
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 90,
+          "x": 1.3694451,
+          "Ue": 0.97827534,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0037537718,
+            "delta_star": 0.0040715045,
+            "ctau": 0.035358241,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0037160482,
+            "delta_star": 0.003986764,
+            "ctau": 0.033453107,
+            "ampl": 9.9296319,
+            "dmax": 7.2409392e-07,
+            "Hk": 1.0626406,
+            "Rtheta": 3613.3221
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 91,
+          "x": 1.4287195,
+          "Ue": 0.98115091,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0037160482,
+            "delta_star": 0.003986764,
+            "ctau": 0.033453107,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0036827383,
+            "delta_star": 0.0039134271,
+            "ctau": 0.031493529,
+            "ampl": 9.9296319,
+            "dmax": 1.128011e-06,
+            "Hk": 1.053892,
+            "Rtheta": 3593.9098
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 92,
+          "x": 1.4962401,
+          "Ue": 0.98372214,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0036827383,
+            "delta_star": 0.0039134271,
+            "ctau": 0.031493529,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.003653379,
+            "delta_star": 0.0038502669,
+            "ctau": 0.029498901,
+            "ampl": 9.9296319,
+            "dmax": 1.6748885e-06,
+            "Hk": 1.0464646,
+            "Rtheta": 3576.825
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 93,
+          "x": 1.5731541,
+          "Ue": 0.98601122,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.003653379,
+            "delta_star": 0.0038502669,
+            "ctau": 0.029498901,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0036275703,
+            "delta_star": 0.0037961239,
+            "ctau": 0.027490962,
+            "ampl": 9.9296319,
+            "dmax": 2.3850361e-06,
+            "Hk": 1.0402085,
+            "Rtheta": 3561.8408
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 94,
+          "x": 1.6607682,
+          "Ue": 0.98803908,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0036275703,
+            "delta_star": 0.0037961239,
+            "ctau": 0.027490962,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0036049594,
+            "delta_star": 0.0037499092,
+            "ctau": 0.025492502,
+            "ampl": 9.9296319,
+            "dmax": 3.2695253e-06,
+            "Hk": 1.0349724,
+            "Rtheta": 3548.7523
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 95,
+          "x": 1.7605711,
+          "Ue": 0.98982582,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0036049594,
+            "delta_star": 0.0037499092,
+            "ctau": 0.025492502,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0035852291,
+            "delta_star": 0.003710613,
+            "ctau": 0.023526019,
+            "ampl": 9.9296319,
+            "dmax": 4.3264909e-06,
+            "Hk": 1.030611,
+            "Rtheta": 3537.3721
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 96,
+          "x": 1.8742585,
+          "Ue": 0.99139106,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0035852291,
+            "delta_star": 0.003710613,
+            "ctau": 0.023526019,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0035680896,
+            "delta_star": 0.0036773122,
+            "ctau": 0.021612485,
+            "ampl": 9.9296319,
+            "dmax": 5.5391901e-06,
+            "Hk": 1.0269896,
+            "Rtheta": 3527.5266
+          }
+        },
+        {
+          "side": 2,
+          "ibl": 97,
+          "x": 2.0037619,
+          "Ue": 0.99275397,
+          "n_iterations": 3,
+          "converged": true,
+          "initial": {
+            "theta": 0.0035680896,
+            "delta_star": 0.0036773122,
+            "ctau": 0.021612485,
+            "ampl": 9.9296319
+          },
+          "final": {
+            "theta": 0.0035532738,
+            "delta_star": 0.0036491752,
+            "ctau": 0.019770347,
+            "ampl": 9.9296319,
+            "dmax": 6.8763974e-06,
+            "Hk": 1.0415636,
+            "Rtheta": 4301.7112
+          }
+        }
+      ]
+    }
+  }
+}
