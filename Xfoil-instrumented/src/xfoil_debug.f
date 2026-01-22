@@ -1159,3 +1159,85 @@ C---- VSREZ (solution vector after GAUSS)
       WRITE(LUDBG,'(A)') '}'
       RETURN
       END
+
+
+C---- Dump shape equation Jacobian intermediates
+C     This captures all the Z_ coefficients and derivatives for verifying
+C     the shape equation Jacobian computation in bldif
+      SUBROUTINE DBGSHAPE(IS, IBL, ITYP,
+     &                    Z_HS2, Z_CF2, Z_DI2, Z_T2, Z_U2,
+     &                    Z_HCA, Z_HA, Z_UPW,
+     &                    HS2_T2, HS2_D2, HS2_U2,
+     &                    CF2_T2, CF2_D2, CF2_U2,
+     &                    DI2_T2, DI2_D2, DI2_U2, DI2_S2,
+     &                    HC2_T2, HC2_D2, HC2_U2,
+     &                    H2_T2, H2_D2,
+     &                    UPW_T2, UPW_D2, UPW_U2,
+     &                    VS2_31, VS2_32, VS2_33, VS2_34)
+      INTEGER IS, IBL, ITYP
+      REAL Z_HS2, Z_CF2, Z_DI2, Z_T2, Z_U2
+      REAL Z_HCA, Z_HA, Z_UPW
+      REAL HS2_T2, HS2_D2, HS2_U2
+      REAL CF2_T2, CF2_D2, CF2_U2
+      REAL DI2_T2, DI2_D2, DI2_U2, DI2_S2
+      REAL HC2_T2, HC2_D2, HC2_U2
+      REAL H2_T2, H2_D2
+      REAL UPW_T2, UPW_D2, UPW_U2
+      REAL VS2_31, VS2_32, VS2_33, VS2_34
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only dump for IBL=3 to keep output manageable
+      IF(IBL.NE.3) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "SHAPE_JACOBIAN",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "side": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "flow_type": ', ITYP, ','
+C---- Z coefficients
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_HS2": ', Z_HS2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_CF2": ', Z_CF2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_DI2": ', Z_DI2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_T2": ', Z_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_U2": ', Z_U2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_HCA": ', Z_HCA, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_HA": ', Z_HA, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_UPW": ', Z_UPW, ','
+C---- Hs derivatives
+      WRITE(LUDBG,'(A,E15.8,A)') '  "HS2_T2": ', HS2_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "HS2_D2": ', HS2_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "HS2_U2": ', HS2_U2, ','
+C---- Cf derivatives
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CF2_T2": ', CF2_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CF2_D2": ', CF2_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CF2_U2": ', CF2_U2, ','
+C---- DI derivatives
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DI2_T2": ', DI2_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DI2_D2": ', DI2_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DI2_U2": ', DI2_U2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DI2_S2": ', DI2_S2, ','
+C---- Hc derivatives
+      WRITE(LUDBG,'(A,E15.8,A)') '  "HC2_T2": ', HC2_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "HC2_D2": ', HC2_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "HC2_U2": ', HC2_U2, ','
+C---- H derivatives
+      WRITE(LUDBG,'(A,E15.8,A)') '  "H2_T2": ', H2_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "H2_D2": ', H2_D2, ','
+C---- UPW derivatives
+      WRITE(LUDBG,'(A,E15.8,A)') '  "UPW_T2": ', UPW_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "UPW_D2": ', UPW_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "UPW_U2": ', UPW_U2, ','
+C---- Final VS2 row 3 values (shape equation Jacobian)
+      WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_3_1": ', VS2_31, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_3_2": ', VS2_32, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_3_3": ', VS2_33, ','
+      WRITE(LUDBG,'(A,E15.8)') '  "VS2_3_4": ', VS2_34
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END

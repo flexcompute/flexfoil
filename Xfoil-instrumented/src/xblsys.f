@@ -1994,6 +1994,18 @@ C
       VSX(3)   = 0.
       VSREZ(3) = -REZH
 C
+C---- Debug output for shape equation intermediates
+      CALL DBGSHAPE(ISDBG, IBLDBG, ITYP,
+     &              Z_HS2, Z_CF2, Z_DI2, Z_T2, Z_U2,
+     &              Z_HCA, Z_HA, Z_UPW,
+     &              HS2_T2, HS2_D2, HS2_U2,
+     &              CF2_T2, CF2_D2, CF2_U2,
+     &              DI2_T2, DI2_D2, DI2_U2, DI2_S2,
+     &              HC2_T2, HC2_D2, HC2_U2,
+     &              H2_T2, H2_D2,
+     &              UPW_T2, UPW_D2, UPW_U2,
+     &              VS2(3,1), VS2(3,2), VS2(3,3), VS2(3,4))
+C
 C---- Debug output
       CALL DBGBLDIF(ISDBG, IBLDBG, ITYP, VS1, VS2, VSREZ)
 C

@@ -359,18 +359,22 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
     station.derivs.cf_msq = cf_msq;
 
     // === Dissipation coefficient DI (xblsys.f:930-1098) ===
-    let (mut di, mut di_s, mut di_u, mut di_t, mut di_d, mut di_ms, mut di_re) = match flow_type {
+    // Returns: (di, di_s, di_u, di_t, di_d, di_ms, di_re, di_hk_base, di_rt_base)
+    // di_hk_base and di_rt_base are the base derivatives ∂DI/∂Hk and ∂DI/∂Rθ
+    // needed for the Jacobian in bldif()
+    let (mut di, mut di_s, mut di_u, mut di_t, mut di_d, mut di_ms, mut di_re, di_hk_base, di_rt_base) = match flow_type {
         FlowType::Laminar => {
             let di_result = dissipation_laminar(hk, station.r_theta);
             let di_hk = di_result.di_hk;
             let di_rt = di_result.di_rt;
-            // Chain rule
+            // Chain rule for primary variable derivatives
             let di_u = di_hk * hk_u + di_rt * rt_u;
             let di_t = di_hk * hk_t + di_rt * rt_t;
             let di_d = di_hk * hk_d;
             let di_ms = di_hk * hk_ms;
             let di_re = di_rt * rt_re;
-            (di_result.di, 0.0, di_u, di_t, di_d, di_ms, di_re)
+            // Return base derivatives for Jacobian construction
+            (di_result.di, 0.0, di_u, di_t, di_d, di_ms, di_re, di_hk, di_rt)
         }
         FlowType::Turbulent => {
             // Turbulent wall contribution (xblsys.f:947-965)
@@ -446,9 +450,13 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
                 let di_d = di_hk * hk_d;
                 let di_ms = di_hk * hk_ms;
                 let di_re = di_rt * rt_re;
-                (di_lam.di, 0.0, di_u, di_t, di_d, di_ms, di_re)
+                (di_lam.di, 0.0, di_u, di_t, di_d, di_ms, di_re, di_hk, di_rt)
             } else {
-                (di, di_s, di_u, di_t, di_d, di_ms, di_re)
+                // Turbulent flow: DI depends on Hs, Us, Cf - not directly Hk, Rt
+                // For Jacobian, we'd need DI_HS, DI_US, DI_CF chain rules
+                // TODO: Implement proper turbulent Jacobian derivatives
+                // For now, use laminar approximation for base derivatives
+                (di, di_s, di_u, di_t, di_d, di_ms, di_re, di_lam.di_hk, di_lam.di_rt)
             }
         }
         FlowType::Wake => {
@@ -503,6 +511,7 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
             let di_re = di_rt_deriv * rt_re;
             
             // Double dissipation for wake (two halves) (xblsys.f:1089-1094)
+            // Base derivatives for Jacobian (already doubled via chain rule)
             (
                 di_base * 2.0,
                 di_s * 2.0,
@@ -511,13 +520,17 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
                 di_d * 2.0,
                 di_ms * 2.0,
                 di_re * 2.0,
+                di_hk_deriv * 2.0,
+                di_rt_deriv * 2.0,
             )
         }
     };
 
     station.cd = di;
-    station.derivs.cd_hk = di_u; // Store for later use
-    station.derivs.cd_rt = di_t;
+    // Store BASE derivatives ∂DI/∂Hk and ∂DI/∂Rθ for use in bldif() Jacobian
+    // NOT the chain-rule results (di_u, di_t) - those are ∂DI/∂Ue and ∂DI/∂θ
+    station.derivs.cd_hk = di_hk_base;
+    station.derivs.cd_rt = di_rt_base;
 
     // === BL thickness DE from Green's correlation (xblsys.f:1100-1118) ===
     // DE = (3.15 + 1.72/(HK-1)) * T + D
@@ -888,64 +901,176 @@ pub fn bldif(
     jac.vs1[1][4] = -z_xl / s1.x + z_cfx * (0.25 * s1.cf / s1.theta + 0.5 * cfm / ta * 0.5);
     jac.vs2[1][4] = z_xl / s2.x + z_cfx * (0.25 * s2.cf / s2.theta + 0.5 * cfm / ta * 0.5);
 
-    // === Shape parameter equation (xblsys.f:1901-1974) ===
+    // === Shape parameter equation (xblsys.f:1922-1995) ===
+    // XFOIL computes: REZH = HLOG + BTMP*ULOG + XLOG*(0.5*CFX - DIX)
+    
     let hsa = 0.5 * (s1.hs + s2.hs);
     let hca = 0.5 * (s1.hc + s2.hc);
 
     let xot1 = s1.x / s1.theta;
     let xot2 = s2.x / s2.theta;
 
-    // Upwinded DI and CF
+    // Upwinded DI and CF (XFOIL lines 1932-1935)
     let dix = (1.0 - upw) * s1.cd * xot1 + upw * s2.cd * xot2;
     let cfx_shape = (1.0 - upw) * s1.cf * xot1 + upw * s2.cf * xot2;
+    let dix_upw = s2.cd * xot2 - s1.cd * xot1;
+    let cfx_upw = s2.cf * xot2 - s1.cf * xot1;
 
+    // BTMP for shape equation (XFOIL line 1937)
+    // Note: HWA term is for wake, we ignore for now
     let btmp_shape = 2.0 * hca / hsa + 1.0 - ha;
 
-    // Shape parameter residual
+    // Shape parameter residual (XFOIL line 1939)
     res.res_shape = -(hlog + btmp_shape * ulog + xlog * (0.5 * cfx_shape - dix));
 
-    // Jacobian entries for shape parameter equation
-    // ∂/∂Hs1, ∂/∂Hs2 (via hlog)
-    jac.vs1[2][1] = -hlog / s1.theta; // Simplified - Hs depends on θ
-    jac.vs2[2][1] = hlog / s2.theta;
-    // ∂/∂U1, ∂/∂U2 (via ulog)
-    jac.vs1[2][3] = btmp_shape / s1.u;
-    jac.vs2[2][3] = -btmp_shape / s2.u;
-    // ∂/∂X1, ∂/∂X2
-    jac.vs1[2][4] = -(0.5 * cfx_shape - dix) / s1.x;
-    jac.vs2[2][4] = (0.5 * cfx_shape - dix) / s2.x;
+    // === Z coefficients for shape equation Jacobian (XFOIL lines 1940-1957) ===
+    let z_cfx_shape = xlog * 0.5;
+    let z_dix = -xlog;
+    let z_hca = 2.0 * ulog / hsa;
+    let z_ha_shape = -ulog;
+    let z_hl = 1.0; // DDLOG
+    let z_ul_shape = btmp_shape; // DDLOG * BTMP
+    let z_xl_shape = 0.5 * cfx_shape - dix;
 
-    // DI contribution to Jacobian
-    jac.vs1[2][0] = (1.0 - upw) * xot1 * xlog; // ∂/∂S1 (ctau affects DI for turbulent)
-    jac.vs2[2][0] = upw * xot2 * xlog;
+    // Z_UPW = Z_CFX*CFX_UPW + Z_DIX*DIX_UPW
+    let z_upw = z_cfx_shape * cfx_upw + z_dix * dix_upw;
 
-    // ∂/∂δ*1, ∂/∂δ*2 for shape parameter equation
-    // res_shape = -(hlog + btmp_shape * ulog + xlog * (0.5 * cfx_shape - dix))
-    // where:
-    //   hlog = ln(Hs2/Hs1), and Hs depends on Hk ≈ H = δ*/θ
-    //   btmp_shape = 2*Hc/Hs + 1 - H, where H = δ*/θ
-    //
-    // Chain rule: ∂hlog/∂δ*1 = -∂Hs1/∂δ*1 / Hs1
-    //             ∂hlog/∂δ*2 = ∂Hs2/∂δ*2 / Hs2
-    // where ∂Hs/∂δ* = ∂Hs/∂Hk * ∂Hk/∂H * ∂H/∂δ* ≈ hs_hk * 1 * (1/θ)
-    //
-    // For btmp_shape: ∂btmp_shape/∂δ* = -∂H/∂δ* = -1/θ (the -H term)
-    //
-    // Use stored derivative hs_hk from BlStation, or approximate as ~0.5 for typical Hk
-    let hs_hk1 = s1.derivs.hs_hk.abs().max(0.5);
-    let hs_hk2 = s2.derivs.hs_hk.abs().max(0.5);
+    // Z_HS1 = -HCA*ULOG/HSA^2 - Z_HL/HS1
+    // Z_HS2 = -HCA*ULOG/HSA^2 + Z_HL/HS2
+    let z_hs1 = -hca * ulog / (hsa * hsa) - z_hl / s1.hs.max(0.01);
+    let z_hs2 = -hca * ulog / (hsa * hsa) + z_hl / s2.hs.max(0.01);
 
-    // hlog contribution: ∂(-hlog)/∂δ* = -∂hlog/∂δ*
-    let dhlog_dd1 = -hs_hk1 / (s1.hs.max(0.1) * s1.theta);
-    let dhlog_dd2 = hs_hk2 / (s2.hs.max(0.1) * s2.theta);
+    // Z_CF1 = (1-UPW)*Z_CFX*XOT1, Z_CF2 = UPW*Z_CFX*XOT2
+    let z_cf1_shape = (1.0 - upw) * z_cfx_shape * xot1;
+    let z_cf2_shape = upw * z_cfx_shape * xot2;
 
-    // btmp_shape contribution: ∂(-btmp_shape * ulog)/∂δ* = -ulog * ∂btmp_shape/∂δ*
-    // ∂btmp_shape/∂δ* = -1/θ (from the -H term)
-    let dbtmp_dd1 = -1.0 / s1.theta;
-    let dbtmp_dd2 = -1.0 / s2.theta;
+    // Z_DI1 = (1-UPW)*Z_DIX*XOT1, Z_DI2 = UPW*Z_DIX*XOT2
+    let z_di1 = (1.0 - upw) * z_dix * xot1;
+    let z_di2 = upw * z_dix * xot2;
 
-    jac.vs1[2][2] = -dhlog_dd1 + ulog / s1.theta; // -∂hlog/∂δ*1 - ulog * (-1/θ1)
-    jac.vs2[2][2] = -dhlog_dd2 + ulog / s2.theta; // -∂hlog/∂δ*2 - ulog * (-1/θ2)
+    // Z_T1, Z_T2: direct theta derivatives from CFX and DIX terms (XFOIL lines 1959-1960)
+    let z_t1_shape = (1.0 - upw) * (z_cfx_shape * s1.cf + z_dix * s1.cd) * (-xot1 / s1.theta);
+    let z_t2_shape = upw * (z_cfx_shape * s2.cf + z_dix * s2.cd) * (-xot2 / s2.theta);
+
+    // Z_X1, Z_X2: x derivatives (XFOIL lines 1961-1962)
+    let z_x1_shape = (1.0 - upw) * (z_cfx_shape * s1.cf + z_dix * s1.cd) / s1.theta - z_xl_shape / s1.x;
+    let z_x2_shape = upw * (z_cfx_shape * s2.cf + z_dix * s2.cd) / s2.theta + z_xl_shape / s2.x;
+
+    // Z_U1, Z_U2: Ue derivatives (XFOIL lines 1963-1964)
+    let z_u1_shape = -z_ul_shape / s1.u;
+    let z_u2_shape = z_ul_shape / s2.u;
+
+    // === Derivative chain rules ===
+    // We need: HS_T, HS_D, CF_T, CF_D, DI_T, DI_D, H_T, H_D
+    // These are computed via chain rule from the stored derivatives
+
+    // H derivatives (shape factor H = δ*/θ)
+    // H_T = ∂H/∂θ = -δ*/θ² = -H/θ  (same as h_theta in derivs)
+    // H_D = ∂H/∂δ* = 1/θ  (same as h_delta_star in derivs)
+    let h1_t = s1.derivs.h_theta;
+    let h1_d = s1.derivs.h_delta_star;
+    let h2_t = s2.derivs.h_theta;
+    let h2_d = s2.derivs.h_delta_star;
+
+    // Hk derivatives via H (Hk = f(H, Msq))
+    // HK_T = HK_H * H_T
+    // HK_D = HK_H * H_D
+    let hk1_t = s1.derivs.hk_h * h1_t;
+    let hk1_d = s1.derivs.hk_h * h1_d;
+    let hk2_t = s2.derivs.hk_h * h2_t;
+    let hk2_d = s2.derivs.hk_h * h2_d;
+
+    // Rθ derivatives: Rθ = Re * Ue * θ
+    // RT_T = ∂Rθ/∂θ = Re * Ue = Rθ/θ
+    // RT_U = ∂Rθ/∂Ue = Re * θ = Rθ/Ue
+    let rt1_t = s1.r_theta / s1.theta.max(1e-12);
+    let rt2_t = s2.r_theta / s2.theta.max(1e-12);
+    let rt1_u = s1.r_theta / s1.u.max(1e-12);
+    let rt2_u = s2.r_theta / s2.u.max(1e-12);
+
+    // Hs derivatives: Hs = f(Hk, Rθ, Msq)
+    // HS_T = HS_HK * HK_T + HS_RT * RT_T
+    // HS_D = HS_HK * HK_D
+    // HS_U = HS_RT * RT_U  (via Rθ dependence on Ue)
+    let hs1_t = s1.derivs.hs_hk * hk1_t + s1.derivs.hs_rt * rt1_t;
+    let hs1_d = s1.derivs.hs_hk * hk1_d;
+    let hs1_u = s1.derivs.hs_rt * rt1_u;
+    let hs2_t = s2.derivs.hs_hk * hk2_t + s2.derivs.hs_rt * rt2_t;
+    let hs2_d = s2.derivs.hs_hk * hk2_d;
+    let hs2_u = s2.derivs.hs_rt * rt2_u;
+
+    // Cf derivatives: Cf = f(Hk, Rθ, Msq)
+    // CF_T = CF_HK * HK_T + CF_RT * RT_T
+    // CF_D = CF_HK * HK_D
+    // CF_U = CF_RT * RT_U
+    let cf1_t_shape = s1.derivs.cf_hk * hk1_t + s1.derivs.cf_rt * rt1_t;
+    let cf1_d_shape = s1.derivs.cf_hk * hk1_d;
+    let cf1_u_shape = s1.derivs.cf_rt * rt1_u;
+    let cf2_t_shape = s2.derivs.cf_hk * hk2_t + s2.derivs.cf_rt * rt2_t;
+    let cf2_d_shape = s2.derivs.cf_hk * hk2_d;
+    let cf2_u_shape = s2.derivs.cf_rt * rt2_u;
+
+    // DI (Cd) derivatives: DI = f(Hs, Us, Hk, Rθ, ...) - complex
+    // For laminar: DI = f(Hk, Rθ) via dissipation integral correlation
+    // DI_T = DI_HK * HK_T + DI_RT * RT_T
+    // DI_D = DI_HK * HK_D
+    // For simplicity, use stored derivatives or approximate
+    let di1_t = s1.derivs.cd_hk * hk1_t + s1.derivs.cd_rt * rt1_t;
+    let di1_d = s1.derivs.cd_hk * hk1_d;
+    let di1_u = s1.derivs.cd_rt * rt1_u;
+    let di2_t = s2.derivs.cd_hk * hk2_t + s2.derivs.cd_rt * rt2_t;
+    let di2_d = s2.derivs.cd_hk * hk2_d;
+    let di2_u = s2.derivs.cd_rt * rt2_u;
+
+    // DI_S (ctau derivative) - for turbulent flow, DI depends on ctau
+    // For laminar, this is zero. TODO: Add cd_s to BlDerivatives for turbulent
+    let di1_s = 0.0; // s1.derivs.cd_s when implemented
+    let di2_s = 0.0; // s2.derivs.cd_s when implemented
+
+    // Hc derivatives (curvature shape factor) - usually zero for incompressible
+    let hc1_t = 0.0;
+    let hc1_d = 0.0;
+    let hc1_u = 0.0;
+    let hc2_t = 0.0;
+    let hc2_d = 0.0;
+    let hc2_u = 0.0;
+
+    // UPW derivatives - for fixed upwinding, these are zero
+    // (only nonzero if UPW depends on local variables)
+    let upw_t1 = 0.0;
+    let upw_d1 = 0.0;
+    let upw_u1 = 0.0;
+    let upw_t2 = 0.0;
+    let upw_d2 = 0.0;
+    let upw_u2 = 0.0;
+
+    // === Build shape equation Jacobian (XFOIL lines 1969-1989) ===
+    // VS1(3,1) = Z_DI1*DI1_S1
+    // VS1(3,2) = Z_HS1*HS1_T1 + Z_CF1*CF1_T1 + Z_DI1*DI1_T1 + Z_T1
+    //          + 0.5*(Z_HCA*HC1_T1 + Z_HA*H1_T1) + Z_UPW*UPW_T1
+    // VS1(3,3) = Z_HS1*HS1_D1 + Z_CF1*CF1_D1 + Z_DI1*DI1_D1
+    //          + 0.5*(Z_HCA*HC1_D1 + Z_HA*H1_D1) + Z_UPW*UPW_D1
+    // VS1(3,4) = Z_HS1*HS1_U1 + Z_CF1*CF1_U1 + Z_DI1*DI1_U1 + Z_U1
+    //          + 0.5*Z_HCA*HC1_U1 + Z_UPW*UPW_U1
+    // (same pattern for VS2)
+
+    jac.vs1[2][0] = z_di1 * di1_s;
+    jac.vs1[2][1] = z_hs1 * hs1_t + z_cf1_shape * cf1_t_shape + z_di1 * di1_t + z_t1_shape
+        + 0.5 * (z_hca * hc1_t + z_ha_shape * h1_t) + z_upw * upw_t1;
+    jac.vs1[2][2] = z_hs1 * hs1_d + z_cf1_shape * cf1_d_shape + z_di1 * di1_d
+        + 0.5 * (z_hca * hc1_d + z_ha_shape * h1_d) + z_upw * upw_d1;
+    jac.vs1[2][3] = z_hs1 * hs1_u + z_cf1_shape * cf1_u_shape + z_di1 * di1_u + z_u1_shape
+        + 0.5 * z_hca * hc1_u + z_upw * upw_u1;
+    jac.vs1[2][4] = z_x1_shape;
+
+    jac.vs2[2][0] = z_di2 * di2_s;
+    jac.vs2[2][1] = z_hs2 * hs2_t + z_cf2_shape * cf2_t_shape + z_di2 * di2_t + z_t2_shape
+        + 0.5 * (z_hca * hc2_t + z_ha_shape * h2_t) + z_upw * upw_t2;
+    jac.vs2[2][2] = z_hs2 * hs2_d + z_cf2_shape * cf2_d_shape + z_di2 * di2_d
+        + 0.5 * (z_hca * hc2_d + z_ha_shape * h2_d) + z_upw * upw_d2;
+    jac.vs2[2][3] = z_hs2 * hs2_u + z_cf2_shape * cf2_u_shape + z_di2 * di2_u + z_u2_shape
+        + 0.5 * z_hca * hc2_u + z_upw * upw_u2;
+    jac.vs2[2][4] = z_x2_shape;
 
     (res, jac)
 }
