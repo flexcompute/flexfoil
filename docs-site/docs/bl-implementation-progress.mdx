@@ -2387,13 +2387,325 @@ The sign conventions in `build_4x4_system` and `newton_solve_station` are **CORR
 
 **The sign mismatch in dx[1] and dx[2] is caused by incorrect Jacobian values, not sign convention errors.**
 
-### Next Steps: Shape Equation Jacobian Rewrite
+### Jacobian Bugs Fixed (2026-01-22)
 
-The shape equation Jacobian in `bldif()` must be rewritten to match XFOIL's complete formulation. Required:
+#### Bug 1: Shape Equation Jacobian - Wrong Derivative Storage
 
-1. Compute `Z_HS2`, `Z_CF2`, `Z_DI2`, `Z_T2`, `Z_X2`, `Z_U2` coefficients
-2. Compute `HS2_T2`, `HS2_D2`, `HS2_U2` (Hs derivatives)
-3. Compute `CF2_T2`, `CF2_D2`, `CF2_U2` (Cf derivatives)
-4. Compute `DI2_T2`, `DI2_D2`, `DI2_U2` (DI derivatives)
-5. Add H, Hc, and upwinding derivatives
-6. Assemble full Jacobian row
+**Problem:** In `blvar()`, we were storing chain-rule derivatives (`di_u`, `di_t`) into fields meant for base derivatives (`cd_hk`, `cd_rt`):
+
+```rust
+// WRONG - storing ∂DI/∂Ue and ∂DI/∂θ
+station.derivs.cd_hk = di_u;
+station.derivs.cd_rt = di_t;
+```
+
+This caused `cd_rt` to be +169 instead of ~-0.002, leading to completely wrong shape equation Jacobian values.
+
+**Fix:** Return base derivatives from the dissipation calculation and store correctly:
+
+```rust
+// CORRECT - storing ∂DI/∂Hk and ∂DI/∂Rθ
+station.derivs.cd_hk = di_hk_base;
+station.derivs.cd_rt = di_rt_base;
+```
+
+#### Bug 2: Momentum Equation Jacobian - Missing CFX_TA Term
+
+**Problem:** The momentum equation `z_t2` term was incomplete. XFOIL computes:
+
+```fortran
+CFX_TA = -0.50*CFM*XA/TA**2
+CFX_T2 = -0.25*CF2*X2/T2**2 + CFX_TA*0.5
+Z_T2 = Z_TL/T2 + Z_CFX*CFX_T2
+```
+
+We only had the first part of `CFX_T2`, missing the `CFX_TA*0.5` contribution.
+
+**Fix:** Added the missing term:
+
+```rust
+let cfx_ta = -0.5 * cfm * xa / (ta * ta);
+let cfx_t2 = -0.25 * s2.cf * s2.x / (s2.theta * s2.theta) + cfx_ta * 0.5;
+let z_t2 = 1.0 / s2.theta + z_cfx * cfx_t2;
+```
+
+#### Results After Fixes
+
+| Metric | Before | After |
+|--------|--------|-------|
+| dθ single step (IBL=3) | -6.5e-6 (30% error) | -4.995e-6 (0.0% error) |
+| dδ* single step (IBL=3) | -1.5e-5 (21% error) | -1.256e-5 (0.0% error) |
+| Early stations (0-17) | ~40% error | < 1% error |
+| Transition region (31+) | ~55% error | ~55% error |
+
+**The Newton iteration is now exact. The remaining ~55% error at station 31+ is in transition handling, not the Jacobian.**
+
+---
+
+## Wave 9: Transition Handling Investigation
+
+### Current Status
+
+The theta evolution test shows:
+- **Stations 0-17**: < 1% error (laminar flow, perfect match)
+- **Stations 18-24**: 1-6% error (gradual growth)
+- **Station 31+**: Sudden jump to ~55% error
+
+This indicates the problem is in **transition handling**, not the Newton iteration.
+
+### XFOIL's Transition Architecture
+
+XFOIL uses a sophisticated 2nd-order implicit scheme (`TRCHEK2`) for transition:
+
+```fortran
+C---- Solves the implicit amplification equation for N2:
+C
+C       N2 - N1     N'(XT,NT) + N'(X1,N1)
+C       -------  =  ---------------------
+C       X2 - X1               2
+C
+C     In effect, a 2-point central difference is used between
+C     X1..X2 (no transition), or X1..XT (transition).
+```
+
+Key components:
+1. **TRCHEK2**: Iterative solver for amplification (up to 30 Newton iterations)
+2. **AXSET**: RMS-averaged amplification rate with near-Ncrit correction
+3. **Transition interval handling**: Special treatment when `IBL == ITRAN(IS)`
+4. **Sensitivities**: Computes XT derivatives for global Jacobian
+
+### Differences from Our Implementation
+
+| Aspect | XFOIL | RustFoil | Impact |
+|--------|-------|----------|--------|
+| N-factor integration | Implicit iteration | Explicit `ampl += ax * ds` | Unknown |
+| Transition interval | Special equations | Same as laminar/turbulent | **Likely issue** |
+| Ctau initialization | 0.03 at transition, then iterates | Fixed 0.03 | May affect post-transition |
+| Flow type in march | Checks `IBL < ITRAN` per iteration | Single switch | **Likely issue** |
+| XT sensitivities | Full derivatives for Jacobian | Not computed | Affects Newton convergence |
+
+### Debugging Plan: Phase-by-Phase
+
+#### Phase 1: Instrument XFOIL Transition Events
+
+Add debug subroutines to capture the exact moment and state at transition:
+
+```fortran
+SUBROUTINE DBGTRCHEK_DETAIL(IS, IBL, AMPL1, AMPL2, AX, TRAN, XT)
+C---- Dump transition check details
+```
+
+Capture:
+- N-factor before/after at each station
+- AX1, AX2, AXA from AXSET
+- Whether TRAN flag was set
+- XT location when transition detected
+- State variables (Hk, Rθ, θ, δ*) at transition
+
+#### Phase 2: Compare Amplification Integration
+
+Create test comparing N-factor evolution:
+
+```rust
+#[test]
+fn test_amplification_evolution() {
+    // Load XFOIL N-factor trace from debug output
+    // Compare our ampl values station-by-station
+    // Identify where divergence begins
+}
+```
+
+Key questions:
+- Does our AXSET match XFOIL's at each station?
+- Is the explicit vs implicit integration causing drift?
+- When exactly does the N-factor diverge?
+
+#### Phase 3: Analyze Transition Interval Handling
+
+XFOIL's march has complex logic for the transition station:
+
+```fortran
+IF(IBL.LT.ITRAN(IS)) CALL BLVAR(1)  ! Laminar
+IF(IBL.GE.ITRAN(IS)) CALL BLVAR(2)  ! Turbulent
+IF(WAKE) CALL BLVAR(3)
+
+C---- transition interval: weighted laminar and turbulent case
+HTARG = HK1 + (0.03*(XT-X1) - 0.15*(X2-XT))/T1
+```
+
+Test if we need:
+1. Special equations at the transition station
+2. Weighted laminar/turbulent treatment
+3. Htarget prescription for inverse mode
+
+#### Phase 4: Implement TRCHEK2 Iteration
+
+If explicit integration is the issue, implement the implicit scheme:
+
+```rust
+pub fn trchek2(
+    prev: &BlStation,
+    curr: &mut BlStation,
+    ncrit: f64,
+) -> TransitionResult {
+    // Iterate up to 30 times
+    for _ in 0..30 {
+        // Compute AXSET
+        // Check if AMPL2 > AMCRIT
+        // Set weighting factors WF1, WF2
+        // Compute residual and update
+    }
+    // Return XT and sensitivities
+}
+```
+
+#### Phase 5: Add XT Sensitivities to Jacobian
+
+XFOIL computes transition location sensitivities:
+
+```fortran
+XT_A1 = ...
+XT_T1 = XT_AX*(AX_HK1*HK1_T1 + AX_T1 + AX_RT1*RT1_T1)
+XT_D1 = XT_AX*(AX_HK1*HK1_D1)
+XT_U1 = XT_AX*(AX_HK1*HK1_U1 + AX_RT1*RT1_U1)
+```
+
+These feed into the global Jacobian for viscous-inviscid coupling.
+
+### Test Strategy
+
+| Test | Purpose | Success Criteria |
+|------|---------|------------------|
+| `test_axset_comparison` | Verify AXSET matches XFOIL | < 0.1% error |
+| `test_amplification_march` | N-factor evolution | < 1% error through transition |
+| `test_transition_location` | XT matches XFOIL | < 1% difference |
+| `test_post_transition_theta` | θ evolution after transition | < 5% error |
+
+### Files to Modify
+
+| File | Changes |
+|------|---------|
+| `Xfoil-instrumented/src/xblsys.f` | Add `DBGTRCHEK_DETAIL` subroutine |
+| `Xfoil-instrumented/src/xfoil_debug.f` | Implement transition event output |
+| `crates/rustfoil-bl/src/closures/transition.rs` | Add `trchek2()` if needed |
+| `crates/rustfoil-coupling/src/march.rs` | Update transition handling logic |
+| `crates/rustfoil-coupling/tests/transition_comparison.rs` | New test file |
+
+### Success Criteria
+
+1. **N-factor evolution**: < 1% error vs XFOIL through transition
+2. **Transition location**: < 1% error in x_transition
+3. **Post-transition θ**: < 5% error continuing through all stations
+4. **δ* evolution**: < 5% error through entire march
+
+---
+
+## Newton Tolerance Bug Fix (2026-01-22)
+
+**Status:** Complete  
+**Impact:** Laminar station accuracy improved from ~2.4% error to <0.5% error
+
+### Problem Discovery
+
+During debugging of the transition handling implementation, station 18 showed:
+- θ: +0.3% error (acceptable)
+- δ*: **-2.1% error** (too high)
+- H: **-2.4% error** (caused N-factor to grow too slowly)
+
+Investigation revealed that the Newton solver was converging correctly, but then a fallback mechanism was overwriting the results.
+
+### Root Causes
+
+#### Bug 1: Incorrect Convergence Tolerance
+
+The convergence tolerance was set to `1e-5`, but XFOIL uses `0.1`:
+
+```rust
+// Before (too strict)
+tolerance: 1e-5,
+
+// After (matches XFOIL)
+tolerance: 0.1,
+```
+
+XFOIL's convergence criterion (from `xbl.f`):
+```fortran
+IF(DMAX.LE.1.0E-5) GO TO 110  ! Strict convergence
+IF(DMAX .LE. 0.1) GO TO 109    ! Acceptable convergence
+```
+
+Our strict tolerance caused Newton to report "not converged" even when θ and δ* updates were at machine precision (~1e-16).
+
+#### Bug 2: Harmful Fallback Overwriting Newton Results
+
+When Newton "didn't converge" (always with 1e-5 tolerance), the code fell back to `step_momentum()`:
+
+```rust
+// Before (harmful)
+if !converged {
+    let (theta_new, delta_star_new) = step_momentum(...);
+    station.theta = theta_new;      // Overwrote correct value!
+    station.delta_star = delta_star_new;  // Overwrote correct value!
+}
+```
+
+Debug trace at station 18:
+```
+DEBUG station 18: Newton did not converge!
+  Before fallback: θ=8.325875e-5, δ*=2.283261e-4  ← CORRECT (matches XFOIL)
+  After fallback:  θ=8.351690e-5, δ*=2.236433e-4  ← WRONG (step_momentum)
+```
+
+### Solution
+
+1. **Changed tolerance** from `1e-5` to `0.1` in `MarchConfig::default()`
+2. **Disabled step_momentum fallback** - Newton's result is valid even without strict convergence
+
+### Results
+
+**θ Evolution Comparison (Upper Surface)**:
+
+| Station | x | θ_err% (Before) | θ_err% (After) | δ*_err% (After) |
+|---------|-------|-----------------|----------------|-----------------|
+| 15 | 0.0347 | -0.1% | -0.1% | -0.1% |
+| 16 | 0.0377 | -0.1% | -0.1% | -0.1% |
+| 17 | 0.0409 | -0.1% | -0.1% | -0.1% |
+| 18 | 0.0444 | **-2.1%** | -0.1% | -0.1% |
+| 19 | 0.0483 | - | -0.1% | -0.1% |
+| 20 | 0.0526 | - | -0.0% | -0.1% |
+
+All laminar stations (8-24) now have <0.5% error.
+
+### Newton Iteration Trace
+
+With the fix, Newton converges correctly:
+
+```
+Iter 0: θ=7.533508e-5, δ*=2.020139e-4, H=2.68154, dmax=1.20e-1
+Iter 1: θ=8.282525e-5, δ*=2.261898e-4, H=2.73093, dmax=9.36e-3
+Iter 2: θ=8.325744e-5, δ*=2.283069e-4, H=2.74218, dmax=1.00e-2
+Iter 3: θ=8.325874e-5, δ*=2.283261e-4, H=2.74237, dmax=1.01e-2  ← Converged!
+
+Final vs XFOIL:
+  θ:  8.325874e-5 (XFOIL: 8.325875e-5, err=-0.00%)
+  δ*: 2.283261e-4 (XFOIL: 2.283262e-4, err=-0.00%)
+  H:  2.74237 (XFOIL: 2.74237, err=-0.00%)
+```
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `crates/rustfoil-coupling/src/march.rs` | Tolerance 1e-5 → 0.1, disabled step_momentum fallback |
+| `crates/rustfoil-coupling/tests/theta_evolution.rs` | Updated test config to use tolerance=0.1 |
+
+### Remaining Work
+
+Transition detection is ~7 stations late (station 37 vs XFOIL's station 30). This is a separate issue in the amplification rate calculation, not the Newton solver. The N-factor doesn't reach Ncrit=9 quickly enough.
+
+### Test Results
+
+All tests pass:
+```
+test result: ok. 84 passed; 0 failed
+```

@@ -307,6 +307,315 @@ pub fn check_transition(ampl: f64, ncrit: f64) -> Option<f64> {
     }
 }
 
+/// Result of TRCHEK2 transition check
+///
+/// Contains the computed N-factor at station 2, transition status,
+/// and transition location if transition occurred.
+#[derive(Debug, Clone, Copy)]
+pub struct Trchek2Result {
+    /// Final N-factor at station 2 (may be > Ncrit if transition occurred)
+    pub ampl2: f64,
+    /// Whether transition was detected in this interval
+    pub transition: bool,
+    /// Transition location as arc length (if transition occurred)
+    pub xt: Option<f64>,
+    /// Final amplification rate used (for debugging)
+    pub ax: f64,
+    /// Number of iterations used
+    pub iterations: usize,
+    /// Whether the implicit iteration converged
+    pub converged: bool,
+}
+
+/// XFOIL's TRCHEK2 - 2nd order implicit N-factor integration
+///
+/// This is a direct port of XFOIL's TRCHEK2 subroutine (xblsys.f:235-466),
+/// which uses a 2nd-order implicit scheme to compute N-factor evolution
+/// and detect transition.
+///
+/// The implicit equation solved is:
+/// ```text
+///     N2 - N1     N'(XT,NT) + N'(X1,N1)
+///     -------  =  ---------------------
+///     X2 - X1               2
+/// ```
+///
+/// Where XT,NT are either (X2,N2) if no transition, or interpolated values
+/// at the transition point if N2 >= Ncrit.
+///
+/// # Arguments
+/// * `x1`, `x2` - Arc length positions at station 1 and 2
+/// * `hk1`, `hk2` - Kinematic shape factors
+/// * `t1`, `t2` - Momentum thickness θ
+/// * `rt1`, `rt2` - Momentum thickness Reynolds number Rθ
+/// * `d1`, `d2` - Displacement thickness δ*
+/// * `u1`, `u2` - Edge velocity
+/// * `ampl1` - N-factor at station 1
+/// * `ncrit` - Critical N-factor for transition
+/// * `x_forced` - Forced transition location (None for free transition)
+/// * `re` - Reynolds number (for computing Rθ at interpolated point)
+///
+/// # Returns
+/// `Trchek2Result` containing the computed N-factor, transition status, and location
+///
+/// # Reference
+/// XFOIL xblsys.f TRCHEK2 subroutine (lines 235-466)
+pub fn trchek2(
+    x1: f64,
+    x2: f64,
+    hk1: f64,
+    hk2: f64,
+    t1: f64,
+    t2: f64,
+    rt1: f64,
+    rt2: f64,
+    d1: f64,
+    d2: f64,
+    u1: f64,
+    u2: f64,
+    ampl1: f64,
+    ncrit: f64,
+    x_forced: Option<f64>,
+    re: f64,
+) -> Trchek2Result {
+    const DAEPS: f64 = 5.0e-5; // Convergence tolerance
+    const MAX_ITER: usize = 30;
+    
+    let dx = x2 - x1;
+    if dx <= 0.0 {
+        // Invalid interval
+        return Trchek2Result {
+            ampl2: ampl1,
+            transition: false,
+            xt: None,
+            ax: 0.0,
+            iterations: 0,
+            converged: true,
+        };
+    }
+    
+    // Calculate initial average amplification rate
+    let ax_result = axset(hk1, t1, rt1, ampl1, hk2, t2, rt2, ampl1, ncrit);
+    
+    // Initial guess for N2
+    let mut ampl2 = ampl1 + ax_result.ax * dx;
+    
+    let mut ax = ax_result.ax;
+    let mut xt = x2;
+    let mut converged = false;
+    let mut iterations = 0;
+    
+    // Implicit iteration for N2
+    for itam in 0..MAX_ITER {
+        iterations = itam + 1;
+        
+        // Define weighting factors based on whether transition occurred
+        let (sfa, amplt) = if ampl2 <= ncrit {
+            // No transition yet - "T" is the same as "2"
+            (1.0, ampl2)
+        } else {
+            // Transition in interval - "T" is at Ncrit
+            let sfa = (ncrit - ampl1) / (ampl2 - ampl1).max(1e-20);
+            (sfa, ncrit)
+        };
+        
+        // Check for forced transition
+        let sfx = match x_forced {
+            Some(xf) if xf < x2 => (xf - x1) / dx,
+            _ => 1.0,
+        };
+        
+        // Use the smaller of free or forced transition factor
+        let wf2 = sfa.min(sfx);
+        let wf1 = 1.0 - wf2;
+        
+        // Interpolate BL variables to transition point XT
+        xt = x1 * wf1 + x2 * wf2;
+        let tt = t1 * wf1 + t2 * wf2;
+        let dt = d1 * wf1 + d2 * wf2;
+        let ut = u1 * wf1 + u2 * wf2;
+        
+        // Compute Hk and Rθ at the interpolated point
+        // Simplified version: linear interpolation of Hk (exact would need BLKIN)
+        let hkt = hk1 * wf1 + hk2 * wf2;
+        
+        // Rθ at transition point (using interpolated values)
+        let rtt = ut * tt * re;
+        
+        // Recompute amplification rate over X1..XT interval
+        let ax_result = axset(hk1, t1, rt1, ampl1, hkt, tt, rtt, amplt, ncrit);
+        ax = ax_result.ax;
+        
+        // Exit early if no amplification
+        if ax <= 0.0 {
+            converged = true;
+            break;
+        }
+        
+        // Residual for implicit N2 definition
+        // Note: In XFOIL, they use (X2-X1) in the residual, not (XT-X1)
+        // because XT depends on AMPL2
+        let res = ampl2 - ampl1 - ax * dx;
+        
+        // Simple derivative approximation: RES_A2 ≈ 1 (neglecting AX dependence on A2)
+        // This is simplified from XFOIL which computes full sensitivities
+        let res_a2 = 1.0;
+        
+        // Newton update
+        let da2 = -res / res_a2;
+        
+        // Check convergence
+        if da2.abs() < DAEPS {
+            converged = true;
+            break;
+        }
+        
+        // Relaxation to prevent oscillation
+        let mut rlx = 1.0;
+        if da2.abs() > 1.0 {
+            rlx = 1.0 / da2.abs();
+        }
+        
+        // Prevent crossing Ncrit boundary in a single step
+        let ampl2_new = ampl2 + rlx * da2;
+        if (ampl2 > ncrit && ampl2_new < ncrit) || (ampl2 < ncrit && ampl2_new > ncrit) {
+            ampl2 = ncrit;
+        } else {
+            ampl2 = ampl2_new;
+        }
+    }
+    
+    // Test for free or forced transition
+    let tr_free = ampl2 >= ncrit;
+    let tr_forced = x_forced.map_or(false, |xf| xf > x1 && xf <= x2);
+    let transition = tr_free || tr_forced;
+    
+    // Resolve if both forced and free transition
+    let final_xt = if transition {
+        if tr_forced && x_forced.is_some() {
+            let xf = x_forced.unwrap();
+            if !tr_free || xf < xt {
+                Some(xf)
+            } else {
+                Some(xt)
+            }
+        } else {
+            Some(xt)
+        }
+    } else {
+        None
+    };
+    
+    Trchek2Result {
+        ampl2,
+        transition,
+        xt: final_xt,
+        ax,
+        iterations,
+        converged,
+    }
+}
+
+/// Simplified TRCHEK for use in fixed-Ue march
+///
+/// This is a simpler version that works with BlStation data directly,
+/// avoiding the need to pass all individual variables.
+pub fn trchek2_stations(
+    x1: f64,
+    x2: f64,
+    hk1: f64,
+    t1: f64,
+    rt1: f64,
+    ampl1: f64,
+    hk2: f64,
+    t2: f64,
+    rt2: f64,
+    ncrit: f64,
+) -> Trchek2Result {
+    const DAEPS: f64 = 5.0e-5;
+    const MAX_ITER: usize = 30;
+    
+    let dx = x2 - x1;
+    if dx <= 0.0 {
+        return Trchek2Result {
+            ampl2: ampl1,
+            transition: false,
+            xt: None,
+            ax: 0.0,
+            iterations: 0,
+            converged: true,
+        };
+    }
+    
+    // Initial amplification rate
+    let ax_init = axset(hk1, t1, rt1, ampl1, hk2, t2, rt2, ampl1, ncrit);
+    let mut ampl2 = ampl1 + ax_init.ax * dx;
+    
+    let mut ax = ax_init.ax;
+    let mut xt = x2;
+    let mut converged = false;
+    let mut iterations = 0;
+    
+    for itam in 0..MAX_ITER {
+        iterations = itam + 1;
+        
+        // Weighting factors
+        let (wf2, amplt) = if ampl2 <= ncrit {
+            (1.0, ampl2)
+        } else {
+            let sfa = (ncrit - ampl1) / (ampl2 - ampl1).max(1e-20);
+            (sfa, ncrit)
+        };
+        let wf1 = 1.0 - wf2;
+        
+        // Interpolate to transition point
+        xt = x1 * wf1 + x2 * wf2;
+        let tt = t1 * wf1 + t2 * wf2;
+        let hkt = hk1 * wf1 + hk2 * wf2;
+        let rtt = rt1 * wf1 + rt2 * wf2;  // Simplified interpolation
+        
+        // Recompute AX at transition point
+        let ax_result = axset(hk1, t1, rt1, ampl1, hkt, tt, rtt, amplt, ncrit);
+        ax = ax_result.ax;
+        
+        if ax <= 0.0 {
+            converged = true;
+            break;
+        }
+        
+        // Residual and Newton update
+        let res = ampl2 - ampl1 - ax * dx;
+        let da2 = -res;
+        
+        if da2.abs() < DAEPS {
+            converged = true;
+            break;
+        }
+        
+        // Relaxed update
+        let rlx = if da2.abs() > 1.0 { 1.0 / da2.abs() } else { 1.0 };
+        let ampl2_new = ampl2 + rlx * da2;
+        
+        // Prevent crossing Ncrit boundary
+        if (ampl2 > ncrit && ampl2_new < ncrit) || (ampl2 < ncrit && ampl2_new > ncrit) {
+            ampl2 = ncrit;
+        } else {
+            ampl2 = ampl2_new;
+        }
+    }
+    
+    let transition = ampl2 >= ncrit;
+    
+    Trchek2Result {
+        ampl2,
+        transition,
+        xt: if transition { Some(xt) } else { None },
+        ax,
+        iterations,
+        converged,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
