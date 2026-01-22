@@ -271,6 +271,12 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
         us_re = 0.0;
     }
 
+    // Store Us and its derivatives
+    station.us = us;
+    station.derivs.us_t = us_t;
+    station.derivs.us_d = us_d;
+    station.derivs.us_u = us_u;
+
     // === Equilibrium shear coefficient CQ (xblsys.f:853-895) ===
     // CQ = sqrt(CTCON * Hs * HKB * HKC² / (USB * H * Hk²))
     let gcc = if flow_type == FlowType::Turbulent {
@@ -324,11 +330,17 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
     };
 
     // Chain rule for CQ w.r.t. primary variables
-    let cq_u = cq_hs * hs_u + cq_us * us_u + cq_hk * hk_u + cq_rt * rt_u;
-    let cq_t = cq_hs * hs_t + cq_us * us_t + cq_hk * hk_t + cq_rt * rt_t + cq_h * h_t;
-    let cq_d = cq_hs * hs_d + cq_us * us_d + cq_hk * hk_d + cq_h * h_d;
+    let cq_u_val = cq_hs * hs_u + cq_us * us_u + cq_hk * hk_u + cq_rt * rt_u;
+    let cq_t_val = cq_hs * hs_t + cq_us * us_t + cq_hk * hk_t + cq_rt * rt_t + cq_h * h_t;
+    let cq_d_val = cq_hs * hs_d + cq_us * us_d + cq_hk * hk_d + cq_h * h_d;
     let cq_ms_val = cq_hs * hs_ms + cq_us * us_ms + cq_hk * hk_ms;
     let cq_re_val = cq_hs * hs_re + cq_us * us_re + cq_rt * rt_re;
+
+    // Store CQ and its derivatives
+    station.cq = cq;
+    station.derivs.cq_t = cq_t_val;
+    station.derivs.cq_d = cq_d_val;
+    station.derivs.cq_u = cq_u_val;
 
     // === Skin friction Cf (xblsys.f:899-927) ===
     let (cf, cf_hk, cf_rt, cf_msq) = match flow_type {
@@ -538,12 +550,12 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
 
     // === BL thickness DE from Green's correlation (xblsys.f:1100-1118) ===
     // DE = (3.15 + 1.72/(HK-1)) * T + D
-    let de = (3.15 + 1.72 / (hk - 1.0)) * station.theta + station.delta_star;
-    let de_hk = -1.72 / ((hk - 1.0) * (hk - 1.0)) * station.theta;
+    let de = (3.15 + 1.72 / (hk - 1.0).max(0.01)) * station.theta + station.delta_star;
+    let de_hk = -1.72 / ((hk - 1.0).max(0.01) * (hk - 1.0).max(0.01)) * station.theta;
 
     let de_u = de_hk * hk_u;
-    let de_t = de_hk * hk_t + 3.15 + 1.72 / (hk - 1.0);
-    let de_d = de_hk * hk_d + 1.0;
+    let de_t_val = de_hk * hk_t + 3.15 + 1.72 / (hk - 1.0).max(0.01);
+    let de_d_val = de_hk * hk_d + 1.0;
     let de_ms = de_hk * hk_ms;
 
     // Clamp DE to maximum HDMAX * T
@@ -553,6 +565,11 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
     } else {
         de
     };
+
+    // Store DE and its derivatives
+    station.de = de_final;
+    station.derivs.de_t = de_t_val;
+    station.derivs.de_d = de_d_val;
 
     // Store mass defect
     station.mass_defect = station.u * station.delta_star;
@@ -607,9 +624,9 @@ pub fn blvar_debug(
             Rtheta: station.r_theta,
             Cf: station.cf,
             Cd: station.cd,
-            Us: 0.0, // Us is computed locally, not stored on station
-            Cq: 0.0, // Cq is computed locally, not stored on station
-            De: 0.0, // De is computed locally, not stored on station
+            Us: station.us,
+            Cq: station.cq,
+            De: station.de,
         };
 
         let flow_type_int = match flow_type {
@@ -809,16 +826,16 @@ pub fn bldif(
         }
         FlowType::Turbulent | FlowType::Wake => {
             // Shear-lag equation (xblsys.f:1684-1841)
+            // SA = actual shear stress (ctau), CQA = equilibrium shear stress
             let sa = (1.0 - upw) * s1.ctau + upw * s2.ctau;
-            let cqa = (1.0 - upw) * s1.hk + upw * s2.hk; // Simplified CQ average
+            let cqa = (1.0 - upw) * s1.cq + upw * s2.cq; // Use stored CQ (equilibrium shear)
             let cfa = (1.0 - upw) * s1.cf + upw * s2.cf;
             let hka = (1.0 - upw) * s1.hk + upw * s2.hk;
 
-            let usa = 0.5 * (0.5 * s1.hs + 0.5 * s2.hs); // Simplified Us average
+            // USA, RTA, DEA are simple averages (xblsys.f:1693-1696)
+            let usa = 0.5 * (s1.us + s2.us); // Use stored US (slip velocity)
             let rta = 0.5 * (s1.r_theta + s2.r_theta);
-            let dea = 0.5
-                * ((3.15 + 1.72 / (s1.hk - 1.0).max(0.01)) * s1.theta
-                    + (3.15 + 1.72 / (s2.hk - 1.0).max(0.01)) * s2.theta);
+            let dea = 0.5 * (s1.de + s2.de); // Use stored DE (energy thickness)
             let da = 0.5 * (s1.delta_star + s2.delta_star);
 
             let ald = if flow_type == FlowType::Wake {
@@ -827,40 +844,135 @@ pub fn bldif(
                 1.0
             };
 
-            // Equilibrium dUe/dx
+            // Equilibrium dUe/dx (xblsys.f:1706-1732)
             let gcc = if flow_type == FlowType::Turbulent {
                 GCCON
             } else {
                 0.0
             };
-            let hkc = (hka - 1.0 - gcc / rta.max(1.0)).max(0.01);
-            let hr = hkc / (GACON * ald * hka);
-            let uq = (0.5 * cfa - hr * hr) / (GBCON * da.max(1e-10));
+            let mut hkc = hka - 1.0 - gcc / rta.max(1.0);
+            let mut hkc_hka = 1.0;
+            let mut hkc_rta = gcc / (rta.max(1.0) * rta.max(1.0));
+            if flow_type == FlowType::Turbulent && hkc < 0.01 {
+                hkc = 0.01;
+                hkc_hka = 0.0;
+                hkc_rta = 0.0;
+            }
 
+            let hr = hkc / (GACON * ald * hka);
+            let hr_hka = hkc_hka / (GACON * ald * hka) - hr / hka;
+            let hr_rta = hkc_rta / (GACON * ald * hka);
+
+            let uq = (0.5 * cfa - hr * hr) / (GBCON * da.max(1e-10));
+            let uq_hka = -2.0 * hr * hr_hka / (GBCON * da.max(1e-10));
+            let uq_rta = -2.0 * hr * hr_rta / (GBCON * da.max(1e-10));
+            let uq_cfa = 0.5 / (GBCON * da.max(1e-10));
+            let uq_da = -uq / da.max(1e-10);
+
+            // SCC shear lag constant (xblsys.f:1757-1761)
             let scc = SCCON * 1.333 / (1.0 + usa);
+            let scc_usa = -scc / (1.0 + usa);
+
             let slog = (s2.ctau / s1.ctau.max(1e-20)).ln();
             let dxi = s2.x - s1.x;
 
-            // Residual (simplified form)
+            // Residual (xblsys.f:1767-1769)
+            // REZC = SCC*(CQA - SA*ALD)*DXI - DEA*2.0*SLOG + DEA*2.0*(UQ*DXI - ULOG)*DUXCON
             res.res_third = -(scc * (cqa - sa * ald) * dxi - dea * 2.0 * slog
                 + dea * 2.0 * (uq * dxi - ulog) * DUXCON);
 
-            // Jacobian entries for shear-lag equation
-            jac.vs1[0][0] = (1.0 - upw) * (-scc * ald * dxi) + dea * 2.0 / s1.ctau.max(1e-20);
-            jac.vs2[0][0] = upw * (-scc * ald * dxi) - dea * 2.0 / s2.ctau.max(1e-20);
-            jac.vs1[0][4] = -scc * (cqa - sa * ald) - dea * 2.0 * uq * DUXCON;
-            jac.vs2[0][4] = scc * (cqa - sa * ald) + dea * 2.0 * uq * DUXCON;
+            // === Jacobian entries for shear-lag equation (xblsys.f:1781-1839) ===
+            // Z coefficients
+            let z_cfa = dea * 2.0 * uq_cfa * dxi * DUXCON;
+            let z_hka = dea * 2.0 * uq_hka * dxi * DUXCON;
+            let z_da = dea * 2.0 * uq_da * dxi * DUXCON;
+            let z_sl = -dea * 2.0;
+            let z_ul = -dea * 2.0 * DUXCON;
+            let z_dxi = scc * (cqa - sa * ald) + dea * 2.0 * uq * DUXCON;
+            let z_usa = scc_usa * (cqa - sa * ald) * dxi;
+            let z_cqa = scc * dxi;
+            let z_sa = -scc * dxi * ald;
+            let z_dea = 2.0 * ((uq * dxi - ulog) * DUXCON - slog);
 
-            // δ* derivatives for shear-lag equation:
-            // cqa (Hk average) depends on δ* through H = δ*/θ
-            // ∂cqa/∂δ*1 = (1-upw) * ∂Hk1/∂δ*1 = (1-upw) / θ1
-            // ∂cqa/∂δ*2 = upw * ∂Hk2/∂δ*2 = upw / θ2
-            // Also, uq depends on da = 0.5*(δ*1 + δ*2), so ∂uq/∂δ* = -uq / (2*da)
-            let uq_d = -uq / da.max(1e-10);
-            jac.vs1[0][2] = -scc * (1.0 - upw) * dxi / s1.theta
-                - dea * 2.0 * 0.5 * uq_d * dxi * DUXCON;
-            jac.vs2[0][2] =
-                -scc * upw * dxi / s2.theta - dea * 2.0 * 0.5 * uq_d * dxi * DUXCON;
+            // UPW derivatives for CQ and SA
+            let z_upw = z_cqa * (s2.cq - s1.cq) + z_sa * (s2.ctau - s1.ctau)
+                + z_cfa * (s2.cf - s1.cf) + z_hka * (s2.hk - s1.hk);
+
+            // Direct derivatives
+            let z_de1 = 0.5 * z_dea;
+            let z_de2 = 0.5 * z_dea;
+            let z_us1 = 0.5 * z_usa;
+            let z_us2 = 0.5 * z_usa;
+            let z_d1 = 0.5 * z_da;
+            let z_d2 = 0.5 * z_da;
+            let z_u1 = -z_ul / s1.u;
+            let z_u2 = z_ul / s2.u;
+            let z_x1 = -z_dxi;
+            let z_x2 = z_dxi;
+            let z_s1 = (1.0 - upw) * z_sa - z_sl / s1.ctau.max(1e-20);
+            let z_s2 = upw * z_sa + z_sl / s2.ctau.max(1e-20);
+            let z_cq1 = (1.0 - upw) * z_cqa;
+            let z_cq2 = upw * z_cqa;
+            let z_cf1 = (1.0 - upw) * z_cfa;
+            let z_cf2 = upw * z_cfa;
+            let z_hk1 = (1.0 - upw) * z_hka;
+            let z_hk2 = upw * z_hka;
+
+            // Hk derivatives w.r.t. primary variables
+            let hk1_t = s1.derivs.hk_h * s1.derivs.h_theta;
+            let hk1_d = s1.derivs.hk_h * s1.derivs.h_delta_star;
+            let hk2_t = s2.derivs.hk_h * s2.derivs.h_theta;
+            let hk2_d = s2.derivs.hk_h * s2.derivs.h_delta_star;
+
+            // Rθ derivatives
+            let rt1_t = s1.r_theta / s1.theta.max(1e-12);
+            let rt2_t = s2.r_theta / s2.theta.max(1e-12);
+            let rt1_u = s1.r_theta / s1.u.max(1e-12);
+            let rt2_u = s2.r_theta / s2.u.max(1e-12);
+
+            // Cf derivatives via Hk and Rθ
+            let cf1_t = s1.derivs.cf_hk * hk1_t + s1.derivs.cf_rt * rt1_t;
+            let cf1_d = s1.derivs.cf_hk * hk1_d;
+            let cf1_u = s1.derivs.cf_rt * rt1_u;
+            let cf2_t = s2.derivs.cf_hk * hk2_t + s2.derivs.cf_rt * rt2_t;
+            let cf2_d = s2.derivs.cf_hk * hk2_d;
+            let cf2_u = s2.derivs.cf_rt * rt2_u;
+
+            // UQ derivatives via averaged quantities (xblsys.f:1735-1755)
+            // UQ depends on CFA, HKA, DA, RTA
+            let uq_t1 = (1.0 - upw) * (uq_cfa * cf1_t + uq_hka * hk1_t) + 0.5 * uq_rta * rt1_t;
+            let uq_d1 = (1.0 - upw) * (uq_cfa * cf1_d + uq_hka * hk1_d) + 0.5 * uq_da;
+            let uq_u1 = (1.0 - upw) * (uq_cfa * cf1_u) + 0.5 * uq_rta * rt1_u;
+            let uq_t2 = upw * (uq_cfa * cf2_t + uq_hka * hk2_t) + 0.5 * uq_rta * rt2_t;
+            let uq_d2 = upw * (uq_cfa * cf2_d + uq_hka * hk2_d) + 0.5 * uq_da;
+            let uq_u2 = upw * (uq_cfa * cf2_u) + 0.5 * uq_rta * rt2_u;
+
+            // Build Jacobian entries (xblsys.f:1813-1839)
+            // VS1[0][0] = Z_S1
+            jac.vs1[0][0] = z_s1;
+            // VS1[0][1] = Z_UPW*UPW_T1 + Z_DE1*DE1_T1 + Z_US1*US1_T1 + contributions from CQ, CF, HK
+            jac.vs1[0][1] = z_de1 * s1.derivs.de_t + z_us1 * s1.derivs.us_t
+                + z_cq1 * s1.derivs.cq_t + z_cf1 * cf1_t + z_hk1 * hk1_t
+                + dea * 2.0 * uq_t1 * dxi * DUXCON;
+            // VS1[0][2] = Z_D1 + Z_UPW*UPW_D1 + Z_DE1*DE1_D1 + Z_US1*US1_D1 + ...
+            jac.vs1[0][2] = z_d1 + z_de1 * s1.derivs.de_d + z_us1 * s1.derivs.us_d
+                + z_cq1 * s1.derivs.cq_d + z_cf1 * cf1_d + z_hk1 * hk1_d
+                + dea * 2.0 * uq_d1 * dxi * DUXCON;
+            // VS1[0][3] = Z_U1 + Z_US1*US1_U1 + Z_CF1*CF1_U1 + ...
+            jac.vs1[0][3] = z_u1 + z_us1 * s1.derivs.us_u + z_cq1 * s1.derivs.cq_u
+                + z_cf1 * cf1_u + dea * 2.0 * uq_u1 * dxi * DUXCON;
+            jac.vs1[0][4] = z_x1;
+
+            jac.vs2[0][0] = z_s2;
+            jac.vs2[0][1] = z_de2 * s2.derivs.de_t + z_us2 * s2.derivs.us_t
+                + z_cq2 * s2.derivs.cq_t + z_cf2 * cf2_t + z_hk2 * hk2_t
+                + dea * 2.0 * uq_t2 * dxi * DUXCON;
+            jac.vs2[0][2] = z_d2 + z_de2 * s2.derivs.de_d + z_us2 * s2.derivs.us_d
+                + z_cq2 * s2.derivs.cq_d + z_cf2 * cf2_d + z_hk2 * hk2_d
+                + dea * 2.0 * uq_d2 * dxi * DUXCON;
+            jac.vs2[0][3] = z_u2 + z_us2 * s2.derivs.us_u + z_cq2 * s2.derivs.cq_u
+                + z_cf2 * cf2_u + dea * 2.0 * uq_u2 * dxi * DUXCON;
+            jac.vs2[0][4] = z_x2;
         }
     }
 
