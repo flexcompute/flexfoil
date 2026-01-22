@@ -55,6 +55,28 @@ pub struct BlDerivatives {
     /// ∂Hc/∂M²
     pub hc_msq: f64,
 
+    // === Us (slip velocity) derivatives ===
+    /// ∂Us/∂θ
+    pub us_t: f64,
+    /// ∂Us/∂δ*
+    pub us_d: f64,
+    /// ∂Us/∂Ue
+    pub us_u: f64,
+
+    // === CQ (equilibrium shear) derivatives ===
+    /// ∂CQ/∂θ
+    pub cq_t: f64,
+    /// ∂CQ/∂δ*
+    pub cq_d: f64,
+    /// ∂CQ/∂Ue
+    pub cq_u: f64,
+
+    // === DE (energy thickness) derivatives ===
+    /// ∂DE/∂θ
+    pub de_t: f64,
+    /// ∂DE/∂δ*
+    pub de_d: f64,
+
     // === Edge velocity derivative ===
     /// dUe/dx (velocity gradient)
     pub u_x: f64,
@@ -108,6 +130,12 @@ pub struct BlStation {
     pub cf: f64,
     /// Dissipation coefficient CD
     pub cd: f64,
+    /// Normalized slip velocity Us (XFOIL US)
+    pub us: f64,
+    /// Equilibrium shear stress coefficient CQ (√Cτ_eq)
+    pub cq: f64,
+    /// Energy thickness DE from Green's correlation
+    pub de: f64,
     /// Mass defect Ue·δ* (used in viscous-inviscid coupling)
     pub mass_defect: f64,
 
@@ -148,6 +176,9 @@ impl BlStation {
             r_theta: 1000.0,
             cf: 0.003,
             cd: 0.001,
+            us: 0.5,
+            cq: 0.03,
+            de: 0.006,
             mass_defect: 0.002,
             is_laminar: true,
             is_wake: false,
@@ -328,6 +359,14 @@ mod tests {
         assert_eq!(derivs.cf_msq, 0.0);
         assert_eq!(derivs.cd_hk, 0.0);
         assert_eq!(derivs.cd_rt, 0.0);
+        assert_eq!(derivs.us_t, 0.0);
+        assert_eq!(derivs.us_d, 0.0);
+        assert_eq!(derivs.us_u, 0.0);
+        assert_eq!(derivs.cq_t, 0.0);
+        assert_eq!(derivs.cq_d, 0.0);
+        assert_eq!(derivs.cq_u, 0.0);
+        assert_eq!(derivs.de_t, 0.0);
+        assert_eq!(derivs.de_d, 0.0);
         assert_eq!(derivs.u_x, 0.0);
     }
 
