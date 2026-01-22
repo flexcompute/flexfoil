@@ -452,20 +452,60 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
             }
         }
         FlowType::Wake => {
-            // Wake: use DILW (xblsys.f:1070-1086)
-            let di_result = dissipation_wake(hk, station.r_theta);
-            let di_hk = di_result.di_hk;
-            let di_rt = di_result.di_rt;
-            // Chain rule
-            let di_u = di_hk * hk_u + di_rt * rt_u;
-            let di_t = di_hk * hk_t + di_rt * rt_t;
-            let di_d = di_hk * hk_d;
-            let di_ms = di_hk * hk_ms;
-            let di_re = di_rt * rt_re;
-            // Double dissipation for wake (two halves)
+            // Wake: compute BOTH turbulent outer layer AND laminar wake (DILW)
+            // Use whichever is larger, then double for two wake halves
+            // (xblsys.f:1007-1086)
+            
+            // First compute turbulent outer layer contribution (xblsys.f:1007-1037)
+            // This is the same formula used for turbulent BL, also applies to wake
+            let s2 = station.ctau;
+            let wake_hs = station.hs;
+            
+            // DD = S2^2 * (0.995-US) * 2.0/HS (xblsys.f:1010)
+            let dd_outer = s2 * s2 * (0.995 - us) * 2.0 / wake_hs;
+            let dd_outer_hs = -dd_outer / wake_hs;
+            let dd_outer_us = -s2 * s2 * 2.0 / wake_hs;
+            let dd_outer_s = 2.0 * s2 * (0.995 - us) * 2.0 / wake_hs;
+            
+            // Laminar stress contribution (xblsys.f:1025)
+            // DD = 0.15*(0.995-US)^2 / RT * 2.0/HS
+            let dd_lam = 0.15 * (0.995 - us).powi(2) / station.r_theta * 2.0 / wake_hs;
+            let dd_lam_us = -0.15 * (0.995 - us) * 2.0 / station.r_theta * 2.0 / wake_hs;
+            let dd_lam_hs = -dd_lam / wake_hs;
+            let dd_lam_rt = -dd_lam / station.r_theta;
+            
+            // Total turbulent/wake DI2
+            let di2_turb = dd_outer + dd_lam;
+            let di2_turb_hs = dd_outer_hs + dd_lam_hs;
+            let di2_turb_us = dd_outer_us + dd_lam_us;
+            let di2_turb_rt = dd_lam_rt;
+            let di2_turb_s = dd_outer_s;
+            
+            // Also compute DILW (laminar wake dissipation)
+            let di_lam_wake = dissipation_wake(hk, station.r_theta);
+            
+            // Use max(DI2_turb, DILW) (xblsys.f:1073)
+            let (di_base, di_s, di_hs_deriv, di_us_deriv, di_hk_deriv, di_rt_deriv) = 
+                if di_lam_wake.di > di2_turb {
+                    // Use laminar wake
+                    (di_lam_wake.di, 0.0, 0.0, 0.0, di_lam_wake.di_hk, di_lam_wake.di_rt)
+                } else {
+                    // Use turbulent outer layer
+                    (di2_turb, di2_turb_s, di2_turb_hs, di2_turb_us, 0.0, di2_turb_rt)
+                };
+            
+            // Chain rule for derivatives
+            // di depends on hk, hs, us, rt, s - need to convert to primary variables
+            let di_u = di_hk_deriv * hk_u + di_hs_deriv * hs_hk * hk_u + di_us_deriv * us_u + di_rt_deriv * rt_u;
+            let di_t = di_hk_deriv * hk_t + di_hs_deriv * hs_hk * hk_t + di_us_deriv * us_t + di_rt_deriv * rt_t;
+            let di_d = di_hk_deriv * hk_d + di_hs_deriv * hs_hk * hk_d + di_us_deriv * us_d;
+            let di_ms = di_hk_deriv * hk_ms + di_hs_deriv * hs_hk * hk_ms + di_us_deriv * us_ms;
+            let di_re = di_rt_deriv * rt_re;
+            
+            // Double dissipation for wake (two halves) (xblsys.f:1089-1094)
             (
-                di_result.di * 2.0,
-                0.0,
+                di_base * 2.0,
+                di_s * 2.0,
                 di_u * 2.0,
                 di_t * 2.0,
                 di_d * 2.0,
@@ -503,6 +543,73 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
     // Store H derivative (for compatibility)
     station.derivs.h_theta = h_t;
     station.derivs.h_delta_star = h_d;
+}
+
+/// Compute BL secondary variables with debug output
+///
+/// Same as [`blvar`] but also emits debug events when debug collection is active.
+/// This matches XFOIL's BLVAR instrumented output.
+///
+/// # Arguments
+/// * `station` - Mutable BL station with primary variables set
+/// * `flow_type` - Flow type (Laminar, Turbulent, Wake)
+/// * `msq` - Mach number squared
+/// * `re` - Reference Reynolds number
+/// * `iteration` - Current solver iteration (for debug output)
+/// * `side` - Side index (1 or 2 for upper/lower)
+/// * `ibl` - Station index along the side
+pub fn blvar_debug(
+    station: &mut BlStation,
+    flow_type: FlowType,
+    msq: f64,
+    re: f64,
+    iteration: usize,
+    side: usize,
+    ibl: usize,
+) {
+    // Capture inputs before computation
+    let input = crate::debug::BlvarInput {
+        x: station.x,
+        u: station.u,
+        theta: station.theta,
+        delta_star: station.delta_star,
+        ctau: station.ctau,
+        ampl: station.ampl,
+    };
+
+    // Run the actual computation
+    blvar(station, flow_type, msq, re);
+
+    // Emit debug event if collection is active
+    if crate::debug::is_debug_active() {
+        let output = crate::debug::BlvarOutput {
+            H: station.h,
+            Hk: station.hk,
+            Hs: station.hs,
+            Hc: station.hc,
+            Rtheta: station.r_theta,
+            Cf: station.cf,
+            Cd: station.cd,
+            Us: 0.0, // Us is computed locally, not stored on station
+            Cq: 0.0, // Cq is computed locally, not stored on station
+            De: 0.0, // De is computed locally, not stored on station
+        };
+
+        let flow_type_int = match flow_type {
+            FlowType::Laminar => 1,
+            FlowType::Turbulent => 2,
+            FlowType::Wake => 3,
+        };
+
+        crate::debug::add_event(crate::debug::DebugEvent::blvar(
+            iteration,
+            side,
+            ibl,
+            flow_type_int,
+            input,
+            output,
+        ));
+    }
 }
 
 /// Compute midpoint skin friction coefficient
@@ -613,6 +720,7 @@ pub fn bldif(
                 0.5 * (s1.r_theta + s2.r_theta),
             );
             let ax = ax_result.ax;
+            let ax_hk = ax_result.ax_hk; // Derivative of amplification rate w.r.t. Hk
             let dx = s2.x - s1.x;
 
             res.res_third = -(s2.ampl - s1.ampl - ax * dx);
@@ -623,6 +731,12 @@ pub fn bldif(
             jac.vs1[0][4] = ax; // ∂/∂X1
             jac.vs2[0][0] = 1.0; // ∂/∂AMPL2
             jac.vs2[0][4] = -ax; // -∂/∂X2
+
+            // δ* derivatives: ax depends on Hk, and Hk ≈ H = δ*/θ for incompressible
+            // ∂ax/∂δ* = ∂ax/∂Hk * ∂Hk/∂H * ∂H/∂δ* = ax_hk * 1 * (1/θ)
+            // The midpoint uses average, so each station contributes 0.5
+            jac.vs1[0][2] = 0.5 * ax_hk * dx / s1.theta;
+            jac.vs2[0][2] = 0.5 * ax_hk * dx / s2.theta;
         }
         FlowType::Turbulent | FlowType::Wake => {
             // Shear-lag equation (xblsys.f:1684-1841)
@@ -667,6 +781,17 @@ pub fn bldif(
             jac.vs2[0][0] = upw * (-scc * ald * dxi) - dea * 2.0 / s2.ctau.max(1e-20);
             jac.vs1[0][4] = -scc * (cqa - sa * ald) - dea * 2.0 * uq * DUXCON;
             jac.vs2[0][4] = scc * (cqa - sa * ald) + dea * 2.0 * uq * DUXCON;
+
+            // δ* derivatives for shear-lag equation:
+            // cqa (Hk average) depends on δ* through H = δ*/θ
+            // ∂cqa/∂δ*1 = (1-upw) * ∂Hk1/∂δ*1 = (1-upw) / θ1
+            // ∂cqa/∂δ*2 = upw * ∂Hk2/∂δ*2 = upw / θ2
+            // Also, uq depends on da = 0.5*(δ*1 + δ*2), so ∂uq/∂δ* = -uq / (2*da)
+            let uq_d = -uq / da.max(1e-10);
+            jac.vs1[0][2] = -scc * (1.0 - upw) * dxi / s1.theta
+                - dea * 2.0 * 0.5 * uq_d * dxi * DUXCON;
+            jac.vs2[0][2] =
+                -scc * upw * dxi / s2.theta - dea * 2.0 * 0.5 * uq_d * dxi * DUXCON;
         }
     }
 
@@ -698,6 +823,15 @@ pub fn bldif(
     jac.vs1[1][4] = 0.5 * cfx / s1.x;
     jac.vs2[1][4] = -0.5 * cfx / s2.x;
 
+    // ∂/∂δ*1, ∂/∂δ*2 (via H affecting btmp)
+    // btmp = ha + 2 - msq/2, where ha = 0.5*(H1 + H2)
+    // H = δ*/θ, so ∂H/∂δ* = 1/θ
+    // ∂btmp/∂δ*1 = 0.5 * ∂H1/∂δ*1 = 0.5 / θ1
+    // The term btmp * ulog contributes: ∂(btmp * ulog)/∂δ* = ulog * ∂btmp/∂δ*
+    // res_mom = -(tlog + btmp * ulog - ...), so ∂res_mom/∂δ* = -ulog * ∂btmp/∂δ*
+    jac.vs1[1][2] = -0.5 * ulog / s1.theta;
+    jac.vs2[1][2] = -0.5 * ulog / s2.theta;
+
     // === Shape parameter equation (xblsys.f:1901-1974) ===
     let hsa = 0.5 * (s1.hs + s2.hs);
     let hca = 0.5 * (s1.hc + s2.hc);
@@ -728,6 +862,98 @@ pub fn bldif(
     // DI contribution to Jacobian
     jac.vs1[2][0] = (1.0 - upw) * xot1 * xlog; // ∂/∂S1 (ctau affects DI for turbulent)
     jac.vs2[2][0] = upw * xot2 * xlog;
+
+    // ∂/∂δ*1, ∂/∂δ*2 for shape parameter equation
+    // res_shape = -(hlog + btmp_shape * ulog + xlog * (0.5 * cfx_shape - dix))
+    // where:
+    //   hlog = ln(Hs2/Hs1), and Hs depends on Hk ≈ H = δ*/θ
+    //   btmp_shape = 2*Hc/Hs + 1 - H, where H = δ*/θ
+    //
+    // Chain rule: ∂hlog/∂δ*1 = -∂Hs1/∂δ*1 / Hs1
+    //             ∂hlog/∂δ*2 = ∂Hs2/∂δ*2 / Hs2
+    // where ∂Hs/∂δ* = ∂Hs/∂Hk * ∂Hk/∂H * ∂H/∂δ* ≈ hs_hk * 1 * (1/θ)
+    //
+    // For btmp_shape: ∂btmp_shape/∂δ* = -∂H/∂δ* = -1/θ (the -H term)
+    //
+    // Use stored derivative hs_hk from BlStation, or approximate as ~0.5 for typical Hk
+    let hs_hk1 = s1.derivs.hs_hk.abs().max(0.5);
+    let hs_hk2 = s2.derivs.hs_hk.abs().max(0.5);
+
+    // hlog contribution: ∂(-hlog)/∂δ* = -∂hlog/∂δ*
+    let dhlog_dd1 = -hs_hk1 / (s1.hs.max(0.1) * s1.theta);
+    let dhlog_dd2 = hs_hk2 / (s2.hs.max(0.1) * s2.theta);
+
+    // btmp_shape contribution: ∂(-btmp_shape * ulog)/∂δ* = -ulog * ∂btmp_shape/∂δ*
+    // ∂btmp_shape/∂δ* = -1/θ (from the -H term)
+    let dbtmp_dd1 = -1.0 / s1.theta;
+    let dbtmp_dd2 = -1.0 / s2.theta;
+
+    jac.vs1[2][2] = -dhlog_dd1 + ulog / s1.theta; // -∂hlog/∂δ*1 - ulog * (-1/θ1)
+    jac.vs2[2][2] = -dhlog_dd2 + ulog / s2.theta; // -∂hlog/∂δ*2 - ulog * (-1/θ2)
+
+    (res, jac)
+}
+
+/// Compute BL equation residuals and Jacobian with debug output
+///
+/// Same as [`bldif`] but also emits debug events when debug collection is active.
+/// This matches XFOIL's BLDIF instrumented output.
+///
+/// # Arguments
+/// * `s1` - Upstream station (station 1)
+/// * `s2` - Downstream station (station 2)
+/// * `flow_type` - Laminar, Turbulent, or Wake
+/// * `msq` - Mach number squared
+/// * `re` - Reference Reynolds number
+/// * `iteration` - Current solver iteration
+/// * `side` - Side index (1 or 2)
+/// * `ibl` - Station index along the side
+pub fn bldif_debug(
+    s1: &BlStation,
+    s2: &BlStation,
+    flow_type: FlowType,
+    msq: f64,
+    re: f64,
+    iteration: usize,
+    side: usize,
+    ibl: usize,
+) -> (BlResiduals, BlJacobian) {
+    // Run the actual computation
+    let (res, jac) = bldif(s1, s2, flow_type, msq, re);
+
+    // Emit debug event if collection is active
+    if crate::debug::is_debug_active() {
+        let flow_type_int = match flow_type {
+            FlowType::Laminar => 1,
+            FlowType::Turbulent => 2,
+            FlowType::Wake => 3,
+        };
+
+        // Convert 3x5 Jacobian to 4x5 format matching XFOIL (add 4th row for Ue constraint)
+        let vs1: [[f64; 5]; 4] = [
+            jac.vs1[0],
+            jac.vs1[1],
+            jac.vs1[2],
+            [0.0, 0.0, 0.0, 0.0, 0.0], // 4th row: Ue constraint (handled elsewhere)
+        ];
+        let vs2: [[f64; 5]; 4] = [
+            jac.vs2[0],
+            jac.vs2[1],
+            jac.vs2[2],
+            [0.0, 0.0, 0.0, 0.0, 0.0],
+        ];
+        let vsrez: [f64; 4] = [res.res_third, res.res_mom, res.res_shape, 0.0];
+
+        crate::debug::add_event(crate::debug::DebugEvent::bldif(
+            iteration,
+            side,
+            ibl,
+            flow_type_int,
+            vs1,
+            vs2,
+            vsrez,
+        ));
+    }
 
     (res, jac)
 }
@@ -1228,5 +1454,195 @@ mod tests {
             (s_lam.hs - s_turb.hs).abs() > 1e-6,
             "Laminar and turbulent Hs should differ"
         );
+    }
+
+    // =========================================================================
+    // Jacobian Non-Singularity Tests
+    // =========================================================================
+
+    /// Helper function to compute determinant of 3x3 matrix
+    fn det_3x3(m: &[[f64; 3]; 3]) -> f64 {
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+    }
+
+    #[test]
+    fn test_bldif_jacobian_column2_nonzero_laminar() {
+        // Verify column 2 (delta_star derivatives) is populated for laminar flow
+        let mut s1 = BlStation::new();
+        s1.x = 0.1;
+        s1.u = 1.0;
+        s1.theta = 0.001;
+        s1.delta_star = 0.0026;
+
+        let mut s2 = BlStation::new();
+        s2.x = 0.15;
+        s2.u = 0.98;
+        s2.theta = 0.0012;
+        s2.delta_star = 0.0032;
+
+        blvar(&mut s1, FlowType::Laminar, 0.0, 1e6);
+        blvar(&mut s2, FlowType::Laminar, 0.0, 1e6);
+
+        let (_, jac) = bldif(&s1, &s2, FlowType::Laminar, 0.0, 1e6);
+
+        // Check that column 2 (delta_star derivatives) is NOT all zeros
+        let col2_nonzero_vs1 =
+            jac.vs1[0][2].abs() > 1e-20 || jac.vs1[1][2].abs() > 1e-20 || jac.vs1[2][2].abs() > 1e-20;
+        let col2_nonzero_vs2 =
+            jac.vs2[0][2].abs() > 1e-20 || jac.vs2[1][2].abs() > 1e-20 || jac.vs2[2][2].abs() > 1e-20;
+
+        assert!(
+            col2_nonzero_vs1,
+            "VS1 column 2 should have at least one non-zero entry: [{}, {}, {}]",
+            jac.vs1[0][2], jac.vs1[1][2], jac.vs1[2][2]
+        );
+        assert!(
+            col2_nonzero_vs2,
+            "VS2 column 2 should have at least one non-zero entry: [{}, {}, {}]",
+            jac.vs2[0][2], jac.vs2[1][2], jac.vs2[2][2]
+        );
+    }
+
+    #[test]
+    fn test_bldif_jacobian_column2_nonzero_turbulent() {
+        // Verify column 2 (delta_star derivatives) is populated for turbulent flow
+        let mut s1 = BlStation::new();
+        s1.x = 0.5;
+        s1.u = 1.0;
+        s1.theta = 0.003;
+        s1.delta_star = 0.006;
+        s1.ctau = 0.15;
+        s1.is_laminar = false;
+        s1.is_turbulent = true;
+
+        let mut s2 = BlStation::new();
+        s2.x = 0.55;
+        s2.u = 0.95;
+        s2.theta = 0.0035;
+        s2.delta_star = 0.007;
+        s2.ctau = 0.14;
+        s2.is_laminar = false;
+        s2.is_turbulent = true;
+
+        blvar(&mut s1, FlowType::Turbulent, 0.0, 1e6);
+        blvar(&mut s2, FlowType::Turbulent, 0.0, 1e6);
+
+        let (_, jac) = bldif(&s1, &s2, FlowType::Turbulent, 0.0, 1e6);
+
+        // Check that column 2 (delta_star derivatives) is NOT all zeros
+        let col2_nonzero_vs1 =
+            jac.vs1[0][2].abs() > 1e-20 || jac.vs1[1][2].abs() > 1e-20 || jac.vs1[2][2].abs() > 1e-20;
+        let col2_nonzero_vs2 =
+            jac.vs2[0][2].abs() > 1e-20 || jac.vs2[1][2].abs() > 1e-20 || jac.vs2[2][2].abs() > 1e-20;
+
+        assert!(
+            col2_nonzero_vs1,
+            "VS1 column 2 (turbulent) should have at least one non-zero entry: [{}, {}, {}]",
+            jac.vs1[0][2], jac.vs1[1][2], jac.vs1[2][2]
+        );
+        assert!(
+            col2_nonzero_vs2,
+            "VS2 column 2 (turbulent) should have at least one non-zero entry: [{}, {}, {}]",
+            jac.vs2[0][2], jac.vs2[1][2], jac.vs2[2][2]
+        );
+    }
+
+    #[test]
+    fn test_bldif_jacobian_3x3_nonsingular() {
+        // Verify that the 3x3 submatrix (columns 0,1,2) is non-singular
+        // This is the matrix that gets inverted in the Newton solver
+        let mut s1 = BlStation::new();
+        s1.x = 0.1;
+        s1.u = 1.0;
+        s1.theta = 0.001;
+        s1.delta_star = 0.0026;
+
+        let mut s2 = BlStation::new();
+        s2.x = 0.15;
+        s2.u = 0.98;
+        s2.theta = 0.0012;
+        s2.delta_star = 0.0032;
+
+        blvar(&mut s1, FlowType::Laminar, 0.0, 1e6);
+        blvar(&mut s2, FlowType::Laminar, 0.0, 1e6);
+
+        let (_, jac) = bldif(&s1, &s2, FlowType::Laminar, 0.0, 1e6);
+
+        // Extract 3x3 submatrix from VS2 (downstream station)
+        let va: [[f64; 3]; 3] = [
+            [jac.vs2[0][0], jac.vs2[0][1], jac.vs2[0][2]],
+            [jac.vs2[1][0], jac.vs2[1][1], jac.vs2[1][2]],
+            [jac.vs2[2][0], jac.vs2[2][1], jac.vs2[2][2]],
+        ];
+
+        let det = det_3x3(&va);
+
+        assert!(
+            det.abs() > 1e-20,
+            "3x3 Jacobian submatrix (VA) should be non-singular. det = {:.2e}",
+            det
+        );
+    }
+
+    #[test]
+    fn test_bldif_jacobian_nonsingular_across_conditions() {
+        // Test non-singularity across various BL states
+        let test_cases = [
+            // (theta, h_ratio, x, ue, flow_type)
+            (0.0005, 2.6, 0.05, 1.1, FlowType::Laminar),   // Near stagnation
+            (0.001, 2.6, 0.2, 1.0, FlowType::Laminar),     // Mid-chord laminar
+            (0.002, 3.0, 0.5, 0.9, FlowType::Laminar),     // APG laminar
+            (0.003, 1.4, 0.6, 0.95, FlowType::Turbulent),  // Turbulent attached
+            (0.005, 1.8, 0.9, 0.85, FlowType::Turbulent),  // Turbulent APG
+            (0.008, 2.0, 1.5, 0.3, FlowType::Wake),        // Wake
+        ];
+
+        for (theta, h_ratio, x, ue, flow_type) in test_cases {
+            let mut s1 = BlStation::new();
+            s1.x = x;
+            s1.u = ue;
+            s1.theta = theta;
+            s1.delta_star = theta * h_ratio;
+            s1.ctau = 0.1;
+            s1.is_laminar = flow_type == FlowType::Laminar;
+            s1.is_turbulent = flow_type == FlowType::Turbulent;
+            s1.is_wake = flow_type == FlowType::Wake;
+
+            let mut s2 = BlStation::new();
+            s2.x = x + 0.05;
+            s2.u = ue * 0.98;
+            s2.theta = theta * 1.1;
+            s2.delta_star = theta * h_ratio * 1.15;
+            s2.ctau = 0.09;
+            s2.is_laminar = s1.is_laminar;
+            s2.is_turbulent = s1.is_turbulent;
+            s2.is_wake = s1.is_wake;
+
+            blvar(&mut s1, flow_type, 0.0, 1e6);
+            blvar(&mut s2, flow_type, 0.0, 1e6);
+
+            let (_, jac) = bldif(&s1, &s2, flow_type, 0.0, 1e6);
+
+            // Extract 3x3 submatrix
+            let va: [[f64; 3]; 3] = [
+                [jac.vs2[0][0], jac.vs2[0][1], jac.vs2[0][2]],
+                [jac.vs2[1][0], jac.vs2[1][1], jac.vs2[1][2]],
+                [jac.vs2[2][0], jac.vs2[2][1], jac.vs2[2][2]],
+            ];
+
+            let det = det_3x3(&va);
+
+            assert!(
+                det.abs() > 1e-20,
+                "Jacobian should be non-singular for {:?} at x={}, θ={}, H={}. det = {:.2e}",
+                flow_type,
+                x,
+                theta,
+                h_ratio,
+                det
+            );
+        }
     }
 }

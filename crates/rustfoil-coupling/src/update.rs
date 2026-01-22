@@ -236,6 +236,22 @@ pub fn update_stations(
     for i in 0..n {
         let (dctau, dthet, ddstr, duedg) = changes[i];
 
+        // Emit debug event before applying updates
+        if rustfoil_bl::is_debug_active() {
+            // Compute mass defect change for debug output
+            let dmass = ddstr * stations[i].u + stations[i].delta_star * duedg;
+            rustfoil_bl::add_event(rustfoil_bl::DebugEvent::update(
+                0, // iteration set by caller
+                1, // side (TODO: track properly)
+                i,
+                rlx * dctau,
+                rlx * dthet,
+                rlx * dmass,
+                rlx * duedg,
+                rlx,
+            ));
+        }
+
         // Apply relaxed updates
         if stations[i].is_laminar {
             stations[i].ampl += rlx * dctau;

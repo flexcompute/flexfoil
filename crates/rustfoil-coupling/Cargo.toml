@@ -11,3 +11,5 @@ nalgebra = "0.33"
 [dev-dependencies]
 rustfoil-testkit = { path = "../rustfoil-testkit" }
 approx = "0.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

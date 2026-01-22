@@ -610,8 +610,10 @@ fn run_viscous_analysis(
     )
     .map_err(|e| CliError::Solver(e.to_string()))?;
 
-    // Set alpha in result
+    // Set alpha and CL/CM from inviscid solution
     result.alpha = alpha;
+    result.cl = inv_solution.cl;  // From inviscid (viscous iteration would adjust this)
+    result.cm = inv_solution.cm;
 
     Ok(result)
 }

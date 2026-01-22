@@ -24,7 +24,7 @@ use rustfoil_bl::equations::{blvar, FlowType};
 use rustfoil_bl::state::BlStation;
 use rustfoil_coupling::march::{march_fixed_ue, march_surface, MarchConfig, MarchResult};
 use rustfoil_coupling::newton::BlNewtonSystem;
-use rustfoil_coupling::solve::solve_bl_system;
+use rustfoil_coupling::solve::solve_coupled_system;
 use rustfoil_coupling::update::{set_edge_velocities, update_stations, UpdateConfig};
 
 use super::config::ViscousSolverConfig;
@@ -242,11 +242,22 @@ pub fn solve_viscous(
             break;
         }
 
-        // Build Newton system from current BL state
-        newton_system.build(stations, &flow_types, msq, re);
+        // Build Newton system from current BL state including VM matrix for coupling
+        newton_system.build_with_vm(stations, &flow_types, msq, re, dij);
 
-        // Solve block-tridiagonal system
-        let deltas_raw = solve_bl_system(&newton_system);
+        // Emit debug event for Newton system (similar to XFOIL's DBGSETBL)
+        if rustfoil_bl::is_debug_active() {
+            // Log RMS residual before solve
+            let rms_res = newton_system.residual_norm() / ((n - 1) as f64).sqrt();
+            let max_res = newton_system.max_residual();
+            eprintln!(
+                "Newton iter {}: RMS residual = {:.6e}, max = {:.6e}",
+                iteration, rms_res, max_res
+            );
+        }
+
+        // Solve coupled system with VM matrix for full viscous-inviscid interaction
+        let deltas_raw = solve_coupled_system(&newton_system);
 
         // Check if solution contains NaN - if so, reduce step size or skip
         let deltas_valid = deltas_raw.iter().all(|d| d.iter().all(|v| v.is_finite()));

@@ -550,6 +550,8 @@ dependencies = [
  "rustfoil-bl",
  "rustfoil-core",
  "rustfoil-testkit",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
