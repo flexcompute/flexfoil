@@ -194,19 +194,52 @@ This suggests:
 
 ---
 
-## Recommended Fix
+## Root Cause Analysis
 
-1. **Correct the Hk derivatives in `newton_solve_station`**:
-   ```rust
-   let hk2_t = -station.hk / station.theta;  // Correct: negative
-   let hk2_d = 1.0 / station.theta;          // Correct: 1/θ, positive
-   ```
+Testing revealed that the issue is more complex than just the Hk derivatives:
 
-2. **Investigate why flat plate fails with correct derivatives**:
-   - Check if inverse mode is ever triggered for flat plates
-   - Compare the minimum Hk clamp behavior
-   - Verify the similarity station initialization
+1. **With correct derivatives**, inverse mode gets triggered for flat plates at early
+   stations (x=0.02-0.04) because the Newton updates predict H will exceed 3.8.
+   
+2. **Once in inverse mode**, the correct derivatives cause H to spiral down to the
+   minimum clamp (1.02), breaking the flat plate solution.
+
+3. **The debug trace shows**:
+   - x=0.02, iter=5: H_curr=3.25, dθ=4.8e-6, dδ*=5.76e-5, h_test=3.82 (triggers inverse)
+   - The Newton update for δ* is ~12x larger than for θ, causing H to increase
+
+4. **The "wrong" derivatives accidentally stabilize the solver** by preventing the
+   excessive H growth that triggers inverse mode.
+
+### Key Finding
+
+The problem is NOT just in the inverse mode constraint - the first 3 equations
+from `bldif` are producing Newton updates that incorrectly predict H will exceed
+limits. This triggers a cascade:
+
+1. Direct mode computes update with dδ* >> dθ
+2. `h_test = (δ* + dδ*) / (θ + dθ)` exceeds hmax
+3. Inverse mode is triggered
+4. With correct derivatives, inverse mode produces unstable solution
+5. H collapses to minimum clamp
+
+---
+
+## Investigation Path
+
+1. **Examine the shape equation Jacobian in `bldif`**:
+   - Check derivatives ∂residual/∂θ and ∂residual/∂δ*
+   - Compare with XFOIL's `BLDIF` (xblsys.f:1901-1976)
+   - The δ* update being 12x larger than θ update suggests Jacobian imbalance
+
+2. **Check the h_test computation**:
+   - The check uses `(δ* + rlx*dδ*) / (θ + rlx*dθ)`
+   - XFOIL may use a different criterion for switching to inverse mode
 
 3. **Consider using `BlStation.derivs` consistently**:
    - The `blvar` function already computes `hk_h * h_theta` and `hk_h * h_delta_star`
-   - Use these stored derivatives instead of recomputing in `newton_solve_station`
+   - Use these stored derivatives instead of recomputing
+
+4. **Compare station-by-station Jacobian matrices**:
+   - Add instrumentation to output full VS2 matrix at problem stations
+   - Compare with XFOIL's debug output
