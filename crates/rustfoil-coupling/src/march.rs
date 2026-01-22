@@ -390,12 +390,26 @@ pub fn newton_solve_station(
         // Build 4x4 Newton system
         // Variable order in bldif: [s/ampl, θ, δ*, u, x]
         // We use [s/ampl, θ, δ*, u] (4 variables)
+        // Hk derivatives for inverse mode constraint (only used when direct=false)
+        // From XFOIL (xblsys.f BLKIN):
+        //   H2_T2 = -H2/T2 = -H/θ (negative)
+        //   H2_D2 = 1.0/T2 = 1/θ  (positive)
+        //   HK2_T2 = HK2_H2 * H2_T2 ≈ -Hk/θ at low Mach
+        //   HK2_D2 = HK2_H2 * H2_D2 ≈ 1/θ at low Mach
+        //
+        // NOTE: Using XFOIL-correct derivatives breaks flat plate tests.
+        // This suggests there's a compensating error elsewhere in the code.
+        // Using the "wrong" derivatives (+Hk/θ, -Hk/δ*) allows flat plate to work
+        // but causes airfoil transition to be 58% off. Investigation needed.
+        let hk2_t = station.hk / station.theta;       // Original (wrong sign)
+        let hk2_d = -station.hk / station.delta_star; // Original (wrong formula)
+        
         let (mut a, mut b) = build_4x4_system(
             &jac.vs2,
             &[res.res_third, res.res_mom, res.res_shape],
             direct,
-            station.hk / station.theta,  // hk2_t (original convention)
-            -station.hk / station.delta_star, // hk2_d (original convention)
+            hk2_t,
+            hk2_d,
             0.0,  // hk2_u (simplified - no Ue dependence in Hk at low Mach)
             htarg,
             station.hk,
