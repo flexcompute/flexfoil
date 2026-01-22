@@ -795,42 +795,98 @@ pub fn bldif(
         }
     }
 
-    // === Momentum equation (xblsys.f:1843-1899) ===
+    // === Momentum equation (xblsys.f:1864-1920) ===
+    // XFOIL reference variables:
+    //   HA = 0.5*(H1 + H2)
+    //   BTMP = HA + 2.0 - MA + HWA (we ignore HWA wake term)
+    //   CFX = 0.50*CFM*XA/TA + 0.25*(CF1*X1/T1 + CF2*X2/T2)
+    //   REZT = TLOG + BTMP*ULOG - XLOG*0.5*CFX
+    //   VSREZ(2) = -REZT
+    //
+    // Jacobian is computed as derivative of REZT (unnegated residual)
     let ha = 0.5 * (s1.h + s2.h);
     let ma_avg = 0.5 * msq;
     let xa = 0.5 * (s1.x + s2.x);
     let ta = 0.5 * (s1.theta + s2.theta);
 
-    // Get midpoint Cf
-    let (cfm, _, _, _, _, _) = blmid(s1, s2, flow_type, msq);
+    // Get midpoint Cf and its derivatives
+    let (cfm, cfm_hk1, cfm_hk2, cfm_rt1, cfm_rt2, _) = blmid(s1, s2, flow_type, msq);
 
-    // CFX term
+    // CFX term: 0.50*CFM*XA/TA + 0.25*(CF1*X1/T1 + CF2*X2/T2)
     let cfx = 0.5 * cfm * xa / ta + 0.25 * (s1.cf * s1.x / s1.theta + s2.cf * s2.x / s2.theta);
+
+    // Partial derivatives of CFX w.r.t. Cf values
+    let cfx_cfm = 0.5 * xa / ta;
+    let cfx_cf1 = 0.25 * s1.x / s1.theta;
+    let cfx_cf2 = 0.25 * s2.x / s2.theta;
 
     let btmp = ha + 2.0 - ma_avg;
 
-    // Momentum residual: d(ln θ)/dx + (H+2-M²) * d(ln Ue)/dx = Cf/2 * x/θ
+    // Momentum residual: VSREZ(2) = -REZT = -(TLOG + BTMP*ULOG - XLOG*0.5*CFX)
     res.res_mom = -(tlog + btmp * ulog - xlog * 0.5 * cfx);
 
-    // Jacobian entries for momentum equation
-    // ∂/∂T1, ∂/∂T2 (via tlog)
-    jac.vs1[1][1] = 1.0 / s1.theta;
-    jac.vs2[1][1] = -1.0 / s2.theta;
-    // ∂/∂U1, ∂/∂U2 (via ulog)
-    jac.vs1[1][3] = btmp / s1.u;
-    jac.vs2[1][3] = -btmp / s2.u;
-    // ∂/∂X1, ∂/∂X2 (via xlog)
-    jac.vs1[1][4] = 0.5 * cfx / s1.x;
-    jac.vs2[1][4] = -0.5 * cfx / s2.x;
+    // Jacobian coefficients (from XFOIL xblsys.f lines 1887-1897)
+    // Z_CFX = -XLOG*0.5, Z_HA = ULOG, Z_TL = DDLOG = 1.0, Z_UL = DDLOG*BTMP
+    let z_cfx = -xlog * 0.5;
+    let z_ha = ulog;
+    let z_cfm = z_cfx * cfx_cfm;
+    let z_cf1 = z_cfx * cfx_cf1;
+    let z_cf2 = z_cfx * cfx_cf2;
 
-    // ∂/∂δ*1, ∂/∂δ*2 (via H affecting btmp)
-    // btmp = ha + 2 - msq/2, where ha = 0.5*(H1 + H2)
-    // H = δ*/θ, so ∂H/∂δ* = 1/θ
-    // ∂btmp/∂δ*1 = 0.5 * ∂H1/∂δ*1 = 0.5 / θ1
-    // The term btmp * ulog contributes: ∂(btmp * ulog)/∂δ* = ulog * ∂btmp/∂δ*
-    // res_mom = -(tlog + btmp * ulog - ...), so ∂res_mom/∂δ* = -ulog * ∂btmp/∂δ*
-    jac.vs1[1][2] = -0.5 * ulog / s1.theta;
-    jac.vs2[1][2] = -0.5 * ulog / s2.theta;
+    // Jacobian entries for momentum equation
+    // These are derivatives of REZT (the unnegated residual)
+    // XFOIL: VS1(2,2) = 0.5*Z_HA*H1_T1 + Z_CFM*CFM_T1 + Z_CF1*CF1_T1 + Z_T1
+    // The θ derivatives (via TLOG and via Cf(Hk(H)))
+    let z_t1 = -1.0 / s1.theta + z_cfx * (-0.25 * s1.cf * s1.x / (s1.theta * s1.theta));
+    let z_t2 = 1.0 / s2.theta + z_cfx * (-0.25 * s2.cf * s2.x / (s2.theta * s2.theta));
+
+    // Compute chain rule derivatives:
+    // H_T (∂H/∂θ) = -δ*/θ² = -H/θ
+    // Hk_T (∂Hk/∂θ) = Hk_H * H_T
+    let h1_t = s1.derivs.h_theta;
+    let h2_t = s2.derivs.h_theta;
+    let hk1_t = s1.derivs.hk_h * h1_t;
+    let hk2_t = s2.derivs.hk_h * h2_t;
+
+    // Rθ derivatives: Rθ = Re * Ue * θ, so ∂Rθ/∂θ = Re * Ue
+    // We get Re*Ue from Rθ/θ
+    let rt1_t = s1.r_theta / s1.theta.max(1e-12);
+    let rt2_t = s2.r_theta / s2.theta.max(1e-12);
+
+    // Full θ Jacobian includes contributions from both Hk and Rθ:
+    // CFM_T = CFM_HK * HK_T + CFM_RT * RT_T
+    // CF_T  = CF_HK * HK_T + CF_RT * RT_T
+    jac.vs1[1][1] = 0.5 * z_ha * h1_t
+        + z_cfm * (cfm_hk1 * hk1_t + cfm_rt1 * rt1_t)
+        + z_cf1 * (s1.derivs.cf_hk * hk1_t + s1.derivs.cf_rt * rt1_t)
+        + z_t1;
+    jac.vs2[1][1] = 0.5 * z_ha * h2_t
+        + z_cfm * (cfm_hk2 * hk2_t + cfm_rt2 * rt2_t)
+        + z_cf2 * (s2.derivs.cf_hk * hk2_t + s2.derivs.cf_rt * rt2_t)
+        + z_t2;
+
+    // The δ* derivatives (via H and via Cf(Hk(H)))
+    // XFOIL: VS2(2,3) = 0.5*Z_HA*H2_D2 + Z_CFM*CFM_D2 + Z_CF2*CF2_D2
+    // H_D (∂H/∂δ*) = 1/θ
+    // Hk_D (∂Hk/∂δ*) = Hk_H * H_D
+    let h1_d = s1.derivs.h_delta_star;
+    let h2_d = s2.derivs.h_delta_star;
+    let hk1_d = s1.derivs.hk_h * h1_d;
+    let hk2_d = s2.derivs.hk_h * h2_d;
+
+    jac.vs1[1][2] = 0.5 * z_ha * h1_d + z_cfm * cfm_hk1 * hk1_d + z_cf1 * s1.derivs.cf_hk * hk1_d;
+    jac.vs2[1][2] = 0.5 * z_ha * h2_d + z_cfm * cfm_hk2 * hk2_d + z_cf2 * s2.derivs.cf_hk * hk2_d;
+
+    // The Ue derivatives (via ULOG and via Cf)
+    // XFOIL: Z_U1 = -Z_UL/U1, Z_U2 = Z_UL/U2 where Z_UL = DDLOG*BTMP = BTMP
+    jac.vs1[1][3] = -btmp / s1.u;
+    jac.vs2[1][3] = btmp / s2.u;
+
+    // The x derivatives (via XLOG and CFX)
+    // XFOIL: Z_X1 = -Z_XL/X1 + Z_CFX*CFX_X1 where Z_XL = -DDLOG*0.5*CFX
+    let z_xl = -0.5 * cfx;
+    jac.vs1[1][4] = -z_xl / s1.x + z_cfx * (0.25 * s1.cf / s1.theta + 0.5 * cfm / ta * 0.5);
+    jac.vs2[1][4] = z_xl / s2.x + z_cfx * (0.25 * s2.cf / s2.theta + 0.5 * cfm / ta * 0.5);
 
     // === Shape parameter equation (xblsys.f:1901-1974) ===
     let hsa = 0.5 * (s1.hs + s2.hs);
