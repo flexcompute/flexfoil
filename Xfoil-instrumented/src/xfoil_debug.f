@@ -11,12 +11,28 @@ C***********************************************************************
 C---- Block data to initialize debug common block
       BLOCK DATA XDBGINIT
       COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      COMMON /XDBGCTX/ ISDBG, IBLDBG
       LOGICAL LDBG
       INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER ISDBG, IBLDBG
       DATA LDBG /.TRUE./
       DATA LUDBG /77/
       DATA IDBGCALL /0/
       DATA IDBGITER /0/
+      DATA ISDBG /0/
+      DATA IBLDBG /0/
+      END
+
+
+C---- Set the current station context for debug output inside TRCHEK2
+      SUBROUTINE DBGSETCTX(IS, IBL)
+      INTEGER IS, IBL
+      COMMON /XDBGCTX/ ISDBG, IBLDBG
+      INTEGER ISDBG, IBLDBG
+C
+      ISDBG = IS
+      IBLDBG = IBL
+      RETURN
       END
 
 
@@ -538,6 +554,104 @@ C
         WRITE(LUDBG,'(A)') '  "transition": false,'
       ENDIF
       WRITE(LUDBG,'(A,E15.8)') '  "x_transition": ', XT
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump TRCHEK2 iteration details for debugging N-factor evolution
+C     Uses ISDBG, IBLDBG from /XDBGCTX/ set by DBGSETCTX before TRCHEK call
+      SUBROUTINE DBGTRCHEK_DETAIL(ITAM, AXV, AMPL2V, RESV,
+     &                            TRANV, XTV, WF1V, WF2V)
+      INTEGER ITAM
+      REAL AXV, AMPL2V, RESV, XTV, WF1V, WF2V
+      LOGICAL TRANV
+      INCLUDE 'XBL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      COMMON /XDBGCTX/ ISDBG, IBLDBG
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER ISDBG, IBLDBG
+C
+      IF(.NOT.LDBG) RETURN
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "TRCHEK2_ITER",'
+      WRITE(LUDBG,'(A,I4,A)') '  "global_iter": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "side": ', ISDBG, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBLDBG, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "trchek_iter": ', ITAM, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "x1": ', X1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "x2": ', X2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ampl1": ', AMPL1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ampl2": ', AMPL2V, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ax": ', AXV, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "residual": ', RESV, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "wf1": ', WF1V, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "wf2": ', WF2V, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "xt": ', XTV, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Hk1": ', HK1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Hk2": ', HK2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Rt1": ', RT1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Rt2": ', RT2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "T1": ', T1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "T2": ', T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Ncrit": ', AMCRIT, ','
+      IF(TRANV) THEN
+        WRITE(LUDBG,'(A)') '  "transition": true'
+      ELSE
+        WRITE(LUDBG,'(A)') '  "transition": false'
+      ENDIF
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump TRCHEK2 final result with convergence info
+C     Uses ISDBG, IBLDBG from /XDBGCTX/ set by DBGSETCTX before TRCHEK call
+      SUBROUTINE DBGTRCHEK_FINAL(NITER, CONVERGED, AXV, XTV)
+      INTEGER NITER
+      LOGICAL CONVERGED
+      REAL AXV, XTV
+      INCLUDE 'XBL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      COMMON /XDBGCTX/ ISDBG, IBLDBG
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER ISDBG, IBLDBG
+C
+      IF(.NOT.LDBG) RETURN
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "TRCHEK2_FINAL",'
+      WRITE(LUDBG,'(A,I4,A)') '  "global_iter": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "side": ', ISDBG, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBLDBG, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "n_iterations": ', NITER, ','
+      IF(CONVERGED) THEN
+        WRITE(LUDBG,'(A)') '  "converged": true,'
+      ELSE
+        WRITE(LUDBG,'(A)') '  "converged": false,'
+      ENDIF
+      WRITE(LUDBG,'(A,E15.8,A)') '  "x1": ', X1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "x2": ', X2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ampl1": ', AMPL1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ampl2_final": ', AMPL2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ax_final": ', AXV, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "xt_final": ', XTV, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Ncrit": ', AMCRIT, ','
+      IF(TRAN) THEN
+        WRITE(LUDBG,'(A)') '  "transition": true,'
+      ELSE
+        WRITE(LUDBG,'(A)') '  "transition": false,'
+      ENDIF
+      IF(TRFORC) THEN
+        WRITE(LUDBG,'(A)') '  "forced": true'
+      ELSE
+        WRITE(LUDBG,'(A)') '  "forced": false'
+      ENDIF
       WRITE(LUDBG,'(A)') '}'
       RETURN
       END

@@ -45,6 +45,12 @@ struct InitialValues {
 struct FinalValues {
     theta: f64,
     delta_star: f64,
+    #[serde(default)]
+    ampl: Option<f64>,
+    #[serde(rename = "Hk", default)]
+    hk: Option<f64>,
+    #[serde(rename = "Rtheta", default)]
+    rtheta: Option<f64>,
 }
 
 fn load_reference() -> Option<MrchueReference> {
@@ -92,11 +98,126 @@ fn test_theta_evolution_station_by_station() {
     let config = MarchConfig {
         ncrit: ref_data.metadata.ncrit,
         max_iter: 25,
-        tolerance: 1e-5,
+        tolerance: 0.1, // Match XFOIL's convergence criterion
         ..Default::default()
     };
 
     let result = march_fixed_ue(&x, &ue, re, msq, &config);
+
+    // Print transition info
+    println!("\n=== Transition Info ===");
+    println!("RustFoil transition: x={:?}, station={:?}", 
+             result.x_transition, result.transition_index);
+    println!("Ncrit = {}", ref_data.metadata.ncrit);
+    
+    // Find XFOIL transition from ampl values
+    for (i, station) in side_data.stations.iter().enumerate() {
+        let ampl = station.final_values.ampl.unwrap_or(0.0);
+        if ampl >= ref_data.metadata.ncrit {
+            println!("XFOIL transition: x={:.6}, station={} (ampl={:.4})", 
+                     station.x, i, ampl);
+            break;
+        }
+    }
+    
+    // Analyze H growth pattern between XFOIL and us
+    println!("\n=== H Growth Pattern Analysis ===");
+    println!("{:>4} {:>10} {:>8} {:>8} {:>10} {:>8} {:>8} {:>10}",
+             "Idx", "x", "H_xfoil", "H_rust", "H_err%", "dH_xf%", "dH_rs%", "dH_err");
+    
+    for i in 15..25.min(result.stations.len()) {
+        let xfoil = &side_data.stations[i];
+        let ours = &result.stations[i];
+        
+        let h_xfoil = xfoil.final_values.delta_star / xfoil.final_values.theta;
+        let h_rust = ours.h;
+        let h_err = (h_rust - h_xfoil) / h_xfoil * 100.0;
+        
+        // H growth from previous station
+        let (dh_xf, dh_rs) = if i > 0 {
+            let xf_prev = &side_data.stations[i-1];
+            let h_xf_prev = xf_prev.final_values.delta_star / xf_prev.final_values.theta;
+            let rs_prev = &result.stations[i-1];
+            ((h_xfoil - h_xf_prev) / h_xf_prev * 100.0, (h_rust - rs_prev.h) / rs_prev.h * 100.0)
+        } else {
+            (0.0, 0.0)
+        };
+        
+        let marker = if h_err.abs() > 1.0 { " <--" } else { "" };
+        println!("{:4} {:10.4} {:8.4} {:8.4} {:+10.1} {:+8.2} {:+8.2} {:+10.2}{}",
+                 i, xfoil.x, h_xfoil, h_rust, h_err, dh_xf, dh_rs, dh_rs - dh_xf, marker);
+    }
+    
+    println!("\nKey insight: Our H growth per station is LOWER than XFOIL's starting at station 18.");
+    println!("This causes H to diverge over time, making Rcrit higher and blocking amplification.");
+    
+    // Check what happens at station 18 specifically
+    println!("\n=== Station 18 Analysis ===");
+    let i = 18;
+    let xfoil = &side_data.stations[i];
+    let xfoil_prev = &side_data.stations[i-1];
+    let ours = &result.stations[i];
+    let ours_prev = &result.stations[i-1];
+    
+    // XFOIL inputs to Newton solve
+    let x_new = xfoil.x;
+    let ue_new = xfoil.ue;
+    
+    println!("Inputs (should match):");
+    println!("  x[18] = {:.6}", x_new);
+    println!("  Ue[18] = {:.6}", ue_new);
+    println!("  prev θ: XFOIL={:.6e}, Rust={:.6e}", xfoil_prev.final_values.theta, ours_prev.theta);
+    println!("  prev δ*: XFOIL={:.6e}, Rust={:.6e}", xfoil_prev.final_values.delta_star, ours_prev.delta_star);
+    
+    println!("\nOutputs:");
+    println!("  θ: XFOIL={:.6e}, Rust={:.6e}", xfoil.final_values.theta, ours.theta);
+    println!("  δ*: XFOIL={:.6e}, Rust={:.6e}", xfoil.final_values.delta_star, ours.delta_star);
+    println!("  H: XFOIL={:.4}, Rust={:.4}", 
+             xfoil.final_values.delta_star / xfoil.final_values.theta, ours.h);
+    
+    // What dH does each get?
+    let dh_xfoil = xfoil.final_values.delta_star / xfoil.final_values.theta 
+                   - xfoil_prev.final_values.delta_star / xfoil_prev.final_values.theta;
+    let dh_rust = ours.h - ours_prev.h;
+    println!("  ΔH: XFOIL={:+.6}, Rust={:+.6}", dh_xfoil, dh_rust);
+    println!("  θ growth: XFOIL={:+.1}%, Rust={:+.1}%",
+             (xfoil.final_values.theta / xfoil_prev.final_values.theta - 1.0) * 100.0,
+             (ours.theta / ours_prev.theta - 1.0) * 100.0);
+    println!("  δ* growth: XFOIL={:+.1}%, Rust={:+.1}%",
+             (xfoil.final_values.delta_star / xfoil_prev.final_values.delta_star - 1.0) * 100.0,
+             (ours.delta_star / ours_prev.delta_star - 1.0) * 100.0);
+
+    // Print detailed comparison at key stations
+    println!("\n=== Detailed BL State Comparison (stations 15-20) ===");
+    println!("NOTE: Reference Hk/Rtheta values are INCORRECT (from different source)");
+    println!("Our values should match Re*Ue*theta and H=dstar/theta\n");
+    
+    for i in 15..21.min(result.stations.len()) {
+        let xfoil = &side_data.stations[i];
+        let ours = &result.stations[i];
+        let xfoil_ampl = xfoil.final_values.ampl.unwrap_or(0.0);
+        
+        // Compute correct H and Rtheta from XFOIL's theta/dstar
+        let h_correct = xfoil.final_values.delta_star / xfoil.final_values.theta;
+        let rtheta_correct = 1e6 * xfoil.ue * xfoil.final_values.theta;
+        
+        println!("Station {} (x={:.6}):", i, xfoil.x);
+        println!("  theta:  XFOIL={:.6e}  Rust={:.6e}  err={:+.1}%", 
+                 xfoil.final_values.theta, ours.theta,
+                 (ours.theta - xfoil.final_values.theta) / xfoil.final_values.theta * 100.0);
+        println!("  dstar:  XFOIL={:.6e}  Rust={:.6e}  err={:+.1}%",
+                 xfoil.final_values.delta_star, ours.delta_star,
+                 (ours.delta_star - xfoil.final_values.delta_star) / xfoil.final_values.delta_star * 100.0);
+        println!("  H:      correct={:.4}       Rust={:.4}       err={:+.1}%",
+                 h_correct, ours.h, (ours.h - h_correct) / h_correct * 100.0);
+        println!("  Hk:     correct={:.4}       Rust={:.4}       (should be ~H at M=0)",
+                 h_correct, ours.hk);
+        println!("  Rtheta: correct={:.1}       Rust={:.1}       err={:+.1}%",
+                 rtheta_correct, ours.r_theta, (ours.r_theta - rtheta_correct) / rtheta_correct * 100.0);
+        println!("  ampl:   XFOIL={:.6e}  Rust={:.6e}",
+                 xfoil_ampl, ours.ampl);
+        println!();
+    }
 
     println!("\n=== θ Evolution Comparison (Upper Surface) ===");
     println!("{:>4} {:>10} {:>12} {:>12} {:>8} {:>12} {:>12} {:>8}",

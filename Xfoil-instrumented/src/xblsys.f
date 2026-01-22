@@ -412,7 +412,16 @@ C
       IF(RLX*ABS(DA2)         .GT. 1.0 ) RLX = 1.0 *ABS(   1.0 /DA2)
 C
 C---- check if converged
-      IF(ABS(DA2) .LT. DAEPS) GO TO 101
+      IF(ABS(DA2) .LT. DAEPS) THEN
+C------ Debug output: converged iteration
+        CALL DBGTRCHEK_DETAIL(ITAM, AX, AMPL2, RES,
+     &                        AMPL2.GE.AMCRIT, XT, WF1, WF2)
+        GO TO 101
+      ENDIF
+C
+C---- Debug output: each iteration
+      CALL DBGTRCHEK_DETAIL(ITAM, AX, AMPL2, RES,
+     &                      AMPL2.GE.AMCRIT, XT, WF1, WF2)
 C
       IF((AMPL2.GT.AMCRIT .AND. AMPL2+RLX*DA2.LT.AMCRIT).OR.
      &   (AMPL2.LT.AMCRIT .AND. AMPL2+RLX*DA2.GT.AMCRIT)    ) THEN
@@ -427,6 +436,8 @@ C
       WRITE(*,*) 'TRCHEK2: N2 convergence failed.'
       WRITE(*,6700) X1, XT, X2, AMPL1, AMPLT, AMPL2, AX, DA2
  6700 FORMAT(1X,'x:', 3F9.5,'  N:',3F7.3,'  Nx:',F8.3,'   dN:',E10.3)
+C---- Debug output: failed convergence
+      CALL DBGTRCHEK_FINAL(30, .FALSE., AX, XT)
 C
  101  CONTINUE
 C
@@ -437,6 +448,9 @@ C---- test for free or forced transition
 C
 C---- set transition interval flag
       TRAN = TRFORC .OR. TRFREE
+C
+C---- Debug output: final result (converged case)
+      CALL DBGTRCHEK_FINAL(ITAM, .TRUE., AX, XT)
 C
       IF(.NOT.TRAN) RETURN
 C
