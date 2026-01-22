@@ -254,6 +254,74 @@ C
       END
 
 
+C---- Dump MRCHUE Newton iteration state (per-iteration debugging)
+      SUBROUTINE DBGMRCHUE_ITER(IS, IBL, ITBL, XSI, UEI,
+     &                          THI_IN, DSI_IN, CTI_IN, AMI_IN,
+     &                          THI_OUT, DSI_OUT, CTI_OUT, AMI_OUT,
+     &                          VS2, VSREZ, DMAX, RLX, CONV)
+      INTEGER IS, IBL, ITBL
+      REAL XSI, UEI
+      REAL THI_IN, DSI_IN, CTI_IN, AMI_IN
+      REAL THI_OUT, DSI_OUT, CTI_OUT, AMI_OUT
+      REAL VS2(4,5), VSREZ(4), DMAX, RLX
+      LOGICAL CONV
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER I, J
+C
+      IF(.NOT.LDBG) RETURN
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "MRCHUE_ITER",'
+      WRITE(LUDBG,'(A,I2,A)') '  "side": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I3,A)') '  "newton_iter": ', ITBL, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "x": ', XSI, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Ue": ', UEI, ','
+C---- Input state (before update)
+      WRITE(LUDBG,'(A)') '  "input": {'
+      WRITE(LUDBG,'(A,E15.8,A)') '    "theta": ', THI_IN, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '    "delta_star": ', DSI_IN, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '    "ctau": ', CTI_IN, ','
+      WRITE(LUDBG,'(A,E15.8)') '    "ampl": ', AMI_IN
+      WRITE(LUDBG,'(A)') '  },'
+C---- Output state (after update)
+      WRITE(LUDBG,'(A)') '  "output": {'
+      WRITE(LUDBG,'(A,E15.8,A)') '    "theta": ', THI_OUT, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '    "delta_star": ', DSI_OUT, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '    "ctau": ', CTI_OUT, ','
+      WRITE(LUDBG,'(A,E15.8)') '    "ampl": ', AMI_OUT
+      WRITE(LUDBG,'(A)') '  },'
+C---- Newton update vector
+      WRITE(LUDBG,'(A,4(E14.7,A),A)')
+     &  '  "vsrez": [', (VSREZ(I), ',', I=1,3), VSREZ(4), '],'
+C---- VS2 matrix (Jacobian for current station)
+      WRITE(LUDBG,'(A)') '  "VS2": ['
+      DO 10 I=1,4
+        IF(I.LT.4) THEN
+          WRITE(LUDBG,'(A,5(E14.7,A),A)')
+     &      '    [', (VS2(I,J), ',', J=1,4), VS2(I,5), '],'
+        ELSE
+          WRITE(LUDBG,'(A,5(E14.7,A),A)')
+     &      '    [', (VS2(I,J), ',', J=1,4), VS2(I,5), ']'
+        ENDIF
+   10 CONTINUE
+      WRITE(LUDBG,'(A)') '  ],'
+C---- Convergence info
+      WRITE(LUDBG,'(A,E15.8,A)') '  "dmax": ', DMAX, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "relaxation": ', RLX, ','
+      IF(CONV) THEN
+        WRITE(LUDBG,'(A)') '  "converged": true'
+      ELSE
+        WRITE(LUDBG,'(A)') '  "converged": false'
+      ENDIF
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
 C---- Dump UPDATE delta values
       SUBROUTINE DBGUPDATE(ISIDE, IBL, DCTAU, DTHET, DMASS, DUEDG, RLX)
       INTEGER ISIDE, IBL

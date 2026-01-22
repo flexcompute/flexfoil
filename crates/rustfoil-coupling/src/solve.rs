@@ -447,6 +447,153 @@ pub fn zero_3x3() -> [[f64; 3]; 3] {
 }
 
 // ============================================================================
+// 4x4 Gauss Elimination (for per-station Newton solve)
+// ============================================================================
+
+/// Solve 4x4 linear system using Gaussian elimination with partial pivoting.
+///
+/// This is the per-station Newton solver, equivalent to XFOIL's GAUSS subroutine.
+/// The system solves: A * x = b where A is 4x4 and b is 4x1.
+///
+/// In the BL march context:
+/// - Variables: [dS/dAmpl, dθ, dδ*, dUe] (or [dCtau, dθ, dδ*, dUe] for turbulent)
+/// - Equations: [third_eq, momentum_eq, shape_eq, constraint_eq]
+///
+/// For direct mode (prescribed Ue), the constraint is dUe = 0.
+/// For inverse mode (prescribed Hk), the constraint relates dHk to variables.
+///
+/// # Arguments
+/// * `a` - 4x4 coefficient matrix
+/// * `b` - 4x1 right-hand side vector
+///
+/// # Returns
+/// Solution vector [dS, dθ, dδ*, dUe]
+///
+/// # Reference
+/// XFOIL xsolve.f GAUSS subroutine
+pub fn solve_4x4(a: &[[f64; 4]; 4], b: &[f64; 4]) -> [f64; 4] {
+    // Make mutable copies
+    let mut a = *a;
+    let mut b = *b;
+
+    // Forward elimination with partial pivoting
+    for k in 0..3 {
+        // Find pivot (largest element in column k, rows k..4)
+        let mut max_val = a[k][k].abs();
+        let mut max_row = k;
+        for i in (k + 1)..4 {
+            if a[i][k].abs() > max_val {
+                max_val = a[i][k].abs();
+                max_row = i;
+            }
+        }
+
+        // Swap rows if necessary
+        if max_row != k {
+            a.swap(k, max_row);
+            b.swap(k, max_row);
+        }
+
+        // Check for singularity
+        let pivot = a[k][k];
+        if pivot.abs() < 1e-20 {
+            // Singular matrix - return zero update
+            return [0.0; 4];
+        }
+
+        // Eliminate column k below the diagonal
+        for i in (k + 1)..4 {
+            let factor = a[i][k] / pivot;
+            a[i][k] = 0.0;
+            for j in (k + 1)..4 {
+                a[i][j] -= factor * a[k][j];
+            }
+            b[i] -= factor * b[k];
+        }
+    }
+
+    // Back substitution
+    let mut x = [0.0; 4];
+
+    // Check last pivot
+    if a[3][3].abs() < 1e-20 {
+        return [0.0; 4];
+    }
+
+    x[3] = b[3] / a[3][3];
+    x[2] = (b[2] - a[2][3] * x[3]) / a[2][2].max(1e-20);
+    x[1] = (b[1] - a[1][2] * x[2] - a[1][3] * x[3]) / a[1][1].max(1e-20);
+    x[0] = (b[0] - a[0][1] * x[1] - a[0][2] * x[2] - a[0][3] * x[3]) / a[0][0].max(1e-20);
+
+    x
+}
+
+/// Build the 4x4 Newton system for a single BL station.
+///
+/// This converts the 3x5 Jacobian from bldif into a 4x4 system for Newton solve.
+/// The system solves for [dS, dθ, dδ*, dUe] where:
+/// - In direct mode: dUe = 0 is enforced (row 4 is constraint)
+/// - In inverse mode: target Hk is enforced
+///
+/// # Arguments
+/// * `vs2` - 3x5 Jacobian from bldif (rows 0-2: equations, cols 0-4: [S, θ, δ*, u, x])
+/// * `res` - 3x1 residuals from bldif (negated for Newton: Ax = -res)
+/// * `direct` - true for direct mode (dUe=0), false for inverse mode
+/// * `hk2_t` - ∂Hk/∂θ for inverse mode
+/// * `hk2_d` - ∂Hk/∂δ* for inverse mode
+/// * `hk2_u` - ∂Hk/∂Ue for inverse mode
+/// * `hk_target` - target Hk for inverse mode
+/// * `hk_current` - current Hk for inverse mode
+///
+/// # Returns
+/// (A, b) where A is 4x4 and b is 4x1 for Newton system Ax = b
+pub fn build_4x4_system(
+    vs2: &[[f64; 5]; 3],
+    res: &[f64; 3],
+    direct: bool,
+    hk2_t: f64,
+    hk2_d: f64,
+    hk2_u: f64,
+    hk_target: f64,
+    hk_current: f64,
+) -> ([[f64; 4]; 4], [f64; 4]) {
+    // Build 4x4 system from 3x5 jacobian
+    // Extract columns [0,1,2,3] = [S, θ, δ*, u] (skip x column)
+    let mut a = [[0.0; 4]; 4];
+    let mut b = [0.0; 4];
+
+    // Copy first 3 rows from vs2 (cols 0-3 only)
+    for i in 0..3 {
+        for j in 0..4 {
+            a[i][j] = vs2[i][j];
+        }
+        // bldif already returns residuals with correct sign convention (like XFOIL's VSREZ = -r)
+        // So we use them directly without negation
+        b[i] = res[i];
+    }
+
+    // Fourth row: constraint equation
+    if direct {
+        // Direct mode: dUe = 0
+        a[3][0] = 0.0;
+        a[3][1] = 0.0;
+        a[3][2] = 0.0;
+        a[3][3] = 1.0;
+        b[3] = 0.0;
+    } else {
+        // Inverse mode: enforce target Hk
+        // Hk = Hk(θ, δ*, Ue), linearized: ∂Hk/∂θ * dθ + ∂Hk/∂δ* * dδ* + ∂Hk/∂Ue * dUe = Hk_target - Hk_current
+        a[3][0] = 0.0;
+        a[3][1] = hk2_t;
+        a[3][2] = hk2_d;
+        a[3][3] = hk2_u;
+        b[3] = hk_target - hk_current;
+    }
+
+    (a, b)
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 

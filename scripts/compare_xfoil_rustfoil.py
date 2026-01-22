@@ -266,15 +266,98 @@ def export_test_vectors(events, output_dir):
     print(f"Test vectors exported to {output_dir}")
 
 
+def phase_mrchue_stations(xfoil_events, rustfoil_debug_path=None):
+    """
+    Compare theta/dstar evolution station by station.
+    
+    This compares XFOIL's MRCHUE_ITER final values with RustFoil's march results.
+    """
+    print("=" * 70)
+    print("MRCHUE Station-by-Station Comparison")
+    print("=" * 70)
+    
+    # Group MRCHUE_ITER events by side and ibl
+    mrchue_events = [e for e in xfoil_events if e.get('subroutine') == 'MRCHUE_ITER']
+    
+    if not mrchue_events:
+        print("No MRCHUE_ITER events found in XFOIL data")
+        return
+    
+    # Organize by side -> ibl -> final iteration
+    stations = {}
+    for e in mrchue_events:
+        side = e['side']
+        ibl = e['ibl']
+        key = (side, ibl)
+        
+        # Keep only the final (converged) iteration for each station
+        if key not in stations or e['newton_iter'] > stations[key]['newton_iter']:
+            stations[key] = e
+    
+    # Load RustFoil debug if available
+    rust_stations = {}
+    if rustfoil_debug_path and Path(rustfoil_debug_path).exists():
+        with open(rustfoil_debug_path) as f:
+            rust_data = json.load(f)
+            # Extract march stations from RustFoil debug
+            for e in rust_data.get('events', []):
+                if e.get('subroutine') == 'MRCHUE':
+                    side = e['side']
+                    ibl = e['ibl']
+                    rust_stations[(side, ibl)] = e
+    
+    for side in [1, 2]:
+        side_name = "Upper" if side == 1 else "Lower"
+        side_stations = {k: v for k, v in stations.items() if k[0] == side}
+        
+        if not side_stations:
+            continue
+        
+        print(f"\n=== {side_name} Surface (Side {side}) ===")
+        
+        # Header depends on whether we have RustFoil data
+        if rust_stations:
+            print(f"{'IBL':>4} {'X':>10} {'XFOIL_θ':>12} {'RUST_θ':>12} {'Err%':>8}")
+        else:
+            print(f"{'IBL':>4} {'X':>10} {'θ_init':>12} {'θ_final':>12} {'N_iter':>6}")
+        
+        for (s, ibl), e in sorted(side_stations.items()):
+            x = e['x']
+            theta_in = e['input']['theta']
+            theta_out = e['output']['theta']
+            n_iter = e['newton_iter']
+            
+            if rust_stations and (side, ibl) in rust_stations:
+                rust = rust_stations[(side, ibl)]
+                rust_theta = rust['theta']
+                err = abs(theta_out - rust_theta) / theta_out * 100 if theta_out != 0 else 0
+                print(f"{ibl:4d} {x:10.4f} {theta_out:12.4e} {rust_theta:12.4e} {err:8.2f}")
+            else:
+                print(f"{ibl:4d} {x:10.4f} {theta_in:12.4e} {theta_out:12.4e} {n_iter:6d}")
+        
+        # Summary stats
+        thetas = [e['output']['theta'] for (s, ibl), e in side_stations.items()]
+        print(f"\n  Stations: {len(thetas)}")
+        print(f"  θ range: [{min(thetas):.4e}, {max(thetas):.4e}]")
+        
+        # Check for transition (where flow type changes)
+        for (s, ibl), e in sorted(side_stations.items()):
+            if e.get('converged') and e.get('dmax', 1.0) < 1e-4:
+                # Found converged station
+                pass
+
+
 def main():
     parser = argparse.ArgumentParser(description='Compare XFOIL instrumented output with RustFoil')
     parser.add_argument('xfoil_json', help='Path to xfoil_debug.json')
     parser.add_argument('--phase', type=int, default=0,
-                        help='Comparison phase (0=summary, 1=closures, 2=blvar, 3=jacobians, 4=march, 5=iteration, 6=dij)')
+                        help='Comparison phase (0=summary, 1=closures, 2=blvar, 3=jacobians, 4=march, 5=iteration, 6=dij, 7=mrchue)')
     parser.add_argument('--station', type=int, default=None,
                         help='Filter to specific station number')
     parser.add_argument('--export', type=str, default=None,
                         help='Export test vectors to directory')
+    parser.add_argument('--rustfoil', type=str, default=None,
+                        help='Path to RustFoil debug JSON for comparison')
     args = parser.parse_args()
     
     print(f"Loading {args.xfoil_json}...")
@@ -287,13 +370,14 @@ def main():
         return
     
     if args.phase == 0:
-        print("Use --phase 1-6 for detailed comparison")
+        print("Use --phase 1-7 for detailed comparison")
         print("  1: Closure functions (HKIN, HSL, CFL, DAMPL)")
         print("  2: BLVAR secondary variables")
         print("  3: BLDIF Jacobian matrices")
         print("  4: MRCHUE initial march")
         print("  5: Newton iteration convergence")
         print("  6: QDCALC DIJ matrix")
+        print("  7: MRCHUE station-by-station theta/dstar")
     elif args.phase == 1:
         phase1_closures(events)
     elif args.phase == 2:
@@ -306,6 +390,8 @@ def main():
         phase5_iteration(events)
     elif args.phase == 6:
         phase6_dij(events)
+    elif args.phase == 7:
+        phase_mrchue_stations(events, args.rustfoil)
 
 
 if __name__ == '__main__':

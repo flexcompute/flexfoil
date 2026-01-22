@@ -12,8 +12,10 @@
 
 use nalgebra::DMatrix;
 use rustfoil_bl::closures::{amplification_rate, check_transition};
-use rustfoil_bl::equations::{blvar, FlowType};
+use rustfoil_bl::equations::{bldif, blvar, FlowType};
 use rustfoil_bl::state::BlStation;
+
+use crate::solve::{build_4x4_system, solve_4x4};
 
 // ============================================================================
 // Configuration and Result Structures
@@ -315,8 +317,156 @@ fn gauss_4x4(a: &mut [[f64; 4]; 4], b: &mut [f64; 4]) {
     }
 }
 
+/// Solve for BL station using Newton iteration
+///
+/// This is the core Newton solver for a single BL station, equivalent to
+/// XFOIL's MRCHUE inner loop. It solves for theta, delta_star (and ctau for
+/// turbulent) using the integral BL equations.
+///
+/// # Arguments
+/// * `prev` - Previous (upstream) BL station
+/// * `x_new` - Arc length at current station
+/// * `ue_new` - Edge velocity at current station
+/// * `re` - Reynolds number
+/// * `msq` - Mach number squared
+/// * `is_laminar` - Whether flow is still laminar at this station
+/// * `max_iter` - Maximum Newton iterations
+/// * `tolerance` - Convergence tolerance (DMAX < tolerance)
+/// * `hlmax` - Max Hk for laminar direct mode
+/// * `htmax` - Max Hk for turbulent direct mode
+///
+/// # Returns
+/// Converged BlStation with updated theta, delta_star, etc.
+///
+/// # Reference
+/// XFOIL xbl.f MRCHUE Newton loop (line 622-789)
+pub fn newton_solve_station(
+    prev: &BlStation,
+    x_new: f64,
+    ue_new: f64,
+    re: f64,
+    msq: f64,
+    is_laminar: bool,
+    max_iter: usize,
+    tolerance: f64,
+    hlmax: f64,
+    htmax: f64,
+) -> (BlStation, bool) {
+    let flow_type = if is_laminar {
+        FlowType::Laminar
+    } else {
+        FlowType::Turbulent
+    };
+    
+    // Initialize station from previous (like XFOIL's similarity/upstream extrapolation)
+    let mut station = BlStation::new();
+    station.x = x_new;
+    station.u = ue_new;
+    station.is_laminar = is_laminar;
+    station.is_turbulent = !is_laminar;
+    station.is_wake = false;
+    
+    // Initialize from previous station
+    station.theta = prev.theta;
+    station.delta_star = prev.delta_star;
+    station.ctau = if is_laminar { 0.03 } else { prev.ctau };
+    station.ampl = prev.ampl;
+    
+    // Compute secondary variables
+    blvar(&mut station, flow_type, msq, re);
+    
+    let hmax = if is_laminar { hlmax } else { htmax };
+    let mut direct = true;
+    let mut htarg = hmax;
+    
+    // Newton iteration loop
+    for _iter in 0..max_iter {
+        // Build BL residuals and Jacobian
+        let (res, jac) = bldif(prev, &station, flow_type, msq, re);
+        
+        // Build 4x4 Newton system
+        // Variable order in bldif: [s/ampl, θ, δ*, u, x]
+        // We use [s/ampl, θ, δ*, u] (4 variables)
+        let (mut a, mut b) = build_4x4_system(
+            &jac.vs2,
+            &[res.res_third, res.res_mom, res.res_shape],
+            direct,
+            station.hk / station.theta,  // hk2_t ≈ -Hk/θ
+            -station.hk / station.delta_star, // hk2_d ≈ Hk/δ* (but derivative is negative)
+            0.0,  // hk2_u (simplified - no Ue dependence in Hk at low Mach)
+            htarg,
+            station.hk,
+        );
+        
+        // Solve 4x4 system
+        let vsrez = solve_4x4(&a, &b);
+        
+        // Compute max relative change
+        let dmax = (vsrez[1] / station.theta.max(1e-12)).abs()
+            .max((vsrez[2] / station.delta_star.max(1e-12)).abs());
+        let dmax = if is_laminar {
+            dmax.max((vsrez[0] / 10.0).abs())  // Amplification scale
+        } else {
+            dmax.max((vsrez[0] / station.ctau.max(1e-6)).abs())  // Ctau scale
+        };
+        
+        // Relaxation factor
+        let rlx = if dmax > 0.3 { 0.3 / dmax } else { 1.0 };
+        
+        // Check if direct mode is appropriate (Hk not too high)
+        if direct {
+            let h_test = (station.delta_star + rlx * vsrez[2]) 
+                       / (station.theta + rlx * vsrez[1]).max(1e-12);
+            // Use hkin to convert H to Hk (simplified for low Mach)
+            let hk_test = h_test;  // At low Mach, Hk ≈ H
+            
+            if hk_test >= hmax {
+                // Need to switch to inverse mode
+                direct = false;
+                // Estimate target Hk based on upstream
+                if is_laminar {
+                    htarg = prev.hk + 0.03 * (x_new - prev.x) / prev.theta.max(1e-12);
+                } else {
+                    htarg = prev.hk - 0.15 * (x_new - prev.x) / prev.theta.max(1e-12);
+                }
+                htarg = htarg.max(hmax).min(hmax * 1.5);
+                continue;  // Restart iteration with inverse mode
+            }
+        }
+        
+        // Apply updates with relaxation
+        if !is_laminar {
+            station.ctau = (station.ctau + rlx * vsrez[0]).clamp(1e-7, 0.3);
+        }
+        station.theta = (station.theta + rlx * vsrez[1]).max(1e-12);
+        station.delta_star = (station.delta_star + rlx * vsrez[2]).max(1e-12);
+        if !direct {
+            station.u = (station.u + rlx * vsrez[3]).max(0.01);
+        }
+        
+        // Limit Hk to prevent singularity
+        let hklim = 1.02;
+        let dsw = station.delta_star;
+        let dslim = hklim * station.theta;
+        if dsw / station.theta.max(1e-12) < hklim {
+            station.delta_star = dslim;
+        }
+        
+        // Recompute secondary variables
+        blvar(&mut station, flow_type, msq, re);
+        
+        // Check convergence
+        if dmax <= tolerance {
+            return (station, true);
+        }
+    }
+    
+    // Did not converge - return best estimate
+    (station, false)
+}
+
 // ============================================================================
-// Direct March (MRCHUE)
+// Direct March (MRCHUE) - Newton Version
 // ============================================================================
 
 /// March boundary layer with fixed edge velocity
@@ -362,18 +512,10 @@ pub fn march_fixed_ue(
     // Track state
     let mut is_laminar = true;
 
-    // March downstream
+    // March downstream using Newton iteration at each station
     for i in 1..n {
         let ds = x[i] - x[i - 1];
         let prev_station = &result.stations[i - 1];
-
-        // Initialize current station
-        let mut station = BlStation::new();
-        station.x = x[i];
-        station.u = ue[i];
-        station.is_laminar = is_laminar;
-        station.is_turbulent = !is_laminar;
-        station.is_wake = false;
 
         // Determine flow type
         let flow_type = if is_laminar {
@@ -382,23 +524,26 @@ pub fn march_fixed_ue(
             FlowType::Turbulent
         };
 
-        // Step the momentum and shape equations
-        let (theta_new, delta_star_new) = step_momentum(prev_station, x[i], ue[i], re, msq, is_laminar);
-        
-        station.theta = theta_new;
-        station.delta_star = delta_star_new;
-        station.ctau = if is_laminar { prev_station.ctau } else { prev_station.ctau };
-        station.ampl = prev_station.ampl;
+        // Solve for current station using Newton iteration (XFOIL MRCHUE style)
+        let (mut station, converged) = newton_solve_station(
+            prev_station,
+            x[i],
+            ue[i],
+            re,
+            msq,
+            is_laminar,
+            config.max_iter,
+            config.tolerance,
+            config.hlmax,
+            config.htmax,
+        );
 
-        // Compute all secondary variables
-        blvar(&mut station, flow_type, msq, re);
-
-        // Check if Hk is too high (approaching separation)
-        let hmax = if is_laminar { config.hlmax } else { config.htmax };
-        if station.hk > hmax {
-            // Limit H to prevent singularity
-            let h_limit = hmax * 0.95;
-            station.delta_star = h_limit * station.theta;
+        // If Newton didn't converge, use best estimate (station still has result)
+        if !converged {
+            // Fallback: use step_momentum for robustness
+            let (theta_new, delta_star_new) = step_momentum(prev_station, x[i], ue[i], re, msq, is_laminar);
+            station.theta = theta_new;
+            station.delta_star = delta_star_new;
             blvar(&mut station, flow_type, msq, re);
         }
 
@@ -523,14 +668,6 @@ pub fn march_surface(
         let station_idx = i - start_idx; // Index into result.stations
         let prev_station = &result.stations[station_idx - 1];
 
-        // Initialize current station
-        let mut station = BlStation::new();
-        station.x = x[i];
-        station.u = ue[i].abs();
-        station.is_laminar = is_laminar;
-        station.is_turbulent = !is_laminar;
-        station.is_wake = false;
-
         // Determine flow type
         let flow_type = if is_laminar {
             FlowType::Laminar
@@ -538,16 +675,30 @@ pub fn march_surface(
             FlowType::Turbulent
         };
 
-        // Step the momentum and shape equations
-        let (theta_new, delta_star_new) =
-            step_momentum(prev_station, x[i], ue[i].abs(), re, msq, is_laminar);
+        // Solve for current station using Newton iteration (XFOIL MRCHUE style)
+        let (mut station, converged) = newton_solve_station(
+            prev_station,
+            x[i],
+            ue[i].abs(),
+            re,
+            msq,
+            is_laminar,
+            config.max_iter,
+            config.tolerance,
+            config.hlmax,
+            config.htmax,
+        );
 
-        station.theta = theta_new;
-        station.delta_star = delta_star_new;
-        station.ctau = prev_station.ctau;
-        station.ampl = prev_station.ampl;
+        // If Newton didn't converge, fall back to step_momentum
+        if !converged {
+            let (theta_new, delta_star_new) =
+                step_momentum(prev_station, x[i], ue[i].abs(), re, msq, is_laminar);
+            station.theta = theta_new;
+            station.delta_star = delta_star_new;
+            blvar(&mut station, flow_type, msq, re);
+        }
 
-        // Compute all secondary variables
+        // Compute all secondary variables (already done in newton_solve, but ensure consistency)
         blvar(&mut station, flow_type, msq, re);
 
         // Check if Hk is too high (approaching separation)

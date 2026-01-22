@@ -562,6 +562,9 @@ C---- Debug common block
       INTEGER LUDBG, IDBGCALL, IDBGITER
       COMMON /BLVDBG/ IBLDBG, ISDBG
       INTEGER IBLDBG, ISDBG
+C---- Debug variables for Newton iteration tracking
+      REAL THI_IN, DSI_IN, CTI_IN, AMI_IN
+      LOGICAL CONV
 C
 C---- shape parameters for separation criteria
       HLMAX = 3.8
@@ -620,6 +623,12 @@ C
 C
 C------ Newton iteration loop for current station
         DO 100 ITBL=1, 25
+C
+C-------- Save input state for debug output
+          THI_IN = THI
+          DSI_IN = DSI
+          CTI_IN = CTI
+          AMI_IN = AMI
 C
 C-------- assemble 10x3 linearized system for dCtau, dTh, dDs, dUe, dXi
 C         at the previous "1" station and the current "2" station
@@ -783,6 +792,13 @@ C
           DSW = DSI - DSWAKI
           CALL DSLIM(DSW,THI,UEI,MSQ,HKLIM)
           DSI = DSW + DSWAKI
+C
+C-------- Debug: dump Newton iteration state
+          CONV = DMAX.LE.1.0E-5
+          CALL DBGMRCHUE_ITER(IS, IBL, ITBL, XSI, UEI,
+     &                        THI_IN, DSI_IN, CTI_IN, AMI_IN,
+     &                        THI, DSI, CTI, AMI,
+     &                        VS2, VSREZ, DMAX, RLX, CONV)
 C
           IF(DMAX.LE.1.0E-5) GO TO 110
 C
