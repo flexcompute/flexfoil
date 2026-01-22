@@ -1087,3 +1087,75 @@ C---- VM row sample (first 10 columns of VM for this station)
       WRITE(LUDBG,'(A)') '}'
       RETURN
       END
+
+
+C---- Dump 4x4 Newton system BEFORE GAUSS solve (captures original Jacobian)
+C     This is called in MRCHUE right before CALL GAUSS to capture the
+C     exact system being solved: VS2 * dx = VSREZ
+      SUBROUTINE DBGVS2_BEFORE(IS, IBL, ITBL, VS2, VSREZ)
+      INTEGER IS, IBL, ITBL
+      REAL VS2(4,5), VSREZ(4)
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER I, J
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only dump first 10 stations to avoid huge output
+      IF(IBL.GT.10) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "VS2_BEFORE",'
+      WRITE(LUDBG,'(A,I2,A)') '  "side": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I3,A)') '  "newton_iter": ', ITBL, ','
+C---- VS2 matrix (4x4 Jacobian, columns 1-4)
+      WRITE(LUDBG,'(A)') '  "VS2_4x4": ['
+      DO 10 I=1,4
+        IF(I.LT.4) THEN
+          WRITE(LUDBG,'(A,4(E15.8,A),A)')
+     &      '    [', (VS2(I,J), ', ', J=1,3), VS2(I,4), '],'
+        ELSE
+          WRITE(LUDBG,'(A,4(E15.8,A),A)')
+     &      '    [', (VS2(I,J), ', ', J=1,3), VS2(I,4), ']'
+        ENDIF
+   10 CONTINUE
+      WRITE(LUDBG,'(A)') '  ],'
+C---- VSREZ (RHS before solve = -residual)
+      WRITE(LUDBG,'(A,4(E15.8,A),A)')
+     &  '  "VSREZ_rhs": [', (VSREZ(I), ', ', I=1,3), VSREZ(4), ']'
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump VSREZ AFTER GAUSS solve (contains solution vector dx)
+C     This is called in MRCHUE right after CALL GAUSS to capture
+C     the Newton update: dx = [d_ctau/d_ampl, d_theta, d_dstar, d_ue]
+      SUBROUTINE DBGVSREZ_AFTER(IS, IBL, ITBL, VSREZ)
+      INTEGER IS, IBL, ITBL
+      REAL VSREZ(4)
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER I
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only dump first 10 stations to avoid huge output
+      IF(IBL.GT.10) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "VSREZ_AFTER",'
+      WRITE(LUDBG,'(A,I2,A)') '  "side": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I3,A)') '  "newton_iter": ', ITBL, ','
+C---- VSREZ (solution vector after GAUSS)
+      WRITE(LUDBG,'(A,4(E15.8,A),A)')
+     &  '  "VSREZ_solution": [', (VSREZ(I), ', ', I=1,3), VSREZ(4), ']'
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END

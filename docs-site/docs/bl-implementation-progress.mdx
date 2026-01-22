@@ -2313,6 +2313,87 @@ XFOIL's first Newton iteration at IBL=3 **decreases** θ by 5.0e-6, but our solv
 | `testdata/mrchue_iterations.json` | Station-by-station θ evolution from XFOIL |
 | `Xfoil-instrumented/bin/xfoil_debug.json` | Full XFOIL debug trace |
 
-### Next Steps: Newton Iteration Fix Plan
+### Newton System Investigation (2026-01-22)
 
-See the plan below for systematic debugging approach.
+#### Instrumentation Added to XFOIL
+
+Added two new debug subroutines to capture the exact 4×4 Newton system:
+- `DBGVS2_BEFORE`: Dumps VS2 matrix and VSREZ **before** GAUSS solve
+- `DBGVSREZ_AFTER`: Dumps VSREZ (solution vector) **after** GAUSS solve
+
+Debug trace saved to `testdata/newton_debug_trace.json`.
+
+#### Matrix Comparison Results
+
+Created `matrix_comparison.rs` test to compare RustFoil vs XFOIL element-by-element:
+
+**For IBL=3, Newton iteration 1:**
+
+| Element | XFOIL | RustFoil | Error | Issue |
+|---------|-------|----------|-------|-------|
+| A[1][1] | -2.48e4 | -4.19e4 | 69% | Magnitude |
+| A[1][2] | +5.51e4 | +5.51e4 | 0% | OK |
+| **A[2][1]** | **+7.71e4** | **0.0** | **100%** | **Missing!** |
+| **A[2][2]** | **-4.32e4** | **+1.21e4** | **128%** | **WRONG SIGN** |
+| **A[2][3]** | **-6.29** | **+4.76** | **176%** | **WRONG SIGN** |
+
+**Solution vector comparison:**
+
+| Variable | XFOIL | RustFoil | Issue |
+|----------|-------|----------|-------|
+| dx[1] (dθ) | **-4.99e-6** | **+3.07e-5** | **SIGN MISMATCH** |
+| dx[2] (dδ*) | **-1.26e-5** | **+1.30e-5** | **SIGN MISMATCH** |
+
+#### Root Cause Identified: Shape Equation Jacobian
+
+The bug is in `bldif()` - the **shape equation Jacobian (row 2)** is incomplete.
+
+**XFOIL's shape equation Jacobian** (xblsys.f lines 1974-1989):
+```fortran
+VS2(3,2) = Z_HS2*HS2_T2 + Z_CF2*CF2_T2 + Z_DI2*DI2_T2 + Z_T2
+         + 0.5*(Z_HCA*HC2_T2 + Z_HA*H2_T2) + Z_UPW*UPW_T2
+VS2(3,3) = Z_HS2*HS2_D2 + Z_CF2*CF2_D2 + Z_DI2*DI2_D2
+         + 0.5*(Z_HCA*HC2_D2 + Z_HA*H2_D2) + Z_UPW*UPW_D2
+VS2(3,4) = Z_HS2*HS2_U2 + Z_CF2*CF2_U2 + Z_DI2*DI2_U2 + Z_U2
+         + 0.5*Z_HCA*HC2_U2 + Z_UPW*UPW_U2
+```
+
+**RustFoil's current implementation** (equations.rs ~line 909):
+```rust
+jac.vs1[2][1] = -hlog / s1.theta;  // OVERSIMPLIFIED!
+jac.vs2[2][1] = hlog / s2.theta;
+```
+
+The RustFoil code is missing:
+- `Z_HS2*HS2_T2` - derivatives through Hs (shape energy factor)
+- `Z_CF2*CF2_T2` - derivatives through Cf (skin friction)
+- `Z_DI2*DI2_T2` - derivatives through DI (dissipation integral)
+- `Z_T2` - direct θ derivatives from upwinding
+- `Z_HCA*HC2_T2` - derivatives through Hc (curvature shape factor)
+- `Z_HA*H2_T2` - derivatives through H (shape factor)
+- `Z_UPW*UPW_T2` - derivatives through upwinding factor
+
+#### Sign Convention Audit Results
+
+The sign conventions in `build_4x4_system` and `newton_solve_station` are **CORRECT**:
+
+| Component | Convention | Status |
+|-----------|------------|--------|
+| Residuals in bldif | Negated (r = -residual) | ✓ Correct |
+| RHS in build_4x4_system | Copied directly | ✓ Correct |
+| Jacobian columns | [ctau, θ, δ*, Ue] | ✓ Correct |
+| 4th row (direct) | dUe = 0 | ✓ Correct |
+| Update application | θ += rlx * dx[1] | ✓ Correct |
+
+**The sign mismatch in dx[1] and dx[2] is caused by incorrect Jacobian values, not sign convention errors.**
+
+### Next Steps: Shape Equation Jacobian Rewrite
+
+The shape equation Jacobian in `bldif()` must be rewritten to match XFOIL's complete formulation. Required:
+
+1. Compute `Z_HS2`, `Z_CF2`, `Z_DI2`, `Z_T2`, `Z_X2`, `Z_U2` coefficients
+2. Compute `HS2_T2`, `HS2_D2`, `HS2_U2` (Hs derivatives)
+3. Compute `CF2_T2`, `CF2_D2`, `CF2_U2` (Cf derivatives)
+4. Compute `DI2_T2`, `DI2_D2`, `DI2_U2` (DI derivatives)
+5. Add H, Hc, and upwinding derivatives
+6. Assemble full Jacobian row

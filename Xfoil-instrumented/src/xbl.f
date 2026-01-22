@@ -678,8 +678,14 @@ C--------- try direct mode (set dUe = 0 in currently empty 4th line)
            VS2(4,4) = 1.0
            VSREZ(4) = 0.
 C
+C--------- DEBUG: Dump 4x4 system BEFORE solve
+           CALL DBGVS2_BEFORE(IS, IBL, ITBL, VS2, VSREZ)
+C
 C--------- solve Newton system for current "2" station
            CALL GAUSS(4,4,VS2,VSREZ,1)
+C
+C--------- DEBUG: Dump solution vector AFTER solve
+           CALL DBGVSREZ_AFTER(IS, IBL, ITBL, VSREZ)
 C
 C--------- determine max changes and underrelax if necessary
            DMAX = MAX( ABS(VSREZ(2)/THI),
@@ -759,7 +765,13 @@ C-------- inverse mode (force Hk to prescribed value HTARG)
            VS2(4,4) = HK2_U2
            VSREZ(4) = HTARG - HK2
 C
+C--------- DEBUG: Dump 4x4 system BEFORE solve (inverse mode)
+           CALL DBGVS2_BEFORE(IS, IBL, ITBL, VS2, VSREZ)
+C
            CALL GAUSS(4,4,VS2,VSREZ,1)
+C
+C--------- DEBUG: Dump solution vector AFTER solve (inverse mode)
+           CALL DBGVSREZ_AFTER(IS, IBL, ITBL, VSREZ)
 C
 C--------- added Ue clamp   MD  3 Apr 03
            DMAX = MAX( ABS(VSREZ(2)/THI),
