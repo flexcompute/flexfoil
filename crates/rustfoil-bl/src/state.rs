@@ -49,6 +49,12 @@ pub struct BlDerivatives {
     /// ∂CD/∂Rθ
     pub cd_rt: f64,
 
+    // === Hc (density shape factor) derivatives ===
+    /// ∂Hc/∂Hk
+    pub hc_hk: f64,
+    /// ∂Hc/∂M²
+    pub hc_msq: f64,
+
     // === Edge velocity derivative ===
     /// dUe/dx (velocity gradient)
     pub u_x: f64,

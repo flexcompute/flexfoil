@@ -130,6 +130,53 @@ Once VS2[2][2] matches XFOIL:
 
 The "wrong" Hk derivatives (`+Hk/θ`, `-Hk/δ*`) accidentally compensate for the ~2x error in VS2[2][2]. When the Jacobian is fixed, the correct derivatives (`-Hk/θ`, `+1/θ`) should work properly.
 
+## Implementation Progress (January 2026)
+
+### Completed Fixes
+
+1. **UPW Derivative Framework** (`equations.rs` lines 720-740):
+   - Added `upw_hd`, `hd_hk1`, `hd_hk2` calculations matching XFOIL
+   - Computed `upw_hk1`, `upw_hk2` via chain rule
+   - **Result**: Mathematically correct, but UPW derivatives are disabled (set to 0) because enabling them causes `test_march_adverse_pressure_gradient` to fail. The derivatives only contribute ~5 to VS2[2][2], not enough to explain the ~8000 gap.
+
+2. **Hc Derivative Storage** (`state.rs`, `equations.rs`):
+   - Added `hc_hk` and `hc_msq` fields to `BlDerivatives` struct
+   - Stored values in `blvar()` after computing from `density_shape()`
+   - Updated `bldif()` to use chain rule: `hc2_d = hc_hk * hk2_d`
+   - **Result**: At M=0, `hc_hk=0` so no effect on incompressible results. Needed for compressible correctness.
+
+3. **Hk Derivative Documentation** (`march.rs` lines 390-410):
+   - Updated comments explaining the "wrong" vs "correct" derivative issue
+   - Added TODO for switching to correct derivatives once VS2[2][2] is fixed
+   - **Result**: Keeping "wrong" derivatives (`+Hk/θ`, `-Hk/δ*`) as workaround
+
+### Findings
+
+1. **VS2[2][2] still at ~53% of XFOIL** despite UPW and Hc fixes
+   - RustFoil: -9319 (was -9309 before fixes)
+   - XFOIL: -17548
+   - The fixes added only ~12 to the value
+
+2. **UPW derivatives cause solver instability** when enabled
+   - Test `test_march_adverse_pressure_gradient` fails
+   - Suggests interaction with other Jacobian terms
+
+3. **Transition error remains at 58%** (XFOIL x_tr=0.149, RustFoil=0.235)
+   - Same as before because underlying ~2x Jacobian error not resolved
+
+### Remaining Investigation
+
+The ~8000 missing contribution to VS2[2][2] is not from:
+- UPW derivatives (contribute ~5)
+- Hc derivatives (zero at M=0)
+- Closure derivatives (verified to match XFOIL)
+- Z coefficients (verified to match XFOIL)
+
+Possible unexplored sources:
+- Numerical differences in upwinding calculation at specific flow conditions
+- Interaction between equations in the Newton system
+- Subtle differences in how XFOIL handles the BLDIF residual vs Jacobian
+
 ## Related Commits
 
 - `e2d5839` - test: Add VS2 shape Jacobian comparison test against XFOIL

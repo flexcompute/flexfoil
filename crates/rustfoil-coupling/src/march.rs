@@ -85,7 +85,7 @@ impl Default for MarchConfig {
             ncrit: 9.0,
             max_iter: 25,
             tolerance: 0.1, // Match XFOIL's convergence criterion
-            hlmax: 3.8,
+            hlmax: 4.5,  // Increased from 3.8 to allow higher H before inverse mode
             htmax: 2.5,
             senswt: 1000.0,
             deps: 5.0e-6,
@@ -390,19 +390,19 @@ pub fn newton_solve_station(
         // Build 4x4 Newton system
         // Variable order in bldif: [s/ampl, θ, δ*, u, x]
         // We use [s/ampl, θ, δ*, u] (4 variables)
-        // Hk derivatives for inverse mode constraint (only used when direct=false)
-        // From XFOIL (xblsys.f BLKIN):
-        //   H2_T2 = -H2/T2 = -H/θ (negative)
-        //   H2_D2 = 1.0/T2 = 1/θ  (positive)
-        //   HK2_T2 = HK2_H2 * H2_T2 ≈ -Hk/θ at low Mach
-        //   HK2_D2 = HK2_H2 * H2_D2 ≈ 1/θ at low Mach
         //
-        // NOTE: Using XFOIL-correct derivatives breaks flat plate tests.
-        // This suggests there's a compensating error elsewhere in the code.
-        // Using the "wrong" derivatives (+Hk/θ, -Hk/δ*) allows flat plate to work
-        // but causes airfoil transition to be 58% off. Investigation needed.
-        let hk2_t = station.hk / station.theta;       // Original (wrong sign)
-        let hk2_d = -station.hk / station.delta_star; // Original (wrong formula)
+        // Hk derivatives for inverse mode constraint (only used when direct=false)
+        // XFOIL-correct derivatives (xblsys.f BLKIN lines 768-769):
+        //   HK2_T2 = HK2_H2 * H2_T2 = hk_h * (-H/θ) ≈ -Hk/θ at low Mach
+        //   HK2_D2 = HK2_H2 * H2_D2 = hk_h * (1/θ)  ≈ +1/θ at low Mach
+        //
+        // These are ONLY used in inverse mode (direct=false), where they form 
+        // row 4 of the Newton system: hk2_t*dθ + hk2_d*dδ* = Hk_target - Hk_current
+        // Using correct derivatives ensures the constraint pushes in the right direction.
+        //
+        // Using correct derivatives for inverse mode
+        let hk2_t = station.derivs.hk_h * station.derivs.h_theta;      // = -Hk/θ
+        let hk2_d = station.derivs.hk_h * station.derivs.h_delta_star; // = +1/θ
         
         let (mut a, mut b) = build_4x4_system(
             &jac.vs2,
@@ -444,7 +444,8 @@ pub fn newton_solve_station(
                 if is_laminar {
                     htarg = prev.hk + 0.03 * (x_new - prev.x) / prev.theta.max(1e-12);
                 } else {
-                    htarg = prev.hk - 0.15 * (x_new - prev.x) / prev.theta.max(1e-12);
+                    // For turbulent, target htmax directly (XFOIL behavior)
+                    htarg = hmax;
                 }
                 htarg = htarg.max(hmax).min(hmax * 1.5);
                 continue;  // Restart iteration with inverse mode
@@ -612,23 +613,18 @@ pub fn march_fixed_ue(
                 is_laminar = false;
                 
                 // RE-SOLVE this station with TURBULENT equations
-                // This is critical because:
+                // XFOIL behavior (MRCHUE lines 700-730):
                 // 1. The Newton solve was done with laminar equations
-                // 2. XFOIL re-solves with turbulent when transition is detected
-                // 3. If Hk > htmax, turbulent solve will use inverse mode
+                // 2. Transition detection happens within the Newton loop
+                // 3. XFOIL continues iteration with turbulent equations from current state
+                // 4. Since laminar Hk (~5.4) > htmax (2.5), inverse mode triggers
+                // 5. Inverse mode naturally brings Hk down to htmax over ~6 iterations
                 //
-                // For the turbulent re-solve, we create a modified "prev" station
-                // with delta_star adjusted so that initial Hk is closer to htmax.
-                // This prevents the solver from immediately going into inverse mode
-                // and changing Ue drastically.
-                let mut turb_prev = prev_station.clone();
-                // Adjust delta_star so that initial H for next station is close to htmax
-                // This matches XFOIL's behavior where turbulent BL has much lower H
-                turb_prev.delta_star = config.htmax * turb_prev.theta;
-                turb_prev.hk = config.htmax;
-                
+                // Key: Use the current laminar station as "prev" so we start turbulent
+                // iteration from the correct Hk region. The bldif function needs a
+                // sensible upstream state.
                 let (turb_station, _turb_converged) = newton_solve_station(
-                    &turb_prev,
+                    &station,  // Use current laminar state as starting point
                     x[i],
                     ue[i],
                     re,
@@ -1166,7 +1162,7 @@ mod tests {
         assert_eq!(config.ncrit, 9.0);
         assert_eq!(config.max_iter, 25);
         assert!((config.tolerance - 0.1).abs() < 1e-10); // Match XFOIL's criterion
-        assert!((config.hlmax - 3.8).abs() < 1e-10);
+        assert!((config.hlmax - 4.5).abs() < 1e-10);  // Increased to avoid premature inverse mode
         assert!((config.htmax - 2.5).abs() < 1e-10);
         assert!((config.senswt - 1000.0).abs() < 1e-10);
     }

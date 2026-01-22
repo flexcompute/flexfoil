@@ -1404,6 +1404,194 @@ mod tests {
     }
 
     #[test]
+    fn test_high_hk_station_31_comparison() {
+        // Compare at station 31 (IBL=31) where divergence occurs
+        // This station has Hk approaching 5.4 (near separation)
+        use rustfoil_bl::equations::{bldif, blvar, FlowType};
+        use rustfoil_bl::state::BlStation;
+        
+        // Station 30 (previous) - XFOIL final values
+        let mut s1 = BlStation::new();
+        s1.x = 0.115205;
+        s1.u = 1.503356;
+        s1.theta = 2.073123e-04;
+        s1.delta_star = 7.458165e-04;
+        s1.is_laminar = true;
+        s1.ampl = 6.1372;
+        blvar(&mut s1, FlowType::Laminar, 0.0, 1e6);
+        
+        // Station 31 (initial guess = station 30 final)
+        let mut s2 = BlStation::new();
+        s2.x = 0.127589;
+        s2.u = 1.482947;
+        s2.theta = 2.073123e-04;  // Initial = previous final
+        s2.delta_star = 7.458165e-04;
+        s2.is_laminar = true;
+        s2.ampl = 6.1372;
+        blvar(&mut s2, FlowType::Laminar, 0.0, 1e6);
+        
+        println!("=== Station 30 (s1) ===");
+        println!("  H = {:.4}, Hk = {:.4}", s1.h, s1.hk);
+        println!("  Hs = {:.4}, Cf = {:.6}, Cd = {:.6}", s1.hs, s1.cf, s1.cd);
+        println!("  Rtheta = {:.2}", s1.r_theta);
+        
+        println!("\n=== Station 31 initial (s2) ===");
+        println!("  H = {:.4}, Hk = {:.4}", s2.h, s2.hk);
+        println!("  Hs = {:.4}, Cf = {:.6}, Cd = {:.6}", s2.hs, s2.cf, s2.cd);
+        println!("  Rtheta = {:.2}", s2.r_theta);
+        
+        // Compute bldif
+        let (res, jac) = bldif(&s1, &s2, FlowType::Laminar, 0.0, 1e6);
+        
+        println!("\n=== bldif residuals ===");
+        println!("  res_third (ampl) = {:.6e}", res.res_third);
+        println!("  res_mom = {:.6e}", res.res_mom);
+        println!("  res_shape = {:.6e}", res.res_shape);
+        
+        println!("\n=== Jacobian VS2 comparison ===");
+        println!("                      XFOIL       RustFoil");
+        println!("  VS2[0][1] (ampl/θ): 11503.64    {:.2}", jac.vs2[0][1]);
+        println!("  VS2[0][2] (ampl/δ*): -2356.56   {:.2}", jac.vs2[0][2]);
+        println!("  VS2[1][1] (mom/θ):  4792.37     {:.2}", jac.vs2[1][1]);
+        println!("  VS2[2][1] (shape/θ): 371.69     {:.2}", jac.vs2[2][1]);
+        println!("  VS2[2][2] (shape/δ*): -52.99    {:.2}", jac.vs2[2][2]);
+        
+        // Key check: at high Hk, RustFoil VS2 values should be much smaller
+        // than at low Hk (station 11 had VS2[2][2] ~ -9000)
+        println!("\nNOTE: At high Hk~3.6, Jacobian entries are much smaller than at Hk~2.3");
+        println!("This is expected - closure relationships behave differently near separation");
+        
+        // Check derivatives
+        println!("\n=== Closure derivatives at Hk={:.2} ===", s2.hk);
+        println!("  hs_hk = {:.4}", s2.derivs.hs_hk);
+        println!("  cf_hk = {:.6}", s2.derivs.cf_hk);
+        println!("  cd_hk = {:.6}", s2.derivs.cd_hk);
+    }
+
+    #[test]
+    fn test_newton_iteration_trace_station_31() {
+        // Trace Newton iterations at station 31 (divergence point)
+        // Compare with XFOIL reference from mrchue_iterations.json
+        use rustfoil_bl::equations::{bldif, blvar, FlowType};
+        use rustfoil_bl::state::BlStation;
+        use crate::solve::{build_4x4_system, solve_4x4};
+        
+        // Station 30 (previous station) - XFOIL final values
+        let mut prev = BlStation::new();
+        prev.x = 0.115205;
+        prev.u = 1.503356;
+        prev.theta = 2.073123e-04;
+        prev.delta_star = 7.458165e-04;
+        prev.is_laminar = true;
+        prev.ampl = 6.1372;
+        blvar(&mut prev, FlowType::Laminar, 0.0, 1e6);
+        
+        println!("=== Newton Iteration Trace at Station 31 ===");
+        println!("Previous station (30): x={:.6}, theta={:.4e}, delta*={:.4e}, Hk={:.4}, ampl={:.4}",
+            prev.x, prev.theta, prev.delta_star, prev.hk, prev.ampl);
+        
+        // Initialize station 31
+        let mut station = BlStation::new();
+        station.x = 0.127589;
+        station.u = 1.482947;
+        station.is_laminar = true;
+        station.theta = prev.theta;
+        station.delta_star = prev.delta_star;
+        station.ampl = prev.ampl;
+        blvar(&mut station, FlowType::Laminar, 0.0, 1e6);
+        
+        let re = 1e6;
+        let msq = 0.0;
+        let hmax = 4.0;  // laminar Hk limit
+        let mut direct = true;
+        let mut htarg = hmax;
+        
+        println!("\nStation 31: x={:.6}, Ue={:.6}", station.x, station.u);
+        println!("XFOIL target: theta=2.218e-4, delta*=1.196e-3, Hk=5.39");
+        
+        println!("\n=== Iteration-by-iteration trace ===");
+        println!("XFOIL iteration 1: theta_out=2.24e-4, ds_out=8.49e-4, rlx=1.0, direct");
+        println!("XFOIL iteration 3: theta_out=2.26e-4, ds_out=1.10e-3, rlx=0.70, INVERSE");
+        println!();
+        
+        for iter in 0..10 {
+            // Compute residuals and Jacobian
+            let (res, jac) = bldif(&prev, &station, FlowType::Laminar, msq, re);
+            
+            // Hk derivatives (using correct XFOIL derivatives)
+            let hk2_t = station.derivs.hk_h * station.derivs.h_theta;      // = -Hk/θ
+            let hk2_d = station.derivs.hk_h * station.derivs.h_delta_star; // = +1/θ
+            
+            // Build system
+            let (a, b) = build_4x4_system(
+                &jac.vs2,
+                &[res.res_third, res.res_mom, res.res_shape],
+                direct,
+                hk2_t, hk2_d, 0.0,
+                htarg, station.hk,
+            );
+            
+            // Solve
+            let vsrez = solve_4x4(&a, &b);
+            
+            // Compute dmax
+            let dmax = (vsrez[1] / station.theta).abs()
+                .max((vsrez[2] / station.delta_star).abs())
+                .max((vsrez[0] / 10.0).abs());
+            let rlx = if dmax > 0.3 { 0.3 / dmax } else { 1.0 };
+            
+            // Check mode switch
+            let h_test = (station.delta_star + rlx * vsrez[2]) 
+                       / (station.theta + rlx * vsrez[1]).max(1e-12);
+            
+            println!("Iter {}: theta={:.4e}, ds={:.4e}, H={:.3}, mode={}, rlx={:.3}",
+                iter + 1, station.theta, station.delta_star, station.h,
+                if direct { "direct" } else { "inverse" }, rlx);
+            println!("        vsrez=[{:.4e}, {:.4e}, {:.4e}, {:.4e}]",
+                vsrez[0], vsrez[1], vsrez[2], vsrez[3]);
+            println!("        res_mom={:.4e}, res_shape={:.4e}, res_ampl={:.4e}",
+                res.res_mom, res.res_shape, res.res_third);
+            println!("        h_test={:.3} (hmax={})", h_test, hmax);
+            
+            // Check if should switch to inverse
+            if direct && h_test >= hmax {
+                direct = false;
+                htarg = prev.hk + 0.03 * (station.x - prev.x) / prev.theta;
+                htarg = htarg.max(hmax).min(hmax * 1.5);
+                println!("        -> SWITCHING TO INVERSE MODE, htarg={:.3}", htarg);
+                continue;
+            }
+            
+            // Apply updates
+            station.theta = (station.theta + rlx * vsrez[1]).max(1e-12);
+            station.delta_star = (station.delta_star + rlx * vsrez[2]).max(1e-12);
+            if !direct {
+                station.u = (station.u + rlx * vsrez[3]).max(0.01);
+            }
+            
+            // Limit Hk
+            if station.delta_star / station.theta < 1.02 {
+                println!("        -> HK LIMIT HIT! Clamping ds from {:.4e} to {:.4e}",
+                    station.delta_star, 1.02 * station.theta);
+                station.delta_star = 1.02 * station.theta;
+            }
+            
+            // Recompute
+            blvar(&mut station, FlowType::Laminar, 0.0, re);
+            
+            if dmax <= 1e-5 {
+                println!("\n  Converged at iteration {}", iter + 1);
+                break;
+            }
+        }
+        
+        println!("\n=== Final RustFoil state ===");
+        println!("  theta = {:.4e} (XFOIL: 2.218e-4)", station.theta);
+        println!("  delta* = {:.4e} (XFOIL: 1.196e-3)", station.delta_star);
+        println!("  H = {:.4} (XFOIL: 5.39)", station.h);
+    }
+
+    #[test]
     fn test_inverse_mode_derivative_comparison() {
         // Compare Newton updates with CORRECT vs WRONG Hk derivatives
         // This helps understand why "wrong" derivatives accidentally work
