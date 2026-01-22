@@ -1273,4 +1273,205 @@ mod tests {
             }
         }
     }
+
+    // =========================================================================
+    // Inverse Mode Hk Derivative Comparison
+    // =========================================================================
+
+    #[test]
+    fn test_bldif_vs2_shape_equation_xfoil_comparison() {
+        // Compare RustFoil's bldif VS2 output against XFOIL at IBL=5
+        // Data from testdata/mrchue_iterations.json
+        use rustfoil_bl::equations::{bldif, blvar, FlowType};
+        use rustfoil_bl::state::BlStation;
+        
+        // Station 10 (upstream) - from XFOIL final values
+        let mut s1 = BlStation::new();
+        s1.x = 0.018634;
+        s1.u = 1.388217;
+        s1.theta = 3.263881e-05;
+        s1.delta_star = 7.379446e-05;
+        s1.is_laminar = true;
+        s1.ampl = 0.0;
+        blvar(&mut s1, FlowType::Laminar, 0.0, 1e6);
+        
+        // Station 11 (downstream) - using CONVERGED values from XFOIL
+        let mut s2 = BlStation::new();
+        s2.x = 0.020583;
+        s2.u = 1.507207;
+        s2.theta = 3.442203e-05;  // Converged value from XFOIL
+        s2.delta_star = 7.877334e-05;  // Converged value from XFOIL
+        s2.is_laminar = true;
+        s2.ampl = 0.0;
+        blvar(&mut s2, FlowType::Laminar, 0.0, 1e6);
+        
+        // Print intermediate values for debugging
+        println!("Station 1 values:");
+        println!("  x={:.6}, u={:.4}, theta={:.4e}, delta_star={:.4e}", s1.x, s1.u, s1.theta, s1.delta_star);
+        println!("  H={:.4}, Hs={:.4}, Cf={:.4e}, Cd={:.4e}", s1.h, s1.hs, s1.cf, s1.cd);
+        
+        println!("\nStation 2 values:");
+        println!("  x={:.6}, u={:.4}, theta={:.4e}, delta_star={:.4e}", s2.x, s2.u, s2.theta, s2.delta_star);
+        println!("  H={:.4}, Hs={:.4}, Cf={:.4e}, Cd={:.4e}", s2.h, s2.hs, s2.cf, s2.cd);
+        println!("  h_theta={:.4e}, h_delta_star={:.4e}", s2.derivs.h_theta, s2.derivs.h_delta_star);
+        println!("  hk_h={:.4e}, hs_hk={:.4e}, hs_rt={:.4e}", s2.derivs.hk_h, s2.derivs.hs_hk, s2.derivs.hs_rt);
+        println!("  cf_hk={:.4e}, cf_rt={:.4e}", s2.derivs.cf_hk, s2.derivs.cf_rt);
+        println!("  cd_hk={:.4e}, cd_rt={:.4e}", s2.derivs.cd_hk, s2.derivs.cd_rt);
+        
+        // Compute key intermediate values
+        let xlog = (s2.x / s1.x).ln();
+        let ulog = (s2.u / s1.u).ln();
+        let hlog = (s2.hs / s1.hs).ln();
+        let hsa = 0.5 * (s1.hs + s2.hs);
+        let hca = 0.5 * (s1.hc + s2.hc);
+        let ha = 0.5 * (s1.h + s2.h);
+        
+        // Z coefficients
+        let z_hs2 = -hca * ulog / (hsa * hsa) + 1.0 / s2.hs;
+        let z_ha_shape = -ulog;
+        
+        // Derivatives
+        let hk2_d = s2.derivs.hk_h * s2.derivs.h_delta_star;
+        let hs2_d = s2.derivs.hs_hk * hk2_d;
+        let cf2_d = s2.derivs.cf_hk * hk2_d;
+        let di2_d = s2.derivs.cd_hk * hk2_d;
+        
+        // XOT2
+        let xot2 = s2.x / s2.theta;
+        let upw = 0.5; // Approximate
+        let z_cfx_shape = xlog * 0.5;
+        let z_dix = -xlog;
+        let z_cf2 = upw * z_cfx_shape * xot2;
+        let z_di2 = upw * z_dix * xot2;
+        
+        println!("\nKey Z coefficients:");
+        println!("  xlog={:.4}, ulog={:.4}, hlog={:.4}", xlog, ulog, hlog);
+        println!("  z_hs2={:.4}, z_ha_shape={:.4}", z_hs2, z_ha_shape);
+        println!("  z_cf2={:.4}, z_di2={:.4}", z_cf2, z_di2);
+        
+        println!("\nδ* derivatives (d suffix):");
+        println!("  h2_d={:.4e}, hk2_d={:.4e}", s2.derivs.h_delta_star, hk2_d);
+        println!("  hs2_d={:.4e}, cf2_d={:.4e}, di2_d={:.4e}", hs2_d, cf2_d, di2_d);
+        
+        println!("\nTerms in VS2[2][2]:");
+        println!("  z_hs2*hs2_d = {:.4}", z_hs2 * hs2_d);
+        println!("  z_cf2*cf2_d = {:.4}", z_cf2 * cf2_d);
+        println!("  z_di2*di2_d = {:.4}", z_di2 * di2_d);
+        println!("  0.5*z_ha*h2_d = {:.4}", 0.5 * z_ha_shape * s2.derivs.h_delta_star);
+        println!("  Sum (approx) = {:.4}", 
+            z_hs2 * hs2_d + z_cf2 * cf2_d + z_di2 * di2_d + 0.5 * z_ha_shape * s2.derivs.h_delta_star);
+        
+        // Call bldif
+        let (res, jac) = bldif(&s1, &s2, FlowType::Laminar, 0.0, 1e6);
+        
+        // XFOIL values from mrchue_iterations.json IBL=11, iter=3 (converged)
+        let xfoil_vs2_1_1 = 18800.0;    // VS2[1][1] (∂mom/∂θ) - approximate
+        let xfoil_vs2_2_1 = 17000.0;    // VS2[2][1] (∂shape/∂θ) - approximate
+        let xfoil_vs2_2_2 = -17548.36;  // VS2[2][2] (∂shape/∂δ*) - converged
+        
+        println!("\nShape equation Jacobian comparison:");
+        println!("  VS2[2][1] (∂shape/∂θ): XFOIL={:.2}, RustFoil={:.2}", xfoil_vs2_2_1, jac.vs2[2][1]);
+        println!("  VS2[2][2] (∂shape/∂δ*): XFOIL={:.2}, RustFoil={:.2}", xfoil_vs2_2_2, jac.vs2[2][2]);
+        
+        println!("\nMomentum equation Jacobian:");
+        println!("  VS2[1][1] (∂mom/∂θ): XFOIL={:.2}, RustFoil={:.2}", xfoil_vs2_1_1, jac.vs2[1][1]);
+        
+        // Check if signs match (most important)
+        let sign_shape_theta_match = (jac.vs2[2][1] * xfoil_vs2_2_1) > 0.0;
+        let sign_shape_delta_match = (jac.vs2[2][2] * xfoil_vs2_2_2) > 0.0;
+        
+        println!("\nSign match: ∂shape/∂θ={}, ∂shape/∂δ*={}", 
+                 sign_shape_theta_match, sign_shape_delta_match);
+                 
+        // KNOWN DISCREPANCY: VS2[2][2] magnitude is ~2x different
+        // XFOIL: -17548.36
+        // RustFoil: -9309.57 (same sign, but about half magnitude)
+        // 
+        // Investigation found:
+        // - Individual derivative terms (hs_d, cf_d, di_d, h_d) all match
+        // - Z coefficients (z_hs2, z_cf2, z_di2) all match  
+        // - UPW derivatives are set to zero in RustFoil (minor issue, ~5 contribution)
+        // - Something else is contributing ~8000 difference in XFOIL
+        //
+        // This discrepancy is likely related to the "wrong Hk derivative" issue
+        // where mathematically correct derivatives break flat plate tests.
+        let ratio = jac.vs2[2][2] / xfoil_vs2_2_2;
+        println!("\nRatio RustFoil/XFOIL = {:.3}", ratio);
+        
+        // For now, just check signs match (they do at this station)
+        assert!(sign_shape_delta_match, 
+            "VS2[2][2] signs should match");
+    }
+
+    #[test]
+    fn test_inverse_mode_derivative_comparison() {
+        // Compare Newton updates with CORRECT vs WRONG Hk derivatives
+        // This helps understand why "wrong" derivatives accidentally work
+        
+        // Representative values from flat plate at x=0.02 when inverse mode triggers
+        let theta = 0.001;
+        let delta_star = 0.00325; // H ≈ 3.25
+        let h = delta_star / theta;
+        let hk = h; // At low Mach, Hk ≈ H
+        
+        let htarg = 3.8; // Target when inverse mode triggers
+        let hk_current = h;
+        
+        // Representative VS2 Jacobian from bldif (laminar BL)
+        // These are roughly the order of magnitude for early laminar stations
+        let vs2: [[f64; 5]; 3] = [
+            [1.0, -100.0, 50.0, 0.1, 0.0],  // Amplification equation
+            [0.0, -50.0, 20.0, 2.0, 0.0],   // Momentum equation  
+            [0.0, 30.0, -15.0, 0.5, 0.0],   // Shape equation
+        ];
+        
+        // Residuals (already negated as from bldif)
+        let res = [0.01, 0.001, 0.002];
+        
+        // CORRECT derivatives (XFOIL convention)
+        let hk2_t_correct = -hk / theta; // -Hk/θ ≈ -3250
+        let hk2_d_correct = 1.0 / theta; // 1/θ = 1000
+        
+        // WRONG derivatives (current RustFoil)
+        let hk2_t_wrong = hk / theta;          // +Hk/θ ≈ +3250
+        let hk2_d_wrong = -hk / delta_star;    // -Hk/δ* ≈ -1000
+        
+        // Build 4x4 systems (inverse mode: direct = false)
+        let (a_correct, b_correct) = build_4x4_system(
+            &vs2, &res, false, hk2_t_correct, hk2_d_correct, 0.0, htarg, hk_current
+        );
+        let (a_wrong, b_wrong) = build_4x4_system(
+            &vs2, &res, false, hk2_t_wrong, hk2_d_wrong, 0.0, htarg, hk_current
+        );
+        
+        // 4th row should differ
+        println!("CORRECT 4th row: [{:.1}, {:.1}, {:.1}, {:.1}]", 
+                 a_correct[3][0], a_correct[3][1], a_correct[3][2], a_correct[3][3]);
+        println!("WRONG 4th row:   [{:.1}, {:.1}, {:.1}, {:.1}]", 
+                 a_wrong[3][0], a_wrong[3][1], a_wrong[3][2], a_wrong[3][3]);
+        
+        // Solve both systems
+        let x_correct = solve_4x4(&a_correct, &b_correct);
+        let x_wrong = solve_4x4(&a_wrong, &b_wrong);
+        
+        println!("CORRECT solution [dS, dθ, dδ*, dUe]: [{:.2e}, {:.2e}, {:.2e}, {:.2e}]",
+                 x_correct[0], x_correct[1], x_correct[2], x_correct[3]);
+        println!("WRONG solution [dS, dθ, dδ*, dUe]:   [{:.2e}, {:.2e}, {:.2e}, {:.2e}]",
+                 x_wrong[0], x_wrong[1], x_wrong[2], x_wrong[3]);
+        
+        // Compute resulting H after update
+        let h_new_correct = (delta_star + x_correct[2]) / (theta + x_correct[1]).max(1e-12);
+        let h_new_wrong = (delta_star + x_wrong[2]) / (theta + x_wrong[1]).max(1e-12);
+        
+        println!("H current: {:.4}", h);
+        println!("H with CORRECT: {:.4} (change: {:+.4})", h_new_correct, h_new_correct - h);
+        println!("H with WRONG:   {:.4} (change: {:+.4})", h_new_wrong, h_new_wrong - h);
+        
+        // Both solutions should be finite
+        assert!(x_correct.iter().all(|x| x.is_finite()), "CORRECT solution should be finite");
+        assert!(x_wrong.iter().all(|x| x.is_finite()), "WRONG solution should be finite");
+        
+        // Key observation: the solutions will be different
+        // The "wrong" derivatives happen to produce updates that keep H more stable
+    }
 }
