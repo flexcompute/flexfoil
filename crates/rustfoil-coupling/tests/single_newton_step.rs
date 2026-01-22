@@ -23,6 +23,45 @@ fn load_reference() -> Option<serde_json::Value> {
     None
 }
 
+fn load_debug_trace() -> Option<serde_json::Value> {
+    let paths = [
+        "testdata/newton_debug_trace.json",
+        "../testdata/newton_debug_trace.json",
+        "../../testdata/newton_debug_trace.json",
+    ];
+
+    for path in &paths {
+        if let Ok(content) = fs::read_to_string(path) {
+            if let Ok(data) = serde_json::from_str(&content) {
+                return Some(data);
+            }
+        }
+    }
+    None
+}
+
+/// Extract VSREZ_AFTER event for specific station/iteration
+fn get_xfoil_solution(trace: &serde_json::Value, side: i64, ibl: i64, iter: i64) -> Option<[f64; 4]> {
+    let events = trace["events"].as_array()?;
+    for e in events {
+        if e["subroutine"].as_str() == Some("VSREZ_AFTER")
+            && e["side"].as_i64() == Some(side)
+            && e["ibl"].as_i64() == Some(ibl)
+            && e["newton_iter"].as_i64() == Some(iter)
+        {
+            let sol = e["VSREZ_solution"].as_array()?;
+            let mut v = [0.0; 4];
+            for (i, val) in sol.iter().enumerate() {
+                if i < 4 {
+                    v[i] = val.as_f64().unwrap_or(0.0);
+                }
+            }
+            return Some(v);
+        }
+    }
+    None
+}
+
 #[test]
 fn test_single_newton_step() {
     let ref_data = match load_reference() {
@@ -130,4 +169,107 @@ fn test_single_newton_step() {
     println!("\nXFOIL IBL=3 iter 1: θ changes from 4.121e-5 to 3.622e-5 (dθ = -5.0e-6)");
     println!("Our Newton: θ changes from {:.6e} to {:.6e} (dθ = {:.6e})",
         curr.theta, curr.theta + rlx * dx[1], rlx * dx[1]);
+}
+
+#[test]
+fn test_compare_with_xfoil_trace() {
+    let ref_data = match load_reference() {
+        Some(d) => d,
+        None => {
+            eprintln!("Skipping: mrchue_iterations.json not found");
+            return;
+        }
+    };
+
+    let trace = match load_debug_trace() {
+        Some(t) => t,
+        None => {
+            eprintln!("Skipping: newton_debug_trace.json not found");
+            return;
+        }
+    };
+
+    let re = ref_data["metadata"]["reynolds"].as_f64().unwrap();
+    let msq = 0.0;
+
+    let stations = &ref_data["sides"]["1"]["stations"];
+    let s0 = &stations[0];
+    let s1 = &stations[1];
+
+    // Build prev station (IBL=2 converged)
+    let mut prev = BlStation::new();
+    prev.x = s0["x"].as_f64().unwrap();
+    prev.u = s0["Ue"].as_f64().unwrap();
+    prev.theta = s0["final"]["theta"].as_f64().unwrap();
+    prev.delta_star = s0["final"]["delta_star"].as_f64().unwrap();
+    prev.ampl = 0.0;
+    prev.ctau = 0.03;
+    prev.is_laminar = true;
+    blvar(&mut prev, FlowType::Laminar, msq, re);
+
+    // Build curr station (IBL=3 initial)
+    let mut curr = BlStation::new();
+    curr.x = s1["x"].as_f64().unwrap();
+    curr.u = s1["Ue"].as_f64().unwrap();
+    curr.theta = s1["initial"]["theta"].as_f64().unwrap();
+    curr.delta_star = s1["initial"]["delta_star"].as_f64().unwrap();
+    curr.ampl = 0.0;
+    curr.ctau = 0.03;
+    curr.is_laminar = true;
+    blvar(&mut curr, FlowType::Laminar, msq, re);
+
+    println!("\n=== Compare RustFoil vs XFOIL Newton Solution (IBL=3, iter=1) ===\n");
+
+    // Get XFOIL's solution from debug trace
+    let xfoil_dx = match get_xfoil_solution(&trace, 1, 3, 1) {
+        Some(dx) => dx,
+        None => {
+            eprintln!("Could not find XFOIL solution for side=1, ibl=3, iter=1");
+            return;
+        }
+    };
+
+    // Compute RustFoil's solution
+    let (res, jac) = bldif(&prev, &curr, FlowType::Laminar, msq, re);
+    let (a, b) = build_4x4_system(
+        &jac.vs2,
+        &[res.res_third, res.res_mom, res.res_shape],
+        true,
+        curr.hk / curr.theta,
+        -curr.hk / curr.delta_star,
+        0.0,
+        4.0,
+        curr.hk,
+    );
+    let rust_dx = solve_4x4(&a, &b);
+
+    println!("XFOIL dx: [{:+.6e}, {:+.6e}, {:+.6e}, {:+.6e}]", 
+        xfoil_dx[0], xfoil_dx[1], xfoil_dx[2], xfoil_dx[3]);
+    println!("Rust  dx: [{:+.6e}, {:+.6e}, {:+.6e}, {:+.6e}]", 
+        rust_dx[0], rust_dx[1], rust_dx[2], rust_dx[3]);
+
+    println!("\n--- Solution Comparison ---");
+    let names = ["d_ctau/ampl", "d_theta", "d_dstar", "d_ue"];
+    let mut sign_errors = 0;
+    for i in 0..4 {
+        let xfoil_val = xfoil_dx[i];
+        let rust_val = rust_dx[i];
+        let sign_ok = (xfoil_val >= 0.0) == (rust_val >= 0.0);
+        if !sign_ok && xfoil_val.abs() > 1e-15 {
+            sign_errors += 1;
+        }
+        let rel_err = if xfoil_val.abs() > 1e-30 {
+            ((rust_val - xfoil_val) / xfoil_val).abs() * 100.0
+        } else {
+            0.0
+        };
+        println!("  {:12}: XFOIL={:+.4e}, Rust={:+.4e}, err={:5.1}%{}", 
+            names[i], xfoil_val, rust_val, rel_err,
+            if sign_ok { "" } else { " !! SIGN" });
+    }
+
+    if sign_errors > 0 {
+        println!("\n*** SIGN MISMATCH: {} variable(s) have wrong sign! ***", sign_errors);
+        println!("This indicates a bug in the Jacobian computation.");
+    }
 }
