@@ -849,9 +849,20 @@ pub fn bldif(
     // Jacobian entries for momentum equation
     // These are derivatives of REZT (the unnegated residual)
     // XFOIL: VS1(2,2) = 0.5*Z_HA*H1_T1 + Z_CFM*CFM_T1 + Z_CF1*CF1_T1 + Z_T1
-    // The θ derivatives (via TLOG and via Cf(Hk(H)))
-    let z_t1 = -1.0 / s1.theta + z_cfx * (-0.25 * s1.cf * s1.x / (s1.theta * s1.theta));
-    let z_t2 = 1.0 / s2.theta + z_cfx * (-0.25 * s2.cf * s2.x / (s2.theta * s2.theta));
+    // 
+    // From XFOIL (xblsys.f lines 1874-1879):
+    //   CFX_TA = -.50*CFM*XA/TA**2
+    //   CFX_T1 = -.25*CF1*X1/T1**2 + CFX_TA*0.5
+    //   CFX_T2 = -.25*CF2*X2/T2**2 + CFX_TA*0.5
+    //   Z_T1 = -Z_TL/T1 + Z_CFX*CFX_T1 + Z_HWA*...
+    //   Z_T2 =  Z_TL/T2 + Z_CFX*CFX_T2 + Z_HWA*...
+    //
+    // The θ derivatives must include both local and average theta contributions:
+    let cfx_ta = -0.5 * cfm * xa / (ta * ta);  // Derivative of CFX w.r.t. average theta
+    let cfx_t1 = -0.25 * s1.cf * s1.x / (s1.theta * s1.theta) + cfx_ta * 0.5;
+    let cfx_t2 = -0.25 * s2.cf * s2.x / (s2.theta * s2.theta) + cfx_ta * 0.5;
+    let z_t1 = -1.0 / s1.theta + z_cfx * cfx_t1;
+    let z_t2 = 1.0 / s2.theta + z_cfx * cfx_t2;
 
     // Compute chain rule derivatives:
     // H_T (∂H/∂θ) = -δ*/θ² = -H/θ
