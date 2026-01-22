@@ -75,6 +75,8 @@ pub struct MarchConfig {
     pub senswt: f64,
     /// Small tolerance for convergence check in coupled mode
     pub deps: f64,
+    /// Enable debug tracing output
+    pub debug_trace: bool,
 }
 
 impl Default for MarchConfig {
@@ -87,6 +89,7 @@ impl Default for MarchConfig {
             htmax: 2.5,
             senswt: 1000.0,
             deps: 5.0e-6,
+            debug_trace: false,
         }
     }
 }
@@ -391,8 +394,8 @@ pub fn newton_solve_station(
             &jac.vs2,
             &[res.res_third, res.res_mom, res.res_shape],
             direct,
-            station.hk / station.theta,  // hk2_t ≈ -Hk/θ
-            -station.hk / station.delta_star, // hk2_d ≈ Hk/δ* (but derivative is negative)
+            station.hk / station.theta,  // hk2_t (original convention)
+            -station.hk / station.delta_star, // hk2_d (original convention)
             0.0,  // hk2_u (simplified - no Ue dependence in Hk at low Mach)
             htarg,
             station.hk,
@@ -440,6 +443,9 @@ pub fn newton_solve_station(
         }
         station.theta = (station.theta + rlx * vsrez[1]).max(1e-12);
         station.delta_star = (station.delta_star + rlx * vsrez[2]).max(1e-12);
+        // In inverse mode, XFOIL's MRCHUE allows Ue to vary to satisfy the Hk constraint.
+        // This prevents the solution from blowing up when approaching separation.
+        // The Ue change is typically small due to the Hk constraint formulation.
         if !direct {
             station.u = (station.u + rlx * vsrez[3]).max(0.01);
         }
@@ -551,6 +557,12 @@ pub fn march_fixed_ue(
         // Check for transition AFTER Newton solve using TRCHEK2
         // This matches XFOIL's order: solve first, then check transition with converged values
         if is_laminar && result.x_transition.is_none() {
+            // Debug trace before transition check
+            if config.debug_trace && i >= 28 && i <= 35 {
+                println!("[march_fixed_ue] Station {} PRE-TRCHEK: x={:.4}, Hk={:.4}, theta={:.6e}, ampl={:.4}",
+                         i, station.x, station.hk, station.theta, station.ampl);
+            }
+            
             // Use TRCHEK2 for implicit N-factor integration with converged station values
             let trchek_result = trchek2_stations(
                 prev_station.x,
@@ -567,22 +579,70 @@ pub fn march_fixed_ue(
             
             station.ampl = trchek_result.ampl2;
             
+            if config.debug_trace && i >= 28 && i <= 35 {
+                println!("[march_fixed_ue] Station {} POST-TRCHEK: ampl={:.4}, transition={}",
+                         i, station.ampl, trchek_result.transition);
+            }
+            
             if trchek_result.transition {
                 result.x_transition = trchek_result.xt;
                 result.transition_index = Some(i);
                 
-                // Transition to turbulent for NEXT station
-                is_laminar = false;
-                station.is_laminar = false;
-                station.is_turbulent = true;
-                station.ctau = 0.03; // Initialize turbulent shear stress
+                if config.debug_trace {
+                    println!("[march_fixed_ue] TRANSITION DETECTED at station {}, x={:.4}", i, station.x);
+                    println!("  Laminar values: Hk={:.4}, theta={:.6e}, delta_star={:.6e}",
+                             station.hk, station.theta, station.delta_star);
+                }
                 
-                // Recompute with turbulent closures for this station
-                blvar(&mut station, FlowType::Turbulent, msq, re);
+                // Transition to turbulent
+                is_laminar = false;
+                
+                // RE-SOLVE this station with TURBULENT equations
+                // This is critical because:
+                // 1. The Newton solve was done with laminar equations
+                // 2. XFOIL re-solves with turbulent when transition is detected
+                // 3. If Hk > htmax, turbulent solve will use inverse mode
+                //
+                // For the turbulent re-solve, we create a modified "prev" station
+                // with delta_star adjusted so that initial Hk is closer to htmax.
+                // This prevents the solver from immediately going into inverse mode
+                // and changing Ue drastically.
+                let mut turb_prev = prev_station.clone();
+                // Adjust delta_star so that initial H for next station is close to htmax
+                // This matches XFOIL's behavior where turbulent BL has much lower H
+                turb_prev.delta_star = config.htmax * turb_prev.theta;
+                turb_prev.hk = config.htmax;
+                
+                let (turb_station, _turb_converged) = newton_solve_station(
+                    &turb_prev,
+                    x[i],
+                    ue[i],
+                    re,
+                    msq,
+                    false,  // is_laminar = false (turbulent)
+                    config.max_iter,
+                    config.tolerance,
+                    config.hlmax,
+                    config.htmax,
+                );
+                
+                // Use the turbulent solution
+                station = turb_station;
+                station.ampl = trchek_result.ampl2;  // Keep the transition N-factor
+                
+                if config.debug_trace {
+                    println!("  After turbulent re-solve: Hk={:.4}, theta={:.6e}, delta_star={:.6e}",
+                             station.hk, station.theta, station.delta_star);
+                }
             }
         } else if !is_laminar {
             // Turbulent: N-factor frozen
             station.ampl = prev_station.ampl;
+            
+            if config.debug_trace && i >= 28 && i <= 35 {
+                println!("[march_fixed_ue] Station {} TURBULENT: x={:.4}, Hk={:.4}, theta={:.6e}",
+                         i, station.x, station.hk, station.theta);
+            }
         }
 
         // Check for separation (Cf < 0)
