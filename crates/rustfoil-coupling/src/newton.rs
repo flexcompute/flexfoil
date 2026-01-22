@@ -60,6 +60,17 @@ pub struct BlNewtonSystem {
     /// Coupling to inviscid (dUe influence)
     /// These are the VS2[:,3] entries from bldif - edge velocity sensitivity
     pub vs: Vec<[f64; 3]>,
+    /// VM matrix for mass defect coupling (global viscous-inviscid interaction)
+    /// VM[i][j][k] = sensitivity of equation k at station i to mass defect at station j
+    /// This is the key matrix for full Newton coupling as in XFOIL's SETBL
+    /// Dimensions: n x n x 3
+    pub vm: Vec<Vec<[f64; 3]>>,
+    /// VS columns for delta_star derivatives (column 2 = index 2)
+    /// Used in VM construction: VS1[:,2] and VS2[:,2]
+    pub vs_delta: Vec<[f64; 3]>,
+    /// VS columns for Ue derivatives (column 3 = index 3)
+    /// Used in VM construction: VS1[:,3] and VS2[:,3]
+    pub vs_ue: Vec<[f64; 3]>,
 }
 
 impl BlNewtonSystem {
@@ -77,6 +88,9 @@ impl BlNewtonSystem {
             vb: vec![[[0.0; 3]; 3]; n],
             rhs: vec![[0.0; 3]; n],
             vs: vec![[0.0; 3]; n],
+            vm: vec![vec![[0.0; 3]; n]; n],
+            vs_delta: vec![[0.0; 3]; n],
+            vs_ue: vec![[0.0; 3]; n],
         }
     }
 
@@ -147,6 +161,132 @@ impl BlNewtonSystem {
                 }
                 // Store edge velocity coupling (column 3 = u variable)
                 self.vs[i][eq] = jacobian.vs2[eq][3];
+                // Store delta_star derivatives (column 2)
+                self.vs_delta[i][eq] = jacobian.vs2[eq][2];
+                // Store Ue derivatives (column 3)
+                self.vs_ue[i][eq] = jacobian.vs2[eq][3];
+            }
+        }
+    }
+
+    /// Build the Newton system with VM matrix for mass defect coupling
+    ///
+    /// This extended build method also constructs the VM matrix that couples
+    /// mass defect changes at all stations to the BL equations. This is required
+    /// for the full viscous-inviscid coupling as in XFOIL's SETBL.
+    ///
+    /// The VM matrix entries are computed as:
+    /// ```text
+    /// VM[i][j][k] = VS2[k,2]*D2_M[j] + VS2[k,3]*U2_M[j]
+    ///             + VS1[k,2]*D1_M[j] + VS1[k,3]*U1_M[j]
+    /// ```
+    /// where:
+    /// - D_M[j] = derivative of delta_star w.r.t. mass defect at station j
+    /// - U_M[j] = derivative of Ue w.r.t. mass defect at station j (from DIJ)
+    ///
+    /// # Arguments
+    /// * `stations` - Slice of BlStation with pre-computed secondary variables
+    /// * `flow_types` - Flow type for each interval
+    /// * `msq` - Mach number squared
+    /// * `re` - Reference Reynolds number
+    /// * `dij` - DIJ matrix for Ue-mass defect coupling
+    ///
+    /// # Reference
+    /// XFOIL xbl.f SETBL (lines 327-393)
+    pub fn build_with_vm(
+        &mut self,
+        stations: &[BlStation],
+        flow_types: &[FlowType],
+        msq: f64,
+        re: f64,
+        dij: &DMatrix<f64>,
+    ) {
+        // First build the basic system
+        self.build(stations, flow_types, msq, re);
+
+        // Clear VM matrix
+        for i in 0..self.n {
+            for j in 0..self.n {
+                self.vm[i][j] = [0.0, 0.0, 0.0];
+            }
+        }
+
+        // Build VM matrix for viscous-inviscid coupling
+        // This implements XFOIL's SETBL VM construction
+        //
+        // For each equation station i (interval between i-1 and i):
+        // For each influence station j:
+        //   VM[i][j][k] = VS2[k,2]*D2_M[j] + VS2[k,3]*U2_M[j]
+        //               + VS1[k,2]*D1_M[j] + VS1[k,3]*U1_M[j]
+        //
+        // where:
+        //   D_M[j] = 1/Ue for j==i, 0 otherwise (delta_star sensitivity)
+        //   U_M[j] = -DIJ[i,j] (Ue sensitivity from DIJ matrix)
+
+        for i in 1..self.n {
+            let s1 = &stations[i - 1];
+            let s2 = &stations[i];
+            let flow_type = flow_types[i - 1];
+
+            // Recompute Jacobian (or use cached values)
+            let (_, jacobian) = bldif(s1, s2, flow_type, msq, re);
+
+            // VS1 and VS2 columns for delta_star and Ue
+            let vs1_d: [f64; 3] = [jacobian.vs1[0][2], jacobian.vs1[1][2], jacobian.vs1[2][2]];
+            let vs1_u: [f64; 3] = [jacobian.vs1[0][3], jacobian.vs1[1][3], jacobian.vs1[2][3]];
+            let vs2_d: [f64; 3] = [jacobian.vs2[0][2], jacobian.vs2[1][2], jacobian.vs2[2][2]];
+            let vs2_u: [f64; 3] = [jacobian.vs2[0][3], jacobian.vs2[1][3], jacobian.vs2[2][3]];
+
+            // Derivatives of delta_star w.r.t. Ue (from mass defect relation)
+            // delta_star = mass_defect / Ue
+            // d(delta_star)/d(Ue) = -delta_star / Ue
+            let d2_u2 = if s2.u.abs() > 1e-10 {
+                -s2.delta_star / s2.u
+            } else {
+                0.0
+            };
+            let d1_u1 = if s1.u.abs() > 1e-10 {
+                -s1.delta_star / s1.u
+            } else {
+                0.0
+            };
+
+            // For each influence station j
+            for j in 0..self.n {
+                // U_M[j] = derivative of Ue at current station w.r.t. mass defect at station j
+                // This comes from the DIJ matrix
+                let u2_m_j = if i < dij.nrows() && j < dij.ncols() {
+                    -dij[(i, j)]
+                } else {
+                    0.0
+                };
+                let u1_m_j = if i > 0 && (i - 1) < dij.nrows() && j < dij.ncols() {
+                    -dij[(i - 1, j)]
+                } else {
+                    0.0
+                };
+
+                // D_M[j] = derivative of delta_star w.r.t. mass defect at station j
+                // d(delta_star)/d(mass) = 1/Ue at the same station
+                // Plus the coupling through Ue change
+                let d2_m_j = if j == i && s2.u.abs() > 1e-10 {
+                    1.0 / s2.u + d2_u2 * u2_m_j
+                } else {
+                    d2_u2 * u2_m_j
+                };
+                let d1_m_j = if j == i - 1 && s1.u.abs() > 1e-10 {
+                    1.0 / s1.u + d1_u1 * u1_m_j
+                } else {
+                    d1_u1 * u1_m_j
+                };
+
+                // Build VM entry for each equation
+                for k in 0..3 {
+                    self.vm[i][j][k] = vs2_d[k] * d2_m_j
+                        + vs2_u[k] * u2_m_j
+                        + vs1_d[k] * d1_m_j
+                        + vs1_u[k] * u1_m_j;
+                }
             }
         }
     }
