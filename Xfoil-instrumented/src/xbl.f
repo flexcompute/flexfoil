@@ -814,7 +814,8 @@ C-------- Debug: dump Newton iteration state
           CALL DBGMRCHUE_ITER(IS, IBL, ITBL, XSI, UEI,
      &                        THI_IN, DSI_IN, CTI_IN, AMI_IN,
      &                        THI, DSI, CTI, AMI,
-     &                        VS2, VSREZ, DMAX, RLX, CONV)
+     &                        VS2, VSREZ, DMAX, RLX, CONV,
+     &                        HSTINV, GM1BL, REYBL)
 C
           IF(DMAX.LE.1.0E-5) GO TO 110
 C
@@ -887,14 +888,16 @@ C------ store primary variables
         DELT(IBL,IS) = DE2
         TSTR(IBL,IS) = HS2*T2
 C
-C------ Debug output for this station
+C------ set "1" variables to "2" variables for next streamwise station
+C       (MOVED BEFORE debug output so HK2 is consistent with THI, DSI)
+        CALL BLPRV(XSI,AMI,CTI,THI,DSI,DSWAKI,UEI)
+        CALL BLKIN
+C
+C------ Debug output for this station (HK2 now matches converged THI, DSI)
         ISDBG = IS
         IBLDBG = IBL
         CALL DBGMRCHUE(IS, IBL, XSI, UEI, THI, DSI, CTI, HK2, CF2, TRAN)
 C
-C------ set "1" variables to "2" variables for next streamwise station
-        CALL BLPRV(XSI,AMI,CTI,THI,DSI,DSWAKI,UEI)
-        CALL BLKIN
         DO 310 ICOM=1, NCOM
           COM1(ICOM) = COM2(ICOM)
   310   CONTINUE

@@ -271,22 +271,43 @@ C
 
 
 C---- Dump MRCHUE Newton iteration state (per-iteration debugging)
+C     Computes Hk and Rtheta from output state to ensure consistency
       SUBROUTINE DBGMRCHUE_ITER(IS, IBL, ITBL, XSI, UEI,
      &                          THI_IN, DSI_IN, CTI_IN, AMI_IN,
      &                          THI_OUT, DSI_OUT, CTI_OUT, AMI_OUT,
-     &                          VS2, VSREZ, DMAX, RLX, CONV)
+     &                          VS2, VSREZ, DMAX, RLX, CONV,
+     &                          HSTINV_V, GM1BL_V, REYBL_V)
       INTEGER IS, IBL, ITBL
       REAL XSI, UEI
       REAL THI_IN, DSI_IN, CTI_IN, AMI_IN
       REAL THI_OUT, DSI_OUT, CTI_OUT, AMI_OUT
       REAL VS2(4,5), VSREZ(4), DMAX, RLX
+      REAL HSTINV_V, GM1BL_V, REYBL_V
       LOGICAL CONV
       COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
       LOGICAL LDBG
       INTEGER LUDBG, IDBGCALL, IDBGITER
       INTEGER I, J
+C---- Local variables for computed Hk and Rtheta
+      REAL H_OUT, HK_OUT, RT_OUT, MSQ
 C
       IF(.NOT.LDBG) RETURN
+C
+C---- Compute H = delta_star / theta from output state
+      H_OUT = DSI_OUT / THI_OUT
+C
+C---- Compute MSQ (Mach^2) from edge velocity
+C     Using formula from BLKIN: MSQ = UEI^2 * HSTINV / (GM1BL * (1 - 0.5*UEI^2*HSTINV))
+      MSQ = UEI*UEI*HSTINV_V / (GM1BL_V*(1.0 - 0.5*UEI*UEI*HSTINV_V))
+C
+C---- Compute Hk from H using HKIN correlation (inline for simplicity)
+C     At M=0: Hk = H
+C     With compressibility: Hk = (H - 0.29*MSQ) / (1 + 0.113*MSQ)
+      HK_OUT = (H_OUT - 0.29*MSQ) / (1.0 + 0.113*MSQ)
+C
+C---- Compute Rtheta = Re * Ue * theta
+      RT_OUT = REYBL_V * UEI * THI_OUT
+C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
       WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
@@ -303,12 +324,14 @@ C---- Input state (before update)
       WRITE(LUDBG,'(A,E15.8,A)') '    "ctau": ', CTI_IN, ','
       WRITE(LUDBG,'(A,E15.8)') '    "ampl": ', AMI_IN
       WRITE(LUDBG,'(A)') '  },'
-C---- Output state (after update)
+C---- Output state (after update) - Hk and Rtheta computed from output theta, delta_star
       WRITE(LUDBG,'(A)') '  "output": {'
       WRITE(LUDBG,'(A,E15.8,A)') '    "theta": ', THI_OUT, ','
       WRITE(LUDBG,'(A,E15.8,A)') '    "delta_star": ', DSI_OUT, ','
       WRITE(LUDBG,'(A,E15.8,A)') '    "ctau": ', CTI_OUT, ','
-      WRITE(LUDBG,'(A,E15.8)') '    "ampl": ', AMI_OUT
+      WRITE(LUDBG,'(A,E15.8,A)') '    "ampl": ', AMI_OUT, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '    "Hk": ', HK_OUT, ','
+      WRITE(LUDBG,'(A,E15.8)') '    "Rtheta": ', RT_OUT
       WRITE(LUDBG,'(A)') '  },'
 C---- Newton update vector
       WRITE(LUDBG,'(A,4(E14.7,A),A)')
