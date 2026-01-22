@@ -79,6 +79,20 @@ def extract_mrchue_iterations(events):
             first = iterations[0]
             final = iterations[-1]
             
+            # Get Hk and Rtheta from final output if available
+            final_values = {
+                "theta": final['output']['theta'],
+                "delta_star": final['output']['delta_star'],
+                "ctau": final['output']['ctau'],
+                "ampl": final['output']['ampl'],
+                "dmax": final['dmax']
+            }
+            # Add Hk and Rtheta if present (from updated instrumentation)
+            if 'Hk' in final['output']:
+                final_values['Hk'] = final['output']['Hk']
+            if 'Rtheta' in final['output']:
+                final_values['Rtheta'] = final['output']['Rtheta']
+            
             station = {
                 "side": side,
                 "ibl": ibl,
@@ -92,13 +106,7 @@ def extract_mrchue_iterations(events):
                     "ctau": first['input']['ctau'],
                     "ampl": first['input']['ampl']
                 },
-                "final": {
-                    "theta": final['output']['theta'],
-                    "delta_star": final['output']['delta_star'],
-                    "ctau": final['output']['ctau'],
-                    "ampl": final['output']['ampl'],
-                    "dmax": final['dmax']
-                },
+                "final": final_values,
                 "iterations": []
             }
             
