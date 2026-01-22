@@ -887,17 +887,36 @@ fn run_viscous_polar(cmd: ViscousPolarCmd) -> Result<(), CliError> {
 /// ```
 fn load_airfoil(path: &PathBuf) -> Result<(String, Vec<Point>), CliError> {
     let content = fs::read_to_string(path)?;
-    let mut lines = content.lines();
+    let mut lines = content.lines().peekable();
 
-    // First line is the name
-    let name = lines
-        .next()
+    // Check if first line is a header (text name) or coordinates (two floats)
+    let first_line = lines
+        .peek()
         .ok_or_else(|| CliError::Parse {
             line: 1,
             message: "Empty file".to_string(),
         })?
-        .trim()
-        .to_string();
+        .trim();
+    
+    // Try to parse as coordinates
+    let parts: Vec<&str> = first_line.split_whitespace().collect();
+    let first_is_coords = if parts.len() >= 2 {
+        // Check if both parts parse as floats
+        parts[0].parse::<f64>().is_ok() && parts[1].parse::<f64>().is_ok()
+    } else {
+        false
+    };
+    
+    let name = if first_is_coords {
+        // First line is coordinates - use filename as name
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("airfoil")
+            .to_string()
+    } else {
+        // First line is a header - consume it as the name
+        lines.next().unwrap().trim().to_string()
+    };
 
     let mut points = Vec::new();
 
