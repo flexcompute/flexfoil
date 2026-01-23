@@ -71,6 +71,17 @@ pub struct BlNewtonSystem {
     /// VS columns for Ue derivatives (column 3 = index 3)
     /// Used in VM construction: VS1[:,3] and VS2[:,3]
     pub vs_ue: Vec<[f64; 3]>,
+    /// Surface direction signs (VTI in XFOIL)
+    /// +1.0 for upper surface stations, -1.0 for lower surface stations
+    /// Used in VM matrix construction: U_M = -VTI[i]*VTI[j]*DIJ[i,j]
+    /// For single-surface mode, all values are +1.0
+    pub vti: Vec<f64>,
+    /// VS1 columns for delta_star derivatives (stored for forced changes)
+    /// VS1[:,2] from bldif - upstream station delta_star sensitivity
+    pub vs1_delta: Vec<[f64; 3]>,
+    /// VS1 columns for Ue derivatives (stored for forced changes)
+    /// VS1[:,3] from bldif - upstream station Ue sensitivity
+    pub vs1_ue: Vec<[f64; 3]>,
 }
 
 impl BlNewtonSystem {
@@ -91,6 +102,9 @@ impl BlNewtonSystem {
             vm: vec![vec![[0.0; 3]; n]; n],
             vs_delta: vec![[0.0; 3]; n],
             vs_ue: vec![[0.0; 3]; n],
+            vti: vec![1.0; n], // Default to +1 for single surface
+            vs1_delta: vec![[0.0; 3]; n],
+            vs1_ue: vec![[0.0; 3]; n],
         }
     }
 
@@ -161,10 +175,14 @@ impl BlNewtonSystem {
                 }
                 // Store edge velocity coupling (column 3 = u variable)
                 self.vs[i][eq] = jacobian.vs2[eq][3];
-                // Store delta_star derivatives (column 2)
+                // Store VS2 delta_star derivatives (column 2)
                 self.vs_delta[i][eq] = jacobian.vs2[eq][2];
-                // Store Ue derivatives (column 3)
+                // Store VS2 Ue derivatives (column 3)
                 self.vs_ue[i][eq] = jacobian.vs2[eq][3];
+                // Store VS1 delta_star derivatives (column 2) for forced changes
+                self.vs1_delta[i][eq] = jacobian.vs1[eq][2];
+                // Store VS1 Ue derivatives (column 3) for forced changes
+                self.vs1_ue[i][eq] = jacobian.vs1[eq][3];
             }
         }
     }
@@ -287,6 +305,242 @@ impl BlNewtonSystem {
                         + vs1_d[k] * d1_m_j
                         + vs1_u[k] * u1_m_j;
                 }
+            }
+        }
+    }
+
+    /// Build the Newton system with full XFOIL-style viscous-inviscid coupling
+    ///
+    /// This method implements XFOIL's SETBL algorithm including:
+    /// 1. Building the basic block-tridiagonal system via bldif()
+    /// 2. Building the VM matrix with VTI signs for proper Ue coupling
+    /// 3. Computing and adding forced changes (DUE, DDS) to residuals
+    ///
+    /// The forced changes represent the mismatch between the current edge
+    /// velocities and what UESET would compute from the current mass defect.
+    /// This is crucial for Newton convergence when Ue has been modified
+    /// outside the linearization.
+    ///
+    /// # Arguments
+    /// * `stations` - Slice of BlStation with pre-computed secondary variables
+    /// * `flow_types` - Flow type for each interval
+    /// * `msq` - Mach number squared
+    /// * `re` - Reference Reynolds number
+    /// * `dij` - DIJ matrix for Ue-mass defect coupling
+    /// * `ue_inviscid` - Inviscid edge velocities (UINV in XFOIL)
+    ///
+    /// # Reference
+    /// XFOIL xbl.f SETBL (lines 95-110 for USAV, 215-217 for forced changes)
+    pub fn build_with_vm_full(
+        &mut self,
+        stations: &[BlStation],
+        flow_types: &[FlowType],
+        msq: f64,
+        re: f64,
+        dij: &DMatrix<f64>,
+        ue_inviscid: &[f64],
+    ) {
+        // Step 1: Save current Ue values (USAV in XFOIL)
+        let ue_current: Vec<f64> = stations.iter().map(|s| s.u).collect();
+
+        // Step 2: Compute what UESET would give (Ue from mass defect via DIJ)
+        // XFOIL: UEDG(IBL,IS) = UINV(IBL,IS) + sum_j(-VTI*VTI*DIJ * MASS)
+        let ue_from_mass = self.compute_ue_from_mass(stations, ue_inviscid, dij);
+
+        // Step 3: Compute forced changes (mismatch between current Ue and UESET result)
+        // XFOIL: DUE2 = UEDG(IBL,IS) - USAV(IBL,IS)
+        // Note: In XFOIL, after calling UESET, USAV has new values and UEDG has old
+        // So DUE = old_Ue - new_Ue = current - from_mass
+        let due: Vec<f64> = (0..stations.len())
+            .map(|i| ue_current[i] - ue_from_mass[i])
+            .collect();
+
+        // Step 4: Build basic system (calls bldif for each interval)
+        // This populates VA, VB, RHS, and stores VS columns
+        self.build(stations, flow_types, msq, re);
+
+        // Step 5: Build VM matrix with VTI signs
+        self.build_vm_with_vti(stations, flow_types, msq, re, dij);
+
+        // Step 6: Add forced changes to residuals
+        // XFOIL: VDEL(k,1,IV) = VSREZ(k) + VS1*DDS1 + VS2*DDS2 + VS1*DUE1 + VS2*DUE2
+        self.add_forced_changes(stations, &due);
+    }
+
+    /// Compute edge velocities from mass defect using UESET formula
+    ///
+    /// XFOIL formula: Ue[i] = Ue_inv[i] + sum_j(-VTI[i]*VTI[j]*DIJ[i,j] * mass[j])
+    ///
+    /// # Arguments
+    /// * `stations` - BL stations with mass_defect values
+    /// * `ue_inviscid` - Inviscid edge velocities
+    /// * `dij` - DIJ influence matrix
+    ///
+    /// # Returns
+    /// Vector of computed edge velocities
+    fn compute_ue_from_mass(
+        &self,
+        stations: &[BlStation],
+        ue_inviscid: &[f64],
+        dij: &DMatrix<f64>,
+    ) -> Vec<f64> {
+        let n = stations.len();
+        let mut ue = vec![0.0; n];
+
+        for i in 0..n {
+            let mut dui = 0.0;
+            for j in 0..n {
+                if i < dij.nrows() && j < dij.ncols() {
+                    // UE_M = -VTI[i] * VTI[j] * DIJ[i,j]
+                    let ue_m = -self.vti[i] * self.vti[j] * dij[(i, j)];
+                    dui += ue_m * stations[j].mass_defect;
+                }
+            }
+            ue[i] = if i < ue_inviscid.len() {
+                ue_inviscid[i] + dui
+            } else {
+                dui
+            };
+        }
+
+        ue
+    }
+
+    /// Build VM matrix with VTI signs for proper surface direction handling
+    ///
+    /// This implements XFOIL's VM construction with the correct VTI sign convention:
+    /// U_M[j] = -VTI[i]*VTI[j]*DIJ[i,j]
+    ///
+    /// For single-surface mode (all VTI = +1), this reduces to U_M = -DIJ.
+    /// For two-surface mode, the signs handle upper/lower velocity directions.
+    fn build_vm_with_vti(
+        &mut self,
+        stations: &[BlStation],
+        flow_types: &[FlowType],
+        msq: f64,
+        re: f64,
+        dij: &DMatrix<f64>,
+    ) {
+        // Clear VM matrix
+        for i in 0..self.n {
+            for j in 0..self.n {
+                self.vm[i][j] = [0.0, 0.0, 0.0];
+            }
+        }
+
+        for i in 1..self.n {
+            let s1 = &stations[i - 1];
+            let s2 = &stations[i];
+            let flow_type = flow_types[i - 1];
+
+            // Get Jacobian (recompute or use cached values from build())
+            let (_, jacobian) = bldif(s1, s2, flow_type, msq, re);
+
+            // VS1 and VS2 columns for delta_star and Ue
+            let vs1_d: [f64; 3] = [jacobian.vs1[0][2], jacobian.vs1[1][2], jacobian.vs1[2][2]];
+            let vs1_u: [f64; 3] = [jacobian.vs1[0][3], jacobian.vs1[1][3], jacobian.vs1[2][3]];
+            let vs2_d: [f64; 3] = [jacobian.vs2[0][2], jacobian.vs2[1][2], jacobian.vs2[2][2]];
+            let vs2_u: [f64; 3] = [jacobian.vs2[0][3], jacobian.vs2[1][3], jacobian.vs2[2][3]];
+
+            // Derivatives of delta_star w.r.t. Ue (from mass defect relation)
+            // delta_star = mass_defect / Ue
+            // d(delta_star)/d(Ue) = -delta_star / Ue
+            let d2_u2 = if s2.u.abs() > 1e-10 {
+                -s2.delta_star / s2.u
+            } else {
+                0.0
+            };
+            let d1_u1 = if s1.u.abs() > 1e-10 {
+                -s1.delta_star / s1.u
+            } else {
+                0.0
+            };
+
+            // For each influence station j
+            for j in 0..self.n {
+                // U_M[j] with VTI signs (XFOIL formula)
+                // U2_M(JV) = -VTI(IBL,IS)*VTI(JBL,JS)*DIJ(I,J)
+                let u2_m_j = if i < dij.nrows() && j < dij.ncols() {
+                    -self.vti[i] * self.vti[j] * dij[(i, j)]
+                } else {
+                    0.0
+                };
+                let u1_m_j = if i > 1 && (i - 1) < dij.nrows() && j < dij.ncols() {
+                    -self.vti[i - 1] * self.vti[j] * dij[(i - 1, j)]
+                } else {
+                    0.0
+                };
+
+                // D_M[j] = derivative of delta_star w.r.t. mass defect at station j
+                // d(delta_star)/d(mass) = 1/Ue at the same station
+                // Plus the coupling through Ue change: d(ds)/d(Ue) * d(Ue)/d(mass)
+                let d2_m_j = if j == i && s2.u.abs() > 1e-10 {
+                    1.0 / s2.u + d2_u2 * u2_m_j
+                } else {
+                    d2_u2 * u2_m_j
+                };
+                let d1_m_j = if j == i - 1 && i > 1 && s1.u.abs() > 1e-10 {
+                    1.0 / s1.u + d1_u1 * u1_m_j
+                } else {
+                    d1_u1 * u1_m_j
+                };
+
+                // Build VM entry for each equation
+                // VM[k,j,i] = VS2[k,2]*D2_M[j] + VS2[k,3]*U2_M[j]
+                //           + VS1[k,2]*D1_M[j] + VS1[k,3]*U1_M[j]
+                for k in 0..3 {
+                    self.vm[i][j][k] = vs2_d[k] * d2_m_j
+                        + vs2_u[k] * u2_m_j
+                        + vs1_d[k] * d1_m_j
+                        + vs1_u[k] * u1_m_j;
+                }
+            }
+        }
+    }
+
+    /// Add forced changes to residuals
+    ///
+    /// The forced changes account for the mismatch between current Ue values
+    /// and what UESET would compute. This is essential for Newton convergence.
+    ///
+    /// XFOIL formula (xbl.f lines 351-355):
+    /// ```text
+    /// VDEL(k,1,IV) = VSREZ(k)
+    ///              + VS1(k,3)*DUE1 + VS1(k,2)*DDS1
+    ///              + VS2(k,3)*DUE2 + VS2(k,2)*DDS2
+    /// ```
+    ///
+    /// where DDS = d(delta_star)/d(Ue) * DUE = -delta_star/Ue * DUE
+    fn add_forced_changes(&mut self, stations: &[BlStation], due: &[f64]) {
+        for i in 1..self.n {
+            let s1 = &stations[i - 1];
+            let s2 = &stations[i];
+
+            // Compute d(delta_star)/d(Ue) = -delta_star / Ue
+            let d2_u2 = if s2.u.abs() > 1e-10 {
+                -s2.delta_star / s2.u
+            } else {
+                0.0
+            };
+            let d1_u1 = if i > 1 && s1.u.abs() > 1e-10 {
+                -s1.delta_star / s1.u
+            } else {
+                0.0
+            };
+
+            // Forced changes in delta_star due to Ue mismatch
+            let dds2 = d2_u2 * due[i];
+            let dds1 = if i > 1 { d1_u1 * due[i - 1] } else { 0.0 };
+            let due1 = if i > 1 { due[i - 1] } else { 0.0 };
+            let due2 = due[i];
+
+            // Add to residuals: VDEL += VS1*DDS1 + VS2*DDS2 + VS1*DUE1 + VS2*DUE2
+            // Using stored VS columns
+            for k in 0..3 {
+                self.rhs[i][k] += self.vs1_delta[i][k] * dds1
+                    + self.vs_delta[i][k] * dds2
+                    + self.vs1_ue[i][k] * due1
+                    + self.vs_ue[i][k] * due2;
             }
         }
     }

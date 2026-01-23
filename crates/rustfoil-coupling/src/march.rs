@@ -585,14 +585,28 @@ pub fn march_fixed_ue(
                 prev_station.hk,
                 prev_station.theta,
                 prev_station.r_theta,
+                prev_station.delta_star,
                 prev_station.ampl,
                 station.hk,
                 station.theta,
                 station.r_theta,
+                station.delta_star,
                 config.ncrit,
             );
             
             station.ampl = trchek_result.ampl2;
+            
+            // Debug trace for transition investigation
+            // Trace N-factor evolution to diagnose late transition
+            if config.debug_trace && i <= 30 && station.ampl > 0.001 {
+                println!("[march_fixed_ue] Station {} AMPL: x={:.4}, Hk={:.3}, Rθ={:.1}, N={:.4}",
+                         i, station.x, station.hk, station.r_theta, station.ampl);
+            }
+            if config.debug_trace && station.ampl > 4.0 && station.ampl < 12.0 {
+                println!("[march_fixed_ue] Station {} NEAR-TRANS: x={:.4}, Hk={:.3}, Rθ={:.1}, N={:.4}, dN={:.4}",
+                         i, station.x, station.hk, station.r_theta, station.ampl, 
+                         station.ampl - prev_station.ampl);
+            }
             
             if config.debug_trace && i >= 28 && i <= 35 {
                 println!("[march_fixed_ue] Station {} POST-TRCHEK: ampl={:.4}, transition={}",
@@ -787,6 +801,10 @@ pub fn march_surface(
 
         // Check for transition (laminar only)
         if is_laminar && result.x_transition.is_none() {
+            // First-order estimate of ampl2 for AXSET
+            // (XFOIL uses iterative approach via TRCHEK2)
+            let ampl2_est = prev_station.ampl;  // Use prev ampl as initial guess
+            
             // Compute amplification rate using XFOIL's AXSET (RMS averaging)
             let ax_result = axset(
                 prev_station.hk,
@@ -796,10 +814,17 @@ pub fn march_surface(
                 station.hk,
                 station.theta,
                 station.r_theta,
-                station.ampl,
+                ampl2_est,  // Use estimate, not station.ampl which might be 0
                 config.ncrit,
             );
             station.ampl = prev_station.ampl + ax_result.ax * ds;
+            
+            // Debug trace for transition investigation
+            if config.debug_trace && station.ampl > 0.1 && station.ampl < 12.0 {
+                println!("[march_surface] i={} x={:.4} Hk={:.3} Rθ={:.0} N={:.3} dN={:.4} AX={:.1}",
+                         i, station.x, station.hk, station.r_theta, station.ampl,
+                         station.ampl - prev_station.ampl, ax_result.ax);
+            }
 
             if check_transition(station.ampl, config.ncrit).is_some() {
                 let ampl_prev = prev_station.ampl;

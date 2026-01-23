@@ -15,6 +15,8 @@
 //! The amplification rate dN/dx depends on the local boundary layer state
 //! (shape factor, momentum thickness, Reynolds number).
 
+use super::hkin::hkin;
+
 /// Smoothing half-width for critical Reynolds number transition
 ///
 /// This value controls how smoothly the amplification "turns on" as
@@ -435,9 +437,11 @@ pub fn trchek2(
         let dt = d1 * wf1 + d2 * wf2;
         let ut = u1 * wf1 + u2 * wf2;
         
-        // Compute Hk and Rθ at the interpolated point
-        // Simplified version: linear interpolation of Hk (exact would need BLKIN)
-        let hkt = hk1 * wf1 + hk2 * wf2;
+        // Compute Hk at the interpolated point using proper H = δ*/θ ratio
+        // This is more accurate than linear interpolation of Hk because
+        // the ratio of interpolated values ≠ interpolation of ratios
+        let ht = if tt > 1e-20 { dt / tt } else { hk1 * wf1 + hk2 * wf2 };
+        let hkt = hkin(ht, 0.0).hk;  // Assume incompressible (msq = 0)
         
         // Rθ at transition point (using interpolated values)
         let rtt = ut * tt * re;
@@ -520,16 +524,27 @@ pub fn trchek2(
 ///
 /// This is a simpler version that works with BlStation data directly,
 /// avoiding the need to pass all individual variables.
+///
+/// # Arguments
+/// * `x1`, `x2` - Arc length positions
+/// * `hk1`, `hk2` - Kinematic shape factors
+/// * `t1`, `t2` - Momentum thickness θ
+/// * `rt1`, `rt2` - Momentum thickness Reynolds number Rθ
+/// * `d1`, `d2` - Displacement thickness δ* (for proper Hk interpolation)
+/// * `ampl1` - N-factor at station 1
+/// * `ncrit` - Critical N-factor for transition
 pub fn trchek2_stations(
     x1: f64,
     x2: f64,
     hk1: f64,
     t1: f64,
     rt1: f64,
+    d1: f64,
     ampl1: f64,
     hk2: f64,
     t2: f64,
     rt2: f64,
+    d2: f64,
     ncrit: f64,
 ) -> Trchek2Result {
     const DAEPS: f64 = 5.0e-5;
@@ -571,8 +586,13 @@ pub fn trchek2_stations(
         // Interpolate to transition point
         xt = x1 * wf1 + x2 * wf2;
         let tt = t1 * wf1 + t2 * wf2;
-        let hkt = hk1 * wf1 + hk2 * wf2;
+        let dt = d1 * wf1 + d2 * wf2;
         let rtt = rt1 * wf1 + rt2 * wf2;  // Simplified interpolation
+        
+        // Compute Hk at interpolated point using proper H = δ*/θ ratio
+        // This is more accurate than linear interpolation of Hk
+        let ht = if tt > 1e-20 { dt / tt } else { hk1 * wf1 + hk2 * wf2 };
+        let hkt = hkin(ht, 0.0).hk;  // Assume incompressible
         
         // Recompute AX at transition point
         let ax_result = axset(hk1, t1, rt1, ampl1, hkt, tt, rtt, amplt, ncrit);
