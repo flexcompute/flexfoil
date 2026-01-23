@@ -612,39 +612,84 @@ fn test_dampl_reference_coverage() {
 use rustfoil_bl::{blvar, FlowType};
 use rustfoil_bl::state::BlStation;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct BlvarInput {
+    #[serde(default)]
     x: f64,
+    #[serde(default)]
     u: f64,
+    #[serde(default)]
     theta: f64,
+    #[serde(default)]
     delta_star: f64,
+    #[serde(default)]
     ctau: f64,
+    #[serde(default)]
     ampl: f64,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 #[allow(non_snake_case)]
 struct BlvarOutput {
+    #[serde(default)]
     H: f64,
+    #[serde(default)]
     Hk: f64,
+    #[serde(default)]
     Hs: f64,
+    #[serde(default)]
     Hc: f64,
+    #[serde(default)]
     Rtheta: f64,
+    #[serde(default)]
     Cf: f64,
+    #[serde(default)]
     Cd: f64,
+    #[serde(default)]
     Us: f64,
+    #[serde(default)]
     Cq: f64,
+    #[serde(default)]
     De: f64,
 }
 
 #[derive(Deserialize)]
+#[serde(default)]
 struct BlvarTest {
+    #[serde(default)]
+    call_id: usize,
+    #[serde(default)]
+    subroutine: String,
+    #[serde(default)]
     iteration: usize,
+    #[serde(default)]
     side: usize,
+    #[serde(default)]
     ibl: usize,
     flow_type: usize,
     input: BlvarInput,
     output: BlvarOutput,
+}
+
+impl Default for BlvarTest {
+    fn default() -> Self {
+        Self {
+            call_id: 0,
+            subroutine: String::new(),
+            iteration: 0,
+            side: 0,
+            ibl: 0,
+            flow_type: 0,
+            input: BlvarInput::default(),
+            output: BlvarOutput::default(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct BlvarTestData {
+    metadata: serde_json::Value,
+    events: Vec<BlvarTest>,
 }
 
 fn load_blvar_tests() -> Vec<BlvarTest> {
@@ -658,8 +703,10 @@ fn load_blvar_tests() -> Vec<BlvarTest> {
     let contents = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("Failed to read BLVAR test file {}: {}", path.display(), e));
 
-    serde_json::from_str(&contents)
-        .unwrap_or_else(|e| panic!("Failed to parse BLVAR JSON from {}: {}", path.display(), e))
+    let data: BlvarTestData = serde_json::from_str(&contents)
+        .unwrap_or_else(|e| panic!("Failed to parse BLVAR JSON from {}: {}", path.display(), e));
+    
+    data.events
 }
 
 #[test]

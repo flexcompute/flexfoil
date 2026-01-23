@@ -409,16 +409,21 @@ fn test_trchek2_comparison() {
         if let Some(prev) = prev_iter {
             if prev.ibl + 1 == ev.ibl {
                 // Consecutive stations - test TRCHEK2
+                // Estimate d1, d2 from Hk and theta: d = Hk * theta
+                let d1 = prev.hk2 * prev.t2;
+                let d2 = ev.hk2 * ev.t2;
                 let result = trchek2_stations(
                     prev.x2,  // x1 = prev's x2
                     ev.x2,    // x2 = current's x2
                     prev.hk2, // hk1 = prev's hk2 (output from prev station)
                     prev.t2,  // t1 = prev's T2
                     prev.rt2, // rt1 = prev's Rt2
+                    d1,       // d1 = estimated displacement thickness
                     prev.ampl2, // ampl1 = prev's ampl2 (N at end of prev station)
                     ev.hk2,   // hk2 = current's hk2
                     ev.t2,    // t2 = current's T2  
                     ev.rt2,   // rt2 = current's Rt2
+                    d2,       // d2 = estimated displacement thickness
                     ev.ncrit, // ncrit
                 );
                 

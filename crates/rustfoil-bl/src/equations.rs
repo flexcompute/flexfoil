@@ -938,40 +938,74 @@ pub fn bldif(
             let cf2_d = s2.derivs.cf_hk * hk2_d;
             let cf2_u = s2.derivs.cf_rt * rt2_u;
 
-            // UQ derivatives via averaged quantities (xblsys.f:1735-1755)
-            // UQ depends on CFA, HKA, DA, RTA
-            let uq_t1 = (1.0 - upw) * (uq_cfa * cf1_t + uq_hka * hk1_t) + 0.5 * uq_rta * rt1_t;
-            let uq_d1 = (1.0 - upw) * (uq_cfa * cf1_d + uq_hka * hk1_d) + 0.5 * uq_da;
-            let uq_u1 = (1.0 - upw) * (uq_cfa * cf1_u) + 0.5 * uq_rta * rt1_u;
-            let uq_t2 = upw * (uq_cfa * cf2_t + uq_hka * hk2_t) + 0.5 * uq_rta * rt2_t;
-            let uq_d2 = upw * (uq_cfa * cf2_d + uq_hka * hk2_d) + 0.5 * uq_da;
-            let uq_u2 = upw * (uq_cfa * cf2_u) + 0.5 * uq_rta * rt2_u;
+            // UPW derivatives w.r.t. primary variables (XFOIL xblsys.f:1637-1644)
+            // UPW_T = UPW_HK * HK_T, UPW_D = UPW_HK * HK_D
+            // These are needed for UQ derivative calculations
+            let upw_t1_shear = upw_hk1 * hk1_t;
+            let upw_d1_shear = upw_hk1 * hk1_d;
+            let upw_t2_shear = upw_hk2 * hk2_t;
+            let upw_d2_shear = upw_hk2 * hk2_d;
 
-            // Build Jacobian entries (xblsys.f:1813-1839)
-            // VS1[0][0] = Z_S1
+            // UQ derivatives via averaged quantities (xblsys.f:1735-1790)
+            // UQ depends on CFA, HKA, DA, RTA
+            // First stage: compute with UPW contributions (xblsys.f:1770-1779)
+            let uq_upw = uq_cfa * (s2.cf - s1.cf) + uq_hka * (s2.hk - s1.hk);
+            
+            // UQ_T1 = (1.0-UPW)*(UQ_CFA*CF1_T1 + UQ_HKA*HK1_T1) + UQ_UPW*UPW_T1
+            // Then add: + 0.5*UQ_RTA*RT1_T1 (xblsys.f:1781)
+            let uq_t1 = (1.0 - upw) * (uq_cfa * cf1_t + uq_hka * hk1_t) 
+                + uq_upw * upw_t1_shear
+                + 0.5 * uq_rta * rt1_t;
+            
+            // UQ_D1 = (1.0-UPW)*(UQ_CFA*CF1_D1 + UQ_HKA*HK1_D1) + UQ_UPW*UPW_D1
+            // Then add: + 0.5*UQ_DA (xblsys.f:1782)
+            let uq_d1 = (1.0 - upw) * (uq_cfa * cf1_d + uq_hka * hk1_d)
+                + uq_upw * upw_d1_shear
+                + 0.5 * uq_da;
+            
+            // UQ_U1 = (1.0-UPW)*(UQ_CFA*CF1_U1 + UQ_HKA*HK1_U1) + UQ_UPW*UPW_U1
+            // Then add: + 0.5*UQ_RTA*RT1_U1 (xblsys.f:1783)
+            let uq_u1 = (1.0 - upw) * (uq_cfa * cf1_u)
+                + 0.5 * uq_rta * rt1_u;
+            
+            // UQ_T2 = UPW*(UQ_CFA*CF2_T2 + UQ_HKA*HK2_T2) + UQ_UPW*UPW_T2
+            // Then add: + 0.5*UQ_RTA*RT2_T2 (xblsys.f:1784)
+            let uq_t2 = upw * (uq_cfa * cf2_t + uq_hka * hk2_t)
+                + uq_upw * upw_t2_shear
+                + 0.5 * uq_rta * rt2_t;
+            
+            // UQ_D2 = UPW*(UQ_CFA*CF2_D2 + UQ_HKA*HK2_D2) + UQ_UPW*UPW_D2
+            // Then add: + 0.5*UQ_DA (xblsys.f:1785)
+            let uq_d2 = upw * (uq_cfa * cf2_d + uq_hka * hk2_d)
+                + uq_upw * upw_d2_shear
+                + 0.5 * uq_da;
+            
+            // UQ_U2 = UPW*(UQ_CFA*CF2_U2 + UQ_HKA*HK2_U2) + UQ_UPW*UPW_U2
+            // Then add: + 0.5*UQ_RTA*RT2_U2 (xblsys.f:1786)
+            let uq_u2 = upw * (uq_cfa * cf2_u)
+                + 0.5 * uq_rta * rt2_u;
+
+            // Build Jacobian entries (xblsys.f:1848-1867)
+            // XFOIL builds these in two stages:
+            // 1. First: Z_UPW*UPW_T + Z_DE*DE_T + Z_US*US_T
+            // 2. Then adds: Z_CQ*CQ_T + Z_CF*CF_T + Z_HK*HK_T
+            // Note: The UQ derivatives are already incorporated through Z_CF and Z_HK
+            // (Z_CFA = DEA*2.0*UQ_CFA*DXI*DUXCON, Z_HKA = DEA*2.0*UQ_HKA*DXI*DUXCON)
+            
             jac.vs1[0][0] = z_s1;
-            // VS1[0][1] = Z_UPW*UPW_T1 + Z_DE1*DE1_T1 + Z_US1*US1_T1 + contributions from CQ, CF, HK
-            jac.vs1[0][1] = z_de1 * s1.derivs.de_t + z_us1 * s1.derivs.us_t
-                + z_cq1 * s1.derivs.cq_t + z_cf1 * cf1_t + z_hk1 * hk1_t
-                + dea * 2.0 * uq_t1 * dxi * DUXCON;
-            // VS1[0][2] = Z_D1 + Z_UPW*UPW_D1 + Z_DE1*DE1_D1 + Z_US1*US1_D1 + ...
-            jac.vs1[0][2] = z_d1 + z_de1 * s1.derivs.de_d + z_us1 * s1.derivs.us_d
-                + z_cq1 * s1.derivs.cq_d + z_cf1 * cf1_d + z_hk1 * hk1_d
-                + dea * 2.0 * uq_d1 * dxi * DUXCON;
-            // VS1[0][3] = Z_U1 + Z_US1*US1_U1 + Z_CF1*CF1_U1 + ...
-            jac.vs1[0][3] = z_u1 + z_us1 * s1.derivs.us_u + z_cq1 * s1.derivs.cq_u
-                + z_cf1 * cf1_u + dea * 2.0 * uq_u1 * dxi * DUXCON;
+            jac.vs1[0][1] = z_upw * upw_t1_shear + z_de1 * s1.derivs.de_t + z_us1 * s1.derivs.us_t
+                + z_cq1 * s1.derivs.cq_t + z_cf1 * cf1_t + z_hk1 * hk1_t;
+            jac.vs1[0][2] = z_d1 + z_upw * upw_d1_shear + z_de1 * s1.derivs.de_d + z_us1 * s1.derivs.us_d
+                + z_cq1 * s1.derivs.cq_d + z_cf1 * cf1_d + z_hk1 * hk1_d;
+            jac.vs1[0][3] = z_u1 + z_us1 * s1.derivs.us_u + z_cq1 * s1.derivs.cq_u + z_cf1 * cf1_u;
             jac.vs1[0][4] = z_x1;
 
             jac.vs2[0][0] = z_s2;
-            jac.vs2[0][1] = z_de2 * s2.derivs.de_t + z_us2 * s2.derivs.us_t
-                + z_cq2 * s2.derivs.cq_t + z_cf2 * cf2_t + z_hk2 * hk2_t
-                + dea * 2.0 * uq_t2 * dxi * DUXCON;
-            jac.vs2[0][2] = z_d2 + z_de2 * s2.derivs.de_d + z_us2 * s2.derivs.us_d
-                + z_cq2 * s2.derivs.cq_d + z_cf2 * cf2_d + z_hk2 * hk2_d
-                + dea * 2.0 * uq_d2 * dxi * DUXCON;
-            jac.vs2[0][3] = z_u2 + z_us2 * s2.derivs.us_u + z_cq2 * s2.derivs.cq_u
-                + z_cf2 * cf2_u + dea * 2.0 * uq_u2 * dxi * DUXCON;
+            jac.vs2[0][1] = z_upw * upw_t2_shear + z_de2 * s2.derivs.de_t + z_us2 * s2.derivs.us_t
+                + z_cq2 * s2.derivs.cq_t + z_cf2 * cf2_t + z_hk2 * hk2_t;
+            jac.vs2[0][2] = z_d2 + z_upw * upw_d2_shear + z_de2 * s2.derivs.de_d + z_us2 * s2.derivs.us_d
+                + z_cq2 * s2.derivs.cq_d + z_cf2 * cf2_d + z_hk2 * hk2_d;
+            jac.vs2[0][3] = z_u2 + z_us2 * s2.derivs.us_u + z_cq2 * s2.derivs.cq_u + z_cf2 * cf2_u;
             jac.vs2[0][4] = z_x2;
         }
     }
