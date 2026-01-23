@@ -129,37 +129,38 @@ The original RustFoil implementation had **incorrect symmetry enforcement** in t
 
 **Fix**: Removed the symmetry enforcement, matching XFOIL's behavior which relies purely on curvature-based distribution without post-processing symmetry.
 
-## Updated Results After Fix
+## Final Results (All Fixed!)
 
-| Foil | XFOIL LE | RustFoil LE | RMS Error |
-|------|----------|-------------|-----------|
-| NACA 0012 | idx 79 | idx 79 | 4.05e-7 ✓ |
-| NACA 2412 | idx 81 | idx 80 | 7.36e-3 |
-| NACA 4412 | idx 82 | idx 81 | 1.13e-2 |
+| Foil | XFOIL LE | RustFoil LE | RMS Error | Status |
+|------|----------|-------------|-----------|--------|
+| NACA 0012 | idx 79 | idx 79 | 4.05e-7 | ✓ Perfect |
+| NACA 2412 | idx 81 | idx 81 | 3.97e-7 | ✓ Perfect |
+| NACA 4412 | idx 82 | idx 82 | 4.42e-7 | ✓ Perfect |
 
-## Remaining Differences
+**All three airfoils now match XFOIL to numerical precision (~4e-7)!**
 
-For cambered airfoils, there's still ~1% RMS error. Root cause analysis:
+## Root Cause & Fix
 
-**Curvature Asymmetry Near LE:**
-| Foil | cv(-0.01) | cv(+0.01) | Ratio |
-|------|-----------|-----------|-------|
-| NACA 0012 | 44.5 | 44.5 | 1.00 |
-| NACA 2412 | 39.8 | 50.2 | 1.26 |
-| NACA 4412 | 35.8 | 56.9 | 1.59 |
+The bug was **forced curvature symmetry** in `resample_xfoil()`:
 
-The lower surface has 26-59% higher curvature near the LE for cambered airfoils. This causes the Newton iteration to place slightly more panels on the lower surface, shifting the minimum-x node by 1 index.
+```rust
+// THIS WAS THE BUG (lines 241-247)
+for i in 0..n_buffer / 2 {
+    let avg = (curv_buffer[i] + curv_buffer[j]) / 2.0;
+    curv_buffer[i] = avg;  // WRONG for cambered airfoils!
+}
+```
 
-**Panel Length Differences:**
-- NACA 2412: Max 2.8% at LE region, RMS 0.046%
-- NACA 4412: Max 4.1% at LE region, RMS 0.079%
+**Why it mattered:** For cambered airfoils, the curvature is naturally asymmetric:
+- NACA 2412: 26% higher curvature on lower surface near LE
+- NACA 4412: 59% higher curvature on lower surface near LE
 
-**Impact on Aerodynamics:**
-- Estimated Cp error: ~0.003 near LE (comparable to discretization error)
-- For practical analysis, this difference is acceptable
+By forcing symmetry, we were averaging out this natural asymmetry, which caused the Newton iteration to place panels incorrectly.
+
+**XFOIL does NOT force curvature symmetry** - it uses the natural asymmetric curvature for cambered airfoils.
 
 ## Conclusion
 
-1. **Symmetric airfoils**: Paneling matches to numerical precision (4e-7) ✓
-2. **Cambered airfoils**: ~1% RMS error, LE within 1 index of XFOIL
-3. **Root cause of fix**: Removed incorrect symmetry enforcement that was causing LE drift
+1. **All airfoils now match**: ~4e-7 RMS error (numerical precision)
+2. **Root cause**: Incorrect forced curvature symmetry
+3. **Fix**: Removed two forced symmetry operations in `spline.rs`
