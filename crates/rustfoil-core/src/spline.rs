@@ -481,15 +481,9 @@ impl CubicSpline {
             s_final.push(s_new[ind]);
         }
 
-        // Enforce symmetry in final node positions
-        for i in 0..n / 2 {
-            let j = n - 1 - i;
-            let s_i = s_final[i];
-            let s_j = s_final[j];
-            let avg_deviation = (s_i + (s_max - s_j)) / 2.0;
-            s_final[i] = avg_deviation;
-            s_final[j] = s_max - avg_deviation;
-        }
+        // NOTE: XFOIL does NOT enforce symmetry in the paneling - it relies purely on 
+        // the curvature distribution. We previously had symmetry enforcement here which
+        // caused issues for cambered airfoils. Now removed to match XFOIL behavior.
 
         // Evaluate spline at final node positions
         s_final.iter().map(|&s| self.evaluate(s)).collect()

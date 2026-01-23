@@ -84,6 +84,9 @@ pub mod point;
 pub mod spline;
 pub mod xfoil_spline;
 
+#[cfg(test)]
+mod xfoil_spline_test;
+
 // Re-export commonly used types at the crate root
 pub use body::Body;
 pub use error::GeometryError;

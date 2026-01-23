@@ -123,10 +123,29 @@ python3 scripts/interactive_paneling_comparison.py
 - `naca*_paneled_xfoil.dat` - XFOIL paneled output (160 points)
 - `naca*_rustfoil_paneled.dat` - RustFoil paneled output (160 points)
 
+## Fix Applied
+
+The original RustFoil implementation had **incorrect symmetry enforcement** in the final node positions (lines 484-492 of `spline.rs`). This worked for symmetric airfoils but caused LE drift for cambered airfoils.
+
+**Fix**: Removed the symmetry enforcement, matching XFOIL's behavior which relies purely on curvature-based distribution without post-processing symmetry.
+
+## Updated Results After Fix
+
+| Foil | XFOIL LE | RustFoil LE | RMS Error |
+|------|----------|-------------|-----------|
+| NACA 0012 | idx 79 | idx 79 | 4.05e-7 ✓ |
+| NACA 2412 | idx 81 | idx 80 | 7.36e-3 |
+| NACA 4412 | idx 82 | idx 81 | 1.13e-2 |
+
+## Remaining Differences
+
+For cambered airfoils, there's still ~1% RMS error. This is likely due to:
+1. Subtle numerical precision differences in the Newton iteration
+2. Small differences in curvature spline evaluation near the LE
+3. Potential differences in step size limiting during Newton convergence
+
 ## Conclusion
 
-1. **Symmetric airfoils**: Paneling matches to numerical precision (4e-7)
-2. **Cambered airfoils**: LE detection differs, causing panel index shift
-3. **Fix required**: Align `lefind` algorithm with XFOIL's implementation
-
-The LE index shift scales with camber (~1 index per 2% camber), suggesting the Newton iteration convergence differs for cambered geometries.
+1. **Symmetric airfoils**: Paneling matches to numerical precision (4e-7) ✓
+2. **Cambered airfoils**: ~1% RMS error, LE within 1 index of XFOIL
+3. **Root cause of fix**: Removed incorrect symmetry enforcement that was causing LE drift

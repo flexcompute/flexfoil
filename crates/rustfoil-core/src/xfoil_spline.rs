@@ -486,8 +486,9 @@ impl XfoilSpline {
 
             let mut ds_le = -res / ress;
 
-            // Limit step size
-            let chord_scale = (x_chord.abs() + y_chord.abs()).max(0.01);
+            // Limit step size - XFOIL uses ABS(XCHORD+YCHORD), not sum of absolutes
+            // This matches XFOIL xgeom.f lines 79-80 exactly
+            let chord_scale = (x_chord + y_chord).abs();
             ds_le = ds_le.max(-0.02 * chord_scale).min(0.02 * chord_scale);
             s_le += ds_le;
 
