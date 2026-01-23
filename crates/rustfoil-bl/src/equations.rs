@@ -1297,6 +1297,162 @@ pub fn bldif(
     (res, jac)
 }
 
+/// Compute BL equations for the transition interval (XFOIL TRDIF)
+///
+/// This function handles the hybrid laminar-turbulent interval at transition.
+/// XFOIL's TRDIF splits the interval X1..X2 into:
+/// - Laminar part: X1 to XT (transition point)
+/// - Turbulent part: XT to X2
+///
+/// The residuals are summed:
+/// - Row 1 (shear-lag): Only turbulent part (ctau undefined for laminar)
+/// - Row 2 (momentum): Laminar + Turbulent
+/// - Row 3 (shape): Laminar + Turbulent
+///
+/// # Arguments
+/// * `s1` - Upstream laminar station
+/// * `s2` - Downstream turbulent station
+/// * `xt` - Transition x-location (between s1.x and s2.x)
+/// * `msq` - Mach number squared
+/// * `re` - Reference Reynolds number
+///
+/// # Reference
+/// XFOIL xblsys.f TRDIF (line 1224-1568)
+pub fn trdif(
+    s1: &BlStation,
+    s2: &BlStation,
+    xt: f64,
+    msq: f64,
+    re: f64,
+) -> (BlResiduals, BlJacobian) {
+    use crate::constants::{CTRCON, CTRCEX};
+    
+    let dx = s2.x - s1.x;
+    if dx <= 1e-20 {
+        // Degenerate case - use regular turbulent bldif
+        return bldif(s1, s2, FlowType::Turbulent, msq, re);
+    }
+    
+    // === Weighting factors for interpolation to transition point ===
+    // WF2 = (XT - X1) / (X2 - X1): fraction of interval before transition
+    let wf2 = ((xt - s1.x) / dx).clamp(0.01, 0.99);
+    let wf1 = 1.0 - wf2;
+    
+    // === Interpolate primary variables to transition point ===
+    let tt = s1.theta * wf1 + s2.theta * wf2;  // theta at XT
+    let dt = s1.delta_star * wf1 + s2.delta_star * wf2;  // delta_star at XT
+    let ut = s1.u * wf1 + s2.u * wf2;  // Ue at XT
+    
+    // === PART 1: Laminar interval X1 → XT ===
+    // Create transition station with interpolated values (laminar)
+    let mut st_laminar = BlStation::new();
+    st_laminar.x = xt;
+    st_laminar.u = ut;
+    st_laminar.theta = tt;
+    st_laminar.delta_star = dt;
+    st_laminar.ctau = 0.0;  // Laminar
+    st_laminar.ampl = 9.0;  // At Ncrit
+    st_laminar.is_laminar = true;
+    st_laminar.is_turbulent = false;
+    
+    // Compute secondary variables for laminar transition station
+    blvar(&mut st_laminar, FlowType::Laminar, msq, re);
+    
+    // Compute laminar bldif from s1 to transition station
+    let (res_lam, jac_lam) = bldif(s1, &st_laminar, FlowType::Laminar, msq, re);
+    
+    // === PART 2: Turbulent interval XT → X2 ===
+    // First, compute turbulent equilibrium CQ at transition point (XFOIL line 1415)
+    // XFOIL calls BLVAR(2) to get turbulent secondary variables before computing ST
+    let mut st_turb_temp = BlStation::new();
+    st_turb_temp.x = xt;
+    st_turb_temp.u = ut;
+    st_turb_temp.theta = tt;
+    st_turb_temp.delta_star = dt;
+    st_turb_temp.ctau = 0.03;  // Temporary value for blvar
+    st_turb_temp.ampl = 0.0;
+    st_turb_temp.is_laminar = false;
+    st_turb_temp.is_turbulent = true;
+    blvar(&mut st_turb_temp, FlowType::Turbulent, msq, re);
+    
+    // Now compute initial ctau at transition (XFOIL line 1420-1430)
+    // XFOIL: CTR = CTRCON * exp(-CTRCEX/(HK2-1)), ST = CTR * CQ2
+    let hk_t = st_turb_temp.hk;
+    let cq_t = st_turb_temp.cq;  // Equilibrium ctau from TURBULENT closure
+    
+    let hk_arg = (hk_t - 1.0).max(0.1);
+    let ctr = CTRCON * (-CTRCEX / hk_arg).exp();
+    let st_ctau = ctr * cq_t;
+    
+    // Create turbulent transition station (station "1" for turbulent part)
+    let mut st_turb = BlStation::new();
+    st_turb.x = xt;
+    st_turb.u = ut;
+    st_turb.theta = tt;
+    st_turb.delta_star = dt;
+    st_turb.ctau = st_ctau.max(0.0001);
+    st_turb.ampl = 0.0;  // Turbulent
+    st_turb.is_laminar = false;
+    st_turb.is_turbulent = true;
+    
+    // Compute secondary variables for turbulent transition station with correct ctau
+    blvar(&mut st_turb, FlowType::Turbulent, msq, re);
+    
+    // Compute turbulent bldif from transition station to s2
+    let (res_turb, jac_turb) = bldif(&st_turb, s2, FlowType::Turbulent, msq, re);
+    
+    // === COMBINE: Sum laminar and turbulent contributions ===
+    // XFOIL combines the systems (lines 1547-1568):
+    // - Row 1 (shear-lag): Only from turbulent part
+    // - Rows 2-3 (momentum, shape): Sum of laminar + turbulent
+    let mut res = BlResiduals::default();
+    let mut jac = BlJacobian::default();
+    
+    // Residuals
+    res.res_third = res_turb.res_third;  // Shear-lag: turbulent only
+    res.res_mom = res_lam.res_mom + res_turb.res_mom;  // Sum
+    res.res_shape = res_lam.res_shape + res_turb.res_shape;  // Sum
+    
+    // Jacobian VS1 (derivatives w.r.t. upstream station s1)
+    // The laminar Jacobian's VS1 applies to the true s1
+    // The turbulent Jacobian's VS1 applies to st_turb, which depends on s1 via interpolation
+    // 
+    // For the full chain rule, we'd need: dF/ds1 = dF_lam/ds1 + dF_turb/dst * dst/ds1
+    // where dst/ds1 = WF1 (the interpolation weight)
+    //
+    // Simplified approach: Use laminar VS1 for rows 2-3, turbulent VS1 scaled by WF1 for row 1
+    // This captures the main effect while avoiding the full chain rule complexity
+    
+    // Row 0 (shear-lag): From turbulent part only, but needs chain rule through XT
+    // The turbulent system uses st_turb as "1" station, so its VS1 entries need to be
+    // mapped to the actual s1 via the interpolation.
+    // For simplicity, we use the turbulent VS2 entries (which apply to s2 directly)
+    jac.vs1[0] = [0.0; 5];  // Shear-lag doesn't directly depend on s1 (laminar station)
+    
+    // Rows 1-2 (momentum, shape): Sum of laminar and turbulent contributions
+    // Laminar VS1 applies directly to s1
+    // Turbulent VS1 needs chain rule: VS1_turb * WF1 (interpolation weight)
+    for j in 0..5 {
+        jac.vs1[1][j] = jac_lam.vs1[1][j] + jac_turb.vs1[1][j] * wf1;
+        jac.vs1[2][j] = jac_lam.vs1[2][j] + jac_turb.vs1[2][j] * wf1;
+    }
+    
+    // Jacobian VS2 (derivatives w.r.t. downstream station s2)
+    // Laminar VS2 applies to st_laminar, needs chain rule: VS2_lam * WF2
+    // Turbulent VS2 applies directly to s2
+    
+    // Row 0 (shear-lag): From turbulent part only
+    jac.vs2[0] = jac_turb.vs2[0];
+    
+    // Rows 1-2 (momentum, shape): Combine with chain rule
+    for j in 0..5 {
+        jac.vs2[1][j] = jac_lam.vs2[1][j] * wf2 + jac_turb.vs2[1][j];
+        jac.vs2[2][j] = jac_lam.vs2[2][j] * wf2 + jac_turb.vs2[2][j];
+    }
+    
+    (res, jac)
+}
+
 /// Compute BL equation residuals and Jacobian with debug output
 ///
 /// Same as [`bldif`] but also emits debug events when debug collection is active.
