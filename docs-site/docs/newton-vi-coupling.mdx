@@ -140,23 +140,61 @@ let (turb_station, _) = newton_solve_station_with_guess(
 );
 ```
 
-#### Remaining Issue
+#### Transition Theta Error (13.5%)
 
-The **1.9% ctau error** is caused by bldif residual/Jacobian differences between RustFoil and XFOIL:
+The theta error at the first turbulent station is caused by **missing TRDIF implementation**.
 
-| Component | RustFoil | XFOIL | Error |
-|-----------|----------|-------|-------|
-| VS2[0][0] (shear-lag/ctau) | -0.185 | -0.105 | 75.5% |
-| res_third (shear-lag residual) | -7.27e-3 | 1.16e-3 | 727% |
-| Final theta | 2.77e-4 | 2.44e-4 | 13.5% |
-| Final ctau | 0.0556 | 0.0546 | 1.9% |
+**Current behavior:**
+- RustFoil uses pure turbulent `bldif()` for the entire X1→X2 interval at transition
+- Error: 13.5% at transition station, diminishing to 3-4% downstream
 
-**Root cause:** The `bldif` test suite shows 0/17 vectors matching XFOIL across ALL flow types (laminar, turbulent, wake). This affects all Newton solves, not just transition.
+**XFOIL behavior (TRDIF):**
+- Splits interval at transition point XT
+- Laminar equations: X1 → XT
+- Turbulent equations: XT → X2  
+- Combined residuals and Jacobians with chain rule through interpolated variables
 
-**Investigation needed:**
-1. Compare `blvar` secondary variables before calling `bldif`
-2. Trace VS2 matrix construction element-by-element for turbulent flow
-3. Check upwinding (UPW) calculation differences
+**Current accuracy:**
+
+| Metric | Error | Status |
+|--------|-------|--------|
+| Transition location | 0.1% | ✅ Excellent |
+| Theta at transition | 13.5% | ⚠️ Known limitation |
+| Theta downstream | 3-4% | ✅ Good |
+| ctau at transition | 1.9% | ✅ Close to target |
+
+### TRDIF Algorithm (TODO)
+
+XFOIL's TRDIF (`xblsys.f` lines 1224-1578) handles the transition interval:
+
+```text
+1. Save state (COM1, COM2)
+2. Compute weighting factors WF1, WF2 from XT derivatives (from TRCHEK2)
+3. Interpolate variables to XT: TT, DT, UT with full derivatives
+
+LAMINAR PART (X1 → XT):
+4. Set "2" variables = interpolated "T" variables
+5. Call BLKIN, BLVAR(1), BLMID(1), BLDIF(1)
+6. Transform Jacobian: BL1, BL2 using chain rule through TT_*, DT_*, UT_*, XT_*
+
+TURBULENT PART (XT → X2):
+7. Compute initial ctau: ST = CTR * CQ where CTR = 1.8 * exp(-3.3/(Hk-1))
+8. Compute ST derivatives through CQ and Hk
+9. Set "1" = "T" variables, restore "2"
+10. Call BLMID(2), BLDIF(2)
+11. Transform Jacobian: BT1, BT2 using chain rule through ST_*, TT_*, DT_*, UT_*, XT_*
+
+COMBINE:
+12. VSREZ(1) = BTREZ(1)                    // Shear-lag: turbulent only
+13. VSREZ(2:3) = BLREZ(2:3) + BTREZ(2:3)   // Momentum, shape: sum
+14. VS1 = BL1 + BT1, VS2 = BL2 + BT2       // Jacobians: sum
+15. Restore COM1
+```
+
+**Implementation complexity:** ~600 lines of Rust code including:
+- Extended TRCHEK2 returning XT derivatives
+- Full interpolation derivative tracking
+- Chain rule transformations for both Jacobian blocks
 
 ### Future Phases
 
@@ -174,8 +212,19 @@ The **1.9% ctau error** is caused by bldif residual/Jacobian differences between
 
 ## XFOIL References
 
+### Newton System
 - `VISCAL`: xoper.f line 2886 - Main viscous iteration loop
 - `SETBL`: xbl.f line 21 - Build Newton system with VM
 - `BLSOLV`: xsolve.f line 283 - Block-tridiagonal solver
 - `UPDATE`: xbl.f line 1253 - Apply Newton updates
 - `UESET`: xpanel.f line 1758 - Compute Ue from mass defect
+
+### Boundary Layer Equations
+- `BLDIF`: xblsys.f line 1552 - BL residuals and Jacobian
+- `BLVAR`: xblsys.f line 643 - Secondary BL variables
+- `BLMID`: xblsys.f line 1153 - Midpoint skin friction
+
+### Transition
+- `TRCHEK2`: xblsys.f line 235 - Transition detection with XT derivatives
+- `TRDIF`: xblsys.f line 1224 - Hybrid laminar-turbulent transition interval
+- `MRCHUE`: xbl.f line 549 - Direct mode marching with transition handling
