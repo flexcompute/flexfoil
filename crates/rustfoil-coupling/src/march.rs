@@ -12,10 +12,37 @@
 
 use nalgebra::DMatrix;
 use rustfoil_bl::closures::{axset, check_transition, trchek2_stations};
+use rustfoil_bl::constants::{CTRCON, CTRCEX};
 use rustfoil_bl::equations::{bldif, blvar, FlowType};
 use rustfoil_bl::state::BlStation;
 
 use crate::solve::{build_4x4_system, solve_4x4};
+
+/// Compute initial ctau at transition using XFOIL's physics-based formula
+/// 
+/// XFOIL xblsys.f lines 1391-1401:
+/// ```text
+/// CTR = CTRCON * EXP(-CTRCEX/(HK2-1.0))
+/// ST = CTR * CQ2
+/// ```
+/// 
+/// This computes the initial shear stress coefficient at the transition point
+/// based on the local boundary layer state.
+/// 
+/// # Arguments
+/// * `hk` - Kinematic shape factor at transition (should be near htmax, ~2.5)
+/// * `cq` - Equilibrium shear coefficient from turbulent closures
+/// 
+/// # Note
+/// XFOIL uses the Hk at the interpolated transition point, not the downstream
+/// station's laminar Hk. When calling this, use htmax as a representative value
+/// if the actual transition Hk isn't available.
+#[inline]
+fn compute_transition_ctau(hk: f64, cq: f64) -> f64 {
+    let hk_arg = (hk - 1.0).max(0.1); // Prevent division by zero
+    let ctr = CTRCON * (-CTRCEX / hk_arg).exp();
+    ctr * cq
+}
 
 // ============================================================================
 // Configuration and Result Structures
@@ -327,7 +354,7 @@ fn gauss_4x4(a: &mut [[f64; 4]; 4], b: &mut [f64; 4]) {
 /// turbulent) using the integral BL equations.
 ///
 /// # Arguments
-/// * `prev` - Previous (upstream) BL station
+/// * `prev` - Previous (upstream) BL station, used as "1" variables in bldif
 /// * `x_new` - Arc length at current station
 /// * `ue_new` - Edge velocity at current station
 /// * `re` - Reynolds number
@@ -355,13 +382,61 @@ pub fn newton_solve_station(
     hlmax: f64,
     htmax: f64,
 ) -> (BlStation, bool) {
+    newton_solve_station_with_guess(
+        prev, None, x_new, ue_new, re, msq, is_laminar, max_iter, tolerance, hlmax, htmax,
+    )
+}
+
+/// Solve for BL station using Newton iteration with optional initial guess
+///
+/// This is the core Newton solver for a single BL station, equivalent to
+/// XFOIL's MRCHUE inner loop. It solves for theta, delta_star (and ctau for
+/// turbulent) using the integral BL equations.
+///
+/// # Arguments
+/// * `prev` - Previous (upstream) BL station, used as "1" variables in bldif
+/// * `initial_guess` - Optional initial guess for theta, delta_star, ctau. 
+///                     If None, uses values from `prev`. Used at transition
+///                     to initialize from the laminar solution while using the
+///                     actual upstream station for bldif.
+/// * `x_new` - Arc length at current station
+/// * `ue_new` - Edge velocity at current station
+/// * `re` - Reynolds number
+/// * `msq` - Mach number squared
+/// * `is_laminar` - Whether flow is still laminar at this station
+/// * `max_iter` - Maximum Newton iterations
+/// * `tolerance` - Convergence tolerance (DMAX < tolerance)
+/// * `hlmax` - Max Hk for laminar direct mode
+/// * `htmax` - Max Hk for turbulent direct mode
+///
+/// # Returns
+/// Converged BlStation with updated theta, delta_star, etc.
+///
+/// # Reference
+/// XFOIL xbl.f MRCHUE Newton loop (line 622-789)
+pub fn newton_solve_station_with_guess(
+    prev: &BlStation,
+    initial_guess: Option<&BlStation>,
+    x_new: f64,
+    ue_new: f64,
+    re: f64,
+    msq: f64,
+    is_laminar: bool,
+    max_iter: usize,
+    tolerance: f64,
+    hlmax: f64,
+    htmax: f64,
+) -> (BlStation, bool) {
     let flow_type = if is_laminar {
         FlowType::Laminar
     } else {
         FlowType::Turbulent
     };
     
-    // Initialize station from previous (like XFOIL's similarity/upstream extrapolation)
+    // Use initial_guess if provided, otherwise use prev
+    let init = initial_guess.unwrap_or(prev);
+    
+    // Initialize station
     let mut station = BlStation::new();
     station.x = x_new;
     station.u = ue_new;
@@ -369,11 +444,11 @@ pub fn newton_solve_station(
     station.is_turbulent = !is_laminar;
     station.is_wake = false;
     
-    // Initialize from previous station
-    station.theta = prev.theta;
-    station.delta_star = prev.delta_star;
-    station.ctau = if is_laminar { 0.03 } else { prev.ctau };
-    station.ampl = prev.ampl;
+    // Initialize from initial guess (or prev if no guess)
+    station.theta = init.theta;
+    station.delta_star = init.delta_star;
+    station.ctau = if is_laminar { 0.03 } else { init.ctau };
+    station.ampl = init.ampl;
     
     // Compute secondary variables
     blvar(&mut station, flow_type, msq, re);
@@ -627,18 +702,27 @@ pub fn march_fixed_ue(
                 is_laminar = false;
                 
                 // RE-SOLVE this station with TURBULENT equations
-                // XFOIL behavior (MRCHUE lines 700-730):
-                // 1. The Newton solve was done with laminar equations
-                // 2. Transition detection happens within the Newton loop
-                // 3. XFOIL continues iteration with turbulent equations from current state
-                // 4. Since laminar Hk (~5.4) > htmax (2.5), inverse mode triggers
-                // 5. Inverse mode naturally brings Hk down to htmax over ~6 iterations
+                // XFOIL behavior (MRCHUE):
+                // 1. Newton iteration was running with laminar equations
+                // 2. Transition is detected within the Newton loop
+                // 3. XFOIL continues Newton from current state but with turbulent equations
+                // 4. The "1" variables (upstream) are from the actual previous station (IBL-1)
+                // 5. The "2" variables (current) start from the laminar solution
                 //
-                // Key: Use the current laminar station as "prev" so we start turbulent
-                // iteration from the correct Hk region. The bldif function needs a
-                // sensible upstream state.
-                let (turb_station, _turb_converged) = newton_solve_station(
-                    &station,  // Use current laminar state as starting point
+                // Key fix: We need to use:
+                // - prev_station as the upstream station for bldif ("1" variables)
+                // - The laminar solution (station) as the initial guess for "2" variables
+                //
+                // Create initial guess from laminar solution
+                let mut initial_guess = station.clone();
+                // XFOIL MRCHUE line 801: At transition station, simply use CTI = 0.05
+                // (The physics-based formula in xblsys.f:1391 is for equilibrium ctau,
+                // not the initial guess for Newton iteration)
+                initial_guess.ctau = 0.05;
+                
+                let (turb_station, _turb_converged) = newton_solve_station_with_guess(
+                    prev_station,       // Actual upstream station for bldif "1" variables
+                    Some(&initial_guess), // Laminar solution as initial guess for "2" variables
                     x[i],
                     ue[i],
                     re,
@@ -655,8 +739,9 @@ pub fn march_fixed_ue(
                 station.ampl = trchek_result.ampl2;  // Keep the transition N-factor
                 
                 if config.debug_trace {
-                    println!("  After turbulent re-solve: Hk={:.4}, theta={:.6e}, delta_star={:.6e}",
-                             station.hk, station.theta, station.delta_star);
+                    println!("  Initial ctau = 0.05 (XFOIL MRCHUE line 801)");
+                    println!("  After turbulent re-solve: Hk={:.4}, theta={:.6e}, delta_star={:.6e}, ctau={:.6}",
+                             station.hk, station.theta, station.delta_star, station.ctau);
                 }
             }
         } else if !is_laminar {
@@ -838,8 +923,8 @@ pub fn march_surface(
                 is_laminar = false;
                 station.is_laminar = false;
                 station.is_turbulent = true;
-                station.ctau = 0.03;
-
+                // XFOIL uses 0.05 as fallback ctau at transition (xbl.f:801)
+                station.ctau = 0.05;
                 blvar(&mut station, FlowType::Turbulent, msq, re);
             }
         }
@@ -984,9 +1069,8 @@ pub fn march_fixed_ue_debug(
                 is_laminar = false;
                 station.is_laminar = false;
                 station.is_turbulent = true;
-                station.ctau = 0.03; // Initialize shear stress
-
-                // Recompute with turbulent closures
+                // XFOIL uses 0.05 as fallback ctau at transition (xbl.f:801)
+                station.ctau = 0.05;
                 blvar(&mut station, FlowType::Turbulent, msq, re);
             }
         }
@@ -1150,8 +1234,8 @@ pub fn march_coupled(
                 is_laminar = false;
                 station.is_laminar = false;
                 station.is_turbulent = true;
-                station.ctau = 0.03;
-
+                // XFOIL uses 0.05 as fallback ctau at transition (xbl.f:801)
+                station.ctau = 0.05;
                 blvar(&mut station, FlowType::Turbulent, msq, re);
             }
         }

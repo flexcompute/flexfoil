@@ -113,14 +113,50 @@ for each station:
 
 ## Implementation Status
 
-### Phase 1: Single-Surface Newton Coupling ✅
+### Phase 1: Single-Surface Newton Coupling ⚠️
 
-All components implemented:
+Core components implemented:
 - [x] VTI field in `BlNewtonSystem`
 - [x] `build_with_vm_full()` with forced changes
 - [x] VM matrix with VTI signs
 - [x] Full BLSOLV with row-3 back-substitution
 - [x] `update_xfoil_style()` with mass-first Ue computation
+- [x] Fixed transition ctau initialization (9% → 1.9% error)
+- [ ] **TODO:** ~1.9% ctau error at first turbulent station - should match XFOIL exactly
+
+#### Transition Handling Fix (2026-01-23)
+
+Fixed the upstream station used when re-solving with turbulent equations at transition:
+
+```rust
+// Before (WRONG): Used current laminar station as upstream
+let (turb_station, _) = newton_solve_station(&station_for_turb, ...);
+
+// After (CORRECT): Use actual previous station for upstream, laminar as initial guess
+let (turb_station, _) = newton_solve_station_with_guess(
+    prev_station,       // Actual upstream for bldif "1" variables
+    Some(&initial_guess), // Laminar solution as initial guess for "2" variables
+    ...
+);
+```
+
+#### Remaining Issue
+
+The **1.9% ctau error** is caused by bldif residual/Jacobian differences between RustFoil and XFOIL:
+
+| Component | RustFoil | XFOIL | Error |
+|-----------|----------|-------|-------|
+| VS2[0][0] (shear-lag/ctau) | -0.185 | -0.105 | 75.5% |
+| res_third (shear-lag residual) | -7.27e-3 | 1.16e-3 | 727% |
+| Final theta | 2.77e-4 | 2.44e-4 | 13.5% |
+| Final ctau | 0.0556 | 0.0546 | 1.9% |
+
+**Root cause:** The `bldif` test suite shows 0/17 vectors matching XFOIL across ALL flow types (laminar, turbulent, wake). This affects all Newton solves, not just transition.
+
+**Investigation needed:**
+1. Compare `blvar` secondary variables before calling `bldif`
+2. Trace VS2 matrix construction element-by-element for turbulent flow
+3. Check upwinding (UPW) calculation differences
 
 ### Future Phases
 
