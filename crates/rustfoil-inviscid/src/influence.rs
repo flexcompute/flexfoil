@@ -26,6 +26,7 @@
 
 use crate::geometry::AirfoilGeometry;
 use crate::{QOPI, HOPI};
+use std::f64::consts::PI;
 
 /// Result from computing influence coefficients at a single field point.
 #[derive(Debug, Clone)]
@@ -122,8 +123,9 @@ pub fn psilin(
         let dy = y_jp - y_jo;
         let ds_sq = dx * dx + dy * dy;
         
-        // Skip TE panel if endpoints coincide (SEPS check)
-        if jo == n - 1 && ds_sq < seps * seps {
+        // TE panel (jo = n-1) uses special handling after the main loop, so skip here
+        // XFOIL line 245: IF(JO.EQ.N) GO TO 11 - skips regular vortex calculation for TE
+        if jo == n - 1 {
             continue;
         }
         
@@ -183,12 +185,72 @@ pub fn psilin(
         dzdg[jp] += QOPI * (contrib.psis + contrib.psid);
     }
     
-    // Note: TE panel source/vortex treatment (SIGLIN=.TRUE.) is only needed
-    // for viscous analysis with mass defect. For inviscid-only, the TE panel
-    // is treated like any other vortex panel above.
+    // TE panel special treatment (XFOIL lines 407-438)
+    // This handles the trailing edge "wake" panel (from node N-1 to node 0)
+    // using a different formula with HOPI, SCS, SDS
+    if !geom.sharp {
+        // TE panel: jo = n-1, jp = 0
+        let jo = n - 1;
+        let jp = 0;
+        
+        let x_jo = geom.x[jo];
+        let y_jo = geom.y[jo];
+        let x_jp = geom.x[jp];
+        let y_jp = geom.y[jp];
+        
+        let dx = x_jp - x_jo;
+        let dy = y_jp - y_jo;
+        let ds_sq = dx * dx + dy * dy;
+        
+        if ds_sq > seps * seps {
+            let dso = ds_sq.sqrt();
+            let dsio = 1.0 / dso;
+            
+            let sx = dx * dsio;
+            let sy = dy * dsio;
+            
+            let rx1 = xi - x_jo;
+            let ry1 = yi - y_jo;
+            let rx2 = xi - x_jp;
+            let ry2 = yi - y_jp;
+            
+            let x1 = sx * rx1 + sy * ry1;
+            let x2 = sx * rx2 + sy * ry2;
+            let yy = sx * ry1 - sy * rx1;
+            
+            let rs1 = rx1 * rx1 + ry1 * ry1;
+            let rs2 = rx2 * rx2 + ry2 * ry2;
+            
+            // TE panel angle (APAN in XFOIL) - average of adjacent panels
+            let apan = 0.5 * (geom.apanel[jo] + geom.apanel[0] + PI);
+            
+            let (g1, t1_raw) = if i != jo && rs1 > 1e-20 {
+                (rs1.ln(), x1.atan2(yy))
+            } else {
+                (0.0, 0.0)
+            };
+            
+            let (g2, t2_raw) = if i != jp && rs2 > 1e-20 {
+                (rs2.ln(), x2.atan2(yy))
+            } else {
+                (0.0, 0.0)
+            };
+            
+            // XFOIL formulas (lines 408-409):
+            // PSIG = 0.5*YY*(G1-G2) + X2*(T2-APAN) - X1*(T1-APAN)
+            // PGAM = 0.5*X1*G1 - 0.5*X2*G2 + X2 - X1 + YY*(T1-T2)
+            let psig = 0.5 * yy * (g1 - g2) + x2 * (t2_raw - apan) - x1 * (t1_raw - apan);
+            let pgam = 0.5 * x1 * g1 - 0.5 * x2 * g2 + x2 - x1 + yy * (t1_raw - t2_raw);
+            
+            // TE panel dPsi/dGam (XFOIL lines 434-438):
+            // DZDG(JO) += -HOPI*PSIG*SCS*0.5 + HOPI*PGAM*SDS*0.5
+            // DZDG(JP) += +HOPI*PSIG*SCS*0.5 - HOPI*PGAM*SDS*0.5
+            dzdg[jo] += HOPI * (-psig * scs + pgam * sds) * 0.5;
+            dzdg[jp] += HOPI * ( psig * scs - pgam * sds) * 0.5;
+        }
+    }
+    
     let _ = te_contrib; // Suppress unused warning
-    let _ = scs;
-    let _ = sds;
     
     PsilinResult {
         psi,
@@ -300,6 +362,160 @@ pub fn psilin_single_panel(
     };
     
     compute_psis_psid(x1, x2, yy, rs1, rs2, g1, g2, t1, t2)
+}
+
+/// Debug structure containing all intermediate values for a single panel influence.
+#[derive(Debug, Clone)]
+pub struct PsilinDebugPanel {
+    /// Panel index (jo)
+    pub jo: usize,
+    /// Next panel index (jp = jo+1 mod n)
+    pub jp: usize,
+    /// Panel start point
+    pub x_jo: f64,
+    pub y_jo: f64,
+    /// Panel end point
+    pub x_jp: f64,
+    pub y_jp: f64,
+    /// Panel length
+    pub dso: f64,
+    /// Unit tangent
+    pub sx: f64,
+    pub sy: f64,
+    /// All local coordinate values
+    pub contrib: PanelContribution,
+    /// DZDG contribution to jo
+    pub dzdg_jo: f64,
+    /// DZDG contribution to jp
+    pub dzdg_jp: f64,
+}
+
+/// Complete debug output for a psilin call.
+#[derive(Debug, Clone)]
+pub struct PsilinDebug {
+    /// Field point index
+    pub i: usize,
+    /// Field point coordinates
+    pub xi: f64,
+    pub yi: f64,
+    /// Per-panel debug info
+    pub panels: Vec<PsilinDebugPanel>,
+    /// Final DZDG array
+    pub dzdg: Vec<f64>,
+}
+
+/// Compute influence coefficients with full debug output.
+///
+/// This is the same as `psilin` but returns all intermediate values
+/// for comparison with XFOIL.
+pub fn psilin_debug(
+    geom: &AirfoilGeometry,
+    i: usize,
+    xi: f64,
+    yi: f64,
+) -> PsilinDebug {
+    let n = geom.n;
+    
+    // Initialize
+    let mut dzdg = vec![0.0; n];
+    let mut panels = Vec::new();
+    
+    // Distance tolerance for TE panel skip
+    let seps = geom.total_arc_length() * 1e-5;
+    
+    // Loop over all panels
+    for jo in 0..n {
+        let jp = (jo + 1) % n;
+        
+        // Panel endpoints
+        let x_jo = geom.x[jo];
+        let y_jo = geom.y[jo];
+        let x_jp = geom.x[jp];
+        let y_jp = geom.y[jp];
+        
+        // Panel vector and length
+        let dx = x_jp - x_jo;
+        let dy = y_jp - y_jo;
+        let ds_sq = dx * dx + dy * dy;
+        
+        // CRITICAL: Skip TE panel for vortex calculation
+        // XFOIL line 245: IF(JO.EQ.N) GO TO 11
+        if jo == n - 1 {
+            continue;
+        }
+        
+        // Skip zero-length panels
+        if ds_sq < 1e-24 {
+            continue;
+        }
+        
+        let dso = ds_sq.sqrt();
+        let dsio = 1.0 / dso;
+        
+        // Unit tangent vector
+        let sx = dx * dsio;
+        let sy = dy * dsio;
+        
+        // Vectors from panel endpoints to field point
+        let rx1 = xi - x_jo;
+        let ry1 = yi - y_jo;
+        let rx2 = xi - x_jp;
+        let ry2 = yi - y_jp;
+        
+        // Local coordinates
+        let x1 = sx * rx1 + sy * ry1;
+        let x2 = sx * rx2 + sy * ry2;
+        let yy = sx * ry1 - sy * rx1;
+        
+        let rs1 = rx1 * rx1 + ry1 * ry1;
+        let rs2 = rx2 * rx2 + ry2 * ry2;
+        
+        // Log and angle terms with singularity handling
+        let (g1, t1) = if i != jo && rs1 > 1e-20 {
+            (rs1.ln(), x1.atan2(yy))
+        } else {
+            (0.0, 0.0)
+        };
+        
+        let (g2, t2) = if i != jp && rs2 > 1e-20 {
+            (rs2.ln(), x2.atan2(yy))
+        } else {
+            (0.0, 0.0)
+        };
+        
+        // Compute PSIS and PSID
+        let contrib = compute_psis_psid(x1, x2, yy, rs1, rs2, g1, g2, t1, t2);
+        
+        // Accumulate influence coefficients
+        let dzdg_jo_contrib = QOPI * (contrib.psis - contrib.psid);
+        let dzdg_jp_contrib = QOPI * (contrib.psis + contrib.psid);
+        
+        dzdg[jo] += dzdg_jo_contrib;
+        dzdg[jp] += dzdg_jp_contrib;
+        
+        panels.push(PsilinDebugPanel {
+            jo,
+            jp,
+            x_jo,
+            y_jo,
+            x_jp,
+            y_jp,
+            dso,
+            sx,
+            sy,
+            contrib,
+            dzdg_jo: dzdg_jo_contrib,
+            dzdg_jp: dzdg_jp_contrib,
+        });
+    }
+    
+    PsilinDebug {
+        i,
+        xi,
+        yi,
+        panels,
+        dzdg,
+    }
 }
 
 #[cfg(test)]

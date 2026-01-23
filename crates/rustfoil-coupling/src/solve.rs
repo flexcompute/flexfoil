@@ -124,104 +124,187 @@ pub fn solve_bl_system(system: &BlNewtonSystem) -> Vec<[f64; 3]> {
 /// * `system` - The Newton system with VA, VB, VM, and RHS
 ///
 /// # Returns
-/// Solution vector [Δampl/Δctau, Δθ, Δδ*] at each station.
+/// Solution vector [Δampl/Δctau, Δθ, Δmass] at each station.
 ///
 /// # Reference
 /// XFOIL xsolve.f BLSOLV (line 283)
 pub fn solve_coupled_system(system: &BlNewtonSystem) -> Vec<[f64; 3]> {
+    solve_blsolv_xfoil(system)
+}
+
+/// Solve the coupled BL Newton system using XFOIL's BLSOLV algorithm
+///
+/// This is a faithful port of XFOIL's BLSOLV subroutine (xsolve.f lines 283-485).
+/// The key features are:
+///
+/// 1. **Forward Sweep**: Process rows 1-2 with VA block, then row 3 with VM diagonal
+///    - Normalize rows 1-2 using VA block elements
+///    - Normalize row 3 using VM(3,IV,IV) - the mass coupling diagonal
+///    - Eliminate lower blocks (VB and VM columns below diagonal)
+///
+/// 2. **Back Substitution**: Use row 3 solution (mass change) to update upstream stations
+///    - VDEL(k,1,KV) -= VM(k,IV,KV) * VDEL(3,1,IV)
+///
+/// # Arguments
+/// * `system` - The Newton system with VA, VB, VM, and RHS
+///
+/// # Returns
+/// Solution vector [Δampl/Δctau, Δθ, Δmass] at each station.
+///
+/// # Reference
+/// XFOIL xsolve.f BLSOLV (line 283)
+pub fn solve_blsolv_xfoil(system: &BlNewtonSystem) -> Vec<[f64; 3]> {
     let n = system.n;
     if n < 2 {
         return vec![[0.0; 3]; n];
     }
 
-    let mut solution = vec![[0.0; 3]; n];
-
-    // Working arrays
+    // Working copies (VDEL in XFOIL stores both RHS and solution)
+    let mut vdel = system.rhs.clone(); // VDEL(k,1,IV) = residual, becomes solution
     let mut va_mod = system.va.clone();
-    let mut rhs_mod = system.rhs.clone();
     let mut vm_mod = system.vm.clone();
 
-    // === Forward Sweep ===
-    // Process station 1 first
-    if is_invertible(&va_mod[1]) {
-        let va1_inv = invert_3x3(&va_mod[1]);
-        
-        // Transform RHS
-        rhs_mod[1] = multiply_3x3_vec(&va1_inv, &rhs_mod[1]);
-        
-        // Transform VM columns (VM[1][j] = VA[1]^{-1} * VM[1][j])
-        for j in 0..n {
-            let vm_j = vm_mod[1][j];
-            vm_mod[1][j] = multiply_3x3_vec(&va1_inv, &vm_j);
-        }
-        
-        va_mod[1] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-    }
+    // VACCEL threshold for sparse VM elimination (from XFOIL)
+    let vaccel = 0.005;
 
-    // Forward sweep for remaining stations
-    for i in 2..n {
-        // Subtract VB[i] contribution
-        let vb_contrib = multiply_3x3_vec(&system.vb[i], &rhs_mod[i - 1]);
+    // === Forward Sweep (XFOIL lines 311-463) ===
+    for iv in 1..n {
+        let ivp = iv + 1;
+
+        // === Invert VA[IV] block (rows 1-2) ===
+
+        // Normalize first row by VA[0][0]
+        let pivot = va_mod[iv][0][0];
+        if pivot.abs() < 1e-30 {
+            continue; // Singular, skip
+        }
+        let pivot_inv = 1.0 / pivot;
+        va_mod[iv][0][1] *= pivot_inv;
+        for l in iv..n {
+            vm_mod[iv][l][0] *= pivot_inv;
+        }
+        vdel[iv][0] *= pivot_inv;
+
+        // Eliminate lower first column in VA block (rows 2, 3)
+        for k in 1..3 {
+            let vtmp = va_mod[iv][k][0];
+            va_mod[iv][k][1] -= vtmp * va_mod[iv][0][1];
+            for l in iv..n {
+                vm_mod[iv][l][k] -= vtmp * vm_mod[iv][l][0];
+            }
+            vdel[iv][k] -= vtmp * vdel[iv][0];
+        }
+
+        // Normalize second row by VA[1][1]
+        let pivot = va_mod[iv][1][1];
+        if pivot.abs() < 1e-30 {
+            continue;
+        }
+        let pivot_inv = 1.0 / pivot;
+        for l in iv..n {
+            vm_mod[iv][l][1] *= pivot_inv;
+        }
+        vdel[iv][1] *= pivot_inv;
+
+        // Eliminate lower second column (row 3 only)
+        let vtmp = va_mod[iv][2][1];
+        for l in iv..n {
+            vm_mod[iv][l][2] -= vtmp * vm_mod[iv][l][1];
+        }
+        vdel[iv][2] -= vtmp * vdel[iv][1];
+
+        // Normalize third row by VM(3,IV,IV) - KEY DIFFERENCE from standard block solver!
+        // The third equation couples to mass through VM, not VA
+        let pivot = vm_mod[iv][iv][2];
+        if pivot.abs() < 1e-30 {
+            continue;
+        }
+        let pivot_inv = 1.0 / pivot;
+        for l in (ivp)..n {
+            vm_mod[iv][l][2] *= pivot_inv;
+        }
+        vdel[iv][2] *= pivot_inv;
+
+        // Eliminate upper third column in VA block (back-substitute rows 1-2)
+        let vtmp1 = vm_mod[iv][iv][0];
+        let vtmp2 = vm_mod[iv][iv][1];
+        for l in ivp..n {
+            vm_mod[iv][l][0] -= vtmp1 * vm_mod[iv][l][2];
+            vm_mod[iv][l][1] -= vtmp2 * vm_mod[iv][l][2];
+        }
+        vdel[iv][0] -= vtmp1 * vdel[iv][2];
+        vdel[iv][1] -= vtmp2 * vdel[iv][2];
+
+        // Eliminate upper second column (row 1 only)
+        let vtmp = va_mod[iv][0][1];
+        for l in ivp..n {
+            vm_mod[iv][l][0] -= vtmp * vm_mod[iv][l][1];
+        }
+        vdel[iv][0] -= vtmp * vdel[iv][1];
+
+        if iv >= n - 1 {
+            continue;
+        }
+
+        // === Eliminate VB[IV+1] block ===
         for k in 0..3 {
-            rhs_mod[i][k] -= vb_contrib[k];
-        }
-
-        // Subtract VM[i-1] contributions propagated through VB
-        // This is the key coupling step
-        for j in 0..n {
-            let vm_prev_j = vm_mod[i - 1][j];
-            let vb_vm_contrib = multiply_3x3_vec(&system.vb[i], &vm_prev_j);
-            for k in 0..3 {
-                vm_mod[i][j][k] -= vb_vm_contrib[k];
+            let vtmp1 = system.vb[ivp][k][0];
+            let vtmp2 = system.vb[ivp][k][1];
+            let vtmp3 = vm_mod[ivp][iv][k];
+            for l in ivp..n {
+                vm_mod[ivp][l][k] -= vtmp1 * vm_mod[iv][l][0]
+                    + vtmp2 * vm_mod[iv][l][1]
+                    + vtmp3 * vm_mod[iv][l][2];
             }
+            vdel[ivp][k] -= vtmp1 * vdel[iv][0] + vtmp2 * vdel[iv][1] + vtmp3 * vdel[iv][2];
         }
 
-        // Invert current diagonal and apply
-        if is_invertible(&va_mod[i]) {
-            let va_inv = invert_3x3(&va_mod[i]);
-            
-            // Transform RHS
-            rhs_mod[i] = multiply_3x3_vec(&va_inv, &rhs_mod[i]);
-            
-            // Transform VM columns
-            for j in 0..n {
-                let vm_j = vm_mod[i][j];
-                vm_mod[i][j] = multiply_3x3_vec(&va_inv, &vm_j);
+        if ivp >= n - 1 {
+            continue;
+        }
+
+        // === Eliminate lower VM column (sparse, with VACCEL threshold) ===
+        for kv in (iv + 2)..n {
+            let vtmp1 = vm_mod[kv][iv][0];
+            let vtmp2 = vm_mod[kv][iv][1];
+            let vtmp3 = vm_mod[kv][iv][2];
+
+            // Only process if above threshold (sparsity optimization)
+            if vtmp1.abs() > vaccel {
+                for l in ivp..n {
+                    vm_mod[kv][l][0] -= vtmp1 * vm_mod[iv][l][2];
+                }
+                vdel[kv][0] -= vtmp1 * vdel[iv][2];
             }
-            
-            va_mod[i] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-        }
-    }
-
-    // === Back Substitution ===
-    // Start from last station where we can solve directly
-    // x[n-1] = rhs_mod[n-1] - Σ_j VM[n-1][j] * x[j]
-    //
-    // Since we don't know x[j] yet, we iterate:
-    // 1. Solve assuming VM contributions are zero
-    // 2. Update with VM contributions as we go backwards
-    
-    // Initial solution at last station
-    solution[n - 1] = rhs_mod[n - 1];
-
-    // Back substitution
-    for i in (1..n - 1).rev() {
-        // Start with transformed RHS
-        solution[i] = rhs_mod[i];
-        
-        // Subtract VM contributions from downstream stations we've already solved
-        for j in (i + 1)..n {
-            for k in 0..3 {
-                // Mass defect at station j affects equations at station i through VM
-                // The mass defect change is approximated by the solution delta
-                // This is a simplification - full coupling would use actual mass changes
-                let mass_change = solution[j][2]; // delta_star change as mass proxy
-                solution[i][k] -= vm_mod[i][j][k] * mass_change;
+            if vtmp2.abs() > vaccel {
+                for l in ivp..n {
+                    vm_mod[kv][l][1] -= vtmp2 * vm_mod[iv][l][2];
+                }
+                vdel[kv][1] -= vtmp2 * vdel[iv][2];
+            }
+            if vtmp3.abs() > vaccel {
+                for l in ivp..n {
+                    vm_mod[kv][l][2] -= vtmp3 * vm_mod[iv][l][2];
+                }
+                vdel[kv][2] -= vtmp3 * vdel[iv][2];
             }
         }
     }
 
-    solution
+    // === Back Substitution (XFOIL lines 468-485) ===
+    // Eliminate upper VM columns using row 3 (mass) solution
+    for iv in (2..n).rev() {
+        let vtmp = vdel[iv][2]; // Mass change at station iv
+
+        // Update all upstream stations
+        for kv in (1..iv).rev() {
+            vdel[kv][0] -= vm_mod[kv][iv][0] * vtmp;
+            vdel[kv][1] -= vm_mod[kv][iv][1] * vtmp;
+            vdel[kv][2] -= vm_mod[kv][iv][2] * vtmp;
+        }
+    }
+
+    vdel
 }
 
 /// Check if a 3x3 matrix is invertible

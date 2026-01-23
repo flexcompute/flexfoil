@@ -183,6 +183,10 @@ struct ViscousCmd {
     /// Debug output file for XFOIL comparison
     #[arg(long)]
     debug: Option<PathBuf>,
+
+    /// Skip repaneling - use input coordinates directly (for XFOIL buffer comparison)
+    #[arg(long)]
+    no_repanel: bool,
 }
 
 /// Viscous polar generation
@@ -702,18 +706,28 @@ fn run_viscous_analysis_old(
 fn run_viscous(cmd: ViscousCmd) -> Result<(), CliError> {
     let (name, points) = load_airfoil(&cmd.file)?;
 
-    // Repanel using XFOIL-style curvature-based distribution
-    let spline = CubicSpline::from_points(&points)
-        .map_err(|e| CliError::Geometry(e))?;
-    let repaneled = spline.resample_xfoil(cmd.panels, &PanelingParams::default());
-    
-    eprintln!(
-        "Repaneled from {} to {} points (XFOIL-style distribution)",
-        points.len(),
-        repaneled.len()
-    );
+    // Either use input directly or repanel
+    let final_points = if cmd.no_repanel {
+        eprintln!(
+            "Using input coordinates directly ({} points, no repaneling)",
+            points.len()
+        );
+        points
+    } else {
+        // Repanel using XFOIL-style curvature-based distribution
+        let spline = CubicSpline::from_points(&points)
+            .map_err(|e| CliError::Geometry(e))?;
+        let repaneled = spline.resample_xfoil(cmd.panels, &PanelingParams::default());
+        
+        eprintln!(
+            "Repaneled from {} to {} points (XFOIL-style distribution)",
+            points.len(),
+            repaneled.len()
+        );
+        repaneled
+    };
 
-    let body = Body::from_points(&name, &repaneled)?;
+    let body = Body::from_points(&name, &final_points)?;
 
     // Initialize debug output if requested
     if let Some(ref debug_path) = cmd.debug {

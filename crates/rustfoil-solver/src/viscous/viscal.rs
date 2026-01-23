@@ -25,7 +25,7 @@ use rustfoil_bl::state::BlStation;
 use rustfoil_coupling::march::{march_fixed_ue, march_surface, MarchConfig, MarchResult};
 use rustfoil_coupling::newton::BlNewtonSystem;
 use rustfoil_coupling::solve::solve_coupled_system;
-use rustfoil_coupling::update::{set_edge_velocities, update_stations, UpdateConfig};
+use rustfoil_coupling::update::{update_xfoil_style, UpdateConfig};
 
 use super::config::ViscousSolverConfig;
 use super::forces::compute_forces;
@@ -124,6 +124,7 @@ pub fn solve_viscous(
         ncrit: config.ncrit,
         hlmax: config.hk_max_laminar,
         htmax: config.hk_max_turbulent,
+        debug_trace: rustfoil_bl::is_debug_active(),
         ..Default::default()
     };
 
@@ -242,8 +243,9 @@ pub fn solve_viscous(
             break;
         }
 
-        // Build Newton system from current BL state including VM matrix for coupling
-        newton_system.build_with_vm(stations, &flow_types, msq, re, dij);
+        // Build Newton system from current BL state with full XFOIL-style coupling
+        // This includes VTI signs and forced changes for proper viscous-inviscid coupling
+        newton_system.build_with_vm_full(stations, &flow_types, msq, re, dij, ue_inviscid);
 
         // Emit debug event for Newton system (similar to XFOIL's DBGSETBL)
         if rustfoil_bl::is_debug_active() {
@@ -278,12 +280,17 @@ pub fn solve_viscous(
             })
             .collect();
 
-        // Update stations with limiting
-        let update_result = update_stations(stations, &deltas, &current_ue, &update_config);
-
-        // Update edge velocities from mass defect changes (viscous-inviscid coupling)
-        // This modifies stations in place
-        set_edge_velocities(stations, ue_inviscid, dij, None);
+        // Update stations using XFOIL's mass-first approach
+        // This computes new Ue from proposed mass changes before applying updates,
+        // then applies all updates with a global relaxation factor
+        let update_result = update_xfoil_style(
+            stations,
+            &deltas,
+            ue_inviscid,
+            dij,
+            &newton_system.vti,
+            &update_config,
+        );
 
         // Update current_ue tracker from modified stations
         for (i, station) in stations.iter().enumerate() {
@@ -370,6 +377,7 @@ pub fn solve_surface(
         ncrit: config.ncrit,
         hlmax: config.hk_max_laminar,
         htmax: config.hk_max_turbulent,
+        debug_trace: rustfoil_bl::is_debug_active(),
         ..Default::default()
     };
 
@@ -398,7 +406,7 @@ pub fn solve_viscous_two_surfaces(
     lower_stations: &mut [BlStation],
     upper_ue: &[f64],
     lower_ue: &[f64],
-    _dij: &DMatrix<f64>,
+    dij: &DMatrix<f64>,
     config: &ViscousSolverConfig,
 ) -> SolverResult<ViscousResult> {
     if config.reynolds <= 0.0 {
@@ -423,6 +431,7 @@ pub fn solve_viscous_two_surfaces(
         ncrit: config.ncrit,
         hlmax: config.hk_max_laminar,
         htmax: config.hk_max_turbulent,
+        debug_trace: rustfoil_bl::is_debug_active(),
         ..Default::default()
     };
 
@@ -505,9 +514,286 @@ pub fn solve_viscous_two_surfaces(
         }
     }
 
-    // Get transition locations from march results
-    let x_tr_upper = upper_result.x_transition.unwrap_or(1.0);
-    let x_tr_lower = lower_result.x_transition.unwrap_or(1.0);
+    // Get transition locations from march results (may be updated by Newton iteration)
+    let mut x_tr_upper = upper_result.x_transition.unwrap_or(1.0);
+    let mut x_tr_lower = lower_result.x_transition.unwrap_or(1.0);
+
+    // === Newton iteration for viscous-inviscid coupling ===
+    // NOTE: Full two-surface Newton coupling requires proper DIJ matrix extraction
+    // and VZ block handling (see Phase 2 in newton-vi-coupling-plan.md).
+    // For now, we run Newton iteration only if the DIJ matrix has proper dimensions
+    // for the individual surfaces. Otherwise, we rely on the direct march results.
+
+    let update_config = UpdateConfig::default();
+    let mut iteration = 0;
+    let mut converged = true; // Direct march is considered converged
+    let mut residual = 0.0;
+
+    let n_upper = upper_stations.len();
+    let n_lower = lower_stations.len();
+
+    // Check if DIJ matrix has proper dimensions for Newton iteration
+    // The full DIJ includes both surfaces, so we need to extract submatrices
+    // For proper Newton coupling, we need:
+    // 1. Upper surface DIJ: influences from upper surface mass on upper surface Ue
+    // 2. Lower surface DIJ: influences from lower surface mass on lower surface Ue
+    // 3. Cross-surface coupling (Phase 2)
+    
+    // For Phase 1: Only run Newton if we can extract valid submatrices
+    // The DIJ matrix from setup is for the full airfoil (all panels)
+    // Upper stations are the latter part of the full array (indices n_lower..n_total)
+    // Lower stations are the first part (indices 0..n_lower)
+    
+    #[allow(unused_variables)]
+    let n_total = dij.nrows();
+    // Newton V-I coupling for two surfaces requires:
+    // 1. Proper DIJ submatrix extraction for each surface
+    // 2. Cross-surface coupling through VZ block at trailing edge
+    // 3. Combined Newton system for both surfaces
+    // See Phase 2 in newton-vi-coupling-plan.md for full implementation.
+    //
+    // For Phase 1: Direct march gives CD within ~10% of XFOIL.
+    // Newton iteration is disabled until Phase 2 DIJ handling is implemented.
+    let can_run_newton = false;
+
+    if can_run_newton {
+        // Save original station values in case Newton diverges
+        let upper_backup: Vec<_> = upper_stations.iter().map(|s| (s.theta, s.delta_star, s.ctau, s.ampl, s.h, s.mass_defect)).collect();
+        let lower_backup: Vec<_> = lower_stations.iter().map(|s| (s.theta, s.delta_star, s.ctau, s.ampl, s.h, s.mass_defect)).collect();
+
+        // Extract DIJ submatrices
+        // Lower surface: indices 0..n_lower in the full system
+        // Upper surface: indices n_lower..n_total in the full system
+        // But our stations are already extracted, so we need to map correctly
+        
+        // For now, use diagonal-only DIJ (self-influence only) to avoid cross-coupling issues
+        // This is a simplification - full coupling requires Phase 2 implementation
+        let mut dij_upper = DMatrix::zeros(n_upper, n_upper);
+        let mut dij_lower = DMatrix::zeros(n_lower, n_lower);
+        
+        // Extract diagonal elements (self-influence) from the full DIJ
+        // Upper surface stations map to indices n_lower..n_total in original panel array
+        for i in 0..n_upper {
+            let full_idx = n_lower + i;
+            if full_idx < n_total {
+                dij_upper[(i, i)] = dij[(full_idx, full_idx)];
+            }
+        }
+        
+        // Lower surface stations map to indices 0..n_lower (reversed from TE to stag)
+        for i in 0..n_lower {
+            let full_idx = n_lower - 1 - i; // Reverse mapping
+            if full_idx < n_total {
+                dij_lower[(i, i)] = dij[(full_idx, full_idx)];
+            }
+        }
+
+        // Run Newton iteration with limited iterations to prevent divergence
+        // Phase 1: Very conservative - just 3 iterations with heavy relaxation
+        let max_newton_iter = 3;
+        let mut prev_residual = f64::MAX;
+        
+        for iter in 0..max_newton_iter {
+            iteration = iter + 1;
+
+            // === Upper surface Newton iteration ===
+            let upper_flow_types: Vec<FlowType> = upper_stations
+                .iter()
+                .skip(1)
+                .map(|s| {
+                    if s.is_wake {
+                        FlowType::Wake
+                    } else if s.is_laminar {
+                        FlowType::Laminar
+                    } else {
+                        FlowType::Turbulent
+                    }
+                })
+                .collect();
+
+            // Recompute secondary variables
+            for station in upper_stations.iter_mut() {
+                let flow_type = if station.is_wake {
+                    FlowType::Wake
+                } else if station.is_laminar {
+                    FlowType::Laminar
+                } else {
+                    FlowType::Turbulent
+                };
+                blvar(station, flow_type, msq, re);
+            }
+
+            // Build Newton system (without VM full coupling for Phase 1)
+            let mut upper_newton = BlNewtonSystem::new(n_upper);
+            if upper_flow_types.len() == n_upper - 1 {
+                // Use basic build (not build_with_vm_full) to avoid DIJ issues
+                upper_newton.build(upper_stations, &upper_flow_types, msq, re);
+            }
+
+            let upper_residual = upper_newton.residual_norm();
+
+            // Solve Newton system (basic tridiagonal solve)
+            let upper_deltas = solve_coupled_system(&upper_newton);
+
+            // Apply updates with simple limiting (not XFOIL-style Ue coupling)
+            if upper_deltas.len() == n_upper {
+                for (i, station) in upper_stations.iter_mut().enumerate() {
+                    if i > 0 {
+                        let delta = &upper_deltas[i];
+                        // Apply with relaxation
+                        let rlx = 0.5; // Conservative relaxation
+                        if station.is_laminar {
+                            station.ampl += rlx * delta[0];
+                            station.ampl = station.ampl.max(0.0);
+                        } else {
+                            station.ctau += rlx * delta[0];
+                            station.ctau = station.ctau.clamp(0.0, 0.25);
+                        }
+                        station.theta += rlx * delta[1];
+                        station.theta = station.theta.max(1e-12);
+                        station.delta_star += rlx * delta[2];
+                        station.delta_star = station.delta_star.max(1e-12);
+                        station.h = station.delta_star / station.theta;
+                        station.mass_defect = station.u * station.delta_star;
+                    }
+                }
+            }
+
+            // === Lower surface Newton iteration ===
+            let lower_flow_types: Vec<FlowType> = lower_stations
+                .iter()
+                .skip(1)
+                .map(|s| {
+                    if s.is_wake {
+                        FlowType::Wake
+                    } else if s.is_laminar {
+                        FlowType::Laminar
+                    } else {
+                        FlowType::Turbulent
+                    }
+                })
+                .collect();
+
+            // Recompute secondary variables
+            for station in lower_stations.iter_mut() {
+                let flow_type = if station.is_wake {
+                    FlowType::Wake
+                } else if station.is_laminar {
+                    FlowType::Laminar
+                } else {
+                    FlowType::Turbulent
+                };
+                blvar(station, flow_type, msq, re);
+            }
+
+            // Build Newton system
+            let mut lower_newton = BlNewtonSystem::new(n_lower);
+            if lower_flow_types.len() == n_lower - 1 {
+                lower_newton.build(lower_stations, &lower_flow_types, msq, re);
+            }
+
+            let lower_residual = lower_newton.residual_norm();
+
+            // Solve Newton system
+            let lower_deltas = solve_coupled_system(&lower_newton);
+
+            // Apply updates
+            if lower_deltas.len() == n_lower {
+                for (i, station) in lower_stations.iter_mut().enumerate() {
+                    if i > 0 {
+                        let delta = &lower_deltas[i];
+                        let rlx = 0.5;
+                        if station.is_laminar {
+                            station.ampl += rlx * delta[0];
+                            station.ampl = station.ampl.max(0.0);
+                        } else {
+                            station.ctau += rlx * delta[0];
+                            station.ctau = station.ctau.clamp(0.0, 0.25);
+                        }
+                        station.theta += rlx * delta[1];
+                        station.theta = station.theta.max(1e-12);
+                        station.delta_star += rlx * delta[2];
+                        station.delta_star = station.delta_star.max(1e-12);
+                        station.h = station.delta_star / station.theta;
+                        station.mass_defect = station.u * station.delta_star;
+                    }
+                }
+            }
+
+            // Combined residual
+            residual = (upper_residual + lower_residual) / 2.0;
+
+            // Check convergence
+            if residual < config.tolerance {
+                converged = true;
+                break;
+            }
+
+            // Check for divergence or increasing residual
+            if !residual.is_finite() || residual > 1e10 {
+                // Restore original values
+                for (i, (theta, dstar, ctau, ampl, h, mass)) in upper_backup.iter().enumerate() {
+                    upper_stations[i].theta = *theta;
+                    upper_stations[i].delta_star = *dstar;
+                    upper_stations[i].ctau = *ctau;
+                    upper_stations[i].ampl = *ampl;
+                    upper_stations[i].h = *h;
+                    upper_stations[i].mass_defect = *mass;
+                }
+                for (i, (theta, dstar, ctau, ampl, h, mass)) in lower_backup.iter().enumerate() {
+                    lower_stations[i].theta = *theta;
+                    lower_stations[i].delta_star = *dstar;
+                    lower_stations[i].ctau = *ctau;
+                    lower_stations[i].ampl = *ampl;
+                    lower_stations[i].h = *h;
+                    lower_stations[i].mass_defect = *mass;
+                }
+                converged = true; // Fall back to direct march result
+                iteration = 0;
+                break;
+            }
+            
+            // Stop if residual is increasing (Newton not converging)
+            if residual > prev_residual * 1.5 {
+                // Restore original values
+                for (i, (theta, dstar, ctau, ampl, h, mass)) in upper_backup.iter().enumerate() {
+                    upper_stations[i].theta = *theta;
+                    upper_stations[i].delta_star = *dstar;
+                    upper_stations[i].ctau = *ctau;
+                    upper_stations[i].ampl = *ampl;
+                    upper_stations[i].h = *h;
+                    upper_stations[i].mass_defect = *mass;
+                }
+                for (i, (theta, dstar, ctau, ampl, h, mass)) in lower_backup.iter().enumerate() {
+                    lower_stations[i].theta = *theta;
+                    lower_stations[i].delta_star = *dstar;
+                    lower_stations[i].ctau = *ctau;
+                    lower_stations[i].ampl = *ampl;
+                    lower_stations[i].h = *h;
+                    lower_stations[i].mass_defect = *mass;
+                }
+                converged = true; // Fall back to direct march result
+                iteration = 0;
+                break;
+            }
+            prev_residual = residual;
+        }
+    }
+
+    // Update transition locations from final station states
+    // Find transition point (where is_laminar changes to is_turbulent)
+    for (i, station) in upper_stations.iter().enumerate() {
+        if !station.is_laminar && i > 0 && upper_stations[i - 1].is_laminar {
+            x_tr_upper = station.x;
+            break;
+        }
+    }
+    for (i, station) in lower_stations.iter().enumerate() {
+        if !station.is_laminar && i > 0 && lower_stations[i - 1].is_laminar {
+            x_tr_lower = station.x;
+            break;
+        }
+    }
 
     // Check for separation on either surface
     let x_separation = upper_result
@@ -543,9 +829,9 @@ pub fn solve_viscous_two_surfaces(
         cm: forces.cm,
         x_tr_upper,
         x_tr_lower,
-        iterations: 1, // Only direct march, no Newton iteration yet
-        residual: 0.0,
-        converged: true, // March always "converges"
+        iterations: iteration,
+        residual,
+        converged,
         cd_friction: total_cd_friction,
         cd_pressure: 0.0, // Need pressure integration for this
         x_separation,
