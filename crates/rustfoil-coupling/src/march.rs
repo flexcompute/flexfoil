@@ -715,10 +715,9 @@ pub fn march_fixed_ue(
                 //
                 // Create initial guess from laminar solution
                 let mut initial_guess = station.clone();
-                // XFOIL MRCHUE line 801: At transition station, simply use CTI = 0.05
-                // (The physics-based formula in xblsys.f:1391 is for equilibrium ctau,
-                // not the initial guess for Newton iteration)
-                initial_guess.ctau = 0.05;
+                // XFOIL MRCHUE line 598, 652-655: Initial ctau = 0.03
+                // Note: 0.05 is only used as fallback when convergence fails (line 845)
+                initial_guess.ctau = 0.03;
                 
                 let (turb_station, _turb_converged) = newton_solve_station_with_guess(
                     prev_station,       // Actual upstream station for bldif "1" variables
@@ -739,7 +738,7 @@ pub fn march_fixed_ue(
                 station.ampl = trchek_result.ampl2;  // Keep the transition N-factor
                 
                 if config.debug_trace {
-                    println!("  Initial ctau = 0.05 (XFOIL MRCHUE line 801)");
+                    println!("  Initial ctau = 0.03 (XFOIL MRCHUE line 598)");
                     println!("  After turbulent re-solve: Hk={:.4}, theta={:.6e}, delta_star={:.6e}, ctau={:.6}",
                              station.hk, station.theta, station.delta_star, station.ctau);
                 }
