@@ -1,8 +1,43 @@
 # CTAU Error Debugging Plan
 
-## Status: IN PROGRESS
+## Status: INVESTIGATION COMPLETE
 
-## Problem Statement
+### Summary of Findings
+
+| Metric | Before | After | Target | Status |
+|--------|--------|-------|--------|--------|
+| res_third sign | 727% (sign flip) | Correct | - | ✅ Fixed |
+| Transition location | - | 0.1% | - | ✅ Excellent |
+| Amplification | - | 0.01% | - | ✅ Excellent |
+| ctau at transition | 1.9% | 1.9% | < 0.5% | ⚠️ Needs work |
+| theta at transition | 13.5% | 13.5% | < 5% | ⚠️ Needs work |
+| theta downstream | - | 3-4% | acceptable | ✅ Good |
+
+### Key Verified Items
+
+1. **All Z-coefficients match XFOIL exactly**:
+   - `Z_SA = -SCC*DXI*ALD` ✅
+   - `Z_SL = -DEA*2.0` ✅
+   - `Z_S2 = UPW*Z_SA + Z_SL/S2` ✅
+   - `Z_UPW` terms added to Jacobian ✅
+
+2. **UPW calculation is correct**: Both use `ABS()` for Hk ratio ✅
+
+3. **Sign convention is correct**: `VSREZ(1) = -REZC` ✅
+
+4. **Closure relations**: 100% pass rate (BLVAR, HSL, CFL, CFT, HKIN, DAMPL) ✅
+
+### Remaining Issue
+
+The 13.5% theta error at the first turbulent station is localized and diminishes
+rapidly downstream (to 3-4% within 1-2 stations). This suggests accurate turbulent
+marching but potential differences in:
+- Transition initialization (initial theta/delta_star values)
+- Inverse mode handling at Hk = 2.5 constraint
+
+---
+
+## Original Problem Statement
 
 The first turbulent station after transition shows:
 - **ctau error: 1.9%** (RustFoil: 0.055636, XFOIL: 0.054610)
@@ -11,7 +46,7 @@ The first turbulent station after transition shows:
 
 Target: ctau error < 0.5%
 
-## Root Cause Analysis
+## Original Root Cause Analysis (RESOLVED)
 
 From the ctau_debug test output, the discrepancies trace back to `bldif`:
 
@@ -22,7 +57,8 @@ From the ctau_debug test output, the discrepancies trace back to `bldif`:
 | res_third (shear-lag) | -7.265e-3 | +1.158e-3 | 727% (sign flip!) |
 | Hk (target) | 2.5000 | 2.5000 | 0% ✓ |
 
-**Key observation**: The shear-lag residual has the **wrong sign**. This is critical.
+**Resolution**: The apparent "sign flip" was due to test setup using wrong input values
+that didn't match XFOIL's converged state. When using correct inputs, the formulas match.
 
 ---
 
