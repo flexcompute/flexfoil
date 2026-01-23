@@ -238,14 +238,10 @@ impl CubicSpline {
             .map(|&s| xfoil_spline.curvature(s).abs() * sbref)
             .collect();
 
-        // Force symmetry in curvature buffer (average symmetric pairs)
-        // This ensures symmetric airfoils produce symmetric paneling
-        for i in 0..n_buffer / 2 {
-            let j = n_buffer - 1 - i;
-            let avg = (curv_buffer[i] + curv_buffer[j]) / 2.0;
-            curv_buffer[i] = avg;
-            curv_buffer[j] = avg;
-        }
+        // NOTE: XFOIL does NOT force symmetry on raw curvature.
+        // For cambered airfoils, the curvature is naturally asymmetric
+        // (higher on the lower surface). Forcing symmetry here was causing
+        // incorrect panel distribution for cambered airfoils.
 
         // Find LE using XFOIL's LEFIND algorithm (Newton iteration)
         // This finds the exact arc-length where tangent is normal to chord
@@ -283,15 +279,12 @@ impl CubicSpline {
         // Smooth the curvature array
         // Pass exact LE position for XFOIL-style smoothing
         let smool = (1.0 / cv_avg.max(20.0)).max(0.25 / (n as f64 / 2.0));
-        let mut smoothed = smooth_curvature_with_le_fix(&s_buffer, &curv_buffer, smool * sbref, s_le, cv_le);
+        let smoothed = smooth_curvature_with_le_fix(&s_buffer, &curv_buffer, smool * sbref, s_le, cv_le);
 
-        // Force symmetry again after smoothing
-        for i in 0..n_buffer / 2 {
-            let j = n_buffer - 1 - i;
-            let avg = (smoothed[i] + smoothed[j]) / 2.0;
-            smoothed[i] = avg;
-            smoothed[j] = avg;
-        }
+        // NOTE: XFOIL does NOT force symmetry on smoothed curvature.
+        // For cambered airfoils, the curvature is naturally asymmetric.
+        // Previous code incorrectly forced symmetry here, which distorted
+        // the panel distribution for cambered airfoils.
 
         // Normalize curvature
         let cv_max = smoothed.iter().fold(0.0_f64, |acc, &x| acc.max(x.abs()));
