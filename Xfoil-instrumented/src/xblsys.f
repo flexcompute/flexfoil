@@ -1803,7 +1803,37 @@ C
      &      - DEA*2.0*          SLOG
      &      + DEA*2.0*(UQ*DXI - ULOG)*DUXCON
 C
-
+C---- Debug output for transition (first turbulent station after laminar)
+C---- Trigger when HK1 > 4.0 and HK2 < 3.0 (transition signature)
+       IF(HK1.GT.4.0 .AND. HK2.LT.3.0) THEN
+         WRITE(*,*) '=== XFOIL REZC DEBUG (transition) ==='
+         WRITE(*,*) 'Station: HK1=', HK1, ' HK2=', HK2
+         WRITE(*,*) 'UPW=', UPW
+         WRITE(*,*) 'SA=', SA, ' CQA=', CQA
+         WRITE(*,*) 'CFA=', CFA, ' HKA=', HKA
+         WRITE(*,*) 'USA=', USA, ' RTA=', RTA
+         WRITE(*,*) 'DEA=', DEA, ' DA=', DA
+         WRITE(*,*) 'ALD=', ALD, ' GCC=', GCC
+         WRITE(*,*) 'HKC=', HKC, ' HR=', HR
+         WRITE(*,*) 'UQ=', UQ, ' SCC=', SCC
+         WRITE(*,*) 'S1=', S1, ' S2=', S2
+         WRITE(*,*) 'SLOG=', SLOG, ' DXI=', DXI, ' ULOG=', ULOG
+         WRITE(*,*) 'REZC Term1 = SCC*(CQA-SA*ALD)*DXI =', 
+     &              SCC*(CQA-SA*ALD)*DXI
+         WRITE(*,*) '  CQA - SA*ALD =', CQA - SA*ALD
+         WRITE(*,*) 'REZC Term2 = -DEA*2.0*SLOG =', -DEA*2.0*SLOG
+         WRITE(*,*) 'REZC Term3 = DEA*2.0*(UQ*DXI-ULOG)*DUXCON =',
+     &              DEA*2.0*(UQ*DXI - ULOG)*DUXCON
+         WRITE(*,*) '  UQ*DXI - ULOG =', UQ*DXI - ULOG
+         WRITE(*,*) 'REZC=', REZC
+         WRITE(*,*) 'VSREZ(1) = -REZC =', -REZC
+         WRITE(*,*) '--- Z coefficients ---'
+         WRITE(*,*) 'Z_SL=', -DEA*2.0
+         WRITE(*,*) 'Z_SA=', -SCC*DXI*ALD
+         WRITE(*,*) 'Z_S2=', UPW*(-SCC*DXI*ALD) + (-DEA*2.0)/S2
+         WRITE(*,*) '=== END XFOIL REZC DEBUG ==='
+       ENDIF
+C
 c        if(  ! (rt2.gt.1.0e3 .and. rt1.le.1.0e3) .or.
 c     &     (rt2.gt.1.0e4 .and. rt1.le.1.0e4) .or.
 c     &     (rt2.gt.1.0e5 .and. rt1.le.1.0e5)        ) then
