@@ -27,13 +27,23 @@
 
 4. **Closure relations**: 100% pass rate (BLVAR, HSL, CFL, CFT, HKIN, DAMPL) ✅
 
-### Remaining Issue
+### Root Cause Identified
 
-The 13.5% theta error at the first turbulent station is localized and diminishes
-rapidly downstream (to 3-4% within 1-2 stations). This suggests accurate turbulent
-marching but potential differences in:
-- Transition initialization (initial theta/delta_star values)
-- Inverse mode handling at Hk = 2.5 constraint
+The 13.5% theta error at the first turbulent station is caused by a **missing `TRDIF` implementation**.
+
+**XFOIL's approach** (xblsys.f TRDIF subroutine, lines 1224-1400):
+At the transition station, XFOIL uses a **hybrid laminar-turbulent** formulation:
+1. Laminar equations from X1 to XT (interpolated transition point)
+2. Turbulent equations from XT to X2  
+3. Both contributions are weighted and combined
+
+**RustFoil's current approach**:
+Uses pure turbulent equations for the entire X1→X2 interval at transition.
+
+**Impact**: The error diminishes rapidly downstream (13.5% → 3-4%) because subsequent
+turbulent stations use the correct pure-turbulent formulation.
+
+**Fix required**: Implement `trdif` function that handles the hybrid transition interval.
 
 ---
 
