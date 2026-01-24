@@ -64,7 +64,7 @@ fn test_march_from_xfoil_initial() {
         let theta_xfoil = s["final"]["theta"].as_f64().unwrap();
 
         // Solve using Newton
-        let (station, converged) = newton_solve_station(
+        let (station, converged, _dmax) = newton_solve_station(
             &prev,
             x_new,
             ue_new,
