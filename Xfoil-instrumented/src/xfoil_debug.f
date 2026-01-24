@@ -23,6 +23,180 @@ C---- Block data to initialize debug common block
       DATA IBLDBG /0/
       END
 
+C---- Dump TRDIF chain-rule derivatives (XT/WF/TT/DT/UT)
+      SUBROUTINE DBGTRDIF_DERIVS(ISIDE, IBL, ITBL,
+     &  WF1, WF2, XT,
+     &  XT_A1, XT_X1, XT_X2, XT_T1, XT_T2, XT_D1, XT_D2, XT_U1, XT_U2,
+     &  XT_MS, XT_RE,
+     &  TT_A1, TT_X1, TT_X2, TT_T1, TT_T2, TT_D1, TT_D2, TT_U1, TT_U2,
+     &  TT_MS, TT_RE,
+     &  DT_A1, DT_X1, DT_X2, DT_T1, DT_T2, DT_D1, DT_D2, DT_U1, DT_U2,
+     &  DT_MS, DT_RE,
+     &  UT_A1, UT_X1, UT_X2, UT_T1, UT_T2, UT_D1, UT_D2, UT_U1, UT_U2,
+     &  UT_MS, UT_RE)
+      INTEGER ISIDE, IBL, ITBL
+      REAL WF1, WF2, XT
+      REAL XT_A1, XT_X1, XT_X2, XT_T1, XT_T2, XT_D1, XT_D2, XT_U1, XT_U2
+      REAL XT_MS, XT_RE
+      REAL TT_A1, TT_X1, TT_X2, TT_T1, TT_T2, TT_D1, TT_D2, TT_U1, TT_U2
+      REAL TT_MS, TT_RE
+      REAL DT_A1, DT_X1, DT_X2, DT_T1, DT_T2, DT_D1, DT_D2, DT_U1, DT_U2
+      REAL DT_MS, DT_RE
+      REAL UT_A1, UT_X1, UT_X2, UT_T1, UT_T2, UT_D1, UT_D2, UT_U1, UT_U2
+      REAL UT_MS, UT_RE
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only dump upper surface IBL 30-35 to avoid huge output
+      IF(ISIDE.NE.1) RETURN
+      IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "TRDIF_DERIVS",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "side": ', ISIDE, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I3,A)') '  "newton_iter": ', ITBL, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "WF1": ', WF1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "WF2": ', WF2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "XT": ', XT, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "XT_A1": ', XT_A1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "XT_X1": ', XT_X1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "XT_X2": ', XT_X2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "XT_T1": ', XT_T1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "XT_T2": ', XT_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "XT_D1": ', XT_D1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "XT_D2": ', XT_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "XT_U1": ', XT_U1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "XT_U2": ', XT_U2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "XT_MS": ', XT_MS, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "XT_RE": ', XT_RE, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "TT_A1": ', TT_A1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "TT_X1": ', TT_X1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "TT_X2": ', TT_X2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "TT_T1": ', TT_T1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "TT_T2": ', TT_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "TT_D1": ', TT_D1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "TT_D2": ', TT_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "TT_U1": ', TT_U1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "TT_U2": ', TT_U2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "TT_MS": ', TT_MS, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "TT_RE": ', TT_RE, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DT_A1": ', DT_A1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DT_X1": ', DT_X1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DT_X2": ', DT_X2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DT_T1": ', DT_T1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DT_T2": ', DT_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DT_D1": ', DT_D1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DT_D2": ', DT_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DT_U1": ', DT_U1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DT_U2": ', DT_U2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DT_MS": ', DT_MS, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DT_RE": ', DT_RE, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "UT_A1": ', UT_A1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "UT_X1": ', UT_X1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "UT_X2": ', UT_X2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "UT_T1": ', UT_T1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "UT_T2": ', UT_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "UT_D1": ', UT_D1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "UT_D2": ', UT_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "UT_U1": ', UT_U1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "UT_U2": ', UT_U2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "UT_MS": ', UT_MS, ','
+      WRITE(LUDBG,'(A,E15.8)') '  "UT_RE": ', UT_RE
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+C---- Dump TRDIF Jacobian and residuals (combined laminar+turbulent)
+      SUBROUTINE DBGTRDIF(ISIDE, IBL, ITBL, VS1, VS2, VSREZ)
+      INTEGER ISIDE, IBL, ITBL
+      REAL VS1(4,5), VS2(4,5), VSREZ(4)
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER I, J
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only dump upper surface IBL 30-35 to avoid huge output
+      IF(ISIDE.NE.1) RETURN
+      IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "TRDIF",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "side": ', ISIDE, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I3,A)') '  "newton_iter": ', ITBL, ','
+C---- VS1 matrix
+      WRITE(LUDBG,'(A)') '  "VS1": ['
+      DO 10 I=1,4
+        IF(I.LT.4) THEN
+          WRITE(LUDBG,'(A,5(E14.7,A),A)')
+     &      '    [', (VS1(I,J), ',', J=1,4), VS1(I,5), '],'
+        ELSE
+          WRITE(LUDBG,'(A,5(E14.7,A),A)')
+     &      '    [', (VS1(I,J), ',', J=1,4), VS1(I,5), ']'
+        ENDIF
+   10 CONTINUE
+      WRITE(LUDBG,'(A)') '  ],'
+C---- VS2 matrix
+      WRITE(LUDBG,'(A)') '  "VS2": ['
+      DO 20 I=1,4
+        IF(I.LT.4) THEN
+          WRITE(LUDBG,'(A,5(E14.7,A),A)')
+     &      '    [', (VS2(I,J), ',', J=1,4), VS2(I,5), '],'
+        ELSE
+          WRITE(LUDBG,'(A,5(E14.7,A),A)')
+     &      '    [', (VS2(I,J), ',', J=1,4), VS2(I,5), ']'
+        ENDIF
+   20 CONTINUE
+      WRITE(LUDBG,'(A)') '  ],'
+C---- Residuals
+      WRITE(LUDBG,'(A,4(E14.7,A),A)')
+     &  '  "VSREZ": [', (VSREZ(I), ',', I=1,3), VSREZ(4), ']'
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump BLPRV state (T2/D2/DW2 after DSWAKI subtraction)
+      SUBROUTINE DBGBLPRV(IS, IBL, ITBL)
+      INTEGER IS, IBL, ITBL
+      INCLUDE 'XBL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      COMMON /XDBGIT/ ITBLDBG
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER ITBLDBG
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only dump upper surface IBL 30-35 to keep output manageable
+      IF(IS.NE.1) RETURN
+      IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "BLPRV_STATE",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "side": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I3,A)') '  "newton_iter": ', ITBL, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "T2": ', T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "D2": ', D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DW2": ', DW2, ','
+      WRITE(LUDBG,'(A,E15.8)') '  "U2": ', U2
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
 
 C---- Set the current station context for debug output inside TRCHEK2
       SUBROUTINE DBGSETCTX(IS, IBL)
@@ -187,12 +361,18 @@ C
 
 
 C---- Dump BLDIF Jacobian and residuals
-      SUBROUTINE DBGBLDIF(ISIDE, IBL, ITYP, VS1, VS2, VSREZ)
+      SUBROUTINE DBGBLDIF(ISIDE, IBL, ITYP,
+     &                    X1, U1, T1, D1, S1, A1,
+     &                    X2, U2, T2, D2, S2, A2,
+     &                    VS1, VS2, VSREZ)
       INTEGER ISIDE, IBL, ITYP
+      REAL X1, U1, T1, D1, S1, A1, X2, U2, T2, D2, S2, A2
       REAL VS1(4,5), VS2(4,5), VSREZ(4)
       COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      COMMON /XDBGIT/ ITBLDBG
       LOGICAL LDBG
       INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER ITBLDBG
       INTEGER I, J
 C
       IF(.NOT.LDBG) RETURN
@@ -203,7 +383,21 @@ C
       WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
       WRITE(LUDBG,'(A,I2,A)') '  "side": ', ISIDE, ','
       WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I3,A)') '  "newton_iter": ', ITBLDBG, ','
       WRITE(LUDBG,'(A,I2,A)') '  "flow_type": ', ITYP, ','
+C---- primary state used in BLDIF
+      WRITE(LUDBG,'(A,E15.8,A)') '  "X1": ', X1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "U1": ', U1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "T1": ', T1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "D1": ', D1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "S1": ', S1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "A1": ', A1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "X2": ', X2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "U2": ', U2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "T2": ', T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "D2": ', D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "S2": ', S2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "A2": ', A2, ','
 C---- VS1 matrix
       WRITE(LUDBG,'(A)') '  "VS1": ['
       DO 10 I=1,4
@@ -272,13 +466,13 @@ C
 
 C---- Dump MRCHUE Newton iteration state (per-iteration debugging)
 C     Computes Hk and Rtheta from output state to ensure consistency
-      SUBROUTINE DBGMRCHUE_ITER(IS, IBL, ITBL, XSI, UEI,
+      SUBROUTINE DBGMRCHUE_ITER(IS, IBL, ITBL, XSI, UEI, DSWAKI,
      &                          THI_IN, DSI_IN, CTI_IN, AMI_IN,
      &                          THI_OUT, DSI_OUT, CTI_OUT, AMI_OUT,
      &                          VS2, VSREZ, DMAX, RLX, CONV,
      &                          HSTINV_V, GM1BL_V, REYBL_V)
       INTEGER IS, IBL, ITBL
-      REAL XSI, UEI
+      REAL XSI, UEI, DSWAKI
       REAL THI_IN, DSI_IN, CTI_IN, AMI_IN
       REAL THI_OUT, DSI_OUT, CTI_OUT, AMI_OUT
       REAL VS2(4,5), VSREZ(4), DMAX, RLX
@@ -317,6 +511,7 @@ C
       WRITE(LUDBG,'(A,I3,A)') '  "newton_iter": ', ITBL, ','
       WRITE(LUDBG,'(A,E15.8,A)') '  "x": ', XSI, ','
       WRITE(LUDBG,'(A,E15.8,A)') '  "Ue": ', UEI, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "d_s_wake": ', DSWAKI, ','
 C---- Input state (before update)
       WRITE(LUDBG,'(A)') '  "input": {'
       WRITE(LUDBG,'(A,E15.8,A)') '    "theta": ', THI_IN, ','
@@ -620,6 +815,8 @@ C
       WRITE(LUDBG,'(A,E15.8,A)') '  "Rt2": ', RT2, ','
       WRITE(LUDBG,'(A,E15.8,A)') '  "T1": ', T1, ','
       WRITE(LUDBG,'(A,E15.8,A)') '  "T2": ', T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "U1": ', U1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "U2": ', U2, ','
       WRITE(LUDBG,'(A,E15.8,A)') '  "Ncrit": ', AMCRIT, ','
       IF(TRANV) THEN
         WRITE(LUDBG,'(A)') '  "transition": true'
@@ -1238,8 +1435,9 @@ C     exact system being solved: VS2 * dx = VSREZ
       INTEGER I, J
 C
       IF(.NOT.LDBG) RETURN
-C---- Only dump first 10 stations to avoid huge output
-      IF(IBL.GT.10) RETURN
+C---- Only dump upper surface IBL 30-35 to avoid huge output
+      IF(IS.NE.1) RETURN
+      IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -1268,6 +1466,47 @@ C---- VSREZ (RHS before solve = -residual)
       END
 
 
+C---- Dump MRCHUE mode decision details (direct vs inverse)
+      SUBROUTINE DBGMRCHUE_MODE(IS, IBL, ITBL, DIRECT,
+     &     HTEST, HKTEST, HMAX, DMAX, RLX, UEI, THI, DSI)
+      INTEGER IS, IBL, ITBL
+      LOGICAL DIRECT
+      REAL HTEST, HKTEST, HMAX, DMAX, RLX, UEI, THI, DSI
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+C
+      IF(.NOT.LDBG) RETURN
+      IF(IS.NE.1) RETURN
+      IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "MRCHUE_MODE",'
+      WRITE(LUDBG,'(A,I2,A)') '  "side": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I3,A)') '  "newton_iter": ', ITBL, ','
+      IF(DIRECT) THEN
+        WRITE(LUDBG,'(A)') '  "direct_before": true,'
+        WRITE(LUDBG,'(A)') '  "direct_after": true,'
+      ELSE
+        WRITE(LUDBG,'(A)') '  "direct_before": false,'
+        WRITE(LUDBG,'(A)') '  "direct_after": false,'
+      ENDIF
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Htest": ', HTEST, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Hk_test": ', HKTEST, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Hmax": ', HMAX, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "dmax": ', DMAX, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "rlx": ', RLX, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Ue": ', UEI, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "theta": ', THI, ','
+      WRITE(LUDBG,'(A,E15.8)') '  "delta_star": ', DSI
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
 C---- Dump VSREZ AFTER GAUSS solve (contains solution vector dx)
 C     This is called in MRCHUE right after CALL GAUSS to capture
 C     the Newton update: dx = [d_ctau/d_ampl, d_theta, d_dstar, d_ue]
@@ -1280,8 +1519,9 @@ C     the Newton update: dx = [d_ctau/d_ampl, d_theta, d_dstar, d_ue]
       INTEGER I
 C
       IF(.NOT.LDBG) RETURN
-C---- Only dump first 10 stations to avoid huge output
-      IF(IBL.GT.10) RETURN
+C---- Only dump upper surface IBL 30-35 to avoid huge output
+      IF(IS.NE.1) RETURN
+      IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -1322,12 +1562,15 @@ C     the shape equation Jacobian computation in bldif
       REAL UPW_T2, UPW_D2, UPW_U2
       REAL VS2_31, VS2_32, VS2_33, VS2_34
       COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      COMMON /XDBGIT/ ITBLDBG
       LOGICAL LDBG
       INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER ITBLDBG
 C
       IF(.NOT.LDBG) RETURN
-C---- Only dump for IBL=3 to keep output manageable
-      IF(IBL.NE.3) RETURN
+C---- Only dump for upper surface IBL 30-35 to keep output manageable
+      IF(IS.NE.1) RETURN
+      IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -1336,6 +1579,7 @@ C
       WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
       WRITE(LUDBG,'(A,I2,A)') '  "side": ', IS, ','
       WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I3,A)') '  "newton_iter": ', ITBLDBG, ','
       WRITE(LUDBG,'(A,I2,A)') '  "flow_type": ', ITYP, ','
 C---- Z coefficients
       WRITE(LUDBG,'(A,E15.8,A)') '  "Z_HS2": ', Z_HS2, ','
@@ -1375,6 +1619,207 @@ C---- Final VS2 row 3 values (shape equation Jacobian)
       WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_3_2": ', VS2_32, ','
       WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_3_3": ', VS2_33, ','
       WRITE(LUDBG,'(A,E15.8)') '  "VS2_3_4": ', VS2_34
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump momentum equation Jacobian intermediates
+C     Captures terms used in VS2(2,2..4) for comparison with Rust
+      SUBROUTINE DBGMOM(IS, IBL, ITYP, X1, U1, T1, D1, X2, U2, T2, D2,
+     &                  Z_HA, Z_CFM, Z_CF2, Z_T2, Z_U2,
+     &                  H2_T2, H2_D2,
+     &                  CFM_T2, CFM_D2, CFM_U2,
+     &                  CF2_T2, CF2_D2, CF2_U2,
+     &                  VS2_22, VS2_23, VS2_24)
+      INTEGER IS, IBL, ITYP
+      REAL X1, U1, T1, D1, X2, U2, T2, D2
+      REAL Z_HA, Z_CFM, Z_CF2, Z_T2, Z_U2
+      REAL H2_T2, H2_D2
+      REAL CFM_T2, CFM_D2, CFM_U2
+      REAL CF2_T2, CF2_D2, CF2_U2
+      REAL VS2_22, VS2_23, VS2_24
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      COMMON /XDBGIT/ ITBLDBG
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER ITBLDBG
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only dump upper surface IBL 30-35 to keep output manageable
+      IF(IS.NE.1) RETURN
+      IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "MOM_JACOBIAN",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "side": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I3,A)') '  "newton_iter": ', ITBLDBG, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "flow_type": ', ITYP, ','
+C---- primary state used in BLDIF
+      WRITE(LUDBG,'(A,E15.8,A)') '  "X1": ', X1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "U1": ', U1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "T1": ', T1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "D1": ', D1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "X2": ', X2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "U2": ', U2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "T2": ', T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "D2": ', D2, ','
+C---- Z coefficients
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_HA": ', Z_HA, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_CFM": ', Z_CFM, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_CF2": ', Z_CF2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_T2": ', Z_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_U2": ', Z_U2, ','
+C---- H derivatives
+      WRITE(LUDBG,'(A,E15.8,A)') '  "H2_T2": ', H2_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "H2_D2": ', H2_D2, ','
+C---- CFM derivatives
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CFM_T2": ', CFM_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CFM_D2": ', CFM_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CFM_U2": ', CFM_U2, ','
+C---- CF2 derivatives
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CF2_T2": ', CF2_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CF2_D2": ', CF2_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CF2_U2": ', CF2_U2, ','
+C---- Final VS2 entries
+      WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_2_2": ', VS2_22, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_2_3": ', VS2_23, ','
+      WRITE(LUDBG,'(A,E15.8)') '  "VS2_2_4": ', VS2_24
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump laminar amplification Jacobian intermediates (row 1)
+C     Captures terms used in VS2(1,2..4) for comparison with Rust
+      SUBROUTINE DBGLAMAX(IS, IBL, ITYP,
+     &                    AX, AX_HK2, AX_T2, AX_RT2, AX_A2,
+     &                    HK2_T2, HK2_D2, HK2_U2,
+     &                    RT2_T2, RT2_U2,
+     &                    Z_AX, VS2_12, VS2_13, VS2_14)
+      INTEGER IS, IBL, ITYP
+      REAL AX, AX_HK2, AX_T2, AX_RT2, AX_A2
+      REAL HK2_T2, HK2_D2, HK2_U2
+      REAL RT2_T2, RT2_U2
+      REAL Z_AX, VS2_12, VS2_13, VS2_14
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      COMMON /XDBGIT/ ITBLDBG
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER ITBLDBG
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only dump lower surface IBL 64-67 to keep output manageable
+      IF(IS.NE.2) RETURN
+      IF(IBL.LT.64 .OR. IBL.GT.67) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "LAMINAR_JACOBIAN",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "side": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I3,A)') '  "newton_iter": ', ITBLDBG, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "flow_type": ', ITYP, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "AX": ', AX, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "AX_HK2": ', AX_HK2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "AX_T2": ', AX_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "AX_RT2": ', AX_RT2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "AX_A2": ', AX_A2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "HK2_T2": ', HK2_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "HK2_D2": ', HK2_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "HK2_U2": ', HK2_U2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "RT2_T2": ', RT2_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "RT2_U2": ', RT2_U2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_AX": ', Z_AX, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_1_2": ', VS2_12, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_1_3": ', VS2_13, ','
+      WRITE(LUDBG,'(A,E15.8)') '  "VS2_1_4": ', VS2_14
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump shear-lag equation Jacobian intermediates (row 1)
+C     Captures terms used in VS2(1,2..4) for comparison with Rust
+      SUBROUTINE DBGSHEAR(IS, IBL, ITYP,
+     &                    Z_UPW, Z_DE2, Z_US2, Z_CQ2, Z_CF2, Z_HK2,
+     &                    Z_D2, Z_U2, Z_S2,
+     &                    UPW_T2, UPW_D2, UPW_U2,
+     &                    DE2_T2, DE2_D2, DE2_U2,
+     &                    US2_T2, US2_D2, US2_U2,
+     &                    CQ2_T2, CQ2_D2, CQ2_U2,
+     &                    CF2_T2, CF2_D2, CF2_U2,
+     &                    HK2_T2, HK2_D2, HK2_U2,
+     &                    VS2_12, VS2_13, VS2_14)
+      INTEGER IS, IBL, ITYP
+      REAL Z_UPW, Z_DE2, Z_US2, Z_CQ2, Z_CF2, Z_HK2
+      REAL Z_D2, Z_U2, Z_S2
+      REAL UPW_T2, UPW_D2, UPW_U2
+      REAL DE2_T2, DE2_D2, DE2_U2
+      REAL US2_T2, US2_D2, US2_U2
+      REAL CQ2_T2, CQ2_D2, CQ2_U2
+      REAL CF2_T2, CF2_D2, CF2_U2
+      REAL HK2_T2, HK2_D2, HK2_U2
+      REAL VS2_12, VS2_13, VS2_14
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      COMMON /XDBGIT/ ITBLDBG
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER ITBLDBG
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only dump lower surface IBL 64-67 to keep output manageable
+      IF(IS.NE.2) RETURN
+      IF(IBL.LT.64 .OR. IBL.GT.67) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "SHEAR_JACOBIAN",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "side": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I3,A)') '  "newton_iter": ', ITBLDBG, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "flow_type": ', ITYP, ','
+C---- Z coefficients
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_UPW": ', Z_UPW, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_DE2": ', Z_DE2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_US2": ', Z_US2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_CQ2": ', Z_CQ2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_CF2": ', Z_CF2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_HK2": ', Z_HK2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_D2": ', Z_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_U2": ', Z_U2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_S2": ', Z_S2, ','
+C---- Derivatives used in VS2(1,2..4)
+      WRITE(LUDBG,'(A,E15.8,A)') '  "UPW_T2": ', UPW_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "UPW_D2": ', UPW_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "UPW_U2": ', UPW_U2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DE2_T2": ', DE2_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DE2_D2": ', DE2_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DE2_U2": ', DE2_U2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "US2_T2": ', US2_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "US2_D2": ', US2_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "US2_U2": ', US2_U2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CQ2_T2": ', CQ2_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CQ2_D2": ', CQ2_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CQ2_U2": ', CQ2_U2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CF2_T2": ', CF2_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CF2_D2": ', CF2_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CF2_U2": ', CF2_U2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "HK2_T2": ', HK2_T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "HK2_D2": ', HK2_D2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "HK2_U2": ', HK2_U2, ','
+C---- Final VS2 row 1 values
+      WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_1_2": ', VS2_12, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_1_3": ', VS2_13, ','
+      WRITE(LUDBG,'(A,E15.8)') '  "VS2_1_4": ', VS2_14
       WRITE(LUDBG,'(A)') '}'
       RETURN
       END

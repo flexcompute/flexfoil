@@ -11,10 +11,16 @@
 //! - MRCHDU: xbl.f line 875 - coupled BL march with Ue updates
 
 use nalgebra::DMatrix;
-use rustfoil_bl::closures::{axset, check_transition, trchek2_stations};
+use rustfoil_bl::closures::{
+    axset, check_transition, hkin, trchek2_full, trchek2_stations, Trchek2FullResult,
+    Trchek2Result,
+};
 use rustfoil_bl::constants::{CTRCON, CTRCEX};
-use rustfoil_bl::equations::{bldif, blvar, trdif, FlowType};
+use rustfoil_bl::equations::{
+    bldif, bldif_with_terms, blvar, trdif, trdif_full, trdif_turb_terms, FlowType,
+};
 use rustfoil_bl::state::BlStation;
+use rustfoil_bl::{BlvarInput, BlvarOutput};
 
 use crate::solve::{build_4x4_system, solve_4x4};
 
@@ -42,6 +48,230 @@ fn compute_transition_ctau(hk: f64, cq: f64) -> f64 {
     let hk_arg = (hk - 1.0).max(0.1); // Prevent division by zero
     let ctr = CTRCON * (-CTRCEX / hk_arg).exp();
     ctr * cq
+}
+
+fn estimate_transition_ctau(
+    prev: &BlStation,
+    curr: &BlStation,
+    tr: &Trchek2FullResult,
+    msq: f64,
+    re: f64,
+) -> f64 {
+    let tt = prev.theta * tr.wf1 + curr.theta * tr.wf2;
+    let dt = prev.delta_star * tr.wf1 + curr.delta_star * tr.wf2;
+    let ut = prev.u * tr.wf1 + curr.u * tr.wf2;
+
+    if !tt.is_finite() || tt <= 1e-20 {
+        return 0.03;
+    }
+
+    let mut st_turb = BlStation::new();
+    st_turb.x = tr.xt;
+    st_turb.u = ut;
+    st_turb.theta = tt;
+    st_turb.delta_star = dt;
+    st_turb.ctau = 0.03;
+    st_turb.ampl = 0.0;
+    st_turb.is_laminar = false;
+    st_turb.is_turbulent = true;
+    blvar(&mut st_turb, FlowType::Turbulent, msq, re);
+
+    let st = compute_transition_ctau(st_turb.hk, st_turb.cq);
+    if st.is_finite() {
+        st.clamp(1e-7, 0.3)
+    } else {
+        0.03
+    }
+}
+
+fn emit_trchek2_debug(
+    side: usize,
+    ibl: usize,
+    prev: &BlStation,
+    curr: &BlStation,
+    tr: &Trchek2FullResult,
+    msq: f64,
+    re: f64,
+    ncrit: f64,
+) {
+    if !rustfoil_bl::is_debug_active() {
+        return;
+    }
+
+    let dx = curr.x - prev.x;
+    let residual = tr.ampl2 - prev.ampl - tr.ax * dx;
+
+    rustfoil_bl::add_event(rustfoil_bl::DebugEvent::trchek2_iter(
+        1,
+        side,
+        ibl,
+        tr.iterations.max(1),
+        prev.x,
+        curr.x,
+        prev.ampl,
+        tr.ampl2,
+        tr.ax,
+        residual,
+        tr.wf1,
+        tr.wf2,
+        tr.xt,
+        prev.hk,
+        curr.hk,
+        prev.r_theta,
+        curr.r_theta,
+        prev.theta,
+        curr.theta,
+        prev.u,
+        curr.u,
+        ncrit,
+        tr.transition,
+    ));
+
+    let tt = prev.theta * tr.wf1 + curr.theta * tr.wf2;
+    let dt = prev.delta_star * tr.wf1 + curr.delta_star * tr.wf2;
+    let ut = prev.u * tr.wf1 + curr.u * tr.wf2;
+
+    let ht = if tt > 1e-20 {
+        dt / tt
+    } else {
+        prev.hk * tr.wf1 + curr.hk * tr.wf2
+    };
+    let hk_t = hkin(ht, msq).hk;
+    let rt_t = re * ut * tt;
+
+    let (st_opt, cq_opt) = if tr.transition {
+        let mut st_turb_temp = BlStation::new();
+        st_turb_temp.x = tr.xt;
+        st_turb_temp.u = ut;
+        st_turb_temp.theta = tt;
+        st_turb_temp.delta_star = dt;
+        st_turb_temp.ctau = 0.03;
+        st_turb_temp.ampl = 0.0;
+        st_turb_temp.is_laminar = false;
+        st_turb_temp.is_turbulent = true;
+        blvar(&mut st_turb_temp, FlowType::Turbulent, msq, re);
+
+        let cq_t = st_turb_temp.cq;
+        let st = compute_transition_ctau(st_turb_temp.hk, cq_t);
+        (Some(st), Some(cq_t))
+    } else {
+        (None, None)
+    };
+
+    rustfoil_bl::add_event(rustfoil_bl::DebugEvent::trchek2_final(
+        1,
+        side,
+        ibl,
+        tr.iterations.max(1),
+        tr.converged,
+        prev.x,
+        curr.x,
+        prev.ampl,
+        tr.ampl2,
+        tr.ax,
+        tr.xt,
+        ncrit,
+        tr.transition,
+        false,
+        Some(tt),
+        Some(dt),
+        Some(ut),
+        Some(hk_t),
+        Some(rt_t),
+        st_opt,
+        cq_opt,
+    ));
+}
+
+fn emit_trchek2_station_iter(
+    side: usize,
+    ibl: usize,
+    prev: &BlStation,
+    curr: &BlStation,
+    tr: &Trchek2Result,
+    ncrit: f64,
+) {
+    if !rustfoil_bl::is_debug_active() {
+        return;
+    }
+
+    let dx = curr.x - prev.x;
+    let residual = tr.ampl2 - prev.ampl - tr.ax * dx;
+    let wf2 = if tr.ampl2 <= ncrit {
+        1.0
+    } else {
+        (ncrit - prev.ampl) / (tr.ampl2 - prev.ampl).max(1e-20)
+    };
+    let wf1 = 1.0 - wf2;
+    let xt = prev.x * wf1 + curr.x * wf2;
+
+    rustfoil_bl::add_event(rustfoil_bl::DebugEvent::trchek2_iter(
+        1,
+        side,
+        ibl,
+        tr.iterations.max(1),
+        prev.x,
+        curr.x,
+        prev.ampl,
+        tr.ampl2,
+        tr.ax,
+        residual,
+        wf1,
+        wf2,
+        xt,
+        prev.hk,
+        curr.hk,
+        prev.r_theta,
+        curr.r_theta,
+        prev.theta,
+        curr.theta,
+        prev.u,
+        curr.u,
+        ncrit,
+        tr.transition,
+    ));
+}
+
+fn emit_blvar_debug(side: usize, ibl: usize, flow_type: FlowType, station: &BlStation) {
+    if !rustfoil_bl::is_debug_active() {
+        return;
+    }
+
+    let flow_type_num = match flow_type {
+        FlowType::Laminar => 1,
+        FlowType::Turbulent => 2,
+        FlowType::Wake => 3,
+    };
+
+    let input = BlvarInput {
+        x: station.x,
+        u: station.u,
+        theta: station.theta,
+        delta_star: station.delta_star,
+        ctau: station.ctau,
+        ampl: station.ampl,
+    };
+    let output = BlvarOutput {
+        H: station.h,
+        Hk: station.hk,
+        Hs: station.hs,
+        Hc: station.hc,
+        Rtheta: station.r_theta,
+        Cf: station.cf,
+        Cd: station.cd,
+        Us: station.us,
+        Cq: station.cq,
+        De: station.de,
+    };
+
+    rustfoil_bl::add_event(rustfoil_bl::DebugEvent::blvar(
+        1,
+        side,
+        ibl,
+        flow_type_num,
+        input,
+        output,
+    ));
 }
 
 // ============================================================================
@@ -111,8 +341,8 @@ impl Default for MarchConfig {
         Self {
             ncrit: 9.0,
             max_iter: 25,
-            tolerance: 0.1, // Match XFOIL's convergence criterion
-            hlmax: 4.5,  // Increased from 3.8 to allow higher H before inverse mode
+            tolerance: 1.0e-5, // Match XFOIL's MRCHUE convergence criterion
+            hlmax: 3.8,  // XFOIL default for laminar inverse-mode switch
             htmax: 2.5,
             senswt: 1000.0,
             deps: 5.0e-6,
@@ -381,9 +611,22 @@ pub fn newton_solve_station(
     tolerance: f64,
     hlmax: f64,
     htmax: f64,
-) -> (BlStation, bool) {
+) -> (BlStation, bool, f64) {
     newton_solve_station_with_guess(
-        prev, None, x_new, ue_new, re, msq, is_laminar, max_iter, tolerance, hlmax, htmax,
+        prev,
+        None,
+        x_new,
+        ue_new,
+        re,
+        msq,
+        is_laminar,
+        0.0,
+        max_iter,
+        tolerance,
+        hlmax,
+        htmax,
+        None,
+        None,
     )
 }
 
@@ -422,22 +665,38 @@ pub fn newton_solve_station_with_guess(
     re: f64,
     msq: f64,
     is_laminar: bool,
+    ncrit: f64,
     max_iter: usize,
     tolerance: f64,
     hlmax: f64,
     htmax: f64,
-) -> (BlStation, bool) {
+    debug_side: Option<usize>,
+    debug_ibl: Option<usize>,
+) -> (BlStation, bool, f64) {
     // Call the extended version without transition info
     newton_solve_station_transition(
-        prev, initial_guess, x_new, ue_new, re, msq, is_laminar, 
-        None, max_iter, tolerance, hlmax, htmax,
+        prev,
+        initial_guess,
+        x_new,
+        ue_new,
+        re,
+        msq,
+        is_laminar,
+        ncrit,
+        max_iter,
+        tolerance,
+        hlmax,
+        htmax,
+        debug_side,
+        debug_ibl,
     )
 }
 
 /// Solve for BL station at transition using XFOIL's TRDIF formulation
 ///
 /// This is the Newton solver for the transition station. It uses TRDIF
-/// (hybrid laminar-turbulent equations) instead of regular BLDIF.
+/// (hybrid laminar-turbulent equations) instead of regular BLDIF when
+/// a full transition result with derivatives is provided.
 ///
 /// # Arguments
 /// * `prev` - Previous (upstream) laminar station
@@ -447,7 +706,7 @@ pub fn newton_solve_station_with_guess(
 /// * `re` - Reynolds number
 /// * `msq` - Mach number squared
 /// * `is_laminar` - Flow type (should be false for transition)
-/// * `xt` - Transition x-location (if Some, use TRDIF)
+/// * `ncrit` - Critical N-factor (use 0.0 to disable TRDIF)
 /// * `max_iter` - Maximum Newton iterations
 /// * `tolerance` - Convergence tolerance
 /// * `hlmax` - Max Hk for laminar
@@ -463,13 +722,16 @@ pub fn newton_solve_station_transition(
     re: f64,
     msq: f64,
     is_laminar: bool,
-    xt: Option<f64>,  // Transition x-location (use TRDIF if Some)
+    ncrit: f64,
     max_iter: usize,
     tolerance: f64,
     hlmax: f64,
     htmax: f64,
-) -> (BlStation, bool) {
-    let flow_type = if is_laminar {
+    debug_side: Option<usize>,
+    debug_ibl: Option<usize>,
+) -> (BlStation, bool, f64) {
+    let mut current_laminar = is_laminar;
+    let mut flow_type = if current_laminar {
         FlowType::Laminar
     } else {
         FlowType::Turbulent
@@ -495,20 +757,217 @@ pub fn newton_solve_station_transition(
     // Compute secondary variables
     blvar(&mut station, flow_type, msq, re);
     
-    let hmax = if is_laminar { hlmax } else { htmax };
     let mut direct = true;
-    let mut htarg = hmax;
+    let mut htarg = if current_laminar { hlmax } else { htmax };
+    let use_trchek = ncrit > 0.0;
     
     // Newton iteration loop
-    for _iter in 0..max_iter {
+    let mut last_dmax = f64::INFINITY;
+    for iter_idx in 0..max_iter {
         // Build BL residuals and Jacobian
-        // Note: XFOIL uses TRDIF for hybrid laminar-turbulent transition intervals.
-        // Our simplified TRDIF implementation has Jacobian stability issues during
-        // Newton iteration, so we use regular BLDIF for now. This results in ~10%
-        // theta error at the transition station (vs ~13% without any transition
-        // handling improvements), which diminishes to ~3% downstream.
-        // TODO: Implement full TRDIF with proper Jacobian chain rule through XT
-        let (res, jac) = bldif(prev, &station, flow_type, msq, re);
+        // Use full TRDIF with proper chain rule through XT derivatives when available
+        let mut trchek_full = None;
+        if current_laminar && use_trchek {
+            let tr = trchek2_full(
+                prev.x,
+                station.x,
+                prev.theta,
+                station.theta,
+                prev.delta_star,
+                station.delta_star,
+                prev.u,
+                station.u,
+                prev.hk,
+                station.hk,
+                prev.r_theta,
+                station.r_theta,
+                prev.ampl,
+                ncrit,
+                msq,
+                re,
+            );
+            if tr.transition {
+                current_laminar = false;
+                flow_type = FlowType::Turbulent;
+                station.is_laminar = false;
+                station.is_turbulent = true;
+                station.ampl = tr.ampl2;
+                if station.ctau <= 0.0 {
+                    station.ctau = 0.03;
+                }
+                // Recompute turbulent secondary variables now that flow type flipped.
+                blvar(&mut station, FlowType::Turbulent, msq, re);
+                trchek_full = Some(tr);
+            }
+        } else if !current_laminar && use_trchek {
+            trchek_full = Some(trchek2_full(
+                prev.x,
+                station.x,
+                prev.theta,
+                station.theta,
+                prev.delta_star,
+                station.delta_star,
+                prev.u,
+                station.u,
+                prev.hk,
+                station.hk,
+                prev.r_theta,
+                station.r_theta,
+                prev.ampl,
+                ncrit,
+                msq,
+                re,
+            ));
+        }
+
+        if let (Some(tr), Some(side), Some(ibl)) = (trchek_full.as_ref(), debug_side, debug_ibl) {
+            emit_trchek2_debug(side, ibl, prev, &station, tr, msq, re, ncrit);
+        }
+
+        let (res, jac) = if let Some(tr) = trchek_full.as_ref() {
+            trdif_full(prev, &station, tr, msq, re)
+        } else {
+            bldif(prev, &station, flow_type, msq, re)
+        };
+
+        if rustfoil_bl::is_debug_active() {
+            if let (Some(side), Some(ibl), Some(tr)) = (debug_side, debug_ibl, trchek_full.as_ref()) {
+                let mut vs1 = [[0.0f64; 5]; 4];
+                let mut vs2 = [[0.0f64; 5]; 4];
+                for i in 0..3 {
+                    vs1[i] = jac.vs1[i];
+                    vs2[i] = jac.vs2[i];
+                }
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::trdif(
+                    iter_idx + 1,
+                    side,
+                    ibl,
+                    rustfoil_bl::TrdifEvent {
+                        side,
+                        ibl,
+                        iter: iter_idx + 1,
+                        VS1: vs1,
+                        VS2: vs2,
+                        VSREZ: [res.res_third, res.res_mom, res.res_shape, 0.0],
+                    },
+                ));
+
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::trdif_derivs(
+                    iter_idx + 1,
+                    side,
+                    ibl,
+                    rustfoil_bl::TrdifDerivsEvent {
+                        side,
+                        ibl,
+                        iter: iter_idx + 1,
+                        WF1: tr.wf1,
+                        WF2: tr.wf2,
+                        XT: tr.xt,
+                        XT_A1: tr.xt_a1,
+                        XT_X1: tr.xt_x1,
+                        XT_X2: tr.xt_x2,
+                        XT_T1: tr.xt_t1,
+                        XT_T2: tr.xt_t2,
+                        XT_D1: tr.xt_d1,
+                        XT_D2: tr.xt_d2,
+                        XT_U1: tr.xt_u1,
+                        XT_U2: tr.xt_u2,
+                        XT_MS: tr.xt_ms,
+                        XT_RE: tr.xt_re,
+                        TT_A1: tr.tt_a1,
+                        TT_X1: tr.tt_x1,
+                        TT_X2: tr.tt_x2,
+                        TT_T1: tr.tt_t1,
+                        TT_T2: tr.tt_t2,
+                        TT_D1: tr.tt_d1,
+                        TT_D2: tr.tt_d2,
+                        TT_U1: tr.tt_u1,
+                        TT_U2: tr.tt_u2,
+                        TT_MS: tr.tt_ms,
+                        TT_RE: tr.tt_re,
+                        DT_A1: tr.dt_a1,
+                        DT_X1: tr.dt_x1,
+                        DT_X2: tr.dt_x2,
+                        DT_T1: tr.dt_t1,
+                        DT_T2: tr.dt_t2,
+                        DT_D1: tr.dt_d1,
+                        DT_D2: tr.dt_d2,
+                        DT_U1: tr.dt_u1,
+                        DT_U2: tr.dt_u2,
+                        DT_MS: tr.dt_ms,
+                        DT_RE: tr.dt_re,
+                        UT_A1: tr.ut_a1,
+                        UT_X1: tr.ut_x1,
+                        UT_X2: tr.ut_x2,
+                        UT_T1: tr.ut_t1,
+                        UT_T2: tr.ut_t2,
+                        UT_D1: tr.ut_d1,
+                        UT_D2: tr.ut_d2,
+                        UT_U1: tr.ut_u1,
+                        UT_U2: tr.ut_u2,
+                        UT_MS: tr.ut_ms,
+                        UT_RE: tr.ut_re,
+                    },
+                ));
+
+                if let Some(terms) = trdif_turb_terms(prev, &station, tr, msq, re) {
+                    rustfoil_bl::add_event(rustfoil_bl::DebugEvent::bldif_terms(
+                        iter_idx + 1,
+                        side,
+                        ibl,
+                        2,
+                        rustfoil_bl::BldifTermsEvent {
+                            side,
+                            ibl,
+                            flow_type: 2,
+                            xlog: terms.xlog,
+                            ulog: terms.ulog,
+                            tlog: terms.tlog,
+                            hlog: terms.hlog,
+                            upw: terms.upw,
+                            ha: terms.ha,
+                            btmp_mom: terms.btmp_mom,
+                            cfx: terms.cfx,
+                            cfx_ta: terms.cfx_ta,
+                            cfx_t1: terms.cfx_t1,
+                            cfx_t2: terms.cfx_t2,
+                            btmp_shape: terms.btmp_shape,
+                            cfx_shape: terms.cfx_shape,
+                            dix: terms.dix,
+                            hsa: terms.hsa,
+                            hca: terms.hca,
+                            xot1: terms.xot1,
+                            xot2: terms.xot2,
+                            z_di2: terms.z_di2,
+                            di2_s: terms.di2_s,
+                            z_upw_shape: terms.z_upw_shape,
+                            upw_t2_shape: terms.upw_t2_shape,
+                            upw_d2_shape: terms.upw_d2_shape,
+                            upw_u2_shape: terms.upw_u2_shape,
+                        },
+                    ));
+                }
+            }
+        }
+
+        if rustfoil_bl::is_debug_active() {
+            if let (Some(side), Some(ibl)) = (debug_side, debug_ibl) {
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::mrchue_sys(
+                    iter_idx + 1,
+                    side,
+                    ibl,
+                    rustfoil_bl::MrchueSysEvent {
+                        side,
+                        ibl,
+                        iter: iter_idx + 1,
+                        direct,
+                        flow_type: if current_laminar { 1 } else { 2 },
+                        VS2: jac.vs2,
+                        VSREZ: [res.res_third, res.res_mom, res.res_shape],
+                    },
+                ));
+            }
+        }
         
         // Build 4x4 Newton system
         // Variable order in bldif: [s/ampl, θ, δ*, u, x]
@@ -526,6 +985,7 @@ pub fn newton_solve_station_transition(
         // Using correct derivatives for inverse mode
         let hk2_t = station.derivs.hk_h * station.derivs.h_theta;      // = -Hk/θ
         let hk2_d = station.derivs.hk_h * station.derivs.h_delta_star; // = +1/θ
+        let hmax = if current_laminar { hlmax } else { htmax };
         
         let (mut a, mut b) = build_4x4_system(
             &jac.vs2,
@@ -537,46 +997,130 @@ pub fn newton_solve_station_transition(
             htarg,
             station.hk,
         );
+
+        if rustfoil_bl::is_debug_active() {
+            if let (Some(side), Some(ibl)) = (debug_side, debug_ibl) {
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::vs2_before(
+                    iter_idx + 1,
+                    side,
+                    ibl,
+                    rustfoil_bl::Vs2BeforeEvent {
+                        side,
+                        ibl,
+                        iter: iter_idx + 1,
+                        direct,
+                        flow_type: if current_laminar { 1 } else { 2 },
+                        VS2_4x4: a,
+                        VSREZ_rhs: b,
+                    },
+                ));
+            }
+        }
         
         // Solve 4x4 system
         let vsrez = solve_4x4(&a, &b);
         
         // Compute max relative change
         let dmax = (vsrez[1] / station.theta.max(1e-12)).abs()
-            .max((vsrez[2] / station.delta_star.max(1e-12)).abs());
-        let dmax = if is_laminar {
-            dmax.max((vsrez[0] / 10.0).abs())  // Amplification scale
+            .max((vsrez[2] / station.delta_star.max(1e-12)).abs())
+            .max((vsrez[3] / station.u.max(1e-12)).abs());
+        let dmax = if current_laminar {
+            dmax
         } else {
-            dmax.max((vsrez[0] / station.ctau.max(1e-6)).abs())  // Ctau scale
+            dmax.max((vsrez[0] / station.ctau.max(1e-6)).abs())
         };
+        last_dmax = dmax;
         
         // Relaxation factor
         let rlx = if dmax > 0.3 { 0.3 / dmax } else { 1.0 };
+
+        if rustfoil_bl::is_debug_active() {
+            if let (Some(side), Some(ibl)) = (debug_side, debug_ibl) {
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::mrchue_iter(
+                    iter_idx + 1,
+                    side,
+                    ibl,
+                    rustfoil_bl::MrchueIterEvent {
+                        side,
+                        ibl,
+                        iter: iter_idx + 1,
+                        direct,
+                        dmax,
+                        relaxation: rlx,
+                        res_third: res.res_third,
+                        res_mom: res.res_mom,
+                        res_shape: res.res_shape,
+                        delta_s: vsrez[0],
+                        delta_theta: vsrez[1],
+                        delta_delta_star: vsrez[2],
+                        delta_ue: vsrez[3],
+                        theta: station.theta,
+                        delta_star: station.delta_star,
+                        Ue: station.u,
+                        H: station.h,
+                        Hk: station.hk,
+                        Cf: station.cf,
+                        Cd: station.cd,
+                        ampl: station.ampl,
+                        ctau: station.ctau,
+                    },
+                ));
+            }
+        }
         
         // Check if direct mode is appropriate (Hk not too high)
         if direct {
-            let h_test = (station.delta_star + rlx * vsrez[2]) 
-                       / (station.theta + rlx * vsrez[1]).max(1e-12);
-            // Use hkin to convert H to Hk (simplified for low Mach)
-            let hk_test = h_test;  // At low Mach, Hk ≈ H
-            
-            if hk_test >= hmax {
+            let h_test = (station.delta_star + rlx * vsrez[2])
+                / (station.theta + rlx * vsrez[1]).max(1e-12);
+            let hk_test = rustfoil_bl::closures::hkin(h_test, msq).hk;
+            let direct_after = hk_test < hmax;
+
+            if rustfoil_bl::is_debug_active() {
+                if let (Some(side), Some(ibl)) = (debug_side, debug_ibl) {
+                    rustfoil_bl::add_event(rustfoil_bl::DebugEvent::mrchue_mode(
+                        iter_idx + 1,
+                        side,
+                        ibl,
+                        rustfoil_bl::MrchueModeEvent {
+                            side,
+                            ibl,
+                            iter: iter_idx + 1,
+                            direct_before: direct,
+                            direct_after,
+                            flow_type: if current_laminar { 1 } else { 2 },
+                            dmax,
+                            rlx,
+                            Htest: h_test,
+                            Hk_test: hk_test,
+                            Hmax: hmax,
+                            Ue: station.u,
+                            theta: station.theta,
+                            delta_star: station.delta_star,
+                        },
+                    ));
+                }
+            }
+
+            if !direct_after {
                 // Need to switch to inverse mode
                 direct = false;
                 // Estimate target Hk based on upstream
-                if is_laminar {
+                if current_laminar {
                     htarg = prev.hk + 0.03 * (x_new - prev.x) / prev.theta.max(1e-12);
                 } else {
                     // For turbulent, target htmax directly (XFOIL behavior)
                     htarg = hmax;
                 }
-                htarg = htarg.max(hmax).min(hmax * 1.5);
+                // XFOIL does not clamp the inverse-mode target above hmax.
+                htarg = htarg.max(hmax);
                 continue;  // Restart iteration with inverse mode
             }
         }
         
         // Apply updates with relaxation
-        if !is_laminar {
+        if current_laminar {
+            station.ampl = (station.ampl + rlx * vsrez[0]).max(0.0);
+        } else {
             station.ctau = (station.ctau + rlx * vsrez[0]).clamp(1e-7, 0.3);
         }
         station.theta = (station.theta + rlx * vsrez[1]).max(1e-12);
@@ -598,15 +1142,46 @@ pub fn newton_solve_station_transition(
         
         // Recompute secondary variables
         blvar(&mut station, flow_type, msq, re);
+
+        if rustfoil_bl::is_debug_active() {
+            if let (Some(side), Some(ibl)) = (debug_side, debug_ibl) {
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::blvar(
+                    iter_idx + 1,
+                    side,
+                    ibl,
+                    if current_laminar { 1 } else { 2 },
+                    rustfoil_bl::BlvarInput {
+                        x: station.x,
+                        u: station.u,
+                        theta: station.theta,
+                        delta_star: station.delta_star,
+                        ctau: station.ctau,
+                        ampl: station.ampl,
+                    },
+                    rustfoil_bl::BlvarOutput {
+                        H: station.h,
+                        Hk: station.hk,
+                        Hs: station.hs,
+                        Hc: station.hc,
+                        Rtheta: station.r_theta,
+                        Cf: station.cf,
+                        Cd: station.cd,
+                        Us: station.us,
+                        Cq: station.cq,
+                        De: station.de,
+                    },
+                ));
+            }
+        }
         
         // Check convergence
         if dmax <= tolerance {
-            return (station, true);
+            return (station, true, dmax);
         }
     }
     
     // Did not converge - return best estimate
-    (station, false)
+    (station, false, last_dmax)
 }
 
 // ============================================================================
@@ -668,25 +1243,29 @@ pub fn march_fixed_ue(
         };
 
         // Solve for current station using Newton iteration (XFOIL MRCHUE style)
-        let (mut station, converged) = newton_solve_station(
+        let (mut station, converged, dmax) = newton_solve_station_with_guess(
             prev_station,
+            None,
             x[i],
             ue[i],
             re,
             msq,
             is_laminar,
+            config.ncrit,
             config.max_iter,
             config.tolerance,
             config.hlmax,
             config.htmax,
+            Some(0),
+            Some(i),
         );
         
 
         // If Newton didn't converge, use best estimate (station still has result)
-        // Note: With tolerance=0.1 (matching XFOIL), Newton should converge for normal cases
+        // Note: With tolerance=1e-5 (matching XFOIL), Newton should converge for normal cases
         // The fallback was causing issues (replacing converged Newton values with less accurate estimates)
         // TODO: Consider removing this fallback entirely since it can mask real issues
-        if !converged {
+        if !converged && dmax > 0.1 {
             // Only use fallback if Newton produced clearly wrong values
             // For now, trust Newton's result even without strict convergence
             // (The solution is still valid, just not to machine precision)
@@ -709,15 +1288,27 @@ pub fn march_fixed_ue(
                 prev_station.theta,
                 prev_station.r_theta,
                 prev_station.delta_star,
+                prev_station.u,
                 prev_station.ampl,
                 station.hk,
                 station.theta,
                 station.r_theta,
                 station.delta_star,
+                station.u,
                 config.ncrit,
+                msq,
+                re,
             );
             
             station.ampl = trchek_result.ampl2;
+            emit_trchek2_station_iter(
+                0,
+                i,
+                prev_station,
+                &station,
+                &trchek_result,
+                config.ncrit,
+            );
             
             // Debug trace for transition investigation
             // Trace N-factor evolution to diagnose late transition
@@ -739,66 +1330,51 @@ pub fn march_fixed_ue(
             if trchek_result.transition {
                 result.x_transition = trchek_result.xt;
                 result.transition_index = Some(i);
-                
+
                 if config.debug_trace {
                     println!("[march_fixed_ue] TRANSITION DETECTED at station {}, x={:.4}", i, station.x);
                     println!("  Laminar values: Hk={:.4}, theta={:.6e}, delta_star={:.6e}",
                              station.hk, station.theta, station.delta_star);
                 }
-                
-                // Transition to turbulent
-                is_laminar = false;
-                
-                // RE-SOLVE this station with TURBULENT equations
-                // XFOIL behavior (MRCHUE):
-                // 1. Newton iteration was running with laminar equations
-                // 2. Transition is detected within the Newton loop
-                // 3. XFOIL continues Newton from current state but with turbulent equations
-                // 4. The "1" variables (upstream) are from the actual previous station (IBL-1)
-                // 5. The "2" variables (current) start from the laminar solution
-                //
-                // Key fix: We need to use:
-                // - prev_station as the upstream station for bldif ("1" variables)
-                // - The laminar solution (station) as the initial guess for "2" variables
-                //
-                // Create initial guess from laminar solution
-                let mut initial_guess = station.clone();
-                // XFOIL MRCHUE line 598, 652-655: Initial ctau = 0.03
-                // Note: 0.05 is only used as fallback when convergence fails (line 845)
-                initial_guess.ctau = 0.03;
-                
-                // Get the transition x-location from TRCHEK result
-                // Use TRDIF (hybrid laminar-turbulent) if XT is within the interval
-                let xt_for_trdif = trchek_result.xt;
-                
-                if config.debug_trace && xt_for_trdif.is_some() {
-                    println!("  Using TRDIF with XT={:.6} (hybrid laminar-turbulent)", 
-                             xt_for_trdif.unwrap());
-                }
-                
-                let (turb_station, _turb_converged) = newton_solve_station_transition(
-                    prev_station,       // Actual upstream station for bldif "1" variables
-                    Some(&initial_guess), // Laminar solution as initial guess for "2" variables
-                    x[i],
-                    ue[i],
-                    re,
-                    msq,
-                    false,  // is_laminar = false (turbulent)
-                    xt_for_trdif,       // Transition x-location for TRDIF
-                    config.max_iter,
-                    config.tolerance,
-                    config.hlmax,
-                    config.htmax,
-                );
-                
-                // Use the turbulent solution
-                station = turb_station;
-                station.ampl = trchek_result.ampl2;  // Keep the transition N-factor
-                
-                if config.debug_trace {
-                    println!("  Initial ctau = 0.03 (XFOIL MRCHUE line 598)");
-                    println!("  After TRDIF re-solve: Hk={:.4}, theta={:.6e}, delta_star={:.6e}, ctau={:.6}",
-                             station.hk, station.theta, station.delta_star, station.ctau);
+
+                if station.is_turbulent {
+                    // Transition already handled inside Newton loop (XFOIL behavior).
+                    is_laminar = false;
+                } else {
+                    // Fallback: re-solve with turbulent equations if transition wasn't handled inside Newton.
+                    is_laminar = false;
+
+                    let mut initial_guess = prev_station.clone();
+                    initial_guess.x = station.x;
+                    initial_guess.u = station.u;
+                    initial_guess.ampl = station.ampl;
+                    initial_guess.ctau = 0.03;
+
+                    let (turb_station, _turb_converged, _turb_dmax) = newton_solve_station_transition(
+                        prev_station,
+                        Some(&initial_guess),
+                        x[i],
+                        station.u,
+                        re,
+                        msq,
+                        false,
+                        config.ncrit,
+                        config.max_iter,
+                        config.tolerance,
+                        config.hlmax,
+                        config.htmax,
+                        Some(0),
+                        Some(i),
+                    );
+
+                    station = turb_station;
+                    station.ampl = trchek_result.ampl2;
+
+                    if config.debug_trace {
+                        println!("  Initial ctau = 0.03 (XFOIL MRCHUE line 598)");
+                        println!("  After full TRDIF re-solve: Hk={:.4}, theta={:.6e}, delta_star={:.6e}, ctau={:.6}",
+                                 station.hk, station.theta, station.delta_star, station.ctau);
+                    }
                 }
             }
         } else if !is_laminar {
@@ -874,6 +1450,7 @@ pub fn march_surface(
     prev.x = x[start_idx]; // Use actual x
     prev.u = ue[start_idx].abs();
     blvar(&mut prev, FlowType::Laminar, msq, re);
+    emit_blvar_debug(side, 2, FlowType::Laminar, &prev);
 
     // Emit debug event for first BL station
     if rustfoil_bl::is_debug_active() {
@@ -908,21 +1485,25 @@ pub fn march_surface(
         };
 
         // Solve for current station using Newton iteration (XFOIL MRCHUE style)
-        let (mut station, converged) = newton_solve_station(
+        let (mut station, converged, dmax) = newton_solve_station_with_guess(
             prev_station,
+            None,
             x[i],
             ue[i].abs(),
             re,
             msq,
             is_laminar,
+            config.ncrit,
             config.max_iter,
             config.tolerance,
             config.hlmax,
             config.htmax,
+            Some(side),
+            Some(station_idx + 2),
         );
 
         // If Newton didn't converge, fall back to step_momentum
-        if !converged {
+        if !converged && dmax > 0.1 {
             let (theta_new, delta_star_new) =
                 step_momentum(prev_station, x[i], ue[i].abs(), re, msq, is_laminar);
             station.theta = theta_new;
@@ -933,56 +1514,88 @@ pub fn march_surface(
         // Compute all secondary variables (already done in newton_solve, but ensure consistency)
         blvar(&mut station, flow_type, msq, re);
 
-        // Check if Hk is too high (approaching separation)
-        let hmax = if is_laminar { config.hlmax } else { config.htmax };
-        if station.hk > hmax {
-            let h_limit = hmax * 0.95;
-            station.delta_star = h_limit * station.theta;
-            blvar(&mut station, flow_type, msq, re);
-        }
+        // Do not clamp Hk here; inverse-mode handles near-separation behavior.
 
-        // Check for transition (laminar only)
+        // Check for transition (laminar only) using TRCHEK2 implicit integration
         if is_laminar && result.x_transition.is_none() {
-            // First-order estimate of ampl2 for AXSET
-            // (XFOIL uses iterative approach via TRCHEK2)
-            let ampl2_est = prev_station.ampl;  // Use prev ampl as initial guess
-            
-            // Compute amplification rate using XFOIL's AXSET (RMS averaging)
-            let ax_result = axset(
+            let trchek_result = trchek2_stations(
+                prev_station.x,
+                station.x,
                 prev_station.hk,
                 prev_station.theta,
                 prev_station.r_theta,
+                prev_station.delta_star,
+                prev_station.u,
                 prev_station.ampl,
                 station.hk,
                 station.theta,
                 station.r_theta,
-                ampl2_est,  // Use estimate, not station.ampl which might be 0
+                station.delta_star,
+                station.u,
+                config.ncrit,
+                msq,
+                re,
+            );
+
+            station.ampl = trchek_result.ampl2;
+            emit_trchek2_station_iter(
+                side,
+                station_idx + 2,
+                prev_station,
+                &station,
+                &trchek_result,
                 config.ncrit,
             );
-            station.ampl = prev_station.ampl + ax_result.ax * ds;
-            
-            // Debug trace for transition investigation
+
             if config.debug_trace && station.ampl > 0.1 && station.ampl < 12.0 {
-                println!("[march_surface] i={} x={:.4} Hk={:.3} Rθ={:.0} N={:.3} dN={:.4} AX={:.1}",
-                         i, station.x, station.hk, station.r_theta, station.ampl,
-                         station.ampl - prev_station.ampl, ax_result.ax);
+                println!(
+                    "[march_surface] i={} x={:.4} Hk={:.3} Rθ={:.0} N={:.3} dN={:.4}",
+                    i,
+                    station.x,
+                    station.hk,
+                    station.r_theta,
+                    station.ampl,
+                    station.ampl - prev_station.ampl
+                );
             }
 
-            if check_transition(station.ampl, config.ncrit).is_some() {
-                let ampl_prev = prev_station.ampl;
-                let ampl_curr = station.ampl;
-                let frac = (config.ncrit - ampl_prev) / (ampl_curr - ampl_prev).max(1e-20);
-                let x_trans = prev_station.x + frac * ds;
-
-                result.x_transition = Some(x_trans);
+            if trchek_result.transition {
+                result.x_transition = trchek_result.xt;
                 result.transition_index = Some(station_idx);
 
-                is_laminar = false;
-                station.is_laminar = false;
-                station.is_turbulent = true;
-                // XFOIL uses 0.05 as fallback ctau at transition (xbl.f:801)
-                station.ctau = 0.05;
-                blvar(&mut station, FlowType::Turbulent, msq, re);
+                if station.is_turbulent {
+                    is_laminar = false;
+                } else {
+                    is_laminar = false;
+                    station.is_laminar = false;
+                    station.is_turbulent = true;
+
+                    let mut initial_guess = prev_station.clone();
+                    initial_guess.x = station.x;
+                    initial_guess.u = station.u;
+                    initial_guess.ampl = station.ampl;
+                    initial_guess.ctau = 0.03;
+
+                    let (turb_station, _turb_converged, _turb_dmax) = newton_solve_station_transition(
+                        prev_station,
+                        Some(&initial_guess),
+                        x[i],
+                        station.u,
+                        re,
+                        msq,
+                        false,
+                        config.ncrit,
+                        config.max_iter,
+                        config.tolerance,
+                        config.hlmax,
+                        config.htmax,
+                        Some(side),
+                        Some(station_idx + 2),
+                    );
+
+                    station = turb_station;
+                    station.ampl = trchek_result.ampl2;
+                }
             }
         }
 
@@ -994,8 +1607,79 @@ pub fn march_surface(
         // Store mass defect
         station.mass_defect = station.u * station.delta_star;
 
-        // Emit debug event
+        // Emit debug events
         if rustfoil_bl::is_debug_active() {
+            let flow_type = if station.is_wake {
+                FlowType::Wake
+            } else if station.is_turbulent {
+                FlowType::Turbulent
+            } else {
+                FlowType::Laminar
+            };
+            emit_blvar_debug(side, station_idx + 2, flow_type, &station);
+            let (res, jac, terms) = bldif_with_terms(prev_station, &station, flow_type, msq, re);
+            let mut vs1 = [[0.0; 5]; 4];
+            let mut vs2 = [[0.0; 5]; 4];
+            for row in 0..3 {
+                vs1[row] = jac.vs1[row];
+                vs2[row] = jac.vs2[row];
+            }
+            rustfoil_bl::add_event(rustfoil_bl::DebugEvent::bldif(
+                1,
+                side,
+                station_idx + 2,
+                match flow_type {
+                    FlowType::Laminar => 1,
+                    FlowType::Turbulent => 2,
+                    FlowType::Wake => 3,
+                },
+                vs1,
+                vs2,
+                [res.res_third, res.res_mom, res.res_shape, 0.0],
+            ));
+            rustfoil_bl::add_event(rustfoil_bl::DebugEvent::bldif_terms(
+                1,
+                side,
+                station_idx + 2,
+                match flow_type {
+                    FlowType::Laminar => 1,
+                    FlowType::Turbulent => 2,
+                    FlowType::Wake => 3,
+                },
+                rustfoil_bl::BldifTermsEvent {
+                    side,
+                    ibl: station_idx + 2,
+                    flow_type: match flow_type {
+                        FlowType::Laminar => 1,
+                        FlowType::Turbulent => 2,
+                        FlowType::Wake => 3,
+                    },
+                    xlog: terms.xlog,
+                    ulog: terms.ulog,
+                    tlog: terms.tlog,
+                    hlog: terms.hlog,
+                    upw: terms.upw,
+                    ha: terms.ha,
+                    btmp_mom: terms.btmp_mom,
+                    cfx: terms.cfx,
+                    cfx_ta: terms.cfx_ta,
+                    cfx_t1: terms.cfx_t1,
+                    cfx_t2: terms.cfx_t2,
+                    btmp_shape: terms.btmp_shape,
+                    cfx_shape: terms.cfx_shape,
+                    dix: terms.dix,
+                    hsa: terms.hsa,
+                    hca: terms.hca,
+                    xot1: terms.xot1,
+                    xot2: terms.xot2,
+                    z_di2: terms.z_di2,
+                    di2_s: terms.di2_s,
+                    z_upw_shape: terms.z_upw_shape,
+                    upw_t2_shape: terms.upw_t2_shape,
+                    upw_d2_shape: terms.upw_d2_shape,
+                    upw_u2_shape: terms.upw_u2_shape,
+                },
+            ));
             rustfoil_bl::add_event(rustfoil_bl::DebugEvent::mrchue(
                 side,
                 station_idx + 2, // IBL is 1-indexed, +1 for skipped stagnation
@@ -1086,14 +1770,7 @@ pub fn march_fixed_ue_debug(
         // Compute all secondary variables
         blvar(&mut station, flow_type, msq, re);
 
-        // Check if Hk is too high (approaching separation)
-        let hmax = if is_laminar { config.hlmax } else { config.htmax };
-        if station.hk > hmax {
-            // Limit H to prevent singularity
-            let h_limit = hmax * 0.95;
-            station.delta_star = h_limit * station.theta;
-            blvar(&mut station, flow_type, msq, re);
-        }
+        // Do not clamp Hk here; inverse-mode handles near-separation behavior.
 
         // Check for transition (laminar only)
         if is_laminar && result.x_transition.is_none() {
@@ -1255,13 +1932,7 @@ pub fn march_coupled(
             blvar(&mut station, flow_type, msq, re);
         }
 
-        // Check if Hk is too high
-        let hmax = if is_laminar { config.hlmax } else { config.htmax };
-        if station.hk > hmax {
-            let h_limit = hmax * 0.95;
-            station.delta_star = h_limit * station.theta;
-            blvar(&mut station, flow_type, msq, re);
-        }
+        // Do not clamp Hk here; inverse-mode handles near-separation behavior.
 
         // Check for transition
         if is_laminar && result.x_transition.is_none() {
@@ -1327,8 +1998,8 @@ mod tests {
 
         assert_eq!(config.ncrit, 9.0);
         assert_eq!(config.max_iter, 25);
-        assert!((config.tolerance - 0.1).abs() < 1e-10); // Match XFOIL's criterion
-        assert!((config.hlmax - 4.5).abs() < 1e-10);  // Increased to avoid premature inverse mode
+        assert!((config.tolerance - 1.0e-5).abs() < 1e-12); // Match XFOIL's MRCHUE criterion
+        assert!((config.hlmax - 3.8).abs() < 1e-10);  // XFOIL default
         assert!((config.htmax - 2.5).abs() < 1e-10);
         assert!((config.senswt - 1000.0).abs() < 1e-10);
     }

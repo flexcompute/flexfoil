@@ -18,7 +18,12 @@ pub mod state;
 
 pub use constants::*;
 pub use debug::{
-    add_event, finalize_debug, init_debug, is_debug_active, BlvarInput, BlvarOutput, DebugEvent,
+    add_event, finalize_debug, init_debug, is_debug_active, BlvarInput, BlvarOutput,
+    BldifTermsEvent, DebugEvent, MrchueIterEvent, MrchueModeEvent, MrchueSysEvent,
+    TrdifDerivsEvent, TrdifEvent, Vs2BeforeEvent,
 };
-pub use equations::{bldif, bldif_debug, blvar, blvar_debug, BlJacobian, BlResiduals, FlowType};
+pub use equations::{
+    bldif, bldif_debug, bldif_with_terms, blvar, blvar_debug, trdif_turb_terms, BldifTerms,
+    BlJacobian, BlResiduals, FlowType,
+};
 pub use state::{BlDerivatives, BlStation};

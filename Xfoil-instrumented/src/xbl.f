@@ -562,6 +562,8 @@ C---- Debug common block
       COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
       LOGICAL LDBG
       INTEGER LUDBG, IDBGCALL, IDBGITER
+      COMMON /XDBGIT/ ITBLDBG
+      INTEGER ITBLDBG
       COMMON /BLVDBG/ IBLDBG, ISDBG
       INTEGER IBLDBG, ISDBG
 C---- Debug variables for Newton iteration tracking
@@ -631,6 +633,7 @@ C-------- Save input state for debug output
           DSI_IN = DSI
           CTI_IN = CTI
           AMI_IN = AMI
+          ITBLDBG = ITBL
 C
 C-------- assemble 10x3 linearized system for dCtau, dTh, dDs, dUe, dXi
 C         at the previous "1" station and the current "2" station
@@ -638,6 +641,7 @@ C         (the "1" station coefficients will be ignored)
 C
 C
           CALL BLPRV(XSI,AMI,CTI,THI,DSI,DSWAKI,UEI)
+          CALL DBGBLPRV(IS, IBL, ITBL)
           CALL BLKIN
 C
 C-------- check for transition and set appropriate flags and things
@@ -710,6 +714,8 @@ C---------- decide whether to do direct or inverse problem based on Hk
             IF(IBL.LT.ITRAN(IS)) HMAX = HLMAX
             IF(IBL.GE.ITRAN(IS)) HMAX = HTMAX
             DIRECT = HKTEST.LT.HMAX
+            CALL DBGMRCHUE_MODE(IS, IBL, ITBL, DIRECT,
+     &           HTEST, HKTEST, HMAX, DMAX, RLX, UEI, THI, DSI)
            ENDIF
 C
            IF(DIRECT) THEN
@@ -811,7 +817,7 @@ C
 C
 C-------- Debug: dump Newton iteration state
           CONV = DMAX.LE.1.0E-5
-          CALL DBGMRCHUE_ITER(IS, IBL, ITBL, XSI, UEI,
+          CALL DBGMRCHUE_ITER(IS, IBL, ITBL, XSI, UEI, DSWAKI,
      &                        THI_IN, DSI_IN, CTI_IN, AMI_IN,
      &                        THI, DSI, CTI, AMI,
      &                        VS2, VSREZ, DMAX, RLX, CONV,
