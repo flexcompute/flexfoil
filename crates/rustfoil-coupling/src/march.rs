@@ -763,11 +763,12 @@ pub fn newton_solve_station_transition(
     
     // Newton iteration loop
     let mut last_dmax = f64::INFINITY;
+    let mut transition_active = false;
     for iter_idx in 0..max_iter {
         // Build BL residuals and Jacobian
         // Use full TRDIF with proper chain rule through XT derivatives when available
         let mut trchek_full = None;
-        if current_laminar && use_trchek {
+        if use_trchek && (current_laminar || transition_active) {
             let tr = trchek2_full(
                 prev.x,
                 station.x,
@@ -787,6 +788,7 @@ pub fn newton_solve_station_transition(
                 re,
             );
             if tr.transition {
+                transition_active = true;
                 current_laminar = false;
                 flow_type = FlowType::Turbulent;
                 station.is_laminar = false;
@@ -797,27 +799,10 @@ pub fn newton_solve_station_transition(
                 }
                 // Recompute turbulent secondary variables now that flow type flipped.
                 blvar(&mut station, FlowType::Turbulent, msq, re);
+            }
+            if tr.transition || transition_active {
                 trchek_full = Some(tr);
             }
-        } else if !current_laminar && use_trchek {
-            trchek_full = Some(trchek2_full(
-                prev.x,
-                station.x,
-                prev.theta,
-                station.theta,
-                prev.delta_star,
-                station.delta_star,
-                prev.u,
-                station.u,
-                prev.hk,
-                station.hk,
-                prev.r_theta,
-                station.r_theta,
-                prev.ampl,
-                ncrit,
-                msq,
-                re,
-            ));
         }
 
         if let (Some(tr), Some(side), Some(ibl)) = (trchek_full.as_ref(), debug_side, debug_ibl) {
@@ -962,6 +947,16 @@ pub fn newton_solve_station_transition(
                         iter: iter_idx + 1,
                         direct,
                         flow_type: if current_laminar { 1 } else { 2 },
+                        x1: prev.x,
+                        x2: station.x,
+                        t1: prev.theta,
+                        t2: station.theta,
+                        u1: prev.u,
+                        u2: station.u,
+                        hk1: prev.hk,
+                        hk2: station.hk,
+                        ctau1: prev.ctau,
+                        ctau2: station.ctau,
                         VS2: jac.vs2,
                         VSREZ: [res.res_third, res.res_mom, res.res_shape],
                     },

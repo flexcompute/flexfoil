@@ -272,7 +272,7 @@ fn test_newton_ctau_convergence() {
     let ue_new = 1.4566427;
     
     // Run Newton solver
-    let (result, converged) = newton_solve_station(
+    let (result, converged, _dmax) = newton_solve_station(
         &prev,
         x_new,
         ue_new,

@@ -114,22 +114,73 @@ def phase2_blvar(events, station=None):
         print(f"    Rtheta   = {out.get('Rtheta', 0):12.2f}")
 
 
-def phase3_jacobians(events, station=None):
+def phase3_jacobians(
+    events,
+    station=None,
+    rustfoil_debug_path=None,
+    xfoil_side=None,
+    rust_side=None,
+    rust_ibl=None,
+):
     """Phase 3: BLDIF Jacobian analysis."""
     print("\n" + "=" * 60)
     print("Phase 3: BLDIF Jacobian Analysis")
     print("=" * 60)
     
     bldif_events = filter_events(events, 'BLDIF', iteration=1)
+    if xfoil_side is not None:
+        bldif_events = [e for e in bldif_events if e.get('side') == xfoil_side]
     if station is not None:
         bldif_events = [e for e in bldif_events if e.get('ibl') == station]
+
+    # Keep only the final Newton iteration per station when available
+    if bldif_events:
+        grouped = {}
+        for ev in bldif_events:
+            key = (ev.get('side'), ev.get('ibl'), ev.get('flow_type'))
+            iter_val = ev.get('newton_iter', ev.get('iteration', 0))
+            if key not in grouped or iter_val >= grouped[key].get('newton_iter', grouped[key].get('iteration', 0)):
+                grouped[key] = ev
+        bldif_events = list(grouped.values())
+
+    rust_events = []
+    if rustfoil_debug_path and Path(rustfoil_debug_path).exists():
+        with open(rustfoil_debug_path) as f:
+            rust_events = json.load(f).get('events', [])
+    rust_bldif = [e for e in rust_events if e.get('subroutine') == 'BLDIF']
+    rust_map = {}
+    for ev in rust_bldif:
+        key = (ev.get('side'), ev.get('ibl'), ev.get('flow_type'))
+        rust_map[key] = ev
     
+    if rust_bldif:
+        print(f"{'Side':>4} {'IBL':>4} {'Type':>4} {'Iter':>4} {'Max|dVS1|':>12} {'Max|dVS2|':>12} {'Max|dVSREZ|':>12}")
+
     for ev in bldif_events[:10]:
         print(f"\n--- Side {ev.get('side', '?')}, Station {ev.get('ibl', '?')}, Type {ev.get('flow_type', '?')} ---")
         
         vs1 = np.array(ev['VS1'])
         vs2 = np.array(ev['VS2'])
         vsrez = np.array(ev['VSREZ'])
+
+        if rust_bldif:
+            x_side = ev.get('side')
+            x_ibl = ev.get('ibl')
+            x_type = ev.get('flow_type')
+            r_side = rust_side if rust_side is not None else x_side
+            r_ibl = rust_ibl if rust_ibl is not None else x_ibl
+            rust = rust_map.get((r_side, r_ibl, x_type))
+            if rust:
+                r_vs1 = np.array(rust['VS1'])
+                r_vs2 = np.array(rust['VS2'])
+                r_vsrez = np.array(rust['VSREZ'])
+                max_vs1 = np.max(np.abs(vs1 - r_vs1))
+                max_vs2 = np.max(np.abs(vs2 - r_vs2))
+                max_vsr = np.max(np.abs(vsrez - r_vsrez))
+                iter_val = ev.get('newton_iter', ev.get('iteration', 0))
+                print(f"{x_side:>4} {x_ibl:>4} {x_type:>4} {iter_val:>4} {max_vs1:12.4e} {max_vs2:12.4e} {max_vsr:12.4e}")
+            else:
+                print("  RustFoil BLDIF not found for matching side/ibl/flow_type")
         
         print(f"  VS1 (upstream station derivatives):")
         print(f"    Shape: {vs1.shape}")
@@ -233,7 +284,14 @@ def phase6_dij(events):
         print(f"  Row 1 (first 10):    {[f'{v:.4e}' for v in row1]}")
 
 
-def phase8_trchek2(events, rustfoil_debug_path=None):
+def phase8_trchek2(
+    events,
+    rustfoil_debug_path=None,
+    xfoil_side=None,
+    rust_side=None,
+    ibl=None,
+    rust_ibl=None,
+):
     """Phase 8: TRCHEK2 transition-point comparison."""
     print("\n" + "=" * 60)
     print("Phase 8: TRCHEK2 Transition Comparison")
@@ -249,7 +307,12 @@ def phase8_trchek2(events, rustfoil_debug_path=None):
     # Index the latest TRCHEK2_ITER by (side, ibl)
     tr_iter_map = {}
     for ev in tr_iter:
-        key = (ev.get('side'), ev.get('ibl'))
+        side = ev.get('side')
+        if xfoil_side is not None and side != xfoil_side:
+            continue
+        if ibl is not None and ev.get('ibl') != ibl:
+            continue
+        key = (side, ev.get('ibl'))
         if key not in tr_iter_map or ev.get('trchek_iter', 0) >= tr_iter_map[key].get('trchek_iter', 0):
             tr_iter_map[key] = ev
 
@@ -260,15 +323,59 @@ def phase8_trchek2(events, rustfoil_debug_path=None):
             rust_events = json.load(f).get('events', [])
 
     rust_tr_final = [e for e in rust_events if e.get('subroutine') == 'TRCHEK2_FINAL']
+    rust_tr_iter = [e for e in rust_events if e.get('subroutine') == 'TRCHEK2_ITER']
     rust_map = {(e.get('side'), e.get('ibl')): e for e in rust_tr_final}
+    rust_iter_map = {}
+    for ev in rust_tr_iter:
+        side = ev.get('side')
+        if rust_side is not None and side != rust_side:
+            continue
+        if rust_ibl is not None and ev.get('ibl') != rust_ibl:
+            continue
+        key = (side, ev.get('ibl'))
+        if key not in rust_iter_map or ev.get('trchek_iter', 0) >= rust_iter_map[key].get('trchek_iter', 0):
+            rust_iter_map[key] = ev
+
+    xfoil_mrchue = [e for e in events if e.get('subroutine') == 'MRCHUE_ITER']
+    rust_mrchue = [e for e in rust_events if e.get('subroutine') == 'MRCHUE_ITER']
+    xfoil_mrchue_map = {}
+    for ev in xfoil_mrchue:
+        side = ev.get('side')
+        if xfoil_side is not None and side != xfoil_side:
+            continue
+        if ibl is not None and ev.get('ibl') != ibl:
+            continue
+        key = (side, ev.get('ibl'))
+        if key not in xfoil_mrchue_map or ev.get('newton_iter', 0) >= xfoil_mrchue_map[key].get('newton_iter', 0):
+            xfoil_mrchue_map[key] = ev
+
+    rust_mrchue_map = {}
+    for ev in rust_mrchue:
+        side = ev.get('side')
+        if rust_side is not None and side != rust_side:
+            continue
+        if rust_ibl is not None and ev.get('ibl') != rust_ibl:
+            continue
+        key = (side, ev.get('ibl'))
+        iter_val = ev.get('newton_iter', ev.get('iter', ev.get('iteration', 0)))
+        if key not in rust_mrchue_map or iter_val >= rust_mrchue_map[key].get('newton_iter', rust_mrchue_map[key].get('iter', 0)):
+            rust_mrchue_map[key] = ev
 
     header = [
         "Side", "IBL", "XT_XFOIL", "XT_RUST", "TT_XFOIL", "TT_RUST", "Err%_TT"
     ]
     print(f"{header[0]:>4} {header[1]:>4} {header[2]:>12} {header[3]:>12} {header[4]:>12} {header[5]:>12} {header[6]:>8}")
 
-    # If RustFoil data is present, only compare matching stations
-    if rust_tr_final:
+    if ibl is not None:
+        compare_events = [
+            e for e in tr_final
+            if (xfoil_side is None or e.get('side') == xfoil_side) and e.get('ibl') == ibl
+        ]
+        if compare_events:
+            compare_events = [
+                max(compare_events, key=lambda ev: ev.get('trchek_iter', ev.get('iteration', 0)))
+            ]
+    elif rust_tr_final:
         compare_keys = sorted(rust_map.keys())
         tr_final_map = {(e.get('side'), e.get('ibl')): e for e in tr_final}
         compare_events = [tr_final_map.get(key) for key in compare_keys if tr_final_map.get(key)]
@@ -277,8 +384,12 @@ def phase8_trchek2(events, rustfoil_debug_path=None):
 
     for ev in compare_events:
         side = ev.get('side')
-        ibl = ev.get('ibl')
-        key = (side, ibl)
+        ibl_val = ev.get('ibl')
+        if xfoil_side is not None and side != xfoil_side:
+            continue
+        if ibl is not None and ibl_val != ibl:
+            continue
+        key = (side, ibl_val)
 
         xt_xfoil = ev.get('xt_final', ev.get('xt'))
         iter_ev = tr_iter_map.get(key, {})
@@ -290,17 +401,53 @@ def phase8_trchek2(events, rustfoil_debug_path=None):
         if wf1 is not None and wf2 is not None and t1 is not None and t2 is not None:
             tt_xfoil = t1 * wf1 + t2 * wf2
 
-        rust = rust_map.get(key, {})
+        rust_ibl_val = rust_ibl if rust_ibl is not None else ibl_val
+        rust_key = (rust_side if rust_side is not None else side, rust_ibl_val)
+        rust = rust_map.get(rust_key, {})
         xt_rust = rust.get('xt_final')
-        tt_rust = rust.get('tt')
+        rust_iter_ev = rust_iter_map.get(rust_key, {})
+        t1_r = rust_iter_ev.get('T1')
+        t2_r = rust_iter_ev.get('T2')
+        wf1_r = rust_iter_ev.get('wf1')
+        wf2_r = rust_iter_ev.get('wf2')
+        tt_rust = None
+        if wf1_r is not None and wf2_r is not None and t1_r is not None and t2_r is not None:
+            tt_rust = t1_r * wf1_r + t2_r * wf2_r
+        elif rust.get('tt') is not None:
+            tt_rust = rust.get('tt')
 
         err_tt = 0.0
         if tt_xfoil and tt_rust and abs(tt_xfoil) > 1e-15:
             err_tt = abs(tt_xfoil - tt_rust) / abs(tt_xfoil) * 100.0
 
-        print(f"{side:>4} {ibl:>4} {xt_xfoil:12.6e} {xt_rust if xt_rust is not None else 0.0:12.6e} "
+        print(f"{side:>4} {ibl_val:>4} {xt_xfoil:12.6e} {xt_rust if xt_rust is not None else 0.0:12.6e} "
               f"{tt_xfoil if tt_xfoil is not None else 0.0:12.6e} {tt_rust if tt_rust is not None else 0.0:12.6e} "
               f"{err_tt:8.2f}")
+
+        if ibl is not None or rust_ibl is not None:
+            x_mrchue = xfoil_mrchue_map.get(key, {})
+            r_mrchue = rust_mrchue_map.get(rust_key, {})
+            x_theta2 = None
+            r_theta2 = None
+            if isinstance(x_mrchue.get('output'), dict):
+                x_theta2 = x_mrchue['output'].get('theta')
+            if isinstance(r_mrchue.get('output'), dict):
+                r_theta2 = r_mrchue['output'].get('theta')
+            if r_theta2 is None:
+                r_theta2 = r_mrchue.get('theta')
+            err_theta2 = 0.0
+            if x_theta2 and r_theta2 and abs(x_theta2) > 1e-15:
+                err_theta2 = abs(x_theta2 - r_theta2) / abs(x_theta2) * 100.0
+
+            x_ue = x_mrchue.get('Ue')
+            r_ue = r_mrchue.get('Ue')
+            err_ue = 0.0
+            if x_ue and r_ue and abs(x_ue) > 1e-15:
+                err_ue = abs(x_ue - r_ue) / abs(x_ue) * 100.0
+
+            print("\nTransition station detail:")
+            print(f"  XFOIL theta2: {x_theta2} | Rust theta2: {r_theta2} | Err%: {err_theta2:.2f}")
+            print(f"  XFOIL Ue: {x_ue} | Rust Ue: {r_ue} | Err%: {err_ue:.2f}")
 
     if rust_tr_final:
         print("\nRustFoil TRCHEK2_FINAL extra fields (first 5):")
@@ -308,6 +455,169 @@ def phase8_trchek2(events, rustfoil_debug_path=None):
             print(f"  side={ev.get('side')} ibl={ev.get('ibl')} "
                   f"tt={ev.get('tt')} dt={ev.get('dt')} ut={ev.get('ut')} "
                   f"Hk_t={ev.get('Hk_t')} Rt_t={ev.get('Rt_t')} St={ev.get('St')} Cq_t={ev.get('Cq_t')}")
+
+
+def phase9_trdif(
+    events,
+    rustfoil_debug_path=None,
+    xfoil_side=None,
+    rust_side=None,
+    ibl=None,
+    rust_ibl=None,
+):
+    """Phase 9: TRDIF matrix comparison."""
+    print("\n" + "=" * 60)
+    print("Phase 9: TRDIF Matrix Comparison")
+    print("=" * 60)
+
+    trdif_events = [e for e in events if e.get('subroutine') == 'TRDIF']
+    if xfoil_side is not None:
+        trdif_events = [e for e in trdif_events if e.get('side') == xfoil_side]
+    if ibl is not None:
+        trdif_events = [e for e in trdif_events if e.get('ibl') == ibl]
+
+    if not trdif_events:
+        print("No TRDIF events found in XFOIL data")
+        return
+
+    # Keep only final Newton iteration per station
+    grouped = {}
+    for ev in trdif_events:
+        key = (ev.get('side'), ev.get('ibl'))
+        iter_val = ev.get('newton_iter', ev.get('iteration', 0))
+        if key not in grouped or iter_val >= grouped[key].get('newton_iter', grouped[key].get('iteration', 0)):
+            grouped[key] = ev
+    trdif_events = list(grouped.values())
+
+    rust_events = []
+    if rustfoil_debug_path and Path(rustfoil_debug_path).exists():
+        with open(rustfoil_debug_path) as f:
+            rust_events = json.load(f).get('events', [])
+    rust_trdif = [e for e in rust_events if e.get('subroutine') == 'TRDIF']
+    rust_map = {}
+    for ev in rust_trdif:
+        key = (ev.get('side'), ev.get('ibl'))
+        iter_val = ev.get('iter', ev.get('iteration', 0))
+        if key not in rust_map or iter_val >= rust_map[key].get('iter', rust_map[key].get('iteration', 0)):
+            rust_map[key] = ev
+
+    print(f"{'Side':>4} {'IBL':>4} {'Iter':>4} {'Max|dVS1|':>12} {'Max|dVS2|':>12} {'Max|dVSREZ|':>12}")
+
+    for ev in trdif_events:
+        x_side = ev.get('side')
+        x_ibl = ev.get('ibl')
+        r_side = rust_side if rust_side is not None else x_side
+        r_ibl = rust_ibl if rust_ibl is not None else x_ibl
+        rust = rust_map.get((r_side, r_ibl))
+        if not rust:
+            print(f"{x_side:>4} {x_ibl:>4} {'?':>4} {'-':>12} {'-':>12} {'-':>12}")
+            continue
+        vs1 = np.array(ev['VS1'])
+        vs2 = np.array(ev['VS2'])
+        vsrez = np.array(ev['VSREZ'])
+        r_vs1 = np.array(rust['VS1'])
+        r_vs2 = np.array(rust['VS2'])
+        r_vsrez = np.array(rust['VSREZ'])
+        max_vs1 = np.max(np.abs(vs1 - r_vs1))
+        max_vs2 = np.max(np.abs(vs2 - r_vs2))
+        max_vsr = np.max(np.abs(vsrez - r_vsrez))
+        iter_val = ev.get('newton_iter', ev.get('iteration', 0))
+        print(f"{x_side:>4} {x_ibl:>4} {iter_val:>4} {max_vs1:12.4e} {max_vs2:12.4e} {max_vsr:12.4e}")
+
+        if ibl is not None or rust_ibl is not None:
+            def top_diffs(label, a, b, n=5):
+                diffs = np.abs(a - b)
+                flat_idx = np.argsort(diffs, axis=None)[-n:][::-1]
+                print(f"  Top {n} {label} diffs:")
+                for idx in flat_idx:
+                    r, c = np.unravel_index(idx, diffs.shape)
+                    print(f"    [{r},{c}] xfoil={a[r,c]:.6e} rust={b[r,c]:.6e} diff={diffs[r,c]:.6e}")
+
+            top_diffs("VS1", vs1, r_vs1)
+            top_diffs("VS2", vs2, r_vs2)
+            diffs = np.abs(vsrez - r_vsrez)
+            order = np.argsort(diffs)[::-1][:4]
+            print("  VSREZ diffs:")
+            for i in order:
+                print(f"    [{i}] xfoil={vsrez[i]:.6e} rust={r_vsrez[i]:.6e} diff={diffs[i]:.6e}")
+
+
+def phase10_trdif_derivs(
+    events,
+    rustfoil_debug_path=None,
+    xfoil_side=None,
+    rust_side=None,
+    ibl=None,
+    rust_ibl=None,
+):
+    """Phase 10: TRDIF derivative comparison."""
+    print("\n" + "=" * 60)
+    print("Phase 10: TRDIF_DERIVS Comparison")
+    print("=" * 60)
+
+    deriv_events = [e for e in events if e.get('subroutine') == 'TRDIF_DERIVS']
+    if xfoil_side is not None:
+        deriv_events = [e for e in deriv_events if e.get('side') == xfoil_side]
+    if ibl is not None:
+        deriv_events = [e for e in deriv_events if e.get('ibl') == ibl]
+
+    if not deriv_events:
+        print("No TRDIF_DERIVS events found in XFOIL data")
+        return
+
+    # Final Newton iteration per station
+    grouped = {}
+    for ev in deriv_events:
+        key = (ev.get('side'), ev.get('ibl'))
+        iter_val = ev.get('newton_iter', ev.get('iteration', 0))
+        if key not in grouped or iter_val >= grouped[key].get('newton_iter', grouped[key].get('iteration', 0)):
+            grouped[key] = ev
+    deriv_events = list(grouped.values())
+
+    rust_events = []
+    if rustfoil_debug_path and Path(rustfoil_debug_path).exists():
+        with open(rustfoil_debug_path) as f:
+            rust_events = json.load(f).get('events', [])
+    rust_derivs = [e for e in rust_events if e.get('subroutine') == 'TRDIF_DERIVS']
+    rust_map = {}
+    for ev in rust_derivs:
+        key = (ev.get('side'), ev.get('ibl'))
+        iter_val = ev.get('iter', ev.get('iteration', 0))
+        if key not in rust_map or iter_val >= rust_map[key].get('iter', rust_map[key].get('iteration', 0)):
+            rust_map[key] = ev
+
+    ignore_keys = {
+        'subroutine', 'call_id', 'side', 'ibl', 'iteration', 'newton_iter', 'iter'
+    }
+
+    for ev in deriv_events:
+        x_side = ev.get('side')
+        x_ibl = ev.get('ibl')
+        r_side = rust_side if rust_side is not None else x_side
+        r_ibl = rust_ibl if rust_ibl is not None else x_ibl
+        rust = rust_map.get((r_side, r_ibl))
+        if not rust:
+            print(f"No Rust TRDIF_DERIVS for side={r_side} ibl={r_ibl}")
+            continue
+
+        diffs = []
+        for k, v in ev.items():
+            if k in ignore_keys:
+                continue
+            if k not in rust:
+                continue
+            rv = rust[k]
+            if not isinstance(v, (int, float)) or not isinstance(rv, (int, float)):
+                continue
+            diff = rv - v
+            rel = abs(diff) / abs(v) if abs(v) > 1e-12 else abs(diff)
+            diffs.append((k, v, rv, diff, rel))
+
+        diffs.sort(key=lambda x: abs(x[3]), reverse=True)
+        print(f"\n--- Side {x_side}, IBL {x_ibl} (Rust {r_side}/{r_ibl}) ---")
+        print(f"{'Key':>8} {'XFOIL':>14} {'Rust':>14} {'Diff':>14} {'Rel':>12}")
+        for k, v, rv, diff, rel in diffs[:10]:
+            print(f"{k:>8} {v:14.6e} {rv:14.6e} {diff:14.6e} {rel:12.4e}")
 
 
 def export_test_vectors(events, output_dir):
@@ -376,12 +686,19 @@ def phase_mrchue_stations(xfoil_events, rustfoil_debug_path=None):
     if rustfoil_debug_path and Path(rustfoil_debug_path).exists():
         with open(rustfoil_debug_path) as f:
             rust_data = json.load(f)
-            # Extract march stations from RustFoil debug
+            # Extract best (lowest dmax) MRCHUE_ITER per station
             for e in rust_data.get('events', []):
-                if e.get('subroutine') == 'MRCHUE':
+                if e.get('subroutine') == 'MRCHUE_ITER':
                     side = e['side']
                     ibl = e['ibl']
-                    rust_stations[(side, ibl)] = e
+                    key = (side, ibl)
+                    dmax = e.get('dmax')
+                    if key not in rust_stations:
+                        rust_stations[key] = e
+                    else:
+                        prev_dmax = rust_stations[key].get('dmax')
+                        if dmax is not None and (prev_dmax is None or dmax < prev_dmax):
+                            rust_stations[key] = e
     
     for side in [1, 2]:
         side_name = "Upper" if side == 1 else "Lower"
@@ -406,7 +723,11 @@ def phase_mrchue_stations(xfoil_events, rustfoil_debug_path=None):
             
             if rust_stations and (side, ibl) in rust_stations:
                 rust = rust_stations[(side, ibl)]
-                rust_theta = rust['theta']
+                rust_theta = None
+                if isinstance(rust.get('output'), dict):
+                    rust_theta = rust['output'].get('theta')
+                if rust_theta is None:
+                    rust_theta = rust.get('theta', 0.0)
                 err = abs(theta_out - rust_theta) / theta_out * 100 if theta_out != 0 else 0
                 print(f"{ibl:4d} {x:10.4f} {theta_out:12.4e} {rust_theta:12.4e} {err:8.2f}")
             else:
@@ -428,13 +749,19 @@ def main():
     parser = argparse.ArgumentParser(description='Compare XFOIL instrumented output with RustFoil')
     parser.add_argument('xfoil_json', help='Path to xfoil_debug.json')
     parser.add_argument('--phase', type=int, default=0,
-                        help='Comparison phase (0=summary, 1=closures, 2=blvar, 3=jacobians, 4=march, 5=iteration, 6=dij, 7=mrchue)')
+                        help='Comparison phase (0=summary, 1=closures, 2=blvar, 3=jacobians, 4=march, 5=iteration, 6=dij, 7=mrchue, 8=trchek2, 9=trdif, 10=trdif_derivs)')
     parser.add_argument('--station', type=int, default=None,
                         help='Filter to specific station number')
     parser.add_argument('--export', type=str, default=None,
                         help='Export test vectors to directory')
     parser.add_argument('--rustfoil', type=str, default=None,
                         help='Path to RustFoil debug JSON for comparison')
+    parser.add_argument('--xfoil-side', type=int, default=None,
+                        help='Override XFOIL side for phase 8 (e.g., 1=upper, 2=lower)')
+    parser.add_argument('--rust-side', type=int, default=None,
+                        help='Override Rust side for phase 8 (e.g., 0=single-surface debug)')
+    parser.add_argument('--rust-ibl', type=int, default=None,
+                        help='Override Rust IBL for phase 8 when numbering differs')
     args = parser.parse_args()
     
     print(f"Loading {args.xfoil_json}...")
@@ -456,12 +783,21 @@ def main():
         print("  6: QDCALC DIJ matrix")
         print("  7: MRCHUE station-by-station theta/dstar")
         print("  8: TRCHEK2 transition comparison")
+        print("  9: TRDIF matrix comparison")
+        print(" 10: TRDIF_DERIVS comparison")
     elif args.phase == 1:
         phase1_closures(events)
     elif args.phase == 2:
         phase2_blvar(events, args.station)
     elif args.phase == 3:
-        phase3_jacobians(events, args.station)
+        phase3_jacobians(
+            events,
+            station=args.station,
+            rustfoil_debug_path=args.rustfoil,
+            xfoil_side=args.xfoil_side,
+            rust_side=args.rust_side,
+            rust_ibl=args.rust_ibl,
+        )
     elif args.phase == 4:
         phase4_march(events)
     elif args.phase == 5:
@@ -471,7 +807,32 @@ def main():
     elif args.phase == 7:
         phase_mrchue_stations(events, args.rustfoil)
     elif args.phase == 8:
-        phase8_trchek2(events, args.rustfoil)
+        phase8_trchek2(
+            events,
+            rustfoil_debug_path=args.rustfoil,
+            xfoil_side=args.xfoil_side,
+            rust_side=args.rust_side,
+            ibl=args.station,
+            rust_ibl=args.rust_ibl,
+        )
+    elif args.phase == 9:
+        phase9_trdif(
+            events,
+            rustfoil_debug_path=args.rustfoil,
+            xfoil_side=args.xfoil_side,
+            rust_side=args.rust_side,
+            ibl=args.station,
+            rust_ibl=args.rust_ibl,
+        )
+    elif args.phase == 10:
+        phase10_trdif_derivs(
+            events,
+            rustfoil_debug_path=args.rustfoil,
+            xfoil_side=args.xfoil_side,
+            rust_side=args.rust_side,
+            ibl=args.station,
+            rust_ibl=args.rust_ibl,
+        )
 
 
 if __name__ == '__main__':
