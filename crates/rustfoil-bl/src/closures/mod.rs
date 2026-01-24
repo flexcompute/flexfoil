@@ -19,6 +19,7 @@ pub use dissipation::{
 pub use hkin::{hkin, HkinResult};
 pub use hs::{hs_laminar, hs_turbulent, HsResult};
 pub use transition::{
-    amplification_rate, axset, check_transition, trchek2, trchek2_stations,
-    AmplificationResult, AxsetResult, Trchek2Result,
+    amplification_rate, axset, axset_full, check_transition, trchek2, trchek2_full,
+    trchek2_stations, AmplificationResult, AxsetFullResult, AxsetResult, Trchek2FullResult,
+    Trchek2Result,
 };

@@ -181,6 +181,39 @@ pub struct AxsetResult {
     pub ax: f64,
 }
 
+/// Extended AXSET result with all derivatives for TRDIF
+///
+/// Contains the averaged amplification rate and its partial derivatives
+/// with respect to all station variables. Used by TRCHEK2 and TRDIF.
+///
+/// # Reference
+/// XFOIL xblsys.f AXSET (lines 35-144)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AxsetFullResult {
+    /// Final averaged amplification rate
+    pub ax: f64,
+    
+    // Derivatives w.r.t. station 1 variables
+    /// ∂AX/∂Hk₁
+    pub ax_hk1: f64,
+    /// ∂AX/∂θ₁
+    pub ax_t1: f64,
+    /// ∂AX/∂Rθ₁
+    pub ax_rt1: f64,
+    /// ∂AX/∂N₁ (amplification)
+    pub ax_a1: f64,
+    
+    // Derivatives w.r.t. station 2 variables
+    /// ∂AX/∂Hk₂
+    pub ax_hk2: f64,
+    /// ∂AX/∂θ₂
+    pub ax_t2: f64,
+    /// ∂AX/∂Rθ₂
+    pub ax_rt2: f64,
+    /// ∂AX/∂N₂ (amplification)
+    pub ax_a2: f64,
+}
+
 impl Default for AxsetResult {
     fn default() -> Self {
         Self {
@@ -282,6 +315,104 @@ pub fn axset(
     }
 }
 
+/// Compute averaged amplification rate with full derivatives
+///
+/// Extended version of `axset()` that returns all partial derivatives
+/// needed for TRCHEK2 and TRDIF Jacobian calculations.
+///
+/// # Reference
+/// XFOIL xblsys.f AXSET (lines 35-144)
+pub fn axset_full(
+    hk1: f64,
+    th1: f64,
+    rt1: f64,
+    ampl1: f64,
+    hk2: f64,
+    th2: f64,
+    rt2: f64,
+    ampl2: f64,
+    ncrit: f64,
+) -> AxsetFullResult {
+    // Compute individual amplification rates and their derivatives at each station
+    let result1 = amplification_rate(hk1, th1, rt1);
+    let result2 = amplification_rate(hk2, th2, rt2);
+
+    let ax1 = result1.ax;
+    let ax2 = result2.ax;
+    let ax1_hk1 = result1.ax_hk;
+    let ax1_t1 = result1.ax_th;
+    let ax1_rt1 = result1.ax_rt;
+    let ax2_hk2 = result2.ax_hk;
+    let ax2_t2 = result2.ax_th;
+    let ax2_rt2 = result2.ax_rt;
+
+    // RMS average: AXA = sqrt(0.5*(AX1² + AX2²))
+    let axsq = 0.5 * (ax1 * ax1 + ax2 * ax2);
+    let (axa, axa_ax1, axa_ax2) = if axsq > 0.0 {
+        let axa = axsq.sqrt();
+        (axa, 0.5 * ax1 / axa, 0.5 * ax2 / axa)
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+
+    // Small additional term to ensure dN/dx > 0 near N = Ncrit
+    // ARG = MIN(20.0*(ACRIT - 0.5*(A1+A2)), 20.0)
+    let avg_ampl = 0.5 * (ampl1 + ampl2);
+    let arg = (20.0 * (ncrit - avg_ampl)).min(20.0);
+    
+    let (exn, exn_a1, exn_a2) = if arg <= 0.0 {
+        (1.0, 0.0, 0.0)
+    } else {
+        let exn = (-arg).exp();
+        // dEXN/dA1 = d/dA1 exp(-20*(Ncrit - 0.5*(A1+A2))) = 20*0.5*EXN
+        (exn, 20.0 * 0.5 * exn, 20.0 * 0.5 * exn)
+    };
+
+    let th_sum = th1 + th2;
+    let (dax, dax_a1, dax_a2, dax_t1, dax_t2) = if th_sum > 0.0 {
+        let dax = exn * 0.002 / th_sum;
+        (
+            dax,
+            exn_a1 * 0.002 / th_sum,
+            exn_a2 * 0.002 / th_sum,
+            -dax / th_sum,
+            -dax / th_sum,
+        )
+    } else {
+        (0.0, 0.0, 0.0, 0.0, 0.0)
+    };
+
+    // Final AX = AXA + DAX
+    let ax = axa + dax;
+
+    // Chain rule for final derivatives
+    // AX_HK1 = AXA_AX1 * AX1_HK1
+    // AX_T1  = AXA_AX1 * AX1_T1  + DAX_T1
+    // AX_RT1 = AXA_AX1 * AX1_RT1
+    // AX_A1  =                    DAX_A1
+    let ax_hk1 = axa_ax1 * ax1_hk1;
+    let ax_t1 = axa_ax1 * ax1_t1 + dax_t1;
+    let ax_rt1 = axa_ax1 * ax1_rt1;
+    let ax_a1 = dax_a1;
+
+    let ax_hk2 = axa_ax2 * ax2_hk2;
+    let ax_t2 = axa_ax2 * ax2_t2 + dax_t2;
+    let ax_rt2 = axa_ax2 * ax2_rt2;
+    let ax_a2 = dax_a2;
+
+    AxsetFullResult {
+        ax,
+        ax_hk1,
+        ax_t1,
+        ax_rt1,
+        ax_a1,
+        ax_hk2,
+        ax_t2,
+        ax_rt2,
+        ax_a2,
+    }
+}
+
 /// Check for laminar-turbulent transition
 ///
 /// Compares the current amplification factor N against the critical value.
@@ -327,6 +458,138 @@ pub struct Trchek2Result {
     pub iterations: usize,
     /// Whether the implicit iteration converged
     pub converged: bool,
+}
+
+/// Full TRCHEK2 result with all derivatives for TRDIF
+///
+/// Contains the transition point XT, weighting factors WF1/WF2,
+/// and all derivatives needed for the TRDIF Jacobian transformation.
+///
+/// # Variable naming convention
+/// - `xt_*1` = ∂XT/∂(variable at station 1)
+/// - `xt_*2` = ∂XT/∂(variable at station 2)
+///
+/// # Reference
+/// XFOIL xblsys.f TRCHEK2 (lines 231-580)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Trchek2FullResult {
+    /// Transition x-location
+    pub xt: f64,
+    /// Final N-factor at station 2
+    pub ampl2: f64,
+    /// Final averaged amplification rate (AX)
+    pub ax: f64,
+    /// Whether transition occurred
+    pub transition: bool,
+    /// Whether iteration converged
+    pub converged: bool,
+    /// Number of TRCHEK2 iterations used
+    pub iterations: usize,
+    
+    /// Weighting factor: 1 - fraction from X1 to XT
+    pub wf1: f64,
+    /// Weighting factor: fraction from X1 to XT
+    pub wf2: f64,
+    
+    // XT derivatives w.r.t. station 1 variables
+    /// ∂XT/∂N₁ (amplification)
+    pub xt_a1: f64,
+    /// ∂XT/∂X₁
+    pub xt_x1: f64,
+    /// ∂XT/∂θ₁
+    pub xt_t1: f64,
+    /// ∂XT/∂δ*₁
+    pub xt_d1: f64,
+    /// ∂XT/∂Ue₁
+    pub xt_u1: f64,
+    
+    // XT derivatives w.r.t. station 2 variables
+    /// ∂XT/∂X₂
+    pub xt_x2: f64,
+    /// ∂XT/∂θ₂
+    pub xt_t2: f64,
+    /// ∂XT/∂δ*₂
+    pub xt_d2: f64,
+    /// ∂XT/∂Ue₂
+    pub xt_u2: f64,
+    
+    // XT derivatives w.r.t. global parameters
+    /// ∂XT/∂M² (Mach number squared)
+    pub xt_ms: f64,
+    /// ∂XT/∂Re (Reynolds number)
+    pub xt_re: f64,
+    
+    // Interpolation derivatives for TT (theta at XT)
+    /// ∂TT/∂N₁
+    pub tt_a1: f64,
+    /// ∂TT/∂X₁
+    pub tt_x1: f64,
+    /// ∂TT/∂X₂
+    pub tt_x2: f64,
+    /// ∂TT/∂θ₁
+    pub tt_t1: f64,
+    /// ∂TT/∂θ₂
+    pub tt_t2: f64,
+    /// ∂TT/∂δ*₁
+    pub tt_d1: f64,
+    /// ∂TT/∂δ*₂
+    pub tt_d2: f64,
+    /// ∂TT/∂Ue₁
+    pub tt_u1: f64,
+    /// ∂TT/∂Ue₂
+    pub tt_u2: f64,
+    /// ∂TT/∂M²
+    pub tt_ms: f64,
+    /// ∂TT/∂Re
+    pub tt_re: f64,
+    
+    // Interpolation derivatives for DT (delta_star at XT)
+    /// ∂DT/∂N₁
+    pub dt_a1: f64,
+    /// ∂DT/∂X₁
+    pub dt_x1: f64,
+    /// ∂DT/∂X₂
+    pub dt_x2: f64,
+    /// ∂DT/∂θ₁
+    pub dt_t1: f64,
+    /// ∂DT/∂θ₂
+    pub dt_t2: f64,
+    /// ∂DT/∂δ*₁
+    pub dt_d1: f64,
+    /// ∂DT/∂δ*₂
+    pub dt_d2: f64,
+    /// ∂DT/∂Ue₁
+    pub dt_u1: f64,
+    /// ∂DT/∂Ue₂
+    pub dt_u2: f64,
+    /// ∂DT/∂M²
+    pub dt_ms: f64,
+    /// ∂DT/∂Re
+    pub dt_re: f64,
+    
+    // Interpolation derivatives for UT (Ue at XT)
+    /// ∂UT/∂N₁
+    pub ut_a1: f64,
+    /// ∂UT/∂X₁
+    pub ut_x1: f64,
+    /// ∂UT/∂X₂
+    pub ut_x2: f64,
+    /// ∂UT/∂θ₁
+    pub ut_t1: f64,
+    /// ∂UT/∂θ₂
+    pub ut_t2: f64,
+    /// ∂UT/∂δ*₁
+    pub ut_d1: f64,
+    /// ∂UT/∂δ*₂
+    pub ut_d2: f64,
+    /// ∂UT/∂Ue₁
+    pub ut_u1: f64,
+    /// ∂UT/∂Ue₂
+    pub ut_u2: f64,
+    /// ∂UT/∂M²
+    pub ut_ms: f64,
+    /// ∂UT/∂Re
+    pub ut_re: f64,
 }
 
 /// XFOIL's TRCHEK2 - 2nd order implicit N-factor integration
@@ -540,12 +803,16 @@ pub fn trchek2_stations(
     t1: f64,
     rt1: f64,
     d1: f64,
+    u1: f64,
     ampl1: f64,
     hk2: f64,
     t2: f64,
     rt2: f64,
     d2: f64,
+    u2: f64,
     ncrit: f64,
+    msq: f64,
+    re: f64,
 ) -> Trchek2Result {
     const DAEPS: f64 = 5.0e-5;
     const MAX_ITER: usize = 30;
@@ -587,12 +854,13 @@ pub fn trchek2_stations(
         xt = x1 * wf1 + x2 * wf2;
         let tt = t1 * wf1 + t2 * wf2;
         let dt = d1 * wf1 + d2 * wf2;
-        let rtt = rt1 * wf1 + rt2 * wf2;  // Simplified interpolation
+        let ut = u1 * wf1 + u2 * wf2;
+        let rtt = re * ut * tt;
         
         // Compute Hk at interpolated point using proper H = δ*/θ ratio
         // This is more accurate than linear interpolation of Hk
         let ht = if tt > 1e-20 { dt / tt } else { hk1 * wf1 + hk2 * wf2 };
-        let hkt = hkin(ht, 0.0).hk;  // Assume incompressible
+        let hkt = hkin(ht, msq).hk;
         
         // Recompute AX at transition point
         let ax_result = axset(hk1, t1, rt1, ampl1, hkt, tt, rtt, amplt, ncrit);
@@ -633,6 +901,493 @@ pub fn trchek2_stations(
         ax,
         iterations,
         converged,
+    }
+}
+
+/// Full TRCHEK2 with all derivatives for TRDIF
+///
+/// This is the complete version of TRCHEK2 that returns all the derivatives
+/// needed for the TRDIF Jacobian transformation. It computes:
+/// - XT (transition location) and its derivatives
+/// - WF1, WF2 (weighting factors) and their derivatives  
+/// - TT, DT, UT (interpolated variables) and their derivatives
+///
+/// # Arguments
+/// * `x1`, `x2` - Arc length positions
+/// * `t1`, `t2` - Momentum thickness θ
+/// * `d1`, `d2` - Displacement thickness δ*
+/// * `u1`, `u2` - Edge velocity Ue
+/// * `hk1`, `hk2` - Kinematic shape factors (for Hk derivatives)
+/// * `rt1`, `rt2` - Momentum thickness Reynolds number Rθ
+/// * `ampl1` - N-factor at station 1
+/// * `ncrit` - Critical N-factor for transition
+/// * `msq` - Mach number squared (for compressibility effects)
+/// * `re` - Reynolds number
+///
+/// # Reference
+/// XFOIL xblsys.f TRCHEK2 (lines 231-580)
+pub fn trchek2_full(
+    x1: f64,
+    x2: f64,
+    t1: f64,
+    t2: f64,
+    d1: f64,
+    d2: f64,
+    u1: f64,
+    u2: f64,
+    hk1: f64,
+    hk2: f64,
+    rt1: f64,
+    rt2: f64,
+    ampl1: f64,
+    ncrit: f64,
+    msq: f64,
+    re: f64,
+) -> Trchek2FullResult {
+    const DAEPS: f64 = 5.0e-5;
+    const MAX_ITER: usize = 30;
+
+    let dx = x2 - x1;
+    if dx <= 1e-20 {
+        return Trchek2FullResult::default();
+    }
+
+    // Hk derivatives from hkin
+    let hkin1 = hkin(d1 / t1.max(1e-20), msq);
+    let hkin2 = hkin(d2 / t2.max(1e-20), msq);
+    
+    // H = δ*/θ, so dH/dθ = -H/θ, dH/dδ* = 1/θ
+    let h1 = d1 / t1.max(1e-20);
+    let h2 = d2 / t2.max(1e-20);
+    let h1_t1 = -h1 / t1.max(1e-20);
+    let h1_d1 = 1.0 / t1.max(1e-20);
+    let h2_t2 = -h2 / t2.max(1e-20);
+    let h2_d2 = 1.0 / t2.max(1e-20);
+    
+    let hk1_t1 = hkin1.hk_h * h1_t1;
+    let hk1_d1 = hkin1.hk_h * h1_d1;
+    let hk1_ms = hkin1.hk_msq;
+    
+    let hk2_t2 = hkin2.hk_h * h2_t2;
+    let hk2_d2 = hkin2.hk_h * h2_d2;
+    let hk2_ms = hkin2.hk_msq;
+    
+    // Rθ = Re * U * θ, so derivatives:
+    let rt1_t1 = re * u1;
+    let rt1_u1 = re * t1;
+    let rt1_re = u1 * t1;
+    let rt1_ms = 0.0;
+    
+    let rt2_t2 = re * u2;
+    let rt2_u2 = re * t2;
+    let rt2_re = u2 * t2;
+    let rt2_ms = 0.0;
+
+    // Initial amplification rate with derivatives
+    let ax_init = axset_full(hk1, t1, rt1, ampl1, hk2, t2, rt2, ampl1, ncrit);
+    let mut ampl2 = ampl1 + ax_init.ax * dx;
+
+    let mut ax = ax_init.ax;
+    let mut xt = x2;
+    let mut converged = false;
+    let mut iterations = 0usize;
+    
+    // Weighting factor derivatives (will be computed after convergence)
+    let mut wf2 = 1.0;
+    let mut wf1 = 0.0;
+    let mut wf2_a1 = 0.0;
+    let mut wf2_a2 = 0.0;
+    let mut wf2_x1 = 0.0;
+    let mut wf2_x2 = 0.0;
+    let mut amplt_a2 = 1.0;
+    
+    // Interpolated variables at transition
+    let mut tt = t2;
+    let mut dt = d2;
+    let mut ut = u2;
+    
+    // XT_A2 for implicit function theorem
+    let mut xt_a2 = 0.0;
+    let mut tt_a2 = 0.0;
+    let mut dt_a2 = 0.0;
+    let mut ut_a2 = 0.0;
+
+    // === Implicit iteration for AMPL2 ===
+    for itam in 0..MAX_ITER {
+        iterations = itam + 1;
+        // Define weighting factors WF1, WF2 for interpolation to transition point
+        if ampl2 <= ncrit {
+            // No transition yet, "T" is the same as "2"
+            amplt_a2 = 1.0;
+            let sfa = 1.0;
+            wf2_a1 = 0.0;
+            wf2_a2 = 0.0;
+            wf2 = sfa;
+        } else {
+            // Transition in interval, "T" is at Ncrit
+            amplt_a2 = 0.0;
+            let sfa = (ncrit - ampl1) / (ampl2 - ampl1).max(1e-20);
+            wf2_a1 = (sfa - 1.0) / (ampl2 - ampl1).max(1e-20);
+            wf2_a2 = -sfa / (ampl2 - ampl1).max(1e-20);
+            wf2 = sfa;
+        }
+        
+        // For free transition (no forced)
+        wf2_x1 = 0.0;
+        wf2_x2 = 0.0;
+        
+        wf1 = 1.0 - wf2;
+        
+        // Interpolate BL variables to XT
+        xt = x1 * wf1 + x2 * wf2;
+        tt = t1 * wf1 + t2 * wf2;
+        dt = d1 * wf1 + d2 * wf2;
+        ut = u1 * wf1 + u2 * wf2;
+        
+        // Derivatives w.r.t. A2 for iteration
+        xt_a2 = x1 * (-wf2_a2) + x2 * wf2_a2;
+        tt_a2 = t1 * (-wf2_a2) + t2 * wf2_a2;
+        dt_a2 = d1 * (-wf2_a2) + d2 * wf2_a2;
+        ut_a2 = u1 * (-wf2_a2) + u2 * wf2_a2;
+        
+        // Compute Hk at transition point
+        let ht = if tt > 1e-20 { dt / tt } else { hk1 * wf1 + hk2 * wf2 };
+        let hkt_result = hkin(ht, msq);
+        let hkt = hkt_result.hk;
+        
+        // HKT derivatives for AX_A2 calculation
+        let hkt_tt = hkt_result.hk_h * (-ht / tt.max(1e-20));
+        let hkt_dt = hkt_result.hk_h * (1.0 / tt.max(1e-20));
+        let hkt_ut = 0.0;
+        let hkt_ms = hkt_result.hk_msq;
+        
+        // Rθ at transition point
+        let rtt = re * ut * tt;
+        let rtt_tt = re * ut;
+        let rtt_ut = re * tt;
+        let rtt_re = ut * tt;
+        let rtt_ms = 0.0;
+        
+        // Compute averaged amplification rate with derivatives
+        let amplt = if ampl2 <= ncrit { ampl2 } else { ncrit };
+        let ax_result = axset_full(hk1, t1, rt1, ampl1, hkt, tt, rtt, amplt, ncrit);
+        ax = ax_result.ax;
+        
+        if ax <= 0.0 {
+            converged = true;
+            break;
+        }
+        
+        // AX_A2 = chain rule through HKT, TT, RTT, AMPLT
+        let ax_a2 = (ax_result.ax_hk2 * hkt_tt + ax_result.ax_t2 + ax_result.ax_rt2 * rtt_tt) * tt_a2
+                  + (ax_result.ax_hk2 * hkt_dt) * dt_a2
+                  + (ax_result.ax_hk2 * hkt_ut + ax_result.ax_rt2 * rtt_ut) * ut_a2
+                  + ax_result.ax_a2 * amplt_a2;
+        
+        // Residual: RES = AMPL2 - AMPL1 - AX*(X2-X1)
+        let res = ampl2 - ampl1 - ax * dx;
+        let res_a2 = 1.0 - ax_a2 * dx;
+        
+        let da2 = -res / res_a2.max(1e-20);
+        
+        // Relaxation
+        let dxt = xt_a2 * da2;
+        let mut rlx = 1.0;
+        if (rlx * dxt.abs() / dx) > 0.05 {
+            rlx = 0.05 * dx / dxt.abs().max(1e-20);
+        }
+        if rlx * da2.abs() > 1.0 {
+            rlx = 1.0 / da2.abs();
+        }
+        
+        // Check convergence
+        if da2.abs() < DAEPS {
+            converged = true;
+            break;
+        }
+        
+        // Prevent crossing Ncrit boundary
+        let ampl2_new = ampl2 + rlx * da2;
+        if (ampl2 > ncrit && ampl2_new < ncrit) || (ampl2 < ncrit && ampl2_new > ncrit) {
+            ampl2 = ncrit;
+        } else {
+            ampl2 = ampl2_new;
+        }
+    }
+
+    // Test for transition
+    let transition = ampl2 >= ncrit;
+    
+    if !transition {
+        // No transition - return minimal result
+        return Trchek2FullResult {
+            xt,
+            ampl2,
+            ax,
+            transition: false,
+            converged,
+            iterations,
+            wf1,
+            wf2,
+            ..Default::default()
+        };
+    }
+
+    // === Compute full derivatives for free transition ===
+    // At this point we have converged values and need to compute all sensitivities
+    
+    // Recompute interpolated variables with final wf1, wf2
+    tt = t1 * wf1 + t2 * wf2;
+    dt = d1 * wf1 + d2 * wf2;
+    ut = u1 * wf1 + u2 * wf2;
+    
+    // Compute Hk and Rθ at transition with derivatives
+    let ht = if tt > 1e-20 { dt / tt } else { hk1 * wf1 + hk2 * wf2 };
+    let hkt_result = hkin(ht, msq);
+    let hkt = hkt_result.hk;
+    
+    let hkt_tt = hkt_result.hk_h * (-ht / tt.max(1e-20));
+    let hkt_dt = hkt_result.hk_h * (1.0 / tt.max(1e-20));
+    let hkt_ut = 0.0;
+    let hkt_ms = hkt_result.hk_msq;
+    
+    let rtt = re * ut * tt;
+    let rtt_tt = re * ut;
+    let rtt_ut = re * tt;
+    let rtt_ms = 0.0;
+    let rtt_re = ut * tt;
+    
+    let amplt = ncrit;
+    let ax_result = axset_full(hk1, t1, rt1, ampl1, hkt, tt, rtt, amplt, ncrit);
+    
+    // === Basic interpolation derivatives ===
+    // XT = X1*WF1 + X2*WF2
+    let xt_x1_base = wf1;
+    let xt_x2_base = wf2;
+    let tt_t1_base = wf1;
+    let tt_t2_base = wf2;
+    let dt_d1_base = wf1;
+    let dt_d2_base = wf2;
+    let ut_u1_base = wf1;
+    let ut_u2_base = wf2;
+    
+    // Derivatives through WF (via A1)
+    let wf1_a1 = -wf2_a1;
+    let xt_a1_via_wf = x1 * wf1_a1 + x2 * wf2_a1;
+    let tt_a1_via_wf = t1 * wf1_a1 + t2 * wf2_a1;
+    let dt_a1_via_wf = d1 * wf1_a1 + d2 * wf2_a1;
+    let ut_a1_via_wf = u1 * wf1_a1 + u2 * wf2_a1;
+    
+    // Derivatives through WF (via X1, X2 for forced transition - all zero for free)
+    let wf1_x1 = -wf2_x1;
+    let wf1_x2 = -wf2_x2;
+    let xt_x1_via_wf = x1 * wf1_x1 + x2 * wf2_x1;
+    let xt_x2_via_wf = x1 * wf1_x2 + x2 * wf2_x2;
+    let tt_x1 = t1 * wf1_x1 + t2 * wf2_x1;
+    let tt_x2 = t1 * wf1_x2 + t2 * wf2_x2;
+    let dt_x1 = d1 * wf1_x1 + d2 * wf2_x1;
+    let dt_x2 = d1 * wf1_x2 + d2 * wf2_x2;
+    let ut_x1 = u1 * wf1_x1 + u2 * wf2_x1;
+    let ut_x2 = u1 * wf1_x2 + u2 * wf2_x2;
+    
+    // === Full AX sensitivities w.r.t. T1, D1, U1, A1, T2, D2, U2, X1, X2, MS, RE ===
+    // AX = AX(HK1, T1, RT1, A1, HKT, TT, RTT, AT)
+    // Need to chain through HKT(TT,DT), RTT(TT,UT), and interpolation
+    
+    let ax_tt = ax_result.ax_hk2 * hkt_tt + ax_result.ax_t2 + ax_result.ax_rt2 * rtt_tt;
+    let ax_dt = ax_result.ax_hk2 * hkt_dt;
+    let ax_ut = ax_result.ax_hk2 * hkt_ut + ax_result.ax_rt2 * rtt_ut;
+    let ax_at = ax_result.ax_a2;  // = 0 since amplt = ncrit is constant
+    
+    // AX sensitivities w.r.t. original variables
+    // Station 1 direct derivatives
+    let ax_t1 = ax_result.ax_hk1 * hk1_t1 + ax_result.ax_t1 + ax_result.ax_rt1 * rt1_t1
+              + ax_tt * tt_t1_base;
+    let ax_d1 = ax_result.ax_hk1 * hk1_d1 + ax_dt * dt_d1_base;
+    let ax_u1 = ax_result.ax_rt1 * rt1_u1 + ax_ut * ut_u1_base;
+    let ax_a1 = ax_result.ax_a1
+              + ax_tt * tt_a1_via_wf + ax_dt * dt_a1_via_wf + ax_ut * ut_a1_via_wf;
+    let ax_x1 = ax_tt * tt_x1 + ax_dt * dt_x1 + ax_ut * ut_x1;
+    
+    // Station 2 derivatives  
+    let ax_t2 = ax_tt * tt_t2_base;
+    let ax_d2 = ax_dt * dt_d2_base;
+    let ax_u2 = ax_ut * ut_u2_base;
+    // ax_a2 computed earlier for iteration - recalculate with zero for free transition (amplt=ncrit)
+    let ax_a2 = ax_tt * tt_a2 + ax_dt * dt_a2 + ax_ut * ut_a2;
+    let ax_x2 = ax_tt * tt_x2 + ax_dt * dt_x2 + ax_ut * ut_x2;
+    
+    // Global parameters
+    let ax_ms = ax_result.ax_hk1 * hk1_ms + ax_result.ax_hk2 * hkt_ms
+              + ax_result.ax_rt1 * rt1_ms + ax_result.ax_rt2 * rtt_ms;
+    let ax_re = ax_result.ax_rt1 * rt1_re + ax_result.ax_rt2 * rtt_re;
+    
+    // === Residual sensitivities Z_* ===
+    // RES = AMPL2 - AMPL1 - AX*(X2-X1)
+    let z_ax = -dx;
+    
+    let z_a1 = z_ax * ax_a1 - 1.0;
+    let z_t1 = z_ax * ax_t1;
+    let z_d1 = z_ax * ax_d1;
+    let z_u1 = z_ax * ax_u1;
+    let z_x1 = z_ax * ax_x1 + ax;
+    
+    let z_a2 = z_ax * ax_a2 + 1.0;
+    let z_t2 = z_ax * ax_t2;
+    let z_d2 = z_ax * ax_d2;
+    let z_u2 = z_ax * ax_u2;
+    let z_x2 = z_ax * ax_x2 - ax;
+    
+    let z_ms = z_ax * ax_ms;
+    let z_re = z_ax * ax_re;
+    
+    // === Final XT sensitivities using implicit function theorem ===
+    // XT_* = XT_*_basic - (XT_A2/Z_A2)*Z_*
+    // This ensures that when we change a variable, RES remains = 0
+    
+    let xt_a2_over_z_a2 = if z_a2.abs() > 1e-20 { xt_a2 / z_a2 } else { 0.0 };
+    
+    let xt_a1 = xt_a1_via_wf - xt_a2_over_z_a2 * z_a1;
+    let xt_t1 = -xt_a2_over_z_a2 * z_t1;
+    let xt_d1 = -xt_a2_over_z_a2 * z_d1;
+    let xt_u1 = -xt_a2_over_z_a2 * z_u1;
+    let xt_x1 = xt_x1_base + xt_x1_via_wf - xt_a2_over_z_a2 * z_x1;
+    
+    let xt_t2 = -xt_a2_over_z_a2 * z_t2;
+    let xt_d2 = -xt_a2_over_z_a2 * z_d2;
+    let xt_u2 = -xt_a2_over_z_a2 * z_u2;
+    let xt_x2 = xt_x2_base + xt_x2_via_wf - xt_a2_over_z_a2 * z_x2;
+    
+    let xt_ms = -xt_a2_over_z_a2 * z_ms;
+    let xt_re = -xt_a2_over_z_a2 * z_re;
+    
+    // === Compute WF derivatives from XT ===
+    // WF2 = (XT - X1)/(X2 - X1) = XT/dx - X1/dx
+    // WF2_XT = 1/dx
+    let wf2_xt = 1.0 / dx;
+    
+    // Full WF2 derivatives
+    let wf2_a1_full = wf2_xt * xt_a1;
+    let wf2_x1_full = wf2_xt * xt_x1 + (wf2 - 1.0) / dx;
+    let wf2_x2_full = wf2_xt * xt_x2 - wf2 / dx;
+    let wf2_t1 = wf2_xt * xt_t1;
+    let wf2_t2 = wf2_xt * xt_t2;
+    let wf2_d1 = wf2_xt * xt_d1;
+    let wf2_d2 = wf2_xt * xt_d2;
+    let wf2_u1 = wf2_xt * xt_u1;
+    let wf2_u2 = wf2_xt * xt_u2;
+    let wf2_ms = wf2_xt * xt_ms;
+    let wf2_re = wf2_xt * xt_re;
+    
+    let wf1_a1_full = -wf2_a1_full;
+    let wf1_x1_full = -wf2_x1_full;
+    let wf1_x2_full = -wf2_x2_full;
+    let wf1_t1 = -wf2_t1;
+    let wf1_t2 = -wf2_t2;
+    let wf1_d1 = -wf2_d1;
+    let wf1_d2 = -wf2_d2;
+    let wf1_u1 = -wf2_u1;
+    let wf1_u2 = -wf2_u2;
+    let wf1_ms = -wf2_ms;
+    let wf1_re = -wf2_re;
+    
+    // === Full interpolation derivatives for TT, DT, UT ===
+    // TT = T1*WF1 + T2*WF2
+    let tt_a1 = t1 * wf1_a1_full + t2 * wf2_a1_full;
+    let tt_x1 = t1 * wf1_x1_full + t2 * wf2_x1_full;
+    let tt_x2 = t1 * wf1_x2_full + t2 * wf2_x2_full;
+    let tt_t1 = t1 * wf1_t1 + t2 * wf2_t1 + wf1;
+    let tt_t2 = t1 * wf1_t2 + t2 * wf2_t2 + wf2;
+    let tt_d1 = t1 * wf1_d1 + t2 * wf2_d1;
+    let tt_d2 = t1 * wf1_d2 + t2 * wf2_d2;
+    let tt_u1 = t1 * wf1_u1 + t2 * wf2_u1;
+    let tt_u2 = t1 * wf1_u2 + t2 * wf2_u2;
+    let tt_ms = t1 * wf1_ms + t2 * wf2_ms;
+    let tt_re = t1 * wf1_re + t2 * wf2_re;
+    
+    // DT = D1*WF1 + D2*WF2
+    let dt_a1 = d1 * wf1_a1_full + d2 * wf2_a1_full;
+    let dt_x1 = d1 * wf1_x1_full + d2 * wf2_x1_full;
+    let dt_x2 = d1 * wf1_x2_full + d2 * wf2_x2_full;
+    let dt_t1 = d1 * wf1_t1 + d2 * wf2_t1;
+    let dt_t2 = d1 * wf1_t2 + d2 * wf2_t2;
+    let dt_d1 = d1 * wf1_d1 + d2 * wf2_d1 + wf1;
+    let dt_d2 = d1 * wf1_d2 + d2 * wf2_d2 + wf2;
+    let dt_u1 = d1 * wf1_u1 + d2 * wf2_u1;
+    let dt_u2 = d1 * wf1_u2 + d2 * wf2_u2;
+    let dt_ms = d1 * wf1_ms + d2 * wf2_ms;
+    let dt_re = d1 * wf1_re + d2 * wf2_re;
+    
+    // UT = U1*WF1 + U2*WF2
+    let ut_a1 = u1 * wf1_a1_full + u2 * wf2_a1_full;
+    let ut_x1 = u1 * wf1_x1_full + u2 * wf2_x1_full;
+    let ut_x2 = u1 * wf1_x2_full + u2 * wf2_x2_full;
+    let ut_t1 = u1 * wf1_t1 + u2 * wf2_t1;
+    let ut_t2 = u1 * wf1_t2 + u2 * wf2_t2;
+    let ut_d1 = u1 * wf1_d1 + u2 * wf2_d1;
+    let ut_d2 = u1 * wf1_d2 + u2 * wf2_d2;
+    let ut_u1 = u1 * wf1_u1 + u2 * wf2_u1 + wf1;
+    let ut_u2 = u1 * wf1_u2 + u2 * wf2_u2 + wf2;
+    let ut_ms = u1 * wf1_ms + u2 * wf2_ms;
+    let ut_re = u1 * wf1_re + u2 * wf2_re;
+
+    Trchek2FullResult {
+        xt,
+        ampl2,
+        ax,
+        transition: true,
+        converged,
+        iterations,
+        wf1,
+        wf2,
+        
+        xt_a1,
+        xt_x1,
+        xt_t1,
+        xt_d1,
+        xt_u1,
+        xt_x2,
+        xt_t2,
+        xt_d2,
+        xt_u2,
+        xt_ms,
+        xt_re,
+        
+        tt_a1,
+        tt_x1,
+        tt_x2,
+        tt_t1,
+        tt_t2,
+        tt_d1,
+        tt_d2,
+        tt_u1,
+        tt_u2,
+        tt_ms,
+        tt_re,
+        
+        dt_a1,
+        dt_x1,
+        dt_x2,
+        dt_t1,
+        dt_t2,
+        dt_d1,
+        dt_d2,
+        dt_u1,
+        dt_u2,
+        dt_ms,
+        dt_re,
+        
+        ut_a1,
+        ut_x1,
+        ut_x2,
+        ut_t1,
+        ut_t2,
+        ut_d1,
+        ut_d2,
+        ut_u1,
+        ut_u2,
+        ut_ms,
+        ut_re,
     }
 }
 

@@ -43,6 +43,8 @@ def extract_transition_trace(events):
     
     # Extract TRCHEK2_FINAL events (detailed per-station results)
     trchek2_final = [e for e in events if e.get('subroutine') == 'TRCHEK2_FINAL']
+    # Extract TRCHEK2_ITER events (intermediate data, includes wf and T1/T2)
+    trchek2_iter = [e for e in events if e.get('subroutine') == 'TRCHEK2_ITER']
     
     # Extract AXSET events
     axset_events = [e for e in events if e.get('subroutine') == 'AXSET']
@@ -76,6 +78,13 @@ def extract_transition_trace(events):
                 'iteration': e.get('iteration', 0)
             }
     
+    # Index TRCHEK2_ITER by (side, ibl) using latest trchek_iter
+    trchek2_iter_map = {}
+    for e in trchek2_iter:
+        key = (e.get('side'), e.get('ibl'))
+        if key not in trchek2_iter_map or e.get('trchek_iter', 0) >= trchek2_iter_map[key].get('trchek_iter', 0):
+            trchek2_iter_map[key] = e
+
     # Add TRCHEK2_FINAL data
     for e in trchek2_final:
         side = e['side']
@@ -84,6 +93,31 @@ def extract_transition_trace(events):
             stations_by_side[side][ibl]['ax_final'] = e.get('ax_final')
             stations_by_side[side][ibl]['converged'] = e.get('converged')
             stations_by_side[side][ibl]['n_iterations'] = e.get('n_iterations')
+            stations_by_side[side][ibl]['xt_final'] = e.get('xt_final', e.get('xt'))
+            stations_by_side[side][ibl]['ampl2_final'] = e.get('ampl2_final', e.get('ampl2'))
+            # Optional RustFoil extra fields
+            for field in ['tt', 'dt', 'ut', 'Hk_t', 'Rt_t', 'St', 'Cq_t']:
+                if field in e:
+                    stations_by_side[side][ibl][field] = e.get(field)
+
+    # Add TRCHEK2_ITER interpolation data (WF, TT, DT, UT)
+    for side in [1, 2]:
+        for ibl, station in stations_by_side[side].items():
+            key = (side, ibl)
+            iter_ev = trchek2_iter_map.get(key)
+            if not iter_ev:
+                continue
+            station['wf1'] = iter_ev.get('wf1')
+            station['wf2'] = iter_ev.get('wf2')
+            station['xt_iter'] = iter_ev.get('xt')
+            station['T1'] = iter_ev.get('T1')
+            station['T2'] = iter_ev.get('T2')
+            t1 = iter_ev.get('T1')
+            t2 = iter_ev.get('T2')
+            wf1 = iter_ev.get('wf1')
+            wf2 = iter_ev.get('wf2')
+            if t1 is not None and t2 is not None and wf1 is not None and wf2 is not None:
+                station['tt_iter'] = t1 * wf1 + t2 * wf2
     
     # Build output structure
     result = {
