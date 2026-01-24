@@ -9,6 +9,7 @@ RustFoil's boundary layer solver has a ~2x error in the shape equation Jacobian 
 - **Flat plate tests pass** with "wrong" Hk derivatives
 - **Airfoil transition is 58% off** with "wrong" derivatives
 - **Correct Hk derivatives break flat plate** (H collapses to 1.02)
+- **BLDIF term instrumentation added** to capture intermediate momentum/shape terms
 
 ## Root Cause Identified
 
@@ -163,6 +164,78 @@ The "wrong" Hk derivatives (`+Hk/θ`, `-Hk/δ*`) accidentally compensate for the
 
 3. **Transition error remains at 58%** (XFOIL x_tr=0.149, RustFoil=0.235)
    - Same as before because underlying ~2x Jacobian error not resolved
+
+### 2026-01-23 Update: BLDIF Terms vs XFOIL
+
+Added `BLDIF_TERMS` debug events to log the intermediate quantities used in the momentum
+and shape equations (xlog/ulog/tlog/hlog, UPW, HA, BTMP, CFX, DIX, etc.). These are
+emitted for each station during `march_surface` and written to `rustfoil_debug.json`.
+
+Key observation at lower surface IBL 64–67:
+- **HA/BTMP** are ~1.0 lower in RustFoil, driven by smaller `delta_star` (lower H).
+- **CFX/CFX_SHAPE** are shifted in sign/magnitude versus XFOIL when recomputed from XFOIL
+  states, confirming that the *state* (θ, δ*) mismatch dominates the term differences.
+- **UPW/xlog/ulog** differences are small compared to the HA/CFX shifts.
+
+This supports the current hypothesis: the laminar Newton update is producing a
+lower `delta_star` state (and thus lower H/Hk), rather than the residual formulas
+being wrong.
+
+### 2026-01-23 Update: MRCHUE_ITER Debug
+
+Added `MRCHUE_ITER` debug events during the Newton loop to capture iteration-by-iteration
+residuals and updates. Each event logs:
+- residuals (`res_third`, `res_mom`, `res_shape`)
+- update vector (`delta_s`, `delta_theta`, `delta_delta_star`, `delta_ue`)
+- relaxation and `dmax`
+- current station state (`theta`, `delta_star`, `Ue`, `H`, `Hk`, `Cf`, `Cd`, `ampl`, `ctau`)
+
+This should let us pinpoint which Newton step drives `delta_star` low at the problematic
+lower-surface stations (IBL 64–67).
+
+Initial MRCHUE_ITER observations (lower IBL 65, current run):
+- Iter 1 computed in direct mode, then switches to inverse mode without applying updates.
+- Converges after 3 iterations with `dmax ≈ 1.3e-2` (tolerance is 0.1).
+- Residuals at convergence are still non-trivial (`res_mom ~ 1.8e-3`, `res_shape ~ -7.3e-3`).
+- `delta_star` climbs to ~2.87e-3, still below XFOIL’s ~3.61e-3 for this case.
+
+### 2026-01-23 Update: Transition Theta Alignment
+
+After moving TRCHEK2 evaluation into the Newton loop and aligning the transition
+system inputs, the TRDIF Newton system now matches XFOIL at ~1e-5 relative.
+To validate **theta at transition**, use the TRCHEK2_ITER event (wf1/wf2 + T1/T2)
+because XFOIL does not emit `tt` in TRCHEK2_FINAL. The TRCHEK2_ITER-based comparison
+matches at ~1e-10 for the transition station in the current case.
+
+This suggests the convergence criterion may be letting the laminar solve stop early
+before `delta_star` reaches the XFOIL state; the iteration logs now make that visible.
+
+### 2026-01-23 Update: Convergence Criterion Alignment
+
+XFOIL’s `MRCHUE` loop converges on `DMAX <= 1e-5` and only accepts `DMAX <= 0.1`
+after the iteration limit is reached (see `Xfoil/src/xbl.f` lines ~662–786).
+RustFoil now uses `tolerance = 1e-5` and only falls back when `dmax > 0.1`.
+
+With the tighter tolerance:
+- Rust MRCHUE iteration counts now match XFOIL’s scale (5–7 iterations).
+- Lower-surface `delta_star` at IBL 64–67 increased and moved closer to XFOIL’s
+  state (Hk now tracks XFOIL in that region).
+- Transition location shifted slightly on the upper surface; lower surface stays
+  near the prior transition index.
+
+### 2026-01-23 Update: Machine-Level Comparison (Post-Tolerance)
+
+Re-ran `compare_trchek2_full.py` and BLVAR comparisons with the new tolerance.
+Results still diverge from XFOIL at machine precision:
+
+- **TRCHEK2_FINAL** AX and XT still high: AX errors ~40–70% and XT shifts
+  (`x_tr(U)` ~0.2369 vs 0.2403, `x_tr(L)` ~0.9206 vs 0.9286).
+- **Lower BLVAR H/Hk** still offset by ~0.7 at IBL 64–67 even after convergence
+  tightening.
+- **Lower BLVAR Us/Cf/Cq** remain different (sign and magnitude changes).
+
+Conclusion: convergence tightening alone is insufficient to reach machine-level
+agreement; there is still a modeling or state mismatch in the laminar march inputs.
 
 ### Remaining Investigation
 

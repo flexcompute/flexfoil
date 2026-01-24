@@ -9,7 +9,7 @@
 //! - BLDIF: xblsys.f line 1552
 
 use crate::closures::{
-    amplification_rate, cf_laminar, cf_turbulent, density_shape, dissipation_laminar,
+    amplification_rate, axset_full, cf_laminar, cf_turbulent, density_shape, dissipation_laminar,
     dissipation_wake, hkin, hs_laminar, hs_turbulent,
 };
 use crate::constants::{CTCON, DLCON, DUXCON, GACON, GBCON, GCCON, SCCON};
@@ -43,6 +43,89 @@ pub struct BlResiduals {
     pub res_mom: f64,
     /// Shape parameter equation residual
     pub res_shape: f64,
+}
+
+/// Intermediate terms for BLDIF diagnostics
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BldifTerms {
+    pub xlog: f64,
+    pub ulog: f64,
+    pub tlog: f64,
+    pub hlog: f64,
+    pub upw: f64,
+    pub ha: f64,
+    pub btmp_mom: f64,
+    pub cfx: f64,
+    pub cfx_ta: f64,
+    pub cfx_t1: f64,
+    pub cfx_t2: f64,
+    pub btmp_shape: f64,
+    pub cfx_shape: f64,
+    pub dix: f64,
+    pub hsa: f64,
+    pub hca: f64,
+    pub xot1: f64,
+    pub xot2: f64,
+    pub z_upw: f64,
+    pub z_de2: f64,
+    pub z_us2: f64,
+    pub z_cq2: f64,
+    pub z_cf2: f64,
+    pub z_hk2: f64,
+    pub z_d2: f64,
+    pub z_u2: f64,
+    pub z_s2: f64,
+    pub upw_t2: f64,
+    pub upw_d2: f64,
+    pub upw_u2: f64,
+    pub de2_t2: f64,
+    pub de2_d2: f64,
+    pub de2_u2: f64,
+    pub us2_t2: f64,
+    pub us2_d2: f64,
+    pub us2_u2: f64,
+    pub cq2_t2: f64,
+    pub cq2_d2: f64,
+    pub cq2_u2: f64,
+    pub cf2_t2: f64,
+    pub cf2_d2: f64,
+    pub cf2_u2: f64,
+    pub hk2_t2: f64,
+    pub hk2_d2: f64,
+    pub hk2_u2: f64,
+    pub z_ax: f64,
+    pub ax_hk2: f64,
+    pub ax_t2: f64,
+    pub ax_rt2: f64,
+    pub ax_a2: f64,
+    pub rt2_t2: f64,
+    pub rt2_u2: f64,
+    pub z_hs2: f64,
+    pub z_cf2_shape: f64,
+    pub z_di2: f64,
+    pub z_t2_shape: f64,
+    pub z_u2_shape: f64,
+    pub z_hca: f64,
+    pub z_ha_shape: f64,
+    pub z_upw_shape: f64,
+    pub hs2_t: f64,
+    pub hs2_d: f64,
+    pub hs2_u: f64,
+    pub cf2_t_shape: f64,
+    pub cf2_d_shape: f64,
+    pub cf2_u_shape: f64,
+    pub di2_t: f64,
+    pub di2_d: f64,
+    pub di2_u: f64,
+    pub di2_s: f64,
+    pub hc2_t: f64,
+    pub hc2_d: f64,
+    pub hc2_u: f64,
+    pub h2_t: f64,
+    pub h2_d: f64,
+    pub upw_t2_shape: f64,
+    pub upw_d2_shape: f64,
+    pub upw_u2_shape: f64,
 }
 
 /// Jacobian blocks for Newton system
@@ -423,15 +506,21 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
             let grt = station.r_theta.ln();
             let hmin = 1.0 + 2.1 / grt;
             let fl = (hk - 1.0) / (hmin - 1.0);
+            let hm_rt = -(2.1 / (grt * grt)) / station.r_theta;
+            let fl_hk = 1.0 / (hmin - 1.0);
+            let fl_rt = -(fl / (hmin - 1.0)) * hm_rt;
             let tfl = fl.tanh();
             let dfac = 0.5 + 0.5 * tfl;
+            let df_fl = 0.5 * (1.0 - tfl * tfl);
+            let df_hk = df_fl * fl_hk;
+            let df_rt = df_fl * fl_rt;
 
             let di_wall_corrected = di_wall * dfac;
-            let di_u_corrected = di_u * dfac;
-            let di_t_corrected = di_t * dfac;
-            let di_d_corrected = di_d * dfac;
-            let di_ms_corrected = di_ms * dfac;
-            let di_re_corrected = di_re * dfac;
+            let di_u_corrected = di_u * dfac + di_wall * (df_hk * hk_u + df_rt * rt_u);
+            let di_t_corrected = di_t * dfac + di_wall * (df_hk * hk_t + df_rt * rt_t);
+            let di_d_corrected = di_d * dfac + di_wall * (df_hk * hk_d);
+            let di_ms_corrected = di_ms * dfac + di_wall * (df_hk * hk_ms + df_rt * rt_ms);
+            let di_re_corrected = di_re * dfac + di_wall * (df_rt * rt_re);
 
             // Outer layer contribution (xblsys.f:1008-1036)
             // DD = S2² * (0.995 - US) * 2.0/HS
@@ -543,10 +632,14 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
     };
 
     station.cd = di;
-    // Store BASE derivatives ∂DI/∂Hk and ∂DI/∂Rθ for use in bldif() Jacobian
-    // NOT the chain-rule results (di_u, di_t) - those are ∂DI/∂Ue and ∂DI/∂θ
+    // Store BASE derivatives ∂DI/∂Hk and ∂DI/∂Rθ for use in some correlations
     station.derivs.cd_hk = di_hk_base;
     station.derivs.cd_rt = di_rt_base;
+    // Store direct derivatives w.r.t. primary variables for shape Jacobian
+    station.derivs.cd_u = di_u;
+    station.derivs.cd_t = di_t;
+    station.derivs.cd_d = di_d;
+    station.derivs.cd_s = di_s;
 
     // === BL thickness DE from Green's correlation (xblsys.f:1100-1118) ===
     // DE = (3.15 + 1.72/(HK-1)) * T + D
@@ -703,25 +796,30 @@ fn blmid(
 /// * `re` - Reference Reynolds number
 ///
 /// # Returns
-/// * `(BlResiduals, BlJacobian)` - Residuals and Jacobian blocks
+/// * `(BlResiduals, BlJacobian, BldifTerms)` - Residuals, Jacobian, and terms
 ///
 /// # Reference
 /// XFOIL xblsys.f BLDIF (line 1552)
-pub fn bldif(
+pub fn bldif_with_terms(
     s1: &BlStation,
     s2: &BlStation,
     flow_type: FlowType,
     msq: f64,
     re: f64,
-) -> (BlResiduals, BlJacobian) {
+) -> (BlResiduals, BlJacobian, BldifTerms) {
     let mut res = BlResiduals::default();
     let mut jac = BlJacobian::default();
+    let mut terms = BldifTerms::default();
 
     // === Logarithmic differences (xblsys.f:1574-1585) ===
     let xlog = (s2.x / s1.x.max(1e-20)).ln();
     let ulog = (s2.u / s1.u.max(1e-20)).ln();
     let tlog = (s2.theta / s1.theta.max(1e-20)).ln();
     let hlog = (s2.hs / s1.hs.max(1e-20)).ln();
+    terms.xlog = xlog;
+    terms.ulog = ulog;
+    terms.tlog = tlog;
+    terms.hlog = hlog;
 
     // === Local upwinding parameter UPW (xblsys.f:1598-1644) ===
     // Based on log(Hk-1) changes
@@ -737,6 +835,7 @@ pub fn bldif(
     let hlsq = (hl * hl).min(15.0);
     let ehh = (-hlsq * hdcon).exp();
     let upw = 1.0 - 0.5 * ehh;
+    terms.upw = upw;
 
     // UPW derivatives (XFOIL xblsys.f:1631-1644)
     // UPW depends on HL and HDCON, which depend on Hk
@@ -761,13 +860,18 @@ pub fn bldif(
         FlowType::Laminar => {
             // Amplification equation (xblsys.f:1654-1682)
             // REZC = AMPL2 - AMPL1 - AX*(X2-X1)
-            let ax_result = amplification_rate(
-                0.5 * (s1.hk + s2.hk),
-                0.5 * (s1.theta + s2.theta),
-                0.5 * (s1.r_theta + s2.r_theta),
+            let ax_result = axset_full(
+                s1.hk,
+                s1.theta,
+                s1.r_theta,
+                s1.ampl,
+                s2.hk,
+                s2.theta,
+                s2.r_theta,
+                s2.ampl,
+                9.0,
             );
             let ax = ax_result.ax;
-            let ax_hk = ax_result.ax_hk; // Derivative of amplification rate w.r.t. Hk
             let dx = s2.x - s1.x;
 
             res.res_third = -(s2.ampl - s1.ampl - ax * dx);
@@ -782,8 +886,8 @@ pub fn bldif(
             //   θ_avg = 0.5*(θ1 + θ2)  
             //   Rθ_avg = 0.5*(Rθ1 + Rθ2)
             // So derivatives w.r.t. station values include 0.5 factor
-            let ax_hk1 = 0.5 * ax_hk;
-            let ax_hk2 = 0.5 * ax_hk;
+            let ax_hk1 = ax_result.ax_hk1;
+            let ax_hk2 = ax_result.ax_hk2;
             
             // Hk derivatives: Hk = f(H), H = δ*/θ
             // HK_T = HK_H * H_T = hk_h * (-H/θ)
@@ -792,19 +896,34 @@ pub fn bldif(
             let hk1_d = s1.derivs.hk_h * s1.derivs.h_delta_star;
             let hk2_t = s2.derivs.hk_h * s2.derivs.h_theta;
             let hk2_d = s2.derivs.hk_h * s2.derivs.h_delta_star;
+            let hk1_u = 0.0;
+            let hk2_u = 0.0;
             
-            // Rθ derivatives: Rθ = Re * Ue * θ / ν, so RT_T = Rθ/θ
+            // Rθ derivatives: Rθ = Re * Ue * θ / ν
             let rt1_t = s1.r_theta / s1.theta.max(1e-12);
             let rt2_t = s2.r_theta / s2.theta.max(1e-12);
+            let rt1_u = s1.r_theta / s1.u.max(1e-12);
+            let rt2_u = s2.r_theta / s2.u.max(1e-12);
             
             // ax also depends directly on θ and Rθ through the midpoint averages
             // ax_t = ∂ax/∂θ_avg * ∂θ_avg/∂θ = ax_th * 0.5
             // ax_rt = ∂ax/∂Rθ_avg * ∂Rθ_avg/∂Rθ = ax_rt * 0.5
             // (XFOIL xblsys.f:1668, 1673 - AX_T and AX_RT terms)
-            let ax_t1 = 0.5 * ax_result.ax_th;
-            let ax_t2 = 0.5 * ax_result.ax_th;
-            let ax_rt1 = 0.5 * ax_result.ax_rt;
-            let ax_rt2 = 0.5 * ax_result.ax_rt;
+            let ax_t1 = ax_result.ax_t1;
+            let ax_t2 = ax_result.ax_t2;
+            let ax_rt1 = ax_result.ax_rt1;
+            let ax_rt2 = ax_result.ax_rt2;
+
+            terms.z_ax = z_ax;
+            terms.ax_hk2 = ax_hk2;
+            terms.ax_t2 = ax_t2;
+            terms.ax_rt2 = ax_rt2;
+            terms.ax_a2 = ax_result.ax_a2;
+            terms.hk2_t2 = hk2_t;
+            terms.hk2_d2 = hk2_d;
+            terms.hk2_u2 = hk2_u;
+            terms.rt2_t2 = rt2_t;
+            terms.rt2_u2 = rt2_u;
             
             // XFOIL formula:
             // VS1(1,1) = Z_AX * AX_A1 - 1.0
@@ -814,14 +933,16 @@ pub fn bldif(
             // VS2(1,2) = Z_AX * (AX_HK2*HK2_T2 + AX_T2 + AX_RT2*RT2_T2)
             // VS2(1,3) = Z_AX * (AX_HK2*HK2_D2)
             
-            jac.vs1[0][0] = -1.0; // AX_A1 ≈ 0 for simple amplification
+            jac.vs1[0][0] = z_ax * ax_result.ax_a1 - 1.0;
             jac.vs1[0][1] = z_ax * (ax_hk1 * hk1_t + ax_t1 + ax_rt1 * rt1_t);
             jac.vs1[0][2] = z_ax * (ax_hk1 * hk1_d);
+            jac.vs1[0][3] = z_ax * (ax_hk1 * hk1_u + ax_rt1 * rt1_u);
             jac.vs1[0][4] = ax; // ∂/∂X1
             
-            jac.vs2[0][0] = 1.0;  // AX_A2 ≈ 0 for simple amplification
+            jac.vs2[0][0] = z_ax * ax_result.ax_a2 + 1.0;
             jac.vs2[0][1] = z_ax * (ax_hk2 * hk2_t + ax_t2 + ax_rt2 * rt2_t);
             jac.vs2[0][2] = z_ax * (ax_hk2 * hk2_d);
+            jac.vs2[0][3] = z_ax * (ax_hk2 * hk2_u + ax_rt2 * rt2_u);
             jac.vs2[0][4] = -ax; // -∂/∂X2
         }
         FlowType::Turbulent | FlowType::Wake => {
@@ -985,6 +1106,34 @@ pub fn bldif(
             let uq_u2 = upw * (uq_cfa * cf2_u)
                 + 0.5 * uq_rta * rt2_u;
 
+            terms.z_upw = z_upw;
+            terms.z_de2 = z_de2;
+            terms.z_us2 = z_us2;
+            terms.z_cq2 = z_cq2;
+            terms.z_cf2 = z_cf2;
+            terms.z_hk2 = z_hk2;
+            terms.z_d2 = z_d2;
+            terms.z_u2 = z_u2;
+            terms.z_s2 = z_s2;
+            terms.upw_t2 = upw_t2_shear;
+            terms.upw_d2 = upw_d2_shear;
+            terms.upw_u2 = 0.0;
+            terms.de2_t2 = s2.derivs.de_t;
+            terms.de2_d2 = s2.derivs.de_d;
+            terms.de2_u2 = 0.0;
+            terms.us2_t2 = s2.derivs.us_t;
+            terms.us2_d2 = s2.derivs.us_d;
+            terms.us2_u2 = s2.derivs.us_u;
+            terms.cq2_t2 = s2.derivs.cq_t;
+            terms.cq2_d2 = s2.derivs.cq_d;
+            terms.cq2_u2 = s2.derivs.cq_u;
+            terms.cf2_t2 = cf2_t;
+            terms.cf2_d2 = cf2_d;
+            terms.cf2_u2 = cf2_u;
+            terms.hk2_t2 = hk2_t;
+            terms.hk2_d2 = hk2_d;
+            terms.hk2_u2 = 0.0;
+
             // Build Jacobian entries (xblsys.f:1848-1867)
             // XFOIL builds these in two stages:
             // 1. First: Z_UPW*UPW_T + Z_DE*DE_T + Z_US*US_T
@@ -1020,6 +1169,7 @@ pub fn bldif(
     //
     // Jacobian is computed as derivative of REZT (unnegated residual)
     let ha = 0.5 * (s1.h + s2.h);
+    terms.ha = ha;
     let ma_avg = 0.5 * msq;
     let xa = 0.5 * (s1.x + s2.x);
     let ta = 0.5 * (s1.theta + s2.theta);
@@ -1029,6 +1179,7 @@ pub fn bldif(
 
     // CFX term: 0.50*CFM*XA/TA + 0.25*(CF1*X1/T1 + CF2*X2/T2)
     let cfx = 0.5 * cfm * xa / ta + 0.25 * (s1.cf * s1.x / s1.theta + s2.cf * s2.x / s2.theta);
+    terms.cfx = cfx;
 
     // Partial derivatives of CFX w.r.t. Cf values
     let cfx_cfm = 0.5 * xa / ta;
@@ -1036,6 +1187,7 @@ pub fn bldif(
     let cfx_cf2 = 0.25 * s2.x / s2.theta;
 
     let btmp = ha + 2.0 - ma_avg;
+    terms.btmp_mom = btmp;
 
     // Momentum residual: VSREZ(2) = -REZT = -(TLOG + BTMP*ULOG - XLOG*0.5*CFX)
     res.res_mom = -(tlog + btmp * ulog - xlog * 0.5 * cfx);
@@ -1063,6 +1215,9 @@ pub fn bldif(
     let cfx_ta = -0.5 * cfm * xa / (ta * ta);  // Derivative of CFX w.r.t. average theta
     let cfx_t1 = -0.25 * s1.cf * s1.x / (s1.theta * s1.theta) + cfx_ta * 0.5;
     let cfx_t2 = -0.25 * s2.cf * s2.x / (s2.theta * s2.theta) + cfx_ta * 0.5;
+    terms.cfx_ta = cfx_ta;
+    terms.cfx_t1 = cfx_t1;
+    terms.cfx_t2 = cfx_t2;
     let z_t1 = -1.0 / s1.theta + z_cfx * cfx_t1;
     let z_t2 = 1.0 / s2.theta + z_cfx * cfx_t2;
 
@@ -1119,19 +1274,26 @@ pub fn bldif(
     
     let hsa = 0.5 * (s1.hs + s2.hs);
     let hca = 0.5 * (s1.hc + s2.hc);
+    terms.hsa = hsa;
+    terms.hca = hca;
 
     let xot1 = s1.x / s1.theta;
     let xot2 = s2.x / s2.theta;
+    terms.xot1 = xot1;
+    terms.xot2 = xot2;
 
     // Upwinded DI and CF (XFOIL lines 1932-1935)
     let dix = (1.0 - upw) * s1.cd * xot1 + upw * s2.cd * xot2;
     let cfx_shape = (1.0 - upw) * s1.cf * xot1 + upw * s2.cf * xot2;
+    terms.dix = dix;
+    terms.cfx_shape = cfx_shape;
     let dix_upw = s2.cd * xot2 - s1.cd * xot1;
     let cfx_upw = s2.cf * xot2 - s1.cf * xot1;
 
     // BTMP for shape equation (XFOIL line 1937)
     // Note: HWA term is for wake, we ignore for now
     let btmp_shape = 2.0 * hca / hsa + 1.0 - ha;
+    terms.btmp_shape = btmp_shape;
 
     // Shape parameter residual (XFOIL line 1939)
     res.res_shape = -(hlog + btmp_shape * ulog + xlog * (0.5 * cfx_shape - dix));
@@ -1223,22 +1385,16 @@ pub fn bldif(
     let cf2_d_shape = s2.derivs.cf_hk * hk2_d;
     let cf2_u_shape = s2.derivs.cf_rt * rt2_u;
 
-    // DI (Cd) derivatives: DI = f(Hs, Us, Hk, Rθ, ...) - complex
-    // For laminar: DI = f(Hk, Rθ) via dissipation integral correlation
-    // DI_T = DI_HK * HK_T + DI_RT * RT_T
-    // DI_D = DI_HK * HK_D
-    // For simplicity, use stored derivatives or approximate
-    let di1_t = s1.derivs.cd_hk * hk1_t + s1.derivs.cd_rt * rt1_t;
-    let di1_d = s1.derivs.cd_hk * hk1_d;
-    let di1_u = s1.derivs.cd_rt * rt1_u;
-    let di2_t = s2.derivs.cd_hk * hk2_t + s2.derivs.cd_rt * rt2_t;
-    let di2_d = s2.derivs.cd_hk * hk2_d;
-    let di2_u = s2.derivs.cd_rt * rt2_u;
-
-    // DI_S (ctau derivative) - for turbulent flow, DI depends on ctau
-    // For laminar, this is zero. TODO: Add cd_s to BlDerivatives for turbulent
-    let di1_s = 0.0; // s1.derivs.cd_s when implemented
-    let di2_s = 0.0; // s2.derivs.cd_s when implemented
+    // DI (Cd) derivatives: use direct partials stored by BLVAR
+    // Laminar still yields cd_* = 0 for ctau and uses chain rule internally.
+    let di1_t = s1.derivs.cd_t;
+    let di1_d = s1.derivs.cd_d;
+    let di1_u = s1.derivs.cd_u;
+    let di2_t = s2.derivs.cd_t;
+    let di2_d = s2.derivs.cd_d;
+    let di2_u = s2.derivs.cd_u;
+    let di1_s = s1.derivs.cd_s;
+    let di2_s = s2.derivs.cd_s;
 
     // Hc derivatives (density shape factor) via chain rule (XFOIL xblsys.f:803-806)
     // HC_T = HC_HK * HK_T, HC_D = HC_HK * HK_D, HC_U = HC_HK * HK_U
@@ -1254,17 +1410,41 @@ pub fn bldif(
     // UPW depends on Hk through HL and HDCON, so use chain rule:
     // UPW_T = UPW_HK * HK_T, UPW_D = UPW_HK * HK_D, UPW_U = UPW_HK * HK_U
     //
-    // NOTE: These derivatives contribute only ~5 to VS2[2][2] and cause test regressions
-    // when enabled. Keeping them at zero for now as a workaround.
-    // TODO: Investigate why non-zero UPW derivatives break test_march_adverse_pressure_gradient
-    let _upw_hk1_computed = upw_hk1;  // Silence unused warning
-    let _upw_hk2_computed = upw_hk2;  // Silence unused warning
-    let upw_t1 = 0.0; // upw_hk1 * hk1_t;
-    let upw_d1 = 0.0; // upw_hk1 * hk1_d;
-    let upw_u1 = 0.0;
-    let upw_t2 = 0.0; // upw_hk2 * hk2_t;
-    let upw_d2 = 0.0; // upw_hk2 * hk2_d;
-    let upw_u2 = 0.0;
+    let hk1_u = 0.0;
+    let hk2_u = 0.0;
+    let upw_t1 = upw_hk1 * hk1_t;
+    let upw_d1 = upw_hk1 * hk1_d;
+    let upw_u1 = upw_hk1 * hk1_u;
+    let upw_t2 = upw_hk2 * hk2_t;
+    let upw_d2 = upw_hk2 * hk2_d;
+    let upw_u2 = upw_hk2 * hk2_u;
+
+    terms.z_hs2 = z_hs2;
+    terms.z_cf2_shape = z_cf2_shape;
+    terms.z_di2 = z_di2;
+    terms.z_t2_shape = z_t2_shape;
+    terms.z_u2_shape = z_u2_shape;
+    terms.z_hca = z_hca;
+    terms.z_ha_shape = z_ha_shape;
+    terms.z_upw_shape = z_upw;
+    terms.hs2_t = hs2_t;
+    terms.hs2_d = hs2_d;
+    terms.hs2_u = hs2_u;
+    terms.cf2_t_shape = cf2_t_shape;
+    terms.cf2_d_shape = cf2_d_shape;
+    terms.cf2_u_shape = cf2_u_shape;
+    terms.di2_t = di2_t;
+    terms.di2_d = di2_d;
+    terms.di2_u = di2_u;
+    terms.di2_s = di2_s;
+    terms.hc2_t = hc2_t;
+    terms.hc2_d = hc2_d;
+    terms.hc2_u = hc2_u;
+    terms.h2_t = h2_t;
+    terms.h2_d = h2_d;
+    terms.upw_t2_shape = upw_t2;
+    terms.upw_d2_shape = upw_d2;
+    terms.upw_u2_shape = upw_u2;
 
     // === Build shape equation Jacobian (XFOIL lines 1969-1989) ===
     // VS1(3,1) = Z_DI1*DI1_S1
@@ -1294,20 +1474,31 @@ pub fn bldif(
         + 0.5 * z_hca * hc2_u + z_upw * upw_u2;
     jac.vs2[2][4] = z_x2_shape;
 
+    (res, jac, terms)
+}
+
+/// Compute BL equation residuals and Jacobian
+pub fn bldif(
+    s1: &BlStation,
+    s2: &BlStation,
+    flow_type: FlowType,
+    msq: f64,
+    re: f64,
+) -> (BlResiduals, BlJacobian) {
+    let (res, jac, _) = bldif_with_terms(s1, s2, flow_type, msq, re);
     (res, jac)
 }
 
-/// Compute BL equations for the transition interval (XFOIL TRDIF)
+/// Compute BL equations for the transition interval (XFOIL TRDIF) - Simple version
 ///
 /// This function handles the hybrid laminar-turbulent interval at transition.
 /// XFOIL's TRDIF splits the interval X1..X2 into:
 /// - Laminar part: X1 to XT (transition point)
 /// - Turbulent part: XT to X2
 ///
-/// The residuals are summed:
-/// - Row 1 (shear-lag): Only turbulent part (ctau undefined for laminar)
-/// - Row 2 (momentum): Laminar + Turbulent
-/// - Row 3 (shape): Laminar + Turbulent
+/// This is a simplified version that uses basic interpolation weights.
+/// For the full Jacobian with proper chain rule through XT derivatives,
+/// use `trdif_full()` with a `Trchek2FullResult`.
 ///
 /// # Arguments
 /// * `s1` - Upstream laminar station
@@ -1453,6 +1644,338 @@ pub fn trdif(
     (res, jac)
 }
 
+/// Compute BL equations for the transition interval with full Jacobian (XFOIL TRDIF)
+///
+/// This is the full implementation of XFOIL's TRDIF that properly handles the
+/// chain rule through the transition point XT and its derivatives.
+///
+/// The function splits the interval X1..X2 into:
+/// - Laminar part: X1 to XT
+/// - Turbulent part: XT to X2
+///
+/// The Jacobian transformation follows XFOIL exactly:
+/// - Laminar Jacobian VS2 entries are transformed via TT/DT/UT/XT derivatives
+/// - Turbulent Jacobian VS1 entries are transformed via ST (initial ctau) derivatives
+///
+/// # Arguments
+/// * `s1` - Upstream laminar station
+/// * `s2` - Downstream turbulent station  
+/// * `tr` - Full transition result from `trchek2_full()` containing XT and all derivatives
+/// * `msq` - Mach number squared
+/// * `re` - Reference Reynolds number
+///
+/// # Reference
+/// XFOIL xblsys.f TRDIF (lines 1195-1549)
+pub fn trdif_full(
+    s1: &BlStation,
+    s2: &BlStation,
+    tr: &crate::closures::Trchek2FullResult,
+    msq: f64,
+    re: f64,
+) -> (BlResiduals, BlJacobian) {
+    use crate::constants::{CTRCON, CTRCEX};
+    
+    let dx = s2.x - s1.x;
+    if dx <= 1e-20 || !tr.transition {
+        // Degenerate case or no transition - use regular turbulent bldif
+        return bldif(s1, s2, FlowType::Turbulent, msq, re);
+    }
+    
+    let xt = tr.xt;
+    let wf1 = tr.wf1;
+    let wf2 = tr.wf2;
+    
+    // === Interpolate primary variables to transition point ===
+    let tt = s1.theta * wf1 + s2.theta * wf2;
+    let dt = s1.delta_star * wf1 + s2.delta_star * wf2;
+    let ut = s1.u * wf1 + s2.u * wf2;
+    
+    // === PART 1: Laminar interval X1 → XT ===
+    let mut st_laminar = BlStation::new();
+    st_laminar.x = xt;
+    st_laminar.u = ut;
+    st_laminar.theta = tt;
+    st_laminar.delta_star = dt;
+    st_laminar.ctau = 0.0;
+    st_laminar.ampl = 9.0;
+    st_laminar.is_laminar = true;
+    st_laminar.is_turbulent = false;
+    
+    blvar(&mut st_laminar, FlowType::Laminar, msq, re);
+    let (res_lam, jac_lam) = bldif(s1, &st_laminar, FlowType::Laminar, msq, re);
+    
+    // === PART 2: Turbulent interval XT → X2 ===
+    // Compute turbulent equilibrium CQ at transition point
+    let mut st_turb_temp = BlStation::new();
+    st_turb_temp.x = xt;
+    st_turb_temp.u = ut;
+    st_turb_temp.theta = tt;
+    st_turb_temp.delta_star = dt;
+    st_turb_temp.ctau = 0.03;
+    st_turb_temp.ampl = 0.0;
+    st_turb_temp.is_laminar = false;
+    st_turb_temp.is_turbulent = true;
+    blvar(&mut st_turb_temp, FlowType::Turbulent, msq, re);
+    
+    // Compute initial ctau at transition (ST = CTR * CQ)
+    let hk_t = st_turb_temp.hk;
+    let cq_t = st_turb_temp.cq;
+    let hk_arg = (hk_t - 1.0).max(0.1);
+    let ctr = CTRCON * (-CTRCEX / hk_arg).exp();
+    let ctr_hk = ctr * CTRCEX / (hk_arg * hk_arg);
+    
+    let st = ctr * cq_t;
+    
+    // ST derivatives w.r.t. TT, DT, UT (at transition point)
+    // ST = CTR(HK) * CQ(HK, Rθ, ...)
+    // Need CQ derivatives from blvar - using stored derivatives
+    let cq_t_deriv = st_turb_temp.derivs.cq_t;
+    let cq_d_deriv = st_turb_temp.derivs.cq_d;
+    let cq_u_deriv = st_turb_temp.derivs.cq_u;
+    
+    // HK derivatives at transition point
+    let hk_t_deriv = st_turb_temp.derivs.hk_h * (-st_turb_temp.h / tt.max(1e-20));
+    let hk_d_deriv = st_turb_temp.derivs.hk_h * (1.0 / tt.max(1e-20));
+    let hk_u_deriv = 0.0;
+    
+    // ST = CTR * CQ, so ST_TT = CTR * CQ_T + CQ * CTR_HK * HK_T
+    let st_tt = ctr * cq_t_deriv + cq_t * ctr_hk * hk_t_deriv;
+    let st_dt = ctr * cq_d_deriv + cq_t * ctr_hk * hk_d_deriv;
+    let st_ut = ctr * cq_u_deriv + cq_t * ctr_hk * hk_u_deriv;
+    
+    // Chain rule: ST derivatives w.r.t. actual "1" and "2" variables
+    // ST_*1 = ST_TT * TT_*1 + ST_DT * DT_*1 + ST_UT * UT_*1
+    let st_a1 = st_tt * tr.tt_a1 + st_dt * tr.dt_a1 + st_ut * tr.ut_a1;
+    let st_x1 = st_tt * tr.tt_x1 + st_dt * tr.dt_x1 + st_ut * tr.ut_x1;
+    let st_t1 = st_tt * tr.tt_t1 + st_dt * tr.dt_t1 + st_ut * tr.ut_t1;
+    let st_d1 = st_tt * tr.tt_d1 + st_dt * tr.dt_d1 + st_ut * tr.ut_d1;
+    let st_u1 = st_tt * tr.tt_u1 + st_dt * tr.dt_u1 + st_ut * tr.ut_u1;
+    
+    let st_x2 = st_tt * tr.tt_x2 + st_dt * tr.dt_x2 + st_ut * tr.ut_x2;
+    let st_t2 = st_tt * tr.tt_t2 + st_dt * tr.dt_t2 + st_ut * tr.ut_t2;
+    let st_d2 = st_tt * tr.tt_d2 + st_dt * tr.dt_d2 + st_ut * tr.ut_d2;
+    let st_u2 = st_tt * tr.tt_u2 + st_dt * tr.dt_u2 + st_ut * tr.ut_u2;
+    
+    // Create turbulent transition station with correct ST
+    let mut st_turb = BlStation::new();
+    st_turb.x = xt;
+    st_turb.u = ut;
+    st_turb.theta = tt;
+    st_turb.delta_star = dt;
+    st_turb.ctau = st.max(0.0001);
+    st_turb.ampl = 0.0;
+    st_turb.is_laminar = false;
+    st_turb.is_turbulent = true;
+    blvar(&mut st_turb, FlowType::Turbulent, msq, re);
+    
+    let (res_turb, jac_turb) = bldif(&st_turb, s2, FlowType::Turbulent, msq, re);
+    
+    // === Transform Jacobians using full chain rule (XFOIL lines 1318-1515) ===
+    
+    // Laminar part: VS2 affects T variables (TT, DT, UT, XT)
+    // BL1[K][j] = VS1[K][j] + VS2[K][2]*TT_*1 + VS2[K][3]*DT_*1 + VS2[K][4]*UT_*1 + VS2[K][5]*XT_*1
+    // BL2[K][j] = VS2[K][2]*TT_*2 + VS2[K][3]*DT_*2 + VS2[K][4]*UT_*2 + VS2[K][5]*XT_*2
+    let mut bl1 = [[0.0f64; 5]; 3];
+    let mut bl2 = [[0.0f64; 5]; 3];
+    
+    for k in 1..3 {  // Only rows 2-3 (momentum, shape) for laminar
+        // BL1: derivatives w.r.t. station 1 variables
+        // Column 0: amplification (index 0)
+        bl1[k][0] = jac_lam.vs1[k][0]
+                  + jac_lam.vs2[k][1] * tr.tt_a1
+                  + jac_lam.vs2[k][2] * tr.dt_a1
+                  + jac_lam.vs2[k][3] * tr.ut_a1
+                  + jac_lam.vs2[k][4] * tr.xt_a1;
+        // Column 1: theta (index 1)
+        bl1[k][1] = jac_lam.vs1[k][1]
+                  + jac_lam.vs2[k][1] * tr.tt_t1
+                  + jac_lam.vs2[k][2] * tr.dt_t1
+                  + jac_lam.vs2[k][3] * tr.ut_t1
+                  + jac_lam.vs2[k][4] * tr.xt_t1;
+        // Column 2: delta_star (index 2)
+        bl1[k][2] = jac_lam.vs1[k][2]
+                  + jac_lam.vs2[k][1] * tr.tt_d1
+                  + jac_lam.vs2[k][2] * tr.dt_d1
+                  + jac_lam.vs2[k][3] * tr.ut_d1
+                  + jac_lam.vs2[k][4] * tr.xt_d1;
+        // Column 3: u (index 3)
+        bl1[k][3] = jac_lam.vs1[k][3]
+                  + jac_lam.vs2[k][1] * tr.tt_u1
+                  + jac_lam.vs2[k][2] * tr.dt_u1
+                  + jac_lam.vs2[k][3] * tr.ut_u1
+                  + jac_lam.vs2[k][4] * tr.xt_u1;
+        // Column 4: x (index 4)
+        bl1[k][4] = jac_lam.vs1[k][4]
+                  + jac_lam.vs2[k][1] * tr.tt_x1
+                  + jac_lam.vs2[k][2] * tr.dt_x1
+                  + jac_lam.vs2[k][3] * tr.ut_x1
+                  + jac_lam.vs2[k][4] * tr.xt_x1;
+        
+        // BL2: derivatives w.r.t. station 2 variables (no VS1 contribution)
+        bl2[k][0] = 0.0;  // No amplification dependence in VS2 for station 2
+        bl2[k][1] = jac_lam.vs2[k][1] * tr.tt_t2
+                  + jac_lam.vs2[k][2] * tr.dt_t2
+                  + jac_lam.vs2[k][3] * tr.ut_t2
+                  + jac_lam.vs2[k][4] * tr.xt_t2;
+        bl2[k][2] = jac_lam.vs2[k][1] * tr.tt_d2
+                  + jac_lam.vs2[k][2] * tr.dt_d2
+                  + jac_lam.vs2[k][3] * tr.ut_d2
+                  + jac_lam.vs2[k][4] * tr.xt_d2;
+        bl2[k][3] = jac_lam.vs2[k][1] * tr.tt_u2
+                  + jac_lam.vs2[k][2] * tr.dt_u2
+                  + jac_lam.vs2[k][3] * tr.ut_u2
+                  + jac_lam.vs2[k][4] * tr.xt_u2;
+        bl2[k][4] = jac_lam.vs2[k][1] * tr.tt_x2
+                  + jac_lam.vs2[k][2] * tr.dt_x2
+                  + jac_lam.vs2[k][3] * tr.ut_x2
+                  + jac_lam.vs2[k][4] * tr.xt_x2;
+    }
+    
+    // Turbulent part: VS1 affects T variables (ST, TT, DT, UT, XT)
+    // BT1[K][j] = VS1[K][1]*ST_*1 + VS1[K][2]*TT_*1 + VS1[K][3]*DT_*1 + VS1[K][4]*UT_*1 + VS1[K][5]*XT_*1
+    // BT2[K][j] = VS2[K][j] + VS1[K][1]*ST_*2 + VS1[K][2]*TT_*2 + ...
+    let mut bt1 = [[0.0f64; 5]; 3];
+    let mut bt2 = [[0.0f64; 5]; 3];
+    
+    for k in 0..3 {
+        // BT1: derivatives w.r.t. station 1 variables
+        // Column 0: amplification
+        bt1[k][0] = jac_turb.vs1[k][0] * st_a1
+                  + jac_turb.vs1[k][1] * tr.tt_a1
+                  + jac_turb.vs1[k][2] * tr.dt_a1
+                  + jac_turb.vs1[k][3] * tr.ut_a1
+                  + jac_turb.vs1[k][4] * tr.xt_a1;
+        // Column 1: theta
+        bt1[k][1] = jac_turb.vs1[k][0] * st_t1
+                  + jac_turb.vs1[k][1] * tr.tt_t1
+                  + jac_turb.vs1[k][2] * tr.dt_t1
+                  + jac_turb.vs1[k][3] * tr.ut_t1
+                  + jac_turb.vs1[k][4] * tr.xt_t1;
+        // Column 2: delta_star
+        bt1[k][2] = jac_turb.vs1[k][0] * st_d1
+                  + jac_turb.vs1[k][1] * tr.tt_d1
+                  + jac_turb.vs1[k][2] * tr.dt_d1
+                  + jac_turb.vs1[k][3] * tr.ut_d1
+                  + jac_turb.vs1[k][4] * tr.xt_d1;
+        // Column 3: u
+        bt1[k][3] = jac_turb.vs1[k][0] * st_u1
+                  + jac_turb.vs1[k][1] * tr.tt_u1
+                  + jac_turb.vs1[k][2] * tr.dt_u1
+                  + jac_turb.vs1[k][3] * tr.ut_u1
+                  + jac_turb.vs1[k][4] * tr.xt_u1;
+        // Column 4: x
+        bt1[k][4] = jac_turb.vs1[k][0] * st_x1
+                  + jac_turb.vs1[k][1] * tr.tt_x1
+                  + jac_turb.vs1[k][2] * tr.dt_x1
+                  + jac_turb.vs1[k][3] * tr.ut_x1
+                  + jac_turb.vs1[k][4] * tr.xt_x1;
+        
+        // BT2: VS2 applies directly, plus VS1 chain rule through T variables
+        bt2[k][0] = jac_turb.vs2[k][0];  // Direct ctau dependence
+        bt2[k][1] = jac_turb.vs2[k][1]
+                  + jac_turb.vs1[k][0] * st_t2
+                  + jac_turb.vs1[k][1] * tr.tt_t2
+                  + jac_turb.vs1[k][2] * tr.dt_t2
+                  + jac_turb.vs1[k][3] * tr.ut_t2
+                  + jac_turb.vs1[k][4] * tr.xt_t2;
+        bt2[k][2] = jac_turb.vs2[k][2]
+                  + jac_turb.vs1[k][0] * st_d2
+                  + jac_turb.vs1[k][1] * tr.tt_d2
+                  + jac_turb.vs1[k][2] * tr.dt_d2
+                  + jac_turb.vs1[k][3] * tr.ut_d2
+                  + jac_turb.vs1[k][4] * tr.xt_d2;
+        bt2[k][3] = jac_turb.vs2[k][3]
+                  + jac_turb.vs1[k][0] * st_u2
+                  + jac_turb.vs1[k][1] * tr.tt_u2
+                  + jac_turb.vs1[k][2] * tr.dt_u2
+                  + jac_turb.vs1[k][3] * tr.ut_u2
+                  + jac_turb.vs1[k][4] * tr.xt_u2;
+        bt2[k][4] = jac_turb.vs2[k][4]
+                  + jac_turb.vs1[k][0] * st_x2
+                  + jac_turb.vs1[k][1] * tr.tt_x2
+                  + jac_turb.vs1[k][2] * tr.dt_x2
+                  + jac_turb.vs1[k][3] * tr.ut_x2
+                  + jac_turb.vs1[k][4] * tr.xt_x2;
+    }
+    
+    // === Combine laminar and turbulent parts ===
+    // Row 0 (shear-lag): turbulent only
+    // Rows 1-2 (momentum, shape): laminar + turbulent
+    let mut res = BlResiduals::default();
+    let mut jac = BlJacobian::default();
+    
+    res.res_third = res_turb.res_third;
+    res.res_mom = res_lam.res_mom + res_turb.res_mom;
+    res.res_shape = res_lam.res_shape + res_turb.res_shape;
+    
+    for l in 0..5 {
+        jac.vs1[0][l] = bt1[0][l];
+        jac.vs2[0][l] = bt2[0][l];
+        jac.vs1[1][l] = bl1[1][l] + bt1[1][l];
+        jac.vs2[1][l] = bl2[1][l] + bt2[1][l];
+        jac.vs1[2][l] = bl1[2][l] + bt1[2][l];
+        jac.vs2[2][l] = bl2[2][l] + bt2[2][l];
+    }
+    
+    (res, jac)
+}
+
+/// Compute turbulent-part BLDIF terms inside TRDIF (XT -> X2 interval).
+/// Used for debugging shape-equation sensitivities at transition.
+pub fn trdif_turb_terms(
+    s1: &BlStation,
+    s2: &BlStation,
+    tr: &crate::closures::Trchek2FullResult,
+    msq: f64,
+    re: f64,
+) -> Option<BldifTerms> {
+    use crate::constants::{CTRCON, CTRCEX};
+
+    let dx = s2.x - s1.x;
+    if dx <= 1e-20 || !tr.transition {
+        return None;
+    }
+
+    let xt = tr.xt;
+    let wf1 = tr.wf1;
+    let wf2 = tr.wf2;
+
+    let tt = s1.theta * wf1 + s2.theta * wf2;
+    let dt = s1.delta_star * wf1 + s2.delta_star * wf2;
+    let ut = s1.u * wf1 + s2.u * wf2;
+
+    let mut st_turb_temp = BlStation::new();
+    st_turb_temp.x = xt;
+    st_turb_temp.u = ut;
+    st_turb_temp.theta = tt;
+    st_turb_temp.delta_star = dt;
+    st_turb_temp.ctau = 0.03;
+    st_turb_temp.ampl = 0.0;
+    st_turb_temp.is_laminar = false;
+    st_turb_temp.is_turbulent = true;
+    blvar(&mut st_turb_temp, FlowType::Turbulent, msq, re);
+
+    let hk_t = st_turb_temp.hk;
+    let cq_t = st_turb_temp.cq;
+    let hk_arg = (hk_t - 1.0).max(0.1);
+    let ctr = CTRCON * (-CTRCEX / hk_arg).exp();
+    let st = ctr * cq_t;
+
+    let mut st_turb = BlStation::new();
+    st_turb.x = xt;
+    st_turb.u = ut;
+    st_turb.theta = tt;
+    st_turb.delta_star = dt;
+    st_turb.ctau = st.max(0.0001);
+    st_turb.ampl = 0.0;
+    st_turb.is_laminar = false;
+    st_turb.is_turbulent = true;
+    blvar(&mut st_turb, FlowType::Turbulent, msq, re);
+
+    let (_, _, terms) = bldif_with_terms(&st_turb, s2, FlowType::Turbulent, msq, re);
+    Some(terms)
+}
+
 /// Compute BL equation residuals and Jacobian with debug output
 ///
 /// Same as [`bldif`] but also emits debug events when debug collection is active.
@@ -1478,7 +2001,7 @@ pub fn bldif_debug(
     ibl: usize,
 ) -> (BlResiduals, BlJacobian) {
     // Run the actual computation
-    let (res, jac) = bldif(s1, s2, flow_type, msq, re);
+    let (res, jac, terms) = bldif_with_terms(s1, s2, flow_type, msq, re);
 
     // Emit debug event if collection is active
     if crate::debug::is_debug_active() {
@@ -1511,6 +2034,41 @@ pub fn bldif_debug(
             vs1,
             vs2,
             vsrez,
+        ));
+        crate::debug::add_event(crate::debug::DebugEvent::bldif_terms(
+            iteration,
+            side,
+            ibl,
+            flow_type_int,
+            crate::debug::BldifTermsEvent {
+                side,
+                ibl,
+                flow_type: flow_type_int,
+                xlog: terms.xlog,
+                ulog: terms.ulog,
+                tlog: terms.tlog,
+                hlog: terms.hlog,
+                upw: terms.upw,
+                ha: terms.ha,
+                btmp_mom: terms.btmp_mom,
+                cfx: terms.cfx,
+                cfx_ta: terms.cfx_ta,
+                cfx_t1: terms.cfx_t1,
+                cfx_t2: terms.cfx_t2,
+                btmp_shape: terms.btmp_shape,
+                cfx_shape: terms.cfx_shape,
+                dix: terms.dix,
+                hsa: terms.hsa,
+                hca: terms.hca,
+                xot1: terms.xot1,
+                xot2: terms.xot2,
+                z_di2: terms.z_di2,
+                di2_s: terms.di2_s,
+                z_upw_shape: terms.z_upw_shape,
+                upw_t2_shape: terms.upw_t2_shape,
+                upw_d2_shape: terms.upw_d2_shape,
+                upw_u2_shape: terms.upw_u2_shape,
+            },
         ));
     }
 
