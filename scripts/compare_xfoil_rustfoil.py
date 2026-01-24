@@ -233,6 +233,83 @@ def phase6_dij(events):
         print(f"  Row 1 (first 10):    {[f'{v:.4e}' for v in row1]}")
 
 
+def phase8_trchek2(events, rustfoil_debug_path=None):
+    """Phase 8: TRCHEK2 transition-point comparison."""
+    print("\n" + "=" * 60)
+    print("Phase 8: TRCHEK2 Transition Comparison")
+    print("=" * 60)
+
+    tr_final = filter_events(events, 'TRCHEK2_FINAL')
+    tr_iter = filter_events(events, 'TRCHEK2_ITER')
+
+    if not tr_final:
+        print("No TRCHEK2_FINAL events found in XFOIL data")
+        return
+
+    # Index the latest TRCHEK2_ITER by (side, ibl)
+    tr_iter_map = {}
+    for ev in tr_iter:
+        key = (ev.get('side'), ev.get('ibl'))
+        if key not in tr_iter_map or ev.get('trchek_iter', 0) >= tr_iter_map[key].get('trchek_iter', 0):
+            tr_iter_map[key] = ev
+
+    # Load RustFoil debug if available
+    rust_events = []
+    if rustfoil_debug_path and Path(rustfoil_debug_path).exists():
+        with open(rustfoil_debug_path) as f:
+            rust_events = json.load(f).get('events', [])
+
+    rust_tr_final = [e for e in rust_events if e.get('subroutine') == 'TRCHEK2_FINAL']
+    rust_map = {(e.get('side'), e.get('ibl')): e for e in rust_tr_final}
+
+    header = [
+        "Side", "IBL", "XT_XFOIL", "XT_RUST", "TT_XFOIL", "TT_RUST", "Err%_TT"
+    ]
+    print(f"{header[0]:>4} {header[1]:>4} {header[2]:>12} {header[3]:>12} {header[4]:>12} {header[5]:>12} {header[6]:>8}")
+
+    # If RustFoil data is present, only compare matching stations
+    if rust_tr_final:
+        compare_keys = sorted(rust_map.keys())
+        tr_final_map = {(e.get('side'), e.get('ibl')): e for e in tr_final}
+        compare_events = [tr_final_map.get(key) for key in compare_keys if tr_final_map.get(key)]
+    else:
+        compare_events = tr_final[:30]
+
+    for ev in compare_events:
+        side = ev.get('side')
+        ibl = ev.get('ibl')
+        key = (side, ibl)
+
+        xt_xfoil = ev.get('xt_final', ev.get('xt'))
+        iter_ev = tr_iter_map.get(key, {})
+        wf1 = iter_ev.get('wf1')
+        wf2 = iter_ev.get('wf2')
+        t1 = iter_ev.get('T1')
+        t2 = iter_ev.get('T2')
+        tt_xfoil = None
+        if wf1 is not None and wf2 is not None and t1 is not None and t2 is not None:
+            tt_xfoil = t1 * wf1 + t2 * wf2
+
+        rust = rust_map.get(key, {})
+        xt_rust = rust.get('xt_final')
+        tt_rust = rust.get('tt')
+
+        err_tt = 0.0
+        if tt_xfoil and tt_rust and abs(tt_xfoil) > 1e-15:
+            err_tt = abs(tt_xfoil - tt_rust) / abs(tt_xfoil) * 100.0
+
+        print(f"{side:>4} {ibl:>4} {xt_xfoil:12.6e} {xt_rust if xt_rust is not None else 0.0:12.6e} "
+              f"{tt_xfoil if tt_xfoil is not None else 0.0:12.6e} {tt_rust if tt_rust is not None else 0.0:12.6e} "
+              f"{err_tt:8.2f}")
+
+    if rust_tr_final:
+        print("\nRustFoil TRCHEK2_FINAL extra fields (first 5):")
+        for ev in rust_tr_final[:5]:
+            print(f"  side={ev.get('side')} ibl={ev.get('ibl')} "
+                  f"tt={ev.get('tt')} dt={ev.get('dt')} ut={ev.get('ut')} "
+                  f"Hk_t={ev.get('Hk_t')} Rt_t={ev.get('Rt_t')} St={ev.get('St')} Cq_t={ev.get('Cq_t')}")
+
+
 def export_test_vectors(events, output_dir):
     """Export test vectors for RustFoil unit tests."""
     output_dir = Path(output_dir)
@@ -370,7 +447,7 @@ def main():
         return
     
     if args.phase == 0:
-        print("Use --phase 1-7 for detailed comparison")
+        print("Use --phase 1-8 for detailed comparison")
         print("  1: Closure functions (HKIN, HSL, CFL, DAMPL)")
         print("  2: BLVAR secondary variables")
         print("  3: BLDIF Jacobian matrices")
@@ -378,6 +455,7 @@ def main():
         print("  5: Newton iteration convergence")
         print("  6: QDCALC DIJ matrix")
         print("  7: MRCHUE station-by-station theta/dstar")
+        print("  8: TRCHEK2 transition comparison")
     elif args.phase == 1:
         phase1_closures(events)
     elif args.phase == 2:
@@ -392,6 +470,8 @@ def main():
         phase6_dij(events)
     elif args.phase == 7:
         phase_mrchue_stations(events, args.rustfoil)
+    elif args.phase == 8:
+        phase8_trchek2(events, args.rustfoil)
 
 
 if __name__ == '__main__':

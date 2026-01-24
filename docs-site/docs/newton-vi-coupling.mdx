@@ -136,6 +136,7 @@ let (turb_station, _) = newton_solve_station(&station_for_turb, ...);
 let (turb_station, _) = newton_solve_station_with_guess(
     prev_station,       // Actual upstream for bldif "1" variables
     Some(&initial_guess), // Laminar solution as initial guess for "2" variables
+    config.ncrit,
     ...
 );
 ```

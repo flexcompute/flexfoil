@@ -48,6 +48,14 @@ pub struct BlDerivatives {
     pub cd_hk: f64,
     /// ∂CD/∂Rθ
     pub cd_rt: f64,
+    /// ∂CD/∂θ
+    pub cd_t: f64,
+    /// ∂CD/∂δ*
+    pub cd_d: f64,
+    /// ∂CD/∂Ue
+    pub cd_u: f64,
+    /// ∂CD/∂S (ctau)
+    pub cd_s: f64,
 
     // === Hc (density shape factor) derivatives ===
     /// ∂Hc/∂Hk
@@ -359,6 +367,10 @@ mod tests {
         assert_eq!(derivs.cf_msq, 0.0);
         assert_eq!(derivs.cd_hk, 0.0);
         assert_eq!(derivs.cd_rt, 0.0);
+        assert_eq!(derivs.cd_t, 0.0);
+        assert_eq!(derivs.cd_d, 0.0);
+        assert_eq!(derivs.cd_u, 0.0);
+        assert_eq!(derivs.cd_s, 0.0);
         assert_eq!(derivs.us_t, 0.0);
         assert_eq!(derivs.us_d, 0.0);
         assert_eq!(derivs.us_u, 0.0);

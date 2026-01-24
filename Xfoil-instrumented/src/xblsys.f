@@ -814,8 +814,10 @@ C----------------------------------------------------
       INCLUDE 'XBL.INC'
 C---- Debug common block
       COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      COMMON /XDBGIT/ ITBLDBG
       LOGICAL LDBG
       INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER ITBLDBG
       COMMON /BLVDBG/ IBLDBG, ISDBG
       INTEGER IBLDBG, ISDBG
 C
@@ -1231,6 +1233,13 @@ C     are simply summed.
 C-----------------------------------------------
       IMPLICIT REAL(M)
       INCLUDE 'XBL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      COMMON /XDBGIT/ ITBLDBG
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER ITBLDBG
+      COMMON /BLVDBG/ IBLDBG, ISDBG
+      INTEGER IBLDBG, ISDBG
       REAL  BL1(4,5), BL2(4,5), BLREZ(4), BLM(4), BLR(4), BLX(4)
      &    , BT1(4,5), BT2(4,5), BTREZ(4), BTM(4), BTR(4), BTX(4)
 C
@@ -1316,6 +1325,18 @@ C
       UT_MS = U1*WF1_MS + U2*WF2_MS
       UT_RE = U1*WF1_RE + U2*WF2_RE
       UT_XF = U1*WF1_XF + U2*WF2_XF
+C
+C---- Debug TRDIF chain-rule derivatives (XT/WF/TT/DT/UT)
+      CALL DBGTRDIF_DERIVS(ISDBG, IBLDBG, ITBLDBG,
+     &  WF1, WF2, XT,
+     &  XT_A1, XT_X1, XT_X2, XT_T1, XT_T2, XT_D1, XT_D2, XT_U1, XT_U2,
+     &  XT_MS, XT_RE,
+     &  TT_A1, TT_X1, TT_X2, TT_T1, TT_T2, TT_D1, TT_D2, TT_U1, TT_U2,
+     &  TT_MS, TT_RE,
+     &  DT_A1, DT_X1, DT_X2, DT_T1, DT_T2, DT_D1, DT_D2, DT_U1, DT_U2,
+     &  DT_MS, DT_RE,
+     &  UT_A1, UT_X1, UT_X2, UT_T1, UT_T2, UT_D1, UT_D2, UT_U1, UT_U2,
+     &  UT_MS, UT_RE)
 C
 C---- set primary "T" variables at XT  (really placed into "2" variables)
       X2 = XT
@@ -1567,6 +1588,9 @@ C-    in terms of honest-to-God "1" and "2" variables.
         VS2(3,L) = BL2(3,L) + BT2(3,L)
    60 CONTINUE
 C
+C---- Debug TRDIF combined system
+      CALL DBGTRDIF(ISDBG, IBLDBG, ITBLDBG, VS1, VS2, VSREZ)
+C
 C---- To be sanitary, restore "1" quantities which got clobbered
 C-    in all of the numerical gymnastics above.  The "2" variables
 C-    were already restored for the XT-X2 differencing part.
@@ -1709,6 +1733,12 @@ C
        VS2(1,3) = Z_AX*(AX_HK2*HK2_D2                        )         
        VS2(1,4) = Z_AX*(AX_HK2*HK2_U2         + AX_RT2*RT2_U2)
        VS2(1,5) = -AX
+C---- dump laminar amplification Jacobian terms (row 1)
+      CALL DBGLAMAX(ISDBG, IBLDBG, ITYP,
+     &              AX, AX_HK2, AX_T2, AX_RT2, AX_A2,
+     &              HK2_T2, HK2_D2, HK2_U2,
+     &              RT2_T2, RT2_U2,
+     &              Z_AX, VS2(1,2), VS2(1,3), VS2(1,4))
        VSM(1)   = Z_AX*(AX_HK1*HK1_MS         + AX_RT1*RT1_MS
      &                + AX_HK2*HK2_MS         + AX_RT2*RT2_MS)
        VSR(1)   = Z_AX*(                        AX_RT1*RT1_RE
@@ -1895,6 +1925,17 @@ C
        VS2(1,2) = VS2(1,2) + Z_CQ2*CQ2_T2 + Z_CF2*CF2_T2 + Z_HK2*HK2_T2
        VS2(1,3) = VS2(1,3) + Z_CQ2*CQ2_D2 + Z_CF2*CF2_D2 + Z_HK2*HK2_D2
        VS2(1,4) = VS2(1,4) + Z_CQ2*CQ2_U2 + Z_CF2*CF2_U2 + Z_HK2*HK2_U2
+C---- dump shear-lag Jacobian terms (row 1)
+      CALL DBGSHEAR(ISDBG, IBLDBG, ITYP,
+     &              Z_UPW, Z_DE2, Z_US2, Z_CQ2, Z_CF2, Z_HK2,
+     &              Z_D2, Z_U2, Z_S2,
+     &              UPW_T2, UPW_D2, UPW_U2,
+     &              DE2_T2, DE2_D2, DE2_U2,
+     &              US2_T2, US2_D2, US2_U2,
+     &              CQ2_T2, CQ2_D2, CQ2_U2,
+     &              CF2_T2, CF2_D2, CF2_U2,
+     &              HK2_T2, HK2_D2, HK2_U2,
+     &              VS2(1,2), VS2(1,3), VS2(1,4))
 C
        VSM(1)   = VSM(1)   + Z_CQ1*CQ1_MS + Z_CF1*CF1_MS + Z_HK1*HK1_MS
      &                     + Z_CQ2*CQ2_MS + Z_CF2*CF2_MS + Z_HK2*HK2_MS
@@ -1962,6 +2003,14 @@ C
      &                                         + Z_CF2*CF2_RE
       VSX(2)   = 0.
       VSREZ(2) = -REZT
+C
+C---- Debug output for momentum equation intermediates
+      CALL DBGMOM(ISDBG, IBLDBG, ITYP, X1, U1, T1, D1, X2, U2, T2, D2,
+     &            Z_HA, Z_CFM, Z_CF2, Z_T2, Z_U2,
+     &            H2_T2, H2_D2,
+     &            CFM_T2, CFM_D2, CFM_U2,
+     &            CF2_T2, CF2_D2, CF2_U2,
+     &            VS2(2,2), VS2(2,3), VS2(2,4))
 C
 C**** Set up shape parameter equation
 C
@@ -2051,7 +2100,10 @@ C---- Debug output for shape equation intermediates
      &              VS2(3,1), VS2(3,2), VS2(3,3), VS2(3,4))
 C
 C---- Debug output
-      CALL DBGBLDIF(ISDBG, IBLDBG, ITYP, VS1, VS2, VSREZ)
+      CALL DBGBLDIF(ISDBG, IBLDBG, ITYP,
+     &              X1, U1, T1, D1, S1, AMPL1,
+     &              X2, U2, T2, D2, S2, AMPL2,
+     &              VS1, VS2, VSREZ)
 C
       RETURN
       END

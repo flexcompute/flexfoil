@@ -419,12 +419,16 @@ fn test_trchek2_comparison() {
                     prev.t2,  // t1 = prev's T2
                     prev.rt2, // rt1 = prev's Rt2
                     d1,       // d1 = estimated displacement thickness
+                    prev.rt2 / prev.t2, // u1 from Rt1 = Re * Ue * theta (use Re=1)
                     prev.ampl2, // ampl1 = prev's ampl2 (N at end of prev station)
                     ev.hk2,   // hk2 = current's hk2
                     ev.t2,    // t2 = current's T2  
                     ev.rt2,   // rt2 = current's Rt2
                     d2,       // d2 = estimated displacement thickness
+                    ev.rt2 / ev.t2, // u2 from Rt2 = Re * Ue * theta (use Re=1)
                     ev.ncrit, // ncrit
+                    0.0,      // msq
+                    1.0,      // re
                 );
                 
                 // Compare with XFOIL's AMPL2

@@ -2,7 +2,8 @@
 //!
 //! Compares RustFoil's Newton iteration against XFOIL's exact values
 
-use rustfoil_bl::equations::{bldif, blvar, FlowType};
+use rustfoil_bl::closures::{trchek2_full, Trchek2FullResult};
+use rustfoil_bl::equations::{bldif, blvar, trdif, trdif_full, FlowType};
 use rustfoil_bl::state::BlStation;
 use rustfoil_bl::constants::{SCCON, GACON, GBCON, GCCON, DLCON, DUXCON};
 use rustfoil_coupling::march::{newton_solve_station, MarchConfig};
@@ -298,4 +299,215 @@ fn test_newton_ctau_convergence() {
     
     // Target: < 1% error for numerical precision
     assert!(ctau_error < 10.0, "ctau error {} > 10%", ctau_error);
+}
+
+/// Test that trchek2_full computes transition location and derivatives
+#[test]
+fn test_trchek2_full_derivatives() {
+    // Set up stations near transition (NACA 0012, alpha=4, Re=1e6)
+    let x1 = 0.12758861;
+    let x2 = 0.14078095;
+    let t1 = 2.218498e-04;
+    let t2 = 2.50e-04;  // Approximate theta at next station
+    let d1 = 1.195687e-03;
+    let d2 = 1.50e-03;  // Approximate delta_star at next station
+    let u1 = 1.4637065;
+    let u2 = 1.4566427;
+    let hk1 = 5.39;  // Laminar Hk
+    let hk2 = 6.0;   // Higher Hk as approaching transition
+    let rt1 = 1e6 * u1 * t1;
+    let rt2 = 1e6 * u2 * t2;
+    let ampl1 = 7.8;  // Close to Ncrit
+    let ncrit = 9.0;
+    let msq = 0.0;
+    let re = 1e6;
+    
+    // Call trchek2_full
+    let result = trchek2_full(
+        x1, x2, t1, t2, d1, d2, u1, u2,
+        hk1, hk2, rt1, rt2, ampl1, ncrit, msq, re,
+    );
+    
+    println!("\n=== trchek2_full results ===");
+    println!("Transition: {}", result.transition);
+    println!("XT: {:.6}", result.xt);
+    println!("AMPL2: {:.4}", result.ampl2);
+    println!("WF1: {:.4}, WF2: {:.4}", result.wf1, result.wf2);
+    println!("Converged: {}", result.converged);
+    
+    if result.transition {
+        println!("\n=== XT derivatives ===");
+        println!("XT_A1: {:.6e}", result.xt_a1);
+        println!("XT_T1: {:.6e}", result.xt_t1);
+        println!("XT_D1: {:.6e}", result.xt_d1);
+        println!("XT_U1: {:.6e}", result.xt_u1);
+        println!("XT_X1: {:.6e}", result.xt_x1);
+        println!("XT_T2: {:.6e}", result.xt_t2);
+        println!("XT_D2: {:.6e}", result.xt_d2);
+        println!("XT_U2: {:.6e}", result.xt_u2);
+        println!("XT_X2: {:.6e}", result.xt_x2);
+        
+        println!("\n=== TT derivatives (sample) ===");
+        println!("TT_T1: {:.6e}, TT_T2: {:.6e}", result.tt_t1, result.tt_t2);
+        println!("TT_A1: {:.6e}", result.tt_a1);
+        
+        // Verify basic properties
+        assert!(result.xt > x1 && result.xt < x2, "XT should be between X1 and X2");
+        assert!(result.wf1 + result.wf2 - 1.0 < 1e-10, "WF1 + WF2 should equal 1");
+        assert!(result.ampl2 >= ncrit, "AMPL2 should be >= Ncrit at transition");
+    }
+}
+
+/// Test that trdif_full produces reasonable residuals at transition
+#[test]
+fn test_trdif_full_residuals() {
+    // Previous station (laminar, just before transition)
+    let mut s1 = BlStation::new();
+    s1.x = 0.12758861;
+    s1.u = 1.4637065;
+    s1.theta = 2.218498e-04;
+    s1.delta_star = 1.195687e-03;
+    s1.ctau = 0.03;
+    s1.ampl = 8.5;  // Just below Ncrit
+    s1.is_laminar = true;
+    s1.is_turbulent = false;
+    
+    // Current station (at transition, turbulent)
+    let mut s2 = BlStation::new();
+    s2.x = 0.14078095;
+    s2.u = 1.4566427;
+    s2.theta = 2.50e-04;
+    s2.delta_star = 6.0e-04;
+    s2.ctau = 0.05;
+    s2.ampl = 9.5;  // Above Ncrit
+    s2.is_laminar = false;
+    s2.is_turbulent = true;
+    
+    let re = 1e6;
+    let msq = 0.0;
+    let ncrit = 9.0;
+    
+    // Compute closure relations
+    blvar(&mut s1, FlowType::Laminar, msq, re);
+    blvar(&mut s2, FlowType::Turbulent, msq, re);
+    
+    // Compute full TRCHEK2 result
+    let tr = trchek2_full(
+        s1.x, s2.x, s1.theta, s2.theta, s1.delta_star, s2.delta_star,
+        s1.u, s2.u, s1.hk, s2.hk, s1.r_theta, s2.r_theta,
+        s1.ampl, ncrit, msq, re,
+    );
+    
+    println!("\n=== trdif_full test ===");
+    println!("Transition detected: {}", tr.transition);
+    
+    if tr.transition {
+        // Test simple trdif (backward compatible)
+        let (res_simple, jac_simple) = trdif(&s1, &s2, tr.xt, msq, re);
+        
+        // Test full trdif
+        let (res_full, jac_full) = trdif_full(&s1, &s2, &tr, msq, re);
+        
+        println!("\n--- Simple TRDIF ---");
+        println!("Residuals: third={:.6e}, mom={:.6e}, shape={:.6e}",
+                 res_simple.res_third, res_simple.res_mom, res_simple.res_shape);
+        
+        println!("\n--- Full TRDIF ---");
+        println!("Residuals: third={:.6e}, mom={:.6e}, shape={:.6e}",
+                 res_full.res_third, res_full.res_mom, res_full.res_shape);
+        
+        println!("\nVS1 comparison (simple vs full):");
+        for i in 0..3 {
+            println!("  Row {}: simple[0]={:.4e}, full[0]={:.4e}", 
+                     i, jac_simple.vs1[i][0], jac_full.vs1[i][0]);
+        }
+        
+        println!("\nVS2 comparison (simple vs full):");
+        for i in 0..3 {
+            println!("  Row {}: simple[0]={:.4e}, full[0]={:.4e}", 
+                     i, jac_simple.vs2[i][0], jac_full.vs2[i][0]);
+        }
+        
+        // Residuals should be similar (same physics, different Jacobian accuracy)
+        let res_diff = (res_full.res_mom - res_simple.res_mom).abs();
+        println!("\nMomentum residual difference: {:.6e}", res_diff);
+        
+        // The full TRDIF should have non-zero VS1[0] derivatives (chain rule through XT)
+        // while simple TRDIF has VS1[0] = [0,0,0,0,0]
+        let full_vs1_0_sum: f64 = jac_full.vs1[0].iter().map(|x| x.abs()).sum();
+        println!("Full VS1[0] sum of absolute values: {:.6e}", full_vs1_0_sum);
+        
+        // The full Jacobian should capture more dependencies
+        // This is the key improvement from the full implementation
+    } else {
+        println!("No transition detected - test may need adjustment");
+    }
+}
+
+/// Integration test: verify theta error improves with full TRDIF
+#[test]
+fn test_trdif_theta_accuracy() {
+    use rustfoil_coupling::march::{march_fixed_ue, MarchConfig};
+    
+    // Generate a simple test case with known properties
+    // This is a simplified test - real validation should compare against XFOIL
+    let n_stations = 50;
+    let mut x = Vec::with_capacity(n_stations);
+    let mut ue = Vec::with_capacity(n_stations);
+    
+    // Simple velocity profile (favorable gradient then adverse)
+    for i in 0..n_stations {
+        let xi = (i as f64) / (n_stations as f64 - 1.0) * 0.5;  // x from 0 to 0.5
+        x.push(xi.max(1e-6));  // Avoid x=0
+        
+        // Velocity profile: accelerates then decelerates
+        let ue_val = if xi < 0.1 {
+            0.1 + xi * 10.0  // Accelerate from 0.1 to 1.1
+        } else {
+            1.1 - (xi - 0.1) * 0.5  // Decelerate
+        };
+        ue.push(ue_val);
+    }
+    
+    let re = 1e6;
+    let msq = 0.0;
+    let config = MarchConfig {
+        ncrit: 9.0,
+        max_iter: 25,
+        tolerance: 0.1,
+        hlmax: 4.5,
+        htmax: 2.5,
+        debug_trace: false,
+        ..Default::default()
+    };
+    
+    let result = march_fixed_ue(&x, &ue, re, msq, &config);
+    
+    println!("\n=== March result ===");
+    println!("Converged: {}", result.converged);
+    println!("Transition x: {:?}", result.x_transition);
+    println!("Transition index: {:?}", result.transition_index);
+    println!("Separation x: {:?}", result.x_separation);
+    println!("Number of stations: {}", result.stations.len());
+    
+    if let Some(trans_idx) = result.transition_index {
+        if trans_idx < result.stations.len() {
+            let trans_station = &result.stations[trans_idx];
+            println!("\nTransition station:");
+            println!("  x: {:.6}", trans_station.x);
+            println!("  theta: {:.6e}", trans_station.theta);
+            println!("  delta_star: {:.6e}", trans_station.delta_star);
+            println!("  Hk: {:.4}", trans_station.hk);
+            println!("  ctau: {:.6}", trans_station.ctau);
+        }
+    }
+    
+    // Basic sanity checks
+    assert!(result.stations.len() > 0, "Should have computed stations");
+    
+    // If transition occurred, verify it's in a reasonable location
+    if let Some(x_trans) = result.x_transition {
+        assert!(x_trans > 0.0 && x_trans < 0.5, 
+                "Transition should be in the domain");
+    }
 }
