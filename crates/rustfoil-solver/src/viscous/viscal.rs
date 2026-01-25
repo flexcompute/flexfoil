@@ -217,6 +217,15 @@ pub fn solve_viscous(
                     Us: 0.0, // Not stored
                     Cq: 0.0, // Not stored
                     De: 0.0, // Not stored
+                    Dd: 0.0, // Not stored
+                    Dd2: 0.0, // Not stored
+                    DiWall: 0.0, // Not stored
+                    DiTotal: 0.0, // Not stored
+                    DiLam: 0.0, // Not stored
+                    DiUsed: stations[i].cd,
+                    DiLamOverride: None,
+                    DiUsedMinusTotal: None,
+                    DiUsedMinusLam: None,
                 };
                 rustfoil_bl::add_event(rustfoil_bl::DebugEvent::blvar(
                     iteration,
@@ -457,11 +466,16 @@ pub fn solve_viscous_two_surfaces(
     let upper_result = march_surface(&upper_arc, upper_ue, re, msq, &march_config, 1);
 
     // Debug: Print march results
-    if rustfoil_bl::is_debug_active() && !upper_result.stations.is_empty() {
-        eprintln!("[DEBUG viscal] Upper march results:");
+    if rustfoil_bl::is_debug_active() {
+        eprintln!("[DEBUG viscal] Upper march results: {} stations (input: {})", 
+            upper_result.stations.len(), upper_stations.len());
         for (i, s) in upper_result.stations.iter().take(5).enumerate() {
             eprintln!("[DEBUG viscal]   [{i}] theta={:.6e}, dstar={:.6e}, Hk={:.3}, Cf={:.6e}",
                 s.theta, s.delta_star, s.hk, s.cf);
+        }
+        if let Some(last) = upper_result.stations.last() {
+            eprintln!("[DEBUG viscal]   [last] theta={:.6e}, dstar={:.6e}, Hk={:.3}, Cf={:.6e}",
+                last.theta, last.delta_star, last.hk, last.cf);
         }
         eprintln!("[DEBUG viscal]   x_tr={:?}, x_sep={:?}",
             upper_result.x_transition, upper_result.x_separation);
@@ -471,48 +485,63 @@ pub fn solve_viscous_two_surfaces(
     let lower_result = march_surface(&lower_arc, lower_ue, re, msq, &march_config, 2);
 
     // Debug: Print lower march results
-    if rustfoil_bl::is_debug_active() && !lower_result.stations.is_empty() {
-        eprintln!("[DEBUG viscal] Lower march results:");
+    if rustfoil_bl::is_debug_active() {
+        eprintln!("[DEBUG viscal] Lower march results: {} stations (input: {})",
+            lower_result.stations.len(), lower_stations.len());
         for (i, s) in lower_result.stations.iter().take(5).enumerate() {
             eprintln!("[DEBUG viscal]   [{i}] theta={:.6e}, dstar={:.6e}, Hk={:.3}, Cf={:.6e}",
                 s.theta, s.delta_star, s.hk, s.cf);
+        }
+        if let Some(last) = lower_result.stations.last() {
+            eprintln!("[DEBUG viscal]   [last] theta={:.6e}, dstar={:.6e}, Hk={:.3}, Cf={:.6e}",
+                last.theta, last.delta_star, last.hk, last.cf);
         }
         eprintln!("[DEBUG viscal]   x_tr={:?}, x_sep={:?}",
             lower_result.x_transition, lower_result.x_separation);
     }
 
     // Copy results back to stations
+    // Note: march_surface skips stagnation (index 0), so result[i] corresponds to stations[i+1]
+    // if stagnation was skipped. Check if the first input station is at stagnation.
+    let upper_offset = if upper_arc.first().map_or(false, |&x| x < 1e-6) { 1 } else { 0 };
     for (i, station) in upper_result.stations.iter().enumerate() {
-        if i < upper_stations.len() {
-            upper_stations[i].theta = station.theta;
-            upper_stations[i].delta_star = station.delta_star;
-            upper_stations[i].h = station.h;
-            upper_stations[i].hk = station.hk;
-            upper_stations[i].cf = station.cf;
-            upper_stations[i].ctau = station.ctau;
-            upper_stations[i].ampl = station.ampl;
-            upper_stations[i].is_laminar = station.is_laminar;
-            upper_stations[i].is_turbulent = station.is_turbulent;
-            upper_stations[i].mass_defect = station.mass_defect;
-            upper_stations[i].r_theta = station.r_theta;
+        let target = i + upper_offset;
+        if target < upper_stations.len() {
+            upper_stations[target].theta = station.theta;
+            upper_stations[target].delta_star = station.delta_star;
+            upper_stations[target].h = station.h;
+            upper_stations[target].hk = station.hk;
+            upper_stations[target].cf = station.cf;
+            upper_stations[target].ctau = station.ctau;
+            upper_stations[target].ampl = station.ampl;
+            upper_stations[target].is_laminar = station.is_laminar;
+            upper_stations[target].is_turbulent = station.is_turbulent;
+            upper_stations[target].mass_defect = station.mass_defect;
+            upper_stations[target].r_theta = station.r_theta;
         }
     }
+    // Station 0 (stagnation) keeps its initial values - Newton will skip it or handle
+    // it specially like XFOIL's SIMI condition. The key is that station 1 gets result[0],
+    // station 2 gets result[1], etc.
 
+    let lower_offset = if lower_arc.first().map_or(false, |&x| x < 1e-6) { 1 } else { 0 };
     for (i, station) in lower_result.stations.iter().enumerate() {
-        if i < lower_stations.len() {
-            lower_stations[i].theta = station.theta;
-            lower_stations[i].delta_star = station.delta_star;
-            lower_stations[i].h = station.h;
-            lower_stations[i].hk = station.hk;
-            lower_stations[i].cf = station.cf;
-            lower_stations[i].ctau = station.ctau;
-            lower_stations[i].ampl = station.ampl;
-            lower_stations[i].is_laminar = station.is_laminar;
-            lower_stations[i].is_turbulent = station.is_turbulent;
-            lower_stations[i].mass_defect = station.mass_defect;
-            lower_stations[i].r_theta = station.r_theta;
+        let target = i + lower_offset;
+        if target < lower_stations.len() {
+            lower_stations[target].theta = station.theta;
+            lower_stations[target].delta_star = station.delta_star;
+            lower_stations[target].h = station.h;
+            lower_stations[target].hk = station.hk;
+            lower_stations[target].cf = station.cf;
+            lower_stations[target].ctau = station.ctau;
+            lower_stations[target].ampl = station.ampl;
+            lower_stations[target].is_laminar = station.is_laminar;
+            lower_stations[target].is_turbulent = station.is_turbulent;
+            lower_stations[target].mass_defect = station.mass_defect;
+            lower_stations[target].r_theta = station.r_theta;
         }
     }
+    // Station 0 (stagnation) keeps its initial values
 
     // Get transition locations from march results (may be updated by Newton iteration)
     let mut x_tr_upper = upper_result.x_transition.unwrap_or(1.0);
@@ -552,8 +581,10 @@ pub fn solve_viscous_two_surfaces(
     // 3. Combined Newton system for both surfaces
     // See Phase 2 in newton-vi-coupling-plan.md for full implementation.
     //
-    // For Phase 1: Direct march gives CD within ~10% of XFOIL.
-    // Newton iteration is disabled until Phase 2 DIJ handling is implemented.
+    // Newton iteration is currently disabled because it fails at transition stations.
+    // The transition interval needs proper TRDIF handling (hybrid laminar+turbulent equations)
+    // which is not yet implemented. For now, we rely on the direct march results.
+    // TODO: Implement TRDIF handling in Newton system to enable V-I coupling.
     let can_run_newton = false;
 
     if can_run_newton {
@@ -622,6 +653,16 @@ pub fn solve_viscous_two_surfaces(
                 };
                 blvar(station, flow_type, msq, re);
             }
+            
+            // Debug after blvar
+            if rustfoil_bl::is_debug_active() && iter > 0 {
+                eprintln!("[DEBUG Newton] iter {} after blvar:", iter);
+                for i in 1..4.min(upper_stations.len()) {
+                    let s = &upper_stations[i];
+                    eprintln!("[DEBUG Newton]   [{}] theta={:.6e} dstar={:.6e} Hk={:.4} Cf={:.4e}", 
+                        i, s.theta, s.delta_star, s.hk, s.cf);
+                }
+            }
 
             // Build Newton system (without VM full coupling for Phase 1)
             let mut upper_newton = BlNewtonSystem::new(n_upper);
@@ -629,13 +670,62 @@ pub fn solve_viscous_two_surfaces(
                 // Use basic build (not build_with_vm_full) to avoid DIJ issues
                 upper_newton.build(upper_stations, &upper_flow_types, msq, re);
             }
+            
+            // Zero out the stagnation interval residual (XFOIL SIMI condition)
+            // The first interval (station 0 → 1) uses special similarity handling
+            // where the residual is set to zero (prescribed boundary condition)
+            if upper_newton.rhs.len() > 1 {
+                upper_newton.rhs[1] = [0.0, 0.0, 0.0];
+            }
 
             let upper_residual = upper_newton.residual_norm();
+            
+            // Debug: show station values and RHS
+            if rustfoil_bl::is_debug_active() && iter < 2 {
+                eprintln!("[DEBUG Newton] iter {} upper stations before build:", iter);
+                for i in 0..4.min(upper_stations.len()) {
+                    let s = &upper_stations[i];
+                    eprintln!("[DEBUG Newton]   [{}] x={:.6e} theta={:.6e} dstar={:.6e} Hk={:.4} Ue={:.6e}", 
+                        i, s.x, s.theta, s.delta_star, s.hk, s.u);
+                }
+                eprintln!("[DEBUG Newton] iter {} upper RHS res={:.4e}", iter, upper_residual);
+                // Find max residual
+                let mut max_res = 0.0f64;
+                let mut max_idx = 0;
+                for (i, r) in upper_newton.rhs.iter().enumerate() {
+                    let norm = r[0]*r[0] + r[1]*r[1] + r[2]*r[2];
+                    if norm > max_res {
+                        max_res = norm;
+                        max_idx = i;
+                    }
+                }
+                eprintln!("[DEBUG Newton]   max residual at idx={}: {:?}", max_idx, upper_newton.rhs[max_idx]);
+                eprintln!("[DEBUG Newton]   rhs[2]={:?}", upper_newton.rhs[2]);
+            }
 
             // Solve Newton system (basic tridiagonal solve)
             let upper_deltas = solve_coupled_system(&upper_newton);
+            
+            // Debug: show deltas and station values after
+            if rustfoil_bl::is_debug_active() && iter == 0 {
+                eprintln!("[DEBUG Newton] upper deltas n={}", upper_deltas.len());
+                for i in 1..6.min(upper_deltas.len()) {
+                    let d = &upper_deltas[i];
+                    eprintln!("  [{}] d[ampl/ctau]={:.4e}, d[theta]={:.4e}, d[mass]={:.4e}", i, d[0], d[1], d[2]);
+                }
+            }
+            if rustfoil_bl::is_debug_active() && iter == 1 {
+                eprintln!("[DEBUG Newton] iter 1 START, upper stations:");
+                for i in 1..4.min(upper_stations.len()) {
+                    let s = &upper_stations[i];
+                    eprintln!("[DEBUG Newton]   [{}] theta={:.6e} dstar={:.6e} Hk={:.4} Cf={:.4e}", 
+                        i, s.theta, s.delta_star, s.hk, s.cf);
+                }
+            }
 
             // Apply updates with simple limiting (not XFOIL-style Ue coupling)
+            // XFOIL UPDATE: DDSTR = (DMASS - DSTR*DUEDG) / UEDG
+            // Without V-I coupling (DUEDG=0): DDSTR = DMASS / UEDG
             if upper_deltas.len() == n_upper {
                 for (i, station) in upper_stations.iter_mut().enumerate() {
                     if i > 0 {
@@ -651,8 +741,13 @@ pub fn solve_viscous_two_surfaces(
                         }
                         station.theta += rlx * delta[1];
                         station.theta = station.theta.max(1e-12);
-                        station.delta_star += rlx * delta[2];
+                        
+                        // delta[2] is MASS change, not delta_star change
+                        // DDSTR = DMASS / UEDG (when DUEDG = 0)
+                        let d_dstar = delta[2] / station.u.max(1e-6);
+                        station.delta_star += rlx * d_dstar;
                         station.delta_star = station.delta_star.max(1e-12);
+                        
                         station.h = station.delta_star / station.theta;
                         station.mass_defect = station.u * station.delta_star;
                     }
@@ -691,6 +786,11 @@ pub fn solve_viscous_two_surfaces(
             if lower_flow_types.len() == n_lower - 1 {
                 lower_newton.build(lower_stations, &lower_flow_types, msq, re);
             }
+            
+            // Zero out the stagnation interval residual (XFOIL SIMI condition)
+            if lower_newton.rhs.len() > 1 {
+                lower_newton.rhs[1] = [0.0, 0.0, 0.0];
+            }
 
             let lower_residual = lower_newton.residual_norm();
 
@@ -712,8 +812,13 @@ pub fn solve_viscous_two_surfaces(
                         }
                         station.theta += rlx * delta[1];
                         station.theta = station.theta.max(1e-12);
-                        station.delta_star += rlx * delta[2];
+                        
+                        // delta[2] is MASS change, not delta_star change
+                        // DDSTR = DMASS / UEDG (when DUEDG = 0)
+                        let d_dstar = delta[2] / station.u.max(1e-6);
+                        station.delta_star += rlx * d_dstar;
                         station.delta_star = station.delta_star.max(1e-12);
+                        
                         station.h = station.delta_star / station.theta;
                         station.mass_defect = station.u * station.delta_star;
                     }
@@ -722,6 +827,12 @@ pub fn solve_viscous_two_surfaces(
 
             // Combined residual
             residual = (upper_residual + lower_residual) / 2.0;
+            
+            // Debug: show Newton iteration progress
+            if rustfoil_bl::is_debug_active() {
+                eprintln!("[DEBUG Newton] iter={}: upper_res={:.6e}, lower_res={:.6e}, total={:.6e}",
+                    iter, upper_residual, lower_residual, residual);
+            }
 
             // Check convergence
             if residual < config.tolerance {
@@ -731,6 +842,9 @@ pub fn solve_viscous_two_surfaces(
 
             // Check for divergence or increasing residual
             if !residual.is_finite() || residual > 1e10 {
+                if rustfoil_bl::is_debug_active() {
+                    eprintln!("[DEBUG Newton] FAILED: residual={:.6e}, falling back to direct march", residual);
+                }
                 // Restore original values
                 for (i, (theta, dstar, ctau, ampl, h, mass)) in upper_backup.iter().enumerate() {
                     upper_stations[i].theta = *theta;

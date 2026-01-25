@@ -20,7 +20,7 @@ use rustfoil_bl::equations::{
     bldif, bldif_with_terms, blvar, trdif, trdif_full, trdif_turb_terms, FlowType,
 };
 use rustfoil_bl::state::BlStation;
-use rustfoil_bl::{BlvarInput, BlvarOutput};
+use rustfoil_bl::{closures, BlvarInput, BlvarOutput};
 
 use crate::solve::{build_4x4_system, solve_4x4};
 
@@ -82,6 +82,28 @@ fn estimate_transition_ctau(
     } else {
         0.03
     }
+}
+
+fn bldif_terms_xfoil_upstream(
+    s1: &BlStation,
+    s2: &BlStation,
+    flow_type: FlowType,
+    msq: f64,
+    re: f64,
+) -> Option<(rustfoil_bl::BldifTerms, BlStation)> {
+    if flow_type != FlowType::Turbulent {
+        return None;
+    }
+
+    let mut s1_xfoil = s1.clone();
+    s1_xfoil.theta = s2.theta;
+    s1_xfoil.delta_star = s2.delta_star;
+    s1_xfoil.ctau = s2.ctau;
+    s1_xfoil.ampl = s2.ampl;
+    blvar(&mut s1_xfoil, flow_type, msq, re);
+
+    let (_res_x, _jac_x, terms_x) = bldif_with_terms(&s1_xfoil, s2, flow_type, msq, re);
+    Some((terms_x, s1_xfoil))
 }
 
 fn emit_trchek2_debug(
@@ -173,6 +195,8 @@ fn emit_trchek2_debug(
         ncrit,
         tr.transition,
         false,
+        Some(tr.wf1),
+        Some(tr.wf2),
         Some(tt),
         Some(dt),
         Some(ut),
@@ -251,6 +275,26 @@ fn emit_blvar_debug(side: usize, ibl: usize, flow_type: FlowType, station: &BlSt
         ctau: station.ctau,
         ampl: station.ampl,
     };
+    let dd = station.ctau * station.ctau * (0.995 - station.us) * 2.0 / station.hs;
+    let dd2 = 0.15 * (0.995 - station.us).powi(2) / station.r_theta * 2.0 / station.hs;
+    let cf2t_result = closures::cf_turbulent(station.hk, station.r_theta, 0.0);
+    let di_wall = (0.5 * cf2t_result.cf * station.us) * 2.0 / station.hs;
+    let grt = station.r_theta.ln();
+    let hmin = 1.0 + 2.1 / grt;
+    let fl = (station.hk - 1.0) / (hmin - 1.0);
+    let dfac = 0.5 + 0.5 * fl.tanh();
+    let di_wall_corrected = di_wall * dfac;
+    let di_total = di_wall_corrected + dd + dd2;
+    let di_lam = closures::dissipation_laminar(station.hk, station.r_theta).di;
+    let (di_lam_override, di_used_minus_total, di_used_minus_lam) = if flow_type == FlowType::Turbulent {
+        let di_lam_override = di_lam > di_total;
+        let di_used_minus_total = station.cd - di_total;
+        let di_used_minus_lam = station.cd - di_lam;
+        (Some(di_lam_override), Some(di_used_minus_total), Some(di_used_minus_lam))
+    } else {
+        (None, None, None)
+    };
+
     let output = BlvarOutput {
         H: station.h,
         Hk: station.hk,
@@ -262,6 +306,15 @@ fn emit_blvar_debug(side: usize, ibl: usize, flow_type: FlowType, station: &BlSt
         Us: station.us,
         Cq: station.cq,
         De: station.de,
+        Dd: dd,
+        Dd2: dd2,
+        DiWall: di_wall_corrected,
+        DiTotal: di_total,
+        DiLam: di_lam,
+        DiUsed: station.cd,
+        DiLamOverride: di_lam_override,
+        DiUsedMinusTotal: di_used_minus_total,
+        DiUsedMinusLam: di_used_minus_lam,
     };
 
     rustfoil_bl::add_event(rustfoil_bl::DebugEvent::blvar(
@@ -764,11 +817,15 @@ pub fn newton_solve_station_transition(
     // Newton iteration loop
     let mut last_dmax = f64::INFINITY;
     let mut transition_active = false;
+    let mut trchek_hold: Option<Trchek2FullResult> = None;
+    let mut trchek_hold_state: Option<BlStation> = None;
     for iter_idx in 0..max_iter {
         // Build BL residuals and Jacobian
         // Use full TRDIF with proper chain rule through XT derivatives when available
-        let mut trchek_full = None;
-        if use_trchek && (current_laminar || transition_active) {
+        let mut trchek_full = trchek_hold.as_ref();
+        let mut trchek_state: Option<BlStation> = None;
+        if use_trchek && current_laminar {
+            trchek_state = Some(station.clone());
             let tr = trchek2_full(
                 prev.x,
                 station.x,
@@ -800,13 +857,53 @@ pub fn newton_solve_station_transition(
                 // Recompute turbulent secondary variables now that flow type flipped.
                 blvar(&mut station, FlowType::Turbulent, msq, re);
             }
-            if tr.transition || transition_active {
-                trchek_full = Some(tr);
+            if tr.transition {
+                trchek_hold = Some(tr);
+                if trchek_hold_state.is_none() {
+                    trchek_hold_state = trchek_state.clone();
+                }
+                trchek_full = trchek_hold.as_ref();
             }
         }
 
         if let (Some(tr), Some(side), Some(ibl)) = (trchek_full.as_ref(), debug_side, debug_ibl) {
-            emit_trchek2_debug(side, ibl, prev, &station, tr, msq, re, ncrit);
+            let curr = trchek_hold_state
+                .as_ref()
+                .or(trchek_state.as_ref())
+                .unwrap_or(&station);
+            emit_trchek2_debug(side, ibl, prev, curr, tr, msq, re, ncrit);
+        }
+
+        if rustfoil_bl::is_debug_active() {
+            if let (Some(side), Some(ibl)) = (debug_side, debug_ibl) {
+                if trchek_full.is_none() {
+                    rustfoil_bl::add_event(rustfoil_bl::DebugEvent::bldif_state(
+                        iter_idx + 1,
+                        side,
+                        ibl,
+                        rustfoil_bl::BldifStateEvent {
+                            side,
+                            ibl,
+                            iter: iter_idx + 1,
+                            flow_type: match flow_type {
+                                FlowType::Laminar => 1,
+                                FlowType::Turbulent => 2,
+                                FlowType::Wake => 3,
+                            },
+                            X1: prev.x,
+                            U1: prev.u,
+                            T1: prev.theta,
+                            D1: prev.delta_star,
+                            S1: prev.ctau,
+                            X2: station.x,
+                            U2: station.u,
+                            T2: station.theta,
+                            D2: station.delta_star,
+                            S2: station.ctau,
+                        },
+                    ));
+                }
+            }
         }
 
         let (res, jac) = if let Some(tr) = trchek_full.as_ref() {
@@ -909,6 +1006,8 @@ pub fn newton_solve_station_transition(
                             ulog: terms.ulog,
                             tlog: terms.tlog,
                             hlog: terms.hlog,
+                            z_cfx_shape: terms.z_cfx_shape,
+                            z_dix_shape: terms.z_dix_shape,
                             upw: terms.upw,
                             ha: terms.ha,
                             btmp_mom: terms.btmp_mom,
@@ -919,16 +1018,59 @@ pub fn newton_solve_station_transition(
                             btmp_shape: terms.btmp_shape,
                             cfx_shape: terms.cfx_shape,
                             dix: terms.dix,
+                            cfx_upw: terms.cfx_upw,
+                            dix_upw: terms.dix_upw,
                             hsa: terms.hsa,
                             hca: terms.hca,
+                            dd: terms.dd,
+                            dd2: terms.dd2,
                             xot1: terms.xot1,
                             xot2: terms.xot2,
+                            cf1: terms.cf1,
+                            cf2: terms.cf2,
+                            di1: terms.di1,
+                            di2: terms.di2,
+                            z_hs2: terms.z_hs2,
+                            z_cf2_shape: terms.z_cf2_shape,
                             z_di2: terms.z_di2,
+                            z_t2_shape: terms.z_t2_shape,
+                            z_u2_shape: terms.z_u2_shape,
+                            z_hca: terms.z_hca,
+                            z_ha_shape: terms.z_ha_shape,
                             di2_s: terms.di2_s,
                             z_upw_shape: terms.z_upw_shape,
+                            hs2_t: terms.hs2_t,
+                            hs2_d: terms.hs2_d,
+                            hs2_u: terms.hs2_u,
+                            cf2_t_shape: terms.cf2_t_shape,
+                            cf2_d_shape: terms.cf2_d_shape,
+                            cf2_u_shape: terms.cf2_u_shape,
+                            di2_t: terms.di2_t,
+                            di2_d: terms.di2_d,
+                            di2_u: terms.di2_u,
+                            hc2_t: terms.hc2_t,
+                            hc2_d: terms.hc2_d,
+                            hc2_u: terms.hc2_u,
+                            h2_t: terms.h2_t,
+                            h2_d: terms.h2_d,
                             upw_t2_shape: terms.upw_t2_shape,
                             upw_d2_shape: terms.upw_d2_shape,
                             upw_u2_shape: terms.upw_u2_shape,
+                            vs2_3_1: 0.0,
+                            vs2_3_2: 0.0,
+                            vs2_3_3: 0.0,
+                            vs2_3_4: 0.0,
+                            xfoil_t1: None,
+                            xfoil_d1: None,
+                            xfoil_s1: None,
+                            xfoil_hk1: None,
+                            xfoil_rt1: None,
+                            xfoil_di1: None,
+                            xfoil_di2: None,
+                            xfoil_upw: None,
+                            xfoil_dix_upw: None,
+                            xfoil_z_dix_shape: None,
+                            xfoil_z_upw_shape: None,
                         },
                     ));
                 }
@@ -937,6 +1079,121 @@ pub fn newton_solve_station_transition(
 
         if rustfoil_bl::is_debug_active() {
             if let (Some(side), Some(ibl)) = (debug_side, debug_ibl) {
+                if trchek_full.is_none() {
+                    let (res_dbg, jac_dbg, terms_dbg) =
+                        bldif_with_terms(prev, &station, flow_type, msq, re);
+                    let xfoil_terms =
+                        bldif_terms_xfoil_upstream(prev, &station, flow_type, msq, re);
+                    rustfoil_bl::add_event(rustfoil_bl::DebugEvent::bldif_terms(
+                        iter_idx + 1,
+                        side,
+                        ibl,
+                        match flow_type {
+                            FlowType::Laminar => 1,
+                            FlowType::Turbulent => 2,
+                            FlowType::Wake => 3,
+                        },
+                        rustfoil_bl::BldifTermsEvent {
+                            side,
+                            ibl,
+                            flow_type: match flow_type {
+                                FlowType::Laminar => 1,
+                                FlowType::Turbulent => 2,
+                                FlowType::Wake => 3,
+                            },
+                            xlog: terms_dbg.xlog,
+                            ulog: terms_dbg.ulog,
+                            tlog: terms_dbg.tlog,
+                            hlog: terms_dbg.hlog,
+                            z_cfx_shape: terms_dbg.z_cfx_shape,
+                            z_dix_shape: terms_dbg.z_dix_shape,
+                            upw: terms_dbg.upw,
+                            ha: terms_dbg.ha,
+                            btmp_mom: terms_dbg.btmp_mom,
+                            cfx: terms_dbg.cfx,
+                            cfx_ta: terms_dbg.cfx_ta,
+                            cfx_t1: terms_dbg.cfx_t1,
+                            cfx_t2: terms_dbg.cfx_t2,
+                            btmp_shape: terms_dbg.btmp_shape,
+                            cfx_shape: terms_dbg.cfx_shape,
+                            dix: terms_dbg.dix,
+                            cfx_upw: terms_dbg.cfx_upw,
+                            dix_upw: terms_dbg.dix_upw,
+                            hsa: terms_dbg.hsa,
+                            hca: terms_dbg.hca,
+                            dd: terms_dbg.dd,
+                            dd2: terms_dbg.dd2,
+                            xot1: terms_dbg.xot1,
+                            xot2: terms_dbg.xot2,
+                            cf1: terms_dbg.cf1,
+                            cf2: terms_dbg.cf2,
+                            di1: terms_dbg.di1,
+                            di2: terms_dbg.di2,
+                            z_hs2: terms_dbg.z_hs2,
+                            z_cf2_shape: terms_dbg.z_cf2_shape,
+                            z_di2: terms_dbg.z_di2,
+                            z_t2_shape: terms_dbg.z_t2_shape,
+                            z_u2_shape: terms_dbg.z_u2_shape,
+                            z_hca: terms_dbg.z_hca,
+                            z_ha_shape: terms_dbg.z_ha_shape,
+                            di2_s: terms_dbg.di2_s,
+                            z_upw_shape: terms_dbg.z_upw_shape,
+                            hs2_t: terms_dbg.hs2_t,
+                            hs2_d: terms_dbg.hs2_d,
+                            hs2_u: terms_dbg.hs2_u,
+                            cf2_t_shape: terms_dbg.cf2_t_shape,
+                            cf2_d_shape: terms_dbg.cf2_d_shape,
+                            cf2_u_shape: terms_dbg.cf2_u_shape,
+                            di2_t: terms_dbg.di2_t,
+                            di2_d: terms_dbg.di2_d,
+                            di2_u: terms_dbg.di2_u,
+                            hc2_t: terms_dbg.hc2_t,
+                            hc2_d: terms_dbg.hc2_d,
+                            hc2_u: terms_dbg.hc2_u,
+                            h2_t: terms_dbg.h2_t,
+                            h2_d: terms_dbg.h2_d,
+                            upw_t2_shape: terms_dbg.upw_t2_shape,
+                            upw_d2_shape: terms_dbg.upw_d2_shape,
+                            upw_u2_shape: terms_dbg.upw_u2_shape,
+                            vs2_3_1: jac_dbg.vs2[2][0],
+                            vs2_3_2: jac_dbg.vs2[2][1],
+                            vs2_3_3: jac_dbg.vs2[2][2],
+                            vs2_3_4: jac_dbg.vs2[2][3],
+                            xfoil_t1: xfoil_terms.as_ref().map(|(_, s)| s.theta),
+                            xfoil_d1: xfoil_terms.as_ref().map(|(_, s)| s.delta_star),
+                            xfoil_s1: xfoil_terms.as_ref().map(|(_, s)| s.ctau),
+                            xfoil_hk1: xfoil_terms.as_ref().map(|(_, s)| s.hk),
+                            xfoil_rt1: xfoil_terms.as_ref().map(|(_, s)| s.r_theta),
+                            xfoil_di1: xfoil_terms.as_ref().map(|(t, _)| t.di1),
+                            xfoil_di2: xfoil_terms.as_ref().map(|(t, _)| t.di2),
+                            xfoil_upw: xfoil_terms.as_ref().map(|(t, _)| t.upw),
+                            xfoil_dix_upw: xfoil_terms.as_ref().map(|(t, _)| t.dix_upw),
+                            xfoil_z_dix_shape: xfoil_terms.as_ref().map(|(t, _)| t.z_dix_shape),
+                            xfoil_z_upw_shape: xfoil_terms.as_ref().map(|(t, _)| t.z_upw_shape),
+                        },
+                    ));
+
+                    let mut vs1_dbg = [[0.0; 5]; 4];
+                    let mut vs2_dbg = [[0.0; 5]; 4];
+                    for row in 0..3 {
+                        vs1_dbg[row] = jac_dbg.vs1[row];
+                        vs2_dbg[row] = jac_dbg.vs2[row];
+                    }
+                    rustfoil_bl::add_event(rustfoil_bl::DebugEvent::bldif(
+                        iter_idx + 1,
+                        side,
+                        ibl,
+                        match flow_type {
+                            FlowType::Laminar => 1,
+                            FlowType::Turbulent => 2,
+                            FlowType::Wake => 3,
+                        },
+                        vs1_dbg,
+                        vs2_dbg,
+                        [res_dbg.res_third, res_dbg.res_mom, res_dbg.res_shape, 0.0],
+                    ));
+                }
+
                 rustfoil_bl::add_event(rustfoil_bl::DebugEvent::mrchue_sys(
                     iter_idx + 1,
                     side,
@@ -1014,16 +1271,36 @@ pub fn newton_solve_station_transition(
         
         // Solve 4x4 system
         let vsrez = solve_4x4(&a, &b);
+
+        if rustfoil_bl::is_debug_active() {
+            if let (Some(side), Some(ibl)) = (debug_side, debug_ibl) {
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::vsrez_after(
+                    iter_idx + 1,
+                    side,
+                    ibl,
+                    rustfoil_bl::VsrezAfterEvent {
+                        side,
+                        ibl,
+                        iter: iter_idx + 1,
+                        direct,
+                        flow_type: if current_laminar { 1 } else { 2 },
+                        VSREZ_solution: vsrez,
+                    },
+                ));
+            }
+        }
         
-        // Compute max relative change
-        let dmax = (vsrez[1] / station.theta.max(1e-12)).abs()
-            .max((vsrez[2] / station.delta_star.max(1e-12)).abs())
-            .max((vsrez[3] / station.u.max(1e-12)).abs());
-        let dmax = if current_laminar {
-            dmax
+        // Compute max relative change (XFOIL: include dUe in inverse mode)
+        let mut dmax = (vsrez[1] / station.theta.max(1e-12)).abs()
+            .max((vsrez[2] / station.delta_star.max(1e-12)).abs());
+        if current_laminar {
+            dmax = dmax.max((vsrez[0] / 10.0).abs());
         } else {
-            dmax.max((vsrez[0] / station.ctau.max(1e-6)).abs())
-        };
+            dmax = dmax.max((vsrez[0] / station.ctau.max(1e-6)).abs());
+        }
+        if !direct {
+            dmax = dmax.max((vsrez[3] / station.u.max(1e-6)).abs());
+        }
         last_dmax = dmax;
         
         // Relaxation factor
@@ -1099,12 +1376,18 @@ pub fn newton_solve_station_transition(
             if !direct_after {
                 // Need to switch to inverse mode
                 direct = false;
-                // Estimate target Hk based on upstream
+                // Estimate target Hk based on upstream (XFOIL MRCHUE logic)
                 if current_laminar {
+                    // Laminar case: slow increase in Hk downstream
                     htarg = prev.hk + 0.03 * (x_new - prev.x) / prev.theta.max(1e-12);
+                } else if let Some(tr) = trchek_full.as_ref() {
+                    // Transition interval: blend laminar and turbulent targets
+                    htarg = prev.hk
+                        + (0.03 * (tr.xt - prev.x) - 0.15 * (station.x - tr.xt))
+                            / prev.theta.max(1e-12);
                 } else {
-                    // For turbulent, target htmax directly (XFOIL behavior)
-                    htarg = hmax;
+                    // Turbulent case: faster decrease in Hk downstream
+                    htarg = prev.hk - 0.15 * (x_new - prev.x) / prev.theta.max(1e-12);
                 }
                 // XFOIL does not clamp the inverse-mode target above hmax.
                 htarg = htarg.max(hmax);
@@ -1138,6 +1421,32 @@ pub fn newton_solve_station_transition(
         // Recompute secondary variables
         blvar(&mut station, flow_type, msq, re);
 
+        // Update transition interval data using the latest station state.
+        // XFOIL evaluates TRCHEK2 against the current (post-update) station,
+        // so keep the stored TRCHEK2 result in sync once transition is active.
+        if transition_active {
+            let tr_updated = trchek2_full(
+                prev.x,
+                station.x,
+                prev.theta,
+                station.theta,
+                prev.delta_star,
+                station.delta_star,
+                prev.u,
+                station.u,
+                prev.hk,
+                station.hk,
+                prev.r_theta,
+                station.r_theta,
+                prev.ampl,
+                ncrit,
+                msq,
+                re,
+            );
+            trchek_hold = Some(tr_updated);
+            trchek_hold_state = Some(station.clone());
+        }
+
         if rustfoil_bl::is_debug_active() {
             if let (Some(side), Some(ibl)) = (debug_side, debug_ibl) {
                 rustfoil_bl::add_event(rustfoil_bl::DebugEvent::blvar(
@@ -1164,6 +1473,15 @@ pub fn newton_solve_station_transition(
                         Us: station.us,
                         Cq: station.cq,
                         De: station.de,
+                        Dd: station.ctau * station.ctau * (0.995 - station.us) * 2.0 / station.hs,
+                        Dd2: 0.15 * (0.995 - station.us).powi(2) / station.r_theta * 2.0 / station.hs,
+                        DiWall: 0.0,
+                        DiTotal: 0.0,
+                        DiLam: 0.0,
+                        DiUsed: station.cd,
+                        DiLamOverride: None,
+                        DiUsedMinusTotal: None,
+                        DiUsedMinusLam: None,
                     },
                 ));
             }
@@ -1594,6 +1912,16 @@ pub fn march_surface(
             }
         }
 
+        // If transition/wake state changed, recompute secondary variables with the final flow type.
+        let flow_type_final = if station.is_wake {
+            FlowType::Wake
+        } else if station.is_turbulent {
+            FlowType::Turbulent
+        } else {
+            FlowType::Laminar
+        };
+        blvar(&mut station, flow_type_final, msq, re);
+
         // Check for separation
         if station.cf < 0.0 && result.x_separation.is_none() {
             result.x_separation = Some(station.x);
@@ -1613,6 +1941,8 @@ pub fn march_surface(
             };
             emit_blvar_debug(side, station_idx + 2, flow_type, &station);
             let (res, jac, terms) = bldif_with_terms(prev_station, &station, flow_type, msq, re);
+            let xfoil_terms =
+                bldif_terms_xfoil_upstream(prev_station, &station, flow_type, msq, re);
             let mut vs1 = [[0.0; 5]; 4];
             let mut vs2 = [[0.0; 5]; 4];
             for row in 0..3 {
@@ -1653,6 +1983,8 @@ pub fn march_surface(
                     ulog: terms.ulog,
                     tlog: terms.tlog,
                     hlog: terms.hlog,
+                    z_cfx_shape: terms.z_cfx_shape,
+                    z_dix_shape: terms.z_dix_shape,
                     upw: terms.upw,
                     ha: terms.ha,
                     btmp_mom: terms.btmp_mom,
@@ -1663,16 +1995,59 @@ pub fn march_surface(
                     btmp_shape: terms.btmp_shape,
                     cfx_shape: terms.cfx_shape,
                     dix: terms.dix,
+                    cfx_upw: terms.cfx_upw,
+                    dix_upw: terms.dix_upw,
                     hsa: terms.hsa,
                     hca: terms.hca,
+                    dd: terms.dd,
+                    dd2: terms.dd2,
                     xot1: terms.xot1,
                     xot2: terms.xot2,
+                    cf1: terms.cf1,
+                    cf2: terms.cf2,
+                    di1: terms.di1,
+                    di2: terms.di2,
+                    z_hs2: terms.z_hs2,
+                    z_cf2_shape: terms.z_cf2_shape,
                     z_di2: terms.z_di2,
+                    z_t2_shape: terms.z_t2_shape,
+                    z_u2_shape: terms.z_u2_shape,
+                    z_hca: terms.z_hca,
+                    z_ha_shape: terms.z_ha_shape,
                     di2_s: terms.di2_s,
                     z_upw_shape: terms.z_upw_shape,
+                    hs2_t: terms.hs2_t,
+                    hs2_d: terms.hs2_d,
+                    hs2_u: terms.hs2_u,
+                    cf2_t_shape: terms.cf2_t_shape,
+                    cf2_d_shape: terms.cf2_d_shape,
+                    cf2_u_shape: terms.cf2_u_shape,
+                    di2_t: terms.di2_t,
+                    di2_d: terms.di2_d,
+                    di2_u: terms.di2_u,
+                    hc2_t: terms.hc2_t,
+                    hc2_d: terms.hc2_d,
+                    hc2_u: terms.hc2_u,
+                    h2_t: terms.h2_t,
+                    h2_d: terms.h2_d,
                     upw_t2_shape: terms.upw_t2_shape,
                     upw_d2_shape: terms.upw_d2_shape,
                     upw_u2_shape: terms.upw_u2_shape,
+                    vs2_3_1: jac.vs2[2][0],
+                    vs2_3_2: jac.vs2[2][1],
+                    vs2_3_3: jac.vs2[2][2],
+                    vs2_3_4: jac.vs2[2][3],
+                    xfoil_t1: xfoil_terms.as_ref().map(|(_, s)| s.theta),
+                    xfoil_d1: xfoil_terms.as_ref().map(|(_, s)| s.delta_star),
+                    xfoil_s1: xfoil_terms.as_ref().map(|(_, s)| s.ctau),
+                    xfoil_hk1: xfoil_terms.as_ref().map(|(_, s)| s.hk),
+                    xfoil_rt1: xfoil_terms.as_ref().map(|(_, s)| s.r_theta),
+                    xfoil_di1: xfoil_terms.as_ref().map(|(t, _)| t.di1),
+                    xfoil_di2: xfoil_terms.as_ref().map(|(t, _)| t.di2),
+                    xfoil_upw: xfoil_terms.as_ref().map(|(t, _)| t.upw),
+                    xfoil_dix_upw: xfoil_terms.as_ref().map(|(t, _)| t.dix_upw),
+                    xfoil_z_dix_shape: xfoil_terms.as_ref().map(|(t, _)| t.z_dix_shape),
+                    xfoil_z_upw_shape: xfoil_terms.as_ref().map(|(t, _)| t.z_upw_shape),
                 },
             ));
             rustfoil_bl::add_event(rustfoil_bl::DebugEvent::mrchue(

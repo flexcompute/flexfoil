@@ -304,8 +304,9 @@ def phase8_trchek2(
         print("No TRCHEK2_FINAL events found in XFOIL data")
         return
 
-    # Index the latest TRCHEK2_ITER by (side, ibl)
+    # Index the latest TRCHEK2_ITER by (side, ibl) and by call_id
     tr_iter_map = {}
+    tr_iter_by_call = {}
     for ev in tr_iter:
         side = ev.get('side')
         if xfoil_side is not None and side != xfoil_side:
@@ -315,6 +316,9 @@ def phase8_trchek2(
         key = (side, ev.get('ibl'))
         if key not in tr_iter_map or ev.get('trchek_iter', 0) >= tr_iter_map[key].get('trchek_iter', 0):
             tr_iter_map[key] = ev
+        call_key = (side, ev.get('ibl'), ev.get('call_id'))
+        if call_key not in tr_iter_by_call or ev.get('trchek_iter', 0) >= tr_iter_by_call[call_key].get('trchek_iter', 0):
+            tr_iter_by_call[call_key] = ev
 
     # Load RustFoil debug if available
     rust_events = []
@@ -326,6 +330,7 @@ def phase8_trchek2(
     rust_tr_iter = [e for e in rust_events if e.get('subroutine') == 'TRCHEK2_ITER']
     rust_map = {(e.get('side'), e.get('ibl')): e for e in rust_tr_final}
     rust_iter_map = {}
+    rust_iter_by_call = {}
     for ev in rust_tr_iter:
         side = ev.get('side')
         if rust_side is not None and side != rust_side:
@@ -335,6 +340,9 @@ def phase8_trchek2(
         key = (side, ev.get('ibl'))
         if key not in rust_iter_map or ev.get('trchek_iter', 0) >= rust_iter_map[key].get('trchek_iter', 0):
             rust_iter_map[key] = ev
+        call_key = (side, ev.get('ibl'), ev.get('call_id'))
+        if call_key not in rust_iter_by_call or ev.get('trchek_iter', 0) >= rust_iter_by_call[call_key].get('trchek_iter', 0):
+            rust_iter_by_call[call_key] = ev
 
     xfoil_mrchue = [e for e in events if e.get('subroutine') == 'MRCHUE_ITER']
     rust_mrchue = [e for e in rust_events if e.get('subroutine') == 'MRCHUE_ITER']
@@ -377,10 +385,42 @@ def phase8_trchek2(
             ]
     elif rust_tr_final:
         compare_keys = sorted(rust_map.keys())
-        tr_final_map = {(e.get('side'), e.get('ibl')): e for e in tr_final}
-        compare_events = [tr_final_map.get(key) for key in compare_keys if tr_final_map.get(key)]
+        tr_final_map = {}
+        tr_final_by_global = {}
+        for ev in tr_final:
+            key = (ev.get('side'), ev.get('ibl'))
+            tr_final_map[key] = ev
+            gkey = (ev.get('side'), ev.get('ibl'), ev.get('global_iter'))
+            tr_final_by_global[gkey] = ev
+        compare_events = []
+        for key in compare_keys:
+            rust_ev = rust_map.get(key, {})
+            g_iter = rust_ev.get('global_iter')
+            if g_iter is not None:
+                pick = tr_final_by_global.get((key[0], key[1], g_iter))
+                if pick is not None:
+                    compare_events.append(pick)
+                    continue
+            if tr_final_map.get(key):
+                compare_events.append(tr_final_map.get(key))
     else:
         compare_events = tr_final[:30]
+
+    def pick_iter_event(iter_events, xt_final):
+        if not iter_events:
+            return {}
+        # Prefer events closest to final XT, then highest trchek_iter
+        best = None
+        best_key = None
+        for it in iter_events:
+            xt_val = it.get('xt')
+            if xt_val is None or xt_final is None:
+                continue
+            key = (abs(xt_val - xt_final), -it.get('trchek_iter', 0))
+            if best_key is None or key < best_key:
+                best_key = key
+                best = it
+        return best or max(iter_events, key=lambda it: it.get('trchek_iter', 0))
 
     for ev in compare_events:
         side = ev.get('side')
@@ -392,7 +432,10 @@ def phase8_trchek2(
         key = (side, ibl_val)
 
         xt_xfoil = ev.get('xt_final', ev.get('xt'))
-        iter_ev = tr_iter_map.get(key, {})
+        iter_candidates = [e for e in tr_iter if e.get('side') == side and e.get('ibl') == ibl_val]
+        iter_ev = tr_iter_by_call.get((side, ibl_val, ev.get('call_id')))
+        if not iter_ev:
+            iter_ev = pick_iter_event(iter_candidates, xt_xfoil) or tr_iter_map.get(key, {})
         wf1 = iter_ev.get('wf1')
         wf2 = iter_ev.get('wf2')
         t1 = iter_ev.get('T1')
@@ -405,14 +448,21 @@ def phase8_trchek2(
         rust_key = (rust_side if rust_side is not None else side, rust_ibl_val)
         rust = rust_map.get(rust_key, {})
         xt_rust = rust.get('xt_final')
-        rust_iter_ev = rust_iter_map.get(rust_key, {})
+        rust_iter_candidates = [e for e in rust_tr_iter if e.get('side') == rust_key[0] and e.get('ibl') == rust_key[1]]
+        rust_iter_ev = rust_iter_by_call.get((rust_key[0], rust_key[1], rust.get('call_id')))
+        if not rust_iter_ev:
+            rust_iter_ev = pick_iter_event(rust_iter_candidates, xt_rust) or rust_iter_map.get(rust_key, {})
         t1_r = rust_iter_ev.get('T1')
         t2_r = rust_iter_ev.get('T2')
-        wf1_r = rust_iter_ev.get('wf1')
-        wf2_r = rust_iter_ev.get('wf2')
+        wf1_r_iter = rust_iter_ev.get('wf1')
+        wf2_r_iter = rust_iter_ev.get('wf2')
+        wf1_r_final = rust.get('wf1')
+        wf2_r_final = rust.get('wf2')
         tt_rust = None
-        if wf1_r is not None and wf2_r is not None and t1_r is not None and t2_r is not None:
-            tt_rust = t1_r * wf1_r + t2_r * wf2_r
+        if wf1_r_final is not None and wf2_r_final is not None and t1_r is not None and t2_r is not None:
+            tt_rust = t1_r * wf1_r_final + t2_r * wf2_r_final
+        elif wf1_r_iter is not None and wf2_r_iter is not None and t1_r is not None and t2_r is not None:
+            tt_rust = t1_r * wf1_r_iter + t2_r * wf2_r_iter
         elif rust.get('tt') is not None:
             tt_rust = rust.get('tt')
 
@@ -423,6 +473,12 @@ def phase8_trchek2(
         print(f"{side:>4} {ibl_val:>4} {xt_xfoil:12.6e} {xt_rust if xt_rust is not None else 0.0:12.6e} "
               f"{tt_xfoil if tt_xfoil is not None else 0.0:12.6e} {tt_rust if tt_rust is not None else 0.0:12.6e} "
               f"{err_tt:8.2f}")
+        if wf1 is not None or wf1_r_final is not None or wf1_r_iter is not None:
+            print(
+                f"  WF XFOIL: {wf1} / {wf2} | "
+                f"WF Rust(final): {wf1_r_final} / {wf2_r_final} | "
+                f"WF Rust(iter): {wf1_r_iter} / {wf2_r_iter}"
+            )
 
         if ibl is not None or rust_ibl is not None:
             x_mrchue = xfoil_mrchue_map.get(key, {})
@@ -450,11 +506,12 @@ def phase8_trchek2(
             print(f"  XFOIL Ue: {x_ue} | Rust Ue: {r_ue} | Err%: {err_ue:.2f}")
 
     if rust_tr_final:
-        print("\nRustFoil TRCHEK2_FINAL extra fields (first 5):")
-        for ev in rust_tr_final[:5]:
+        print("\nRustFoil TRCHEK2_FINAL extra fields (last 5):")
+        for ev in rust_tr_final[-5:]:
             print(f"  side={ev.get('side')} ibl={ev.get('ibl')} "
-                  f"tt={ev.get('tt')} dt={ev.get('dt')} ut={ev.get('ut')} "
-                  f"Hk_t={ev.get('Hk_t')} Rt_t={ev.get('Rt_t')} St={ev.get('St')} Cq_t={ev.get('Cq_t')}")
+                  f"wf1={ev.get('wf1')} wf2={ev.get('wf2')} tt={ev.get('tt')} "
+                  f"dt={ev.get('dt')} ut={ev.get('ut')} Hk_t={ev.get('Hk_t')} "
+                  f"Rt_t={ev.get('Rt_t')} St={ev.get('St')} Cq_t={ev.get('Cq_t')}")
 
 
 def phase9_trdif(
@@ -683,6 +740,7 @@ def phase_mrchue_stations(xfoil_events, rustfoil_debug_path=None):
     
     # Load RustFoil debug if available
     rust_stations = {}
+    rust_data = None
     if rustfoil_debug_path and Path(rustfoil_debug_path).exists():
         with open(rustfoil_debug_path) as f:
             rust_data = json.load(f)
@@ -699,6 +757,31 @@ def phase_mrchue_stations(xfoil_events, rustfoil_debug_path=None):
                         prev_dmax = rust_stations[key].get('dmax')
                         if dmax is not None and (prev_dmax is None or dmax < prev_dmax):
                             rust_stations[key] = e
+
+            # Optional arc-length sanity check to catch mismatched geometry/paneling.
+            xfoil_mrchue = {(e['side'], e['ibl']): e for e in xfoil_events if e.get('subroutine') == 'MRCHUE'}
+            rust_mrchue = {
+                (e['side'], e['ibl']): e
+                for e in rust_data.get('events', [])
+                if e.get('subroutine') == 'MRCHUE'
+            }
+            dx_samples = []
+            for key, x_ev in xfoil_mrchue.items():
+                r_ev = rust_mrchue.get(key)
+                if not r_ev:
+                    continue
+                x_xfoil = x_ev.get('x')
+                x_rust = r_ev.get('x')
+                if x_xfoil is None or x_rust is None:
+                    continue
+                dx_samples.append(x_rust - x_xfoil)
+            if dx_samples:
+                max_dx = max(dx_samples, key=lambda v: abs(v))
+                if abs(max_dx) > 1e-3:
+                    print(
+                        f\"\\n[warn] MRCHUE arc-length mismatch detected (max |dx|={abs(max_dx):.4e}). \"
+                        \"XFOIL and RustFoil may be using different geometry/paneling.\"\
+                    )
     
     for side in [1, 2]:
         side_name = "Upper" if side == 1 else "Lower"
@@ -711,7 +794,7 @@ def phase_mrchue_stations(xfoil_events, rustfoil_debug_path=None):
         
         # Header depends on whether we have RustFoil data
         if rust_stations:
-            print(f"{'IBL':>4} {'X':>10} {'XFOIL_θ':>12} {'RUST_θ':>12} {'Err%':>8}")
+            print(f"{'IBL':>4} {'X':>10} {'XFOIL_θ':>12} {'RUST_θ':>12} {'Err%':>8} {'XFOIL_Ue':>12} {'RUST_Ue':>12} {'Err%':>8}")
         else:
             print(f"{'IBL':>4} {'X':>10} {'θ_init':>12} {'θ_final':>12} {'N_iter':>6}")
         
@@ -729,7 +812,10 @@ def phase_mrchue_stations(xfoil_events, rustfoil_debug_path=None):
                 if rust_theta is None:
                     rust_theta = rust.get('theta', 0.0)
                 err = abs(theta_out - rust_theta) / theta_out * 100 if theta_out != 0 else 0
-                print(f"{ibl:4d} {x:10.4f} {theta_out:12.4e} {rust_theta:12.4e} {err:8.2f}")
+                xfoil_ue = e.get('Ue', 0.0)
+                rust_ue = rust.get('Ue', 0.0)
+                ue_err = abs(xfoil_ue - rust_ue) / xfoil_ue * 100 if xfoil_ue != 0 else 0
+                print(f"{ibl:4d} {x:10.4f} {theta_out:12.4e} {rust_theta:12.4e} {err:8.2f} {xfoil_ue:12.6f} {rust_ue:12.6f} {ue_err:8.2f}")
             else:
                 print(f"{ibl:4d} {x:10.4f} {theta_in:12.4e} {theta_out:12.4e} {n_iter:6d}")
         
