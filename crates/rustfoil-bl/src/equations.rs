@@ -52,6 +52,8 @@ pub struct BldifTerms {
     pub ulog: f64,
     pub tlog: f64,
     pub hlog: f64,
+    pub z_cfx_shape: f64,
+    pub z_dix_shape: f64,
     pub upw: f64,
     pub ha: f64,
     pub btmp_mom: f64,
@@ -62,10 +64,18 @@ pub struct BldifTerms {
     pub btmp_shape: f64,
     pub cfx_shape: f64,
     pub dix: f64,
+    pub cfx_upw: f64,
+    pub dix_upw: f64,
     pub hsa: f64,
     pub hca: f64,
+    pub dd: f64,
+    pub dd2: f64,
     pub xot1: f64,
     pub xot2: f64,
+    pub cf1: f64,
+    pub cf2: f64,
+    pub di1: f64,
+    pub di2: f64,
     pub z_upw: f64,
     pub z_de2: f64,
     pub z_us2: f64,
@@ -537,17 +547,36 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
             let dd2_rt = -dd2 / station.r_theta;
 
             // Total DI
-            let di = di_wall_corrected + dd + dd2;
-            let di_s = dd_s;
-            let di_u = di_u_corrected + dd_hs * hs_u + dd_us * us_u + dd2_hs * hs_u + dd2_us * us_u + dd2_rt * rt_u;
-            let di_t = di_t_corrected + dd_hs * hs_t + dd_us * us_t + dd2_hs * hs_t + dd2_us * us_t + dd2_rt * rt_t;
-            let di_d = di_d_corrected + dd_hs * hs_d + dd_us * us_d + dd2_hs * hs_d + dd2_us * us_d;
-            let di_ms = di_ms_corrected + dd_hs * hs_ms + dd_us * us_ms + dd2_hs * hs_ms + dd2_us * us_ms;
-            let di_re = di_re_corrected + dd_hs * hs_re + dd_us * us_re + dd2_hs * hs_re + dd2_us * us_re + dd2_rt * rt_re;
+            let di_total = di_wall_corrected + dd + dd2;
+            let di_total_s = dd_s;
+            let di_total_u = di_u_corrected
+                + dd_hs * hs_u
+                + dd_us * us_u
+                + dd2_hs * hs_u
+                + dd2_us * us_u
+                + dd2_rt * rt_u;
+            let di_total_t = di_t_corrected
+                + dd_hs * hs_t
+                + dd_us * us_t
+                + dd2_hs * hs_t
+                + dd2_us * us_t
+                + dd2_rt * rt_t;
+            let di_total_d = di_d_corrected + dd_hs * hs_d + dd_us * us_d + dd2_hs * hs_d + dd2_us * us_d;
+            let di_total_ms = di_ms_corrected
+                + dd_hs * hs_ms
+                + dd_us * us_ms
+                + dd2_hs * hs_ms
+                + dd2_us * us_ms;
+            let di_total_re = di_re_corrected
+                + dd_hs * hs_re
+                + dd_us * us_re
+                + dd2_hs * hs_re
+                + dd2_us * us_re
+                + dd2_rt * rt_re;
 
             // Check if laminar DI is higher (low Rθ case)
             let di_lam = dissipation_laminar(hk, station.r_theta);
-            if di_lam.di > di {
+            if di_lam.di > di_total {
                 let di_hk = di_lam.di_hk;
                 let di_rt = di_lam.di_rt;
                 let di_u = di_hk * hk_u + di_rt * rt_u;
@@ -561,7 +590,17 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
                 // For Jacobian, we'd need DI_HS, DI_US, DI_CF chain rules
                 // TODO: Implement proper turbulent Jacobian derivatives
                 // For now, use laminar approximation for base derivatives
-                (di, di_s, di_u, di_t, di_d, di_ms, di_re, di_lam.di_hk, di_lam.di_rt)
+                (
+                    di_total,
+                    di_total_s,
+                    di_total_u,
+                    di_total_t,
+                    di_total_d,
+                    di_total_ms,
+                    di_total_re,
+                    di_lam.di_hk,
+                    di_lam.di_rt,
+                )
             }
         }
         FlowType::Wake => {
@@ -630,6 +669,97 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
             )
         }
     };
+
+    if flow_type == FlowType::Turbulent {
+        // Defensive check: ensure turbulent DI wins when larger than laminar.
+        // This mirrors XFOIL's DI2L > DI2 override, but prevents accidental laminar selection
+        // when DI2 (turbulent) should dominate.
+        let cf2t_result = cf_turbulent(hk, station.r_theta, msq);
+        let cf2t_u = cf2t_result.cf_hk * hk_u + cf2t_result.cf_rt * rt_u + cf2t_result.cf_msq * m_u;
+        let cf2t_t = cf2t_result.cf_hk * hk_t + cf2t_result.cf_rt * rt_t;
+        let cf2t_d = cf2t_result.cf_hk * hk_d;
+        let cf2t_ms = cf2t_result.cf_hk * hk_ms + cf2t_result.cf_rt * rt_ms + cf2t_result.cf_msq * m_ms;
+        let cf2t_re = cf2t_result.cf_rt * rt_re;
+
+        let di_wall = (0.5 * cf2t_result.cf * us) * 2.0 / station.hs;
+        let di_hs_wall = -(0.5 * cf2t_result.cf * us) * 2.0 / (station.hs * station.hs);
+        let di_us_wall = (0.5 * cf2t_result.cf) * 2.0 / station.hs;
+        let di_cf2t = (0.5 * us) * 2.0 / station.hs;
+
+        let di_u_wall = di_hs_wall * hs_u + di_us_wall * us_u + di_cf2t * cf2t_u;
+        let di_t_wall = di_hs_wall * hs_t + di_us_wall * us_t + di_cf2t * cf2t_t;
+        let di_d_wall = di_hs_wall * hs_d + di_us_wall * us_d + di_cf2t * cf2t_d;
+        let di_ms_wall = di_hs_wall * hs_ms + di_us_wall * us_ms + di_cf2t * cf2t_ms;
+        let di_re_wall = di_hs_wall * hs_re + di_us_wall * us_re + di_cf2t * cf2t_re;
+
+        let grt = station.r_theta.ln();
+        let hmin = 1.0 + 2.1 / grt;
+        let fl = (hk - 1.0) / (hmin - 1.0);
+        let hm_rt = -(2.1 / (grt * grt)) / station.r_theta;
+        let fl_hk = 1.0 / (hmin - 1.0);
+        let fl_rt = -(fl / (hmin - 1.0)) * hm_rt;
+        let tfl = fl.tanh();
+        let dfac = 0.5 + 0.5 * tfl;
+        let df_fl = 0.5 * (1.0 - tfl * tfl);
+        let df_hk = df_fl * fl_hk;
+        let df_rt = df_fl * fl_rt;
+
+        let di_wall_corrected = di_wall * dfac;
+        let di_u_corrected = di_u_wall * dfac + di_wall * (df_hk * hk_u + df_rt * rt_u);
+        let di_t_corrected = di_t_wall * dfac + di_wall * (df_hk * hk_t + df_rt * rt_t);
+        let di_d_corrected = di_d_wall * dfac + di_wall * (df_hk * hk_d);
+        let di_ms_corrected = di_ms_wall * dfac + di_wall * (df_hk * hk_ms + df_rt * rt_ms);
+        let di_re_corrected = di_re_wall * dfac + di_wall * (df_rt * rt_re);
+
+        let s = station.ctau;
+        let dd = s * s * (0.995 - us) * 2.0 / station.hs;
+        let dd_hs = -s * s * (0.995 - us) * 2.0 / (station.hs * station.hs);
+        let dd_us = -s * s * 2.0 / station.hs;
+        let dd_s = s * 2.0 * (0.995 - us) * 2.0 / station.hs;
+
+        let dd2 = 0.15 * (0.995 - us) * (0.995 - us) / station.r_theta * 2.0 / station.hs;
+        let dd2_us = -0.15 * (0.995 - us) * 2.0 / station.r_theta * 2.0 / station.hs;
+        let dd2_hs = -dd2 / station.hs;
+        let dd2_rt = -dd2 / station.r_theta;
+
+        let di_total = di_wall_corrected + dd + dd2;
+        let di_total_s = dd_s;
+        let di_total_u = di_u_corrected
+            + dd_hs * hs_u
+            + dd_us * us_u
+            + dd2_hs * hs_u
+            + dd2_us * us_u
+            + dd2_rt * rt_u;
+        let di_total_t = di_t_corrected
+            + dd_hs * hs_t
+            + dd_us * us_t
+            + dd2_hs * hs_t
+            + dd2_us * us_t
+            + dd2_rt * rt_t;
+        let di_total_d = di_d_corrected + dd_hs * hs_d + dd_us * us_d + dd2_hs * hs_d + dd2_us * us_d;
+        let di_total_ms = di_ms_corrected
+            + dd_hs * hs_ms
+            + dd_us * us_ms
+            + dd2_hs * hs_ms
+            + dd2_us * us_ms;
+        let di_total_re = di_re_corrected
+            + dd_hs * hs_re
+            + dd_us * us_re
+            + dd2_hs * hs_re
+            + dd2_us * us_re
+            + dd2_rt * rt_re;
+
+        let di_lam = dissipation_laminar(hk, station.r_theta);
+        if di_total > di_lam.di && (di - di_total).abs() > 1e-12 {
+            di = di_total;
+            di_s = di_total_s;
+            di_u = di_total_u;
+            di_t = di_total_t;
+            di_d = di_total_d;
+            di_ms = di_total_ms;
+            di_re = di_total_re;
+        }
+    }
 
     station.cd = di;
     // Store BASE derivatives ∂DI/∂Hk and ∂DI/∂Rθ for use in some correlations
@@ -709,6 +839,29 @@ pub fn blvar_debug(
 
     // Emit debug event if collection is active
     if crate::debug::is_debug_active() {
+        let dd = station.ctau * station.ctau * (0.995 - station.us) * 2.0 / station.hs;
+        let dd2 = 0.15 * (0.995 - station.us).powi(2) / station.r_theta * 2.0 / station.hs;
+
+        // Recompute DI terms for debug diagnostics
+        let cf2t_result = cf_turbulent(station.hk, station.r_theta, msq);
+        let di_wall = (0.5 * cf2t_result.cf * station.us) * 2.0 / station.hs;
+        let grt = station.r_theta.ln();
+        let hmin = 1.0 + 2.1 / grt;
+        let fl = (station.hk - 1.0) / (hmin - 1.0);
+        let dfac = 0.5 + 0.5 * fl.tanh();
+        let di_wall_corrected = di_wall * dfac;
+        let di_total = di_wall_corrected + dd + dd2;
+        let di_lam = dissipation_laminar(station.hk, station.r_theta).di;
+
+        let (di_lam_override, di_used_minus_total, di_used_minus_lam) = if flow_type == FlowType::Turbulent {
+            let di_lam_override = di_lam > di_total;
+            let di_used_minus_total = station.cd - di_total;
+            let di_used_minus_lam = station.cd - di_lam;
+            (Some(di_lam_override), Some(di_used_minus_total), Some(di_used_minus_lam))
+        } else {
+            (None, None, None)
+        };
+
         let output = crate::debug::BlvarOutput {
             H: station.h,
             Hk: station.hk,
@@ -720,6 +873,15 @@ pub fn blvar_debug(
             Us: station.us,
             Cq: station.cq,
             De: station.de,
+            Dd: dd,
+            Dd2: dd2,
+            DiWall: di_wall_corrected,
+            DiTotal: di_total,
+            DiLam: di_lam,
+            DiUsed: station.cd,
+            DiLamOverride: di_lam_override,
+            DiUsedMinusTotal: di_used_minus_total,
+            DiUsedMinusLam: di_used_minus_lam,
         };
 
         let flow_type_int = match flow_type {
@@ -820,6 +982,10 @@ pub fn bldif_with_terms(
     terms.ulog = ulog;
     terms.tlog = tlog;
     terms.hlog = hlog;
+    terms.cf1 = s1.cf;
+    terms.cf2 = s2.cf;
+    terms.di1 = s1.cd;
+    terms.di2 = s2.cd;
 
     // === Local upwinding parameter UPW (xblsys.f:1598-1644) ===
     // Based on log(Hk-1) changes
@@ -1281,6 +1447,10 @@ pub fn bldif_with_terms(
     let xot2 = s2.x / s2.theta;
     terms.xot1 = xot1;
     terms.xot2 = xot2;
+    let dd = s2.ctau * s2.ctau * (0.995 - s2.us) * 2.0 / s2.hs;
+    let dd2 = 0.15 * (0.995 - s2.us).powi(2) / s2.r_theta * 2.0 / s2.hs;
+    terms.dd = dd;
+    terms.dd2 = dd2;
 
     // Upwinded DI and CF (XFOIL lines 1932-1935)
     let dix = (1.0 - upw) * s1.cd * xot1 + upw * s2.cd * xot2;
@@ -1289,6 +1459,8 @@ pub fn bldif_with_terms(
     terms.cfx_shape = cfx_shape;
     let dix_upw = s2.cd * xot2 - s1.cd * xot1;
     let cfx_upw = s2.cf * xot2 - s1.cf * xot1;
+    terms.cfx_upw = cfx_upw;
+    terms.dix_upw = dix_upw;
 
     // BTMP for shape equation (XFOIL line 1937)
     // Note: HWA term is for wake, we ignore for now
@@ -1301,6 +1473,8 @@ pub fn bldif_with_terms(
     // === Z coefficients for shape equation Jacobian (XFOIL lines 1940-1957) ===
     let z_cfx_shape = xlog * 0.5;
     let z_dix = -xlog;
+    terms.z_cfx_shape = z_cfx_shape;
+    terms.z_dix_shape = z_dix;
     let z_hca = 2.0 * ulog / hsa;
     let z_ha_shape = -ulog;
     let z_hl = 1.0; // DDLOG
@@ -2002,6 +2176,19 @@ pub fn bldif_debug(
 ) -> (BlResiduals, BlJacobian) {
     // Run the actual computation
     let (res, jac, terms) = bldif_with_terms(s1, s2, flow_type, msq, re);
+    let mut xfoil_terms: Option<(BldifTerms, BlStation)> = None;
+
+    if flow_type == FlowType::Turbulent {
+        let mut s1_xfoil = s1.clone();
+        s1_xfoil.theta = s2.theta;
+        s1_xfoil.delta_star = s2.delta_star;
+        s1_xfoil.ctau = s2.ctau;
+        s1_xfoil.ampl = s2.ampl;
+        blvar(&mut s1_xfoil, flow_type, msq, re);
+
+        let (_res_x, _jac_x, terms_x) = bldif_with_terms(&s1_xfoil, s2, flow_type, msq, re);
+        xfoil_terms = Some((terms_x, s1_xfoil));
+    }
 
     // Emit debug event if collection is active
     if crate::debug::is_debug_active() {
@@ -2048,6 +2235,8 @@ pub fn bldif_debug(
                 ulog: terms.ulog,
                 tlog: terms.tlog,
                 hlog: terms.hlog,
+                z_cfx_shape: terms.z_cfx_shape,
+                z_dix_shape: terms.z_dix_shape,
                 upw: terms.upw,
                 ha: terms.ha,
                 btmp_mom: terms.btmp_mom,
@@ -2058,16 +2247,59 @@ pub fn bldif_debug(
                 btmp_shape: terms.btmp_shape,
                 cfx_shape: terms.cfx_shape,
                 dix: terms.dix,
+                cfx_upw: terms.cfx_upw,
+                dix_upw: terms.dix_upw,
                 hsa: terms.hsa,
                 hca: terms.hca,
+                dd: terms.dd,
+                dd2: terms.dd2,
                 xot1: terms.xot1,
                 xot2: terms.xot2,
+                cf1: terms.cf1,
+                cf2: terms.cf2,
+                di1: terms.di1,
+                di2: terms.di2,
+                z_hs2: terms.z_hs2,
+                z_cf2_shape: terms.z_cf2_shape,
                 z_di2: terms.z_di2,
+                z_t2_shape: terms.z_t2_shape,
+                z_u2_shape: terms.z_u2_shape,
+                z_hca: terms.z_hca,
+                z_ha_shape: terms.z_ha_shape,
                 di2_s: terms.di2_s,
                 z_upw_shape: terms.z_upw_shape,
+                hs2_t: terms.hs2_t,
+                hs2_d: terms.hs2_d,
+                hs2_u: terms.hs2_u,
+                cf2_t_shape: terms.cf2_t_shape,
+                cf2_d_shape: terms.cf2_d_shape,
+                cf2_u_shape: terms.cf2_u_shape,
+                di2_t: terms.di2_t,
+                di2_d: terms.di2_d,
+                di2_u: terms.di2_u,
+                hc2_t: terms.hc2_t,
+                hc2_d: terms.hc2_d,
+                hc2_u: terms.hc2_u,
+                h2_t: terms.h2_t,
+                h2_d: terms.h2_d,
                 upw_t2_shape: terms.upw_t2_shape,
                 upw_d2_shape: terms.upw_d2_shape,
                 upw_u2_shape: terms.upw_u2_shape,
+                vs2_3_1: jac.vs2[2][0],
+                vs2_3_2: jac.vs2[2][1],
+                vs2_3_3: jac.vs2[2][2],
+                vs2_3_4: jac.vs2[2][3],
+                xfoil_t1: xfoil_terms.as_ref().map(|(_, s)| s.theta),
+                xfoil_d1: xfoil_terms.as_ref().map(|(_, s)| s.delta_star),
+                xfoil_s1: xfoil_terms.as_ref().map(|(_, s)| s.ctau),
+                xfoil_hk1: xfoil_terms.as_ref().map(|(_, s)| s.hk),
+                xfoil_rt1: xfoil_terms.as_ref().map(|(_, s)| s.r_theta),
+                xfoil_di1: xfoil_terms.as_ref().map(|(t, _)| t.di1),
+                xfoil_di2: xfoil_terms.as_ref().map(|(t, _)| t.di2),
+                xfoil_upw: xfoil_terms.as_ref().map(|(t, _)| t.upw),
+                xfoil_dix_upw: xfoil_terms.as_ref().map(|(t, _)| t.dix_upw),
+                xfoil_z_dix_shape: xfoil_terms.as_ref().map(|(t, _)| t.z_dix_shape),
+                xfoil_z_upw_shape: xfoil_terms.as_ref().map(|(t, _)| t.z_upw_shape),
             },
         ));
     }
@@ -2762,4 +2994,61 @@ mod tests {
             );
         }
     }
+}
+
+#[test]
+fn test_bldif_xfoil_station2() {
+    // From XFOIL iter=4 (converged):
+    // X1=1.10439760e-03, X2=3.36117580e-03
+    // U1=6.06760320e-02, U2=2.07620520e-01
+    // T1=3.92914430e-05, T2=3.48077990e-05
+    // D1=8.76005770e-05, D2=7.70333380e-05
+    // VSREZ=[0, 1.662689e-06, -1.130309e-06, 0]
+    
+    use crate::state::BlStation;
+    
+    let re = 1e6;
+    let msq = 0.0;
+    
+    // Station 1 (upstream)
+    let mut s1 = BlStation::new();
+    s1.x = 1.10439760e-03;
+    s1.u = 6.06760320e-02;
+    s1.theta = 3.92914430e-05;
+    s1.delta_star = 8.76005770e-05;
+    s1.h = s1.delta_star / s1.theta;
+    s1.ctau = 0.03;
+    s1.is_laminar = true;
+    blvar(&mut s1, FlowType::Laminar, msq, re);
+    
+    // Station 2 (downstream)
+    let mut s2 = BlStation::new();
+    s2.x = 3.36117580e-03;
+    s2.u = 2.07620520e-01;
+    s2.theta = 3.48077990e-05;
+    s2.delta_star = 7.70333380e-05;
+    s2.h = s2.delta_star / s2.theta;
+    s2.ctau = 0.03;
+    s2.is_laminar = true;
+    blvar(&mut s2, FlowType::Laminar, msq, re);
+    
+    // Compute bldif
+    let (res, _jac) = bldif(&s1, &s2, FlowType::Laminar, msq, re);
+    
+    println!("=== RustFoil bldif for XFOIL station 2 ===");
+    println!("Inputs:");
+    println!("  s1: x={:.8e}, u={:.8e}, theta={:.8e}, dstar={:.8e}, Hk={:.4}", 
+             s1.x, s1.u, s1.theta, s1.delta_star, s1.hk);
+    println!("  s2: x={:.8e}, u={:.8e}, theta={:.8e}, dstar={:.8e}, Hk={:.4}",
+             s2.x, s2.u, s2.theta, s2.delta_star, s2.hk);
+    println!("\nResiduals:");
+    println!("  res_third (ampl): {:.8e}", res.res_third);
+    println!("  res_mom (theta):  {:.8e}", res.res_mom);
+    println!("  res_shape (H):    {:.8e}", res.res_shape);
+    println!("\nXFOIL reference (converged iter=4):");
+    println!("  VSREZ = [0, 1.66e-6, -1.13e-6, 0]");
+    
+    // Check residuals are small (same order of magnitude as XFOIL)
+    assert!(res.res_mom.abs() < 0.01, "res_mom too large: {}", res.res_mom);
+    assert!(res.res_shape.abs() < 0.01, "res_shape too large: {}", res.res_shape);
 }

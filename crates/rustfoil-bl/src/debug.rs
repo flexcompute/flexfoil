@@ -102,11 +102,13 @@ pub enum DebugData {
     ViscalResult(ViscalResultEvent),
     Blvar(BlvarEvent),
     Bldif(BldifEvent),
+    BldifState(BldifStateEvent),
     BldifTerms(BldifTermsEvent),
     MrchueIter(MrchueIterEvent),
     MrchueSys(MrchueSysEvent),
     MrchueMode(MrchueModeEvent),
     Vs2Before(Vs2BeforeEvent),
+    VsrezAfter(VsrezAfterEvent),
     Trdif(TrdifEvent),
     TrdifDerivs(TrdifDerivsEvent),
     Trchek2Iter(Trchek2IterEvent),
@@ -170,6 +172,18 @@ pub struct BlvarOutput {
     pub Us: f64,
     pub Cq: f64,
     pub De: f64,
+    pub Dd: f64,
+    pub Dd2: f64,
+    pub DiWall: f64,
+    pub DiTotal: f64,
+    pub DiLam: f64,
+    pub DiUsed: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub DiLamOverride: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub DiUsedMinusTotal: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub DiUsedMinusLam: Option<f64>,
 }
 
 /// BLDIF Jacobian event
@@ -184,6 +198,26 @@ pub struct BldifEvent {
     pub VSREZ: [f64; 4],
 }
 
+/// BLDIF primary state (X1/U1/T1/D1/S1 and X2/U2/T2/D2/S2)
+#[derive(Serialize, Clone)]
+#[allow(non_snake_case)]
+pub struct BldifStateEvent {
+    pub side: usize,
+    pub ibl: usize,
+    pub iter: usize,
+    pub flow_type: usize,
+    pub X1: f64,
+    pub U1: f64,
+    pub T1: f64,
+    pub D1: f64,
+    pub S1: f64,
+    pub X2: f64,
+    pub U2: f64,
+    pub T2: f64,
+    pub D2: f64,
+    pub S2: f64,
+}
+
 /// BLDIF intermediate terms for diagnostics
 #[derive(Serialize, Clone)]
 pub struct BldifTermsEvent {
@@ -194,6 +228,8 @@ pub struct BldifTermsEvent {
     pub ulog: f64,
     pub tlog: f64,
     pub hlog: f64,
+    pub z_cfx_shape: f64,
+    pub z_dix_shape: f64,
     pub upw: f64,
     pub ha: f64,
     pub btmp_mom: f64,
@@ -204,16 +240,70 @@ pub struct BldifTermsEvent {
     pub btmp_shape: f64,
     pub cfx_shape: f64,
     pub dix: f64,
+    pub cfx_upw: f64,
+    pub dix_upw: f64,
     pub hsa: f64,
     pub hca: f64,
+    pub dd: f64,
+    pub dd2: f64,
     pub xot1: f64,
     pub xot2: f64,
+    pub cf1: f64,
+    pub cf2: f64,
+    pub di1: f64,
+    pub di2: f64,
+    pub z_hs2: f64,
+    pub z_cf2_shape: f64,
     pub z_di2: f64,
+    pub z_t2_shape: f64,
+    pub z_u2_shape: f64,
+    pub z_hca: f64,
+    pub z_ha_shape: f64,
     pub di2_s: f64,
     pub z_upw_shape: f64,
+    pub hs2_t: f64,
+    pub hs2_d: f64,
+    pub hs2_u: f64,
+    pub cf2_t_shape: f64,
+    pub cf2_d_shape: f64,
+    pub cf2_u_shape: f64,
+    pub di2_t: f64,
+    pub di2_d: f64,
+    pub di2_u: f64,
+    pub hc2_t: f64,
+    pub hc2_d: f64,
+    pub hc2_u: f64,
+    pub h2_t: f64,
+    pub h2_d: f64,
     pub upw_t2_shape: f64,
     pub upw_d2_shape: f64,
     pub upw_u2_shape: f64,
+    pub vs2_3_1: f64,
+    pub vs2_3_2: f64,
+    pub vs2_3_3: f64,
+    pub vs2_3_4: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xfoil_t1: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xfoil_d1: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xfoil_s1: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xfoil_hk1: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xfoil_rt1: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xfoil_di1: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xfoil_di2: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xfoil_upw: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xfoil_dix_upw: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xfoil_z_dix_shape: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xfoil_z_upw_shape: Option<f64>,
 }
 
 /// TRCHEK2 iteration state (transition check)
@@ -263,6 +353,10 @@ pub struct Trchek2FinalEvent {
     pub Ncrit: f64,
     pub transition: bool,
     pub forced: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wf1: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wf2: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tt: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -375,6 +469,18 @@ pub struct Vs2BeforeEvent {
     pub flow_type: usize,
     pub VS2_4x4: [[f64; 4]; 4],
     pub VSREZ_rhs: [f64; 4],
+}
+
+/// VSREZ solution dump (4x4 Newton system after solve)
+#[derive(Serialize, Clone)]
+#[allow(non_snake_case)]
+pub struct VsrezAfterEvent {
+    pub side: usize,
+    pub ibl: usize,
+    pub iter: usize,
+    pub direct: bool,
+    pub flow_type: usize,
+    pub VSREZ_solution: [f64; 4],
 }
 
 /// TRDIF combined system (transition interval)
@@ -552,6 +658,20 @@ impl DebugEvent {
         }
     }
 
+    pub fn bldif_state(
+        iteration: usize,
+        side: usize,
+        ibl: usize,
+        event: BldifStateEvent,
+    ) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "BLDIF_STATE".to_string(),
+            iteration: Some(iteration),
+            data: DebugData::BldifState(event),
+        }
+    }
+
     pub fn bldif_terms(
         iteration: usize,
         side: usize,
@@ -615,6 +735,20 @@ impl DebugEvent {
             subroutine: "MRCHUE_MODE".to_string(),
             iteration: Some(iteration),
             data: DebugData::MrchueMode(event),
+        }
+    }
+
+    pub fn vsrez_after(
+        iteration: usize,
+        side: usize,
+        ibl: usize,
+        event: VsrezAfterEvent,
+    ) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "VSREZ_AFTER".to_string(),
+            iteration: Some(iteration),
+            data: DebugData::VsrezAfter(event),
         }
     }
 
@@ -739,6 +873,8 @@ impl DebugEvent {
         ncrit: f64,
         transition: bool,
         forced: bool,
+        wf1: Option<f64>,
+        wf2: Option<f64>,
         tt: Option<f64>,
         dt: Option<f64>,
         ut: Option<f64>,
@@ -766,6 +902,8 @@ impl DebugEvent {
                 Ncrit: ncrit,
                 transition,
                 forced,
+                wf1,
+                wf2,
                 tt,
                 dt,
                 ut,
@@ -894,6 +1032,15 @@ mod tests {
             Us: 0.22,
             Cq: 0.07,
             De: 0.00014,
+            Dd: 0.0,
+            Dd2: 0.0,
+            DiWall: 0.0,
+            DiTotal: 0.0,
+            DiLam: 0.0,
+            DiUsed: 0.0012,
+            DiLamOverride: None,
+            DiUsedMinusTotal: None,
+            DiUsedMinusLam: None,
         };
         let event = DebugEvent::blvar(1, 1, 3, 1, input, output);
         let json = serde_json::to_string_pretty(&event).unwrap();
