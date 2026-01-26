@@ -732,7 +732,10 @@ pub fn solve_viscous_two_surfaces(
 
             // Apply updates to both surfaces with relaxation
             // Pass DIJ matrix and inviscid Ue for proper VI coupling
-            let rlx = update_config.relaxation.min(0.5);
+            // Relaxation for Newton iteration
+            // Note: The delta sign convention was found to be inverted - deltas are SUBTRACTED
+            // Even with corrected signs, Newton is marginally stable. Use small relaxation.
+            let rlx = update_config.relaxation.min(0.1);
             
             apply_global_updates(
                 upper_stations,
@@ -743,6 +746,8 @@ pub fn solve_viscous_two_surfaces(
                 Some(dij),
                 Some(upper_ue),
                 Some(lower_ue),
+                msq,
+                re,
             );
 
             // === STMOVE-style stagnation point check ===
@@ -773,8 +778,8 @@ pub fn solve_viscous_two_surfaces(
                 }
             }
 
-            // Check convergence
             if residual < config.tolerance {
+                eprintln!("[DEBUG viscal] CONVERGED");
                 converged = true;
                 break;
             }
