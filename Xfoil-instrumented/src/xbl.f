@@ -519,6 +519,9 @@ C
 C---- next airfoil side
  2000 CONTINUE
 C
+C---- Debug: dump full Newton system after building
+      CALL DBGSETBLSYSTEM(NSYS, VA, VB, VM, VDEL, IZX, IZX)
+C
       RETURN
       END
 
@@ -611,6 +614,10 @@ C
 C
         SIMI = IBL.EQ.2
         WAKE = IBL.GT.IBLTE(IS)
+C
+C------ Set debug variables for this station
+        ISDBG = IS
+        IBLDBG = IBL
 C
 C------ prescribed quantities
         XSI = XSSI(IBL,IS)
@@ -1351,6 +1358,11 @@ C---- Debug common block
       COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
       LOGICAL LDBG
       INTEGER LUDBG, IDBGCALL, IDBGITER
+C---- Local variables for debug before/after state
+      REAL CTAU_B, THET_B, DSTR_B, UEDG_B
+      REAL MASS_B, H_B, HK_B, HK_H_B, HK_M_B
+      REAL MASS_A, H_A, HK_A, HK_H_A, HK_M_A
+      REAL MSQ_DBG
 C
 C---- max allowable alpha changes per iteration
       DALMAX =  0.5*DTOR
@@ -1613,6 +1625,22 @@ C---- update BL variables with underrelaxed changes
         DO 50 IBL=2, NBL(IS)
           IV = ISYS(IBL,IS)
 C
+C-------- Save before state for debug output
+          CTAU_B = CTAU(IBL,IS)
+          THET_B = THET(IBL,IS)
+          DSTR_B = DSTR(IBL,IS)
+          UEDG_B = UEDG(IBL,IS)
+          MASS_B = MASS(IBL,IS)
+          IF(THET_B.GT.1.0E-12) THEN
+            H_B = DSTR_B / THET_B
+          ELSE
+            H_B = 2.5
+          ENDIF
+C-------- Compute Hk before using HKIN
+          MSQ_DBG = UEDG_B**2*HSTINV
+     &            / (GAMM1*(1.0 - 0.5*UEDG_B**2*HSTINV))
+          CALL HKIN(H_B, MSQ_DBG, HK_B, HK_H_B, HK_M_B)
+C
           DCTAU = VDEL(1,1,IV) - DAC*VDEL(1,2,IV)
           DTHET = VDEL(2,1,IV) - DAC*VDEL(2,2,IV)
           DMASS = VDEL(3,1,IV) - DAC*VDEL(3,2,IV)
@@ -1649,9 +1677,29 @@ C
 C-------- set new mass defect (nonlinear update)
           MASS(IBL,IS) = DSTR(IBL,IS) * UEDG(IBL,IS)
 C
-C-------- Debug output
+C-------- Debug output: basic update info
           CALL DBGUPDATE(IS, IBL, RLX*DCTAU, RLX*DTHET, 
      &                   RLX*DMASS, RLX*DUEDG, RLX)
+C
+C-------- Compute after state for debug output
+          MASS_A = MASS(IBL,IS)
+          IF(THET(IBL,IS).GT.1.0E-12) THEN
+            H_A = DSTR(IBL,IS) / THET(IBL,IS)
+          ELSE
+            H_A = 2.5
+          ENDIF
+          MSQ_DBG = UEDG(IBL,IS)**2*HSTINV
+     &            / (GAMM1*(1.0 - 0.5*UEDG(IBL,IS)**2*HSTINV))
+          CALL HKIN(H_A, MSQ_DBG, HK_A, HK_H_A, HK_M_A)
+C
+C-------- Debug output: detailed before/after state
+          CALL DBGUPDATEDETAIL(IS, IBL,
+     &       CTAU_B, THET_B, DSTR_B, UEDG_B,
+     &       MASS_B, H_B, HK_B,
+     &       DCTAU, DTHET, DMASS, DUEDG,
+     &       RLX,
+     &       CTAU(IBL,IS), THET(IBL,IS), DSTR(IBL,IS), UEDG(IBL,IS),
+     &       MASS_A, H_A, HK_A)
 C
    50   CONTINUE
 C

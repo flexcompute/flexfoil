@@ -308,6 +308,11 @@ C---- Debug common block
 C
       IVTE1 = ISYS(IBLTE(1),1)
 C
+C---- Debug: dump input residuals at iteration 1 (disabled)
+C      IF(IDBGITER.LE.1) THEN
+C        (debug output removed)
+C      ENDIF
+C
       VACC1 = VACCEL
       VACC2 = VACCEL * 2.0 / (S(N) - S(1))
       VACC3 = VACCEL * 2.0 / (S(N) - S(1))
@@ -490,6 +495,8 @@ C
 C
 C---- Debug output
       CALL DBGBLSOLV(NSYS)
+C---- Debug: dump full solution deltas after solving
+      CALL DBGBLSOLVSOLUTION(NSYS, VDEL, IZX)
 C
       RETURN
       END

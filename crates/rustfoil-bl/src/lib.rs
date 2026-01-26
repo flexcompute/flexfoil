@@ -19,8 +19,10 @@ pub mod state;
 pub use constants::*;
 pub use debug::{
     add_event, finalize_debug, init_debug, is_debug_active, BlvarInput, BlvarOutput,
-    BldifStateEvent, BldifTermsEvent, DebugEvent, MrchueIterEvent, MrchueModeEvent,
-    MrchueSysEvent, TrdifDerivsEvent, TrdifEvent, Vs2BeforeEvent, VsrezAfterEvent,
+    BldifStateEvent, BldifTermsEvent, BlsolvSolutionEvent, CdBreakdownEvent, ClDetailEvent,
+    DebugEvent, FullAicEvent, FullInviscidEvent, MrchueIterEvent, MrchueModeEvent, 
+    MrchueSysEvent, SetblSystemEvent, TrdifDerivsEvent, TrdifEvent, UpdateDetailedEvent,
+    UesetEvent, UesetSurfaceData, Vs2BeforeEvent, VsrezAfterEvent,
 };
 pub use equations::{
     bldif, bldif_debug, bldif_with_terms, blvar, blvar_debug, trdif_turb_terms, BldifTerms,

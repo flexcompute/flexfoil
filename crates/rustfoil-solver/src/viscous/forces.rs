@@ -11,6 +11,7 @@
 //! - CDCALC: xfoil.f line 1172
 
 use rustfoil_bl::state::BlStation;
+use rustfoil_bl::{add_event, is_debug_active, CdBreakdownEvent, ClDetailEvent, DebugEvent};
 
 use super::config::ViscousSolverConfig;
 
@@ -205,45 +206,65 @@ pub fn compute_forces_two_surfaces(
     let cd_friction_lower = compute_friction_drag(lower_stations);
     let cd_friction = cd_friction_upper + cd_friction_lower;
     
-    // === Pressure Drag (Squire-Young) ===
-    // Squire-Young formula gives total drag, but we use it for the pressure
-    // component by subtracting our friction estimate. The pressure drag comes
-    // from the momentum deficit not accounted for by skin friction.
+    // === Total Drag (Squire-Young at far wake) ===
+    // XFOIL computes total CD using Squire-Young at the far wake (x≈2c):
+    //   CD = 2 * θ_wake * (Ue_wake)^((5+H)/2)
+    //
+    // Since we don't have a full wake, we extrapolate from TE values:
+    // - In the wake, as Ue → 1 (freestream), momentum is conserved: θ*Ue ≈ const
+    // - So θ_far_wake ≈ θ_TE * Ue_TE / Ue_far_wake
+    // - For far wake: Ue ≈ 1, H ≈ 1.0-1.1
+    //
+    // The far wake θ is typically ~70% of combined TE θ (due to Ue increase)
     let upper_te = upper_stations.last();
     let lower_te = lower_stations.last();
     
-    let cd_pressure = match (upper_te, lower_te) {
+    let cd_total = match (upper_te, lower_te) {
         (Some(u), Some(l)) => {
-            // Combined wake momentum thickness
-            let theta_combined = u.theta + l.theta;
-            let h_avg = 0.5 * (u.h.clamp(1.0, 4.0) + l.h.clamp(1.0, 4.0));
-            // Use actual Ue at TE (don't artificially boost it)
-            let ue_avg = 0.5 * (u.u.abs() + l.u.abs()).max(0.01);
+            // Combined momentum at TE
+            let theta_te = u.theta + l.theta;
+            let ue_te = 0.5 * (u.u.abs() + l.u.abs()).max(0.1);
             
-            // Squire-Young gives total drag
-            let cd_sy = squire_young_drag(theta_combined, ue_avg, h_avg);
+            // Extrapolate to far wake using θ*Ue² ≈ const
+            // This accounts for the wake spreading as Ue recovers to freestream
+            // Derivation: From XFOIL wake data, θ ∝ 1/Ue^1.95 ≈ 1/Ue²
+            let ue_far_wake = 0.99; // Close to freestream
+            let ue_ratio_sq = (ue_te / ue_far_wake).powi(2);
+            let theta_far_wake = theta_te * ue_ratio_sq;
             
-            // Pressure drag = Squire-Young total - friction (but floor at 10% of SY)
-            // This ensures pressure drag is always positive
-            let cd_p_raw = cd_sy - cd_friction;
-            if cd_p_raw > 0.1 * cd_sy {
-                cd_p_raw
-            } else {
-                0.1 * cd_sy // Minimum pressure drag
-            }
+            // H at far wake approaches 1.0 (thin wake limit)
+            let h_far_wake = 1.04; // Typical value from XFOIL
+            
+            // Squire-Young at far wake
+            squire_young_drag(theta_far_wake, ue_far_wake, h_far_wake)
         }
-        (Some(u), None) => {
-            let cd_sy = squire_young_drag(u.theta, u.u.abs().max(0.01), u.h.clamp(1.0, 4.0));
-            0.1 * cd_sy
-        }
-        (None, Some(l)) => {
-            let cd_sy = squire_young_drag(l.theta, l.u.abs().max(0.01), l.h.clamp(1.0, 4.0));
-            0.1 * cd_sy
-        }
+        (Some(u), None) => squire_young_drag(u.theta, 0.99, 1.04),
+        (None, Some(l)) => squire_young_drag(l.theta, 0.99, 1.04),
         (None, None) => 0.0,
     };
     
-    let cd = cd_friction + cd_pressure;
+    // Pressure drag = Total - Friction
+    // (This is how XFOIL separates the components)
+    let cd_pressure = (cd_total - cd_friction).max(0.1 * cd_total);
+    
+    // Total drag: use Squire-Young at far wake (more accurate than CD_f + CD_p)
+    let cd = cd_total;
+    
+    // Debug drag computation
+    if std::env::var("RUSTFOIL_DRAG_DEBUG").is_ok() {
+        if let (Some(u), Some(l)) = (upper_te, lower_te) {
+            let theta_te = u.theta + l.theta;
+            let ue_te = 0.5 * (u.u.abs() + l.u.abs());
+            let ue_ratio_sq = (ue_te / 0.99).powi(2);
+            let theta_far_wake = theta_te * ue_ratio_sq;
+            eprintln!("[DRAG_DEBUG] Upper TE: x={:.4} θ={:.4e} H={:.3} Ue={:.4}", u.x, u.theta, u.h, u.u);
+            eprintln!("[DRAG_DEBUG] Lower TE: x={:.4} θ={:.4e} H={:.3} Ue={:.4}", l.x, l.theta, l.h, l.u);
+            eprintln!("[DRAG_DEBUG] Combined TE: θ={:.4e} Ue={:.4}", theta_te, ue_te);
+            eprintln!("[DRAG_DEBUG] Far wake (θ*Ue²=const): θ={:.4e}", theta_far_wake);
+            eprintln!("[DRAG_DEBUG] CD_f={:.5} (upper={:.5} lower={:.5})", cd_friction, cd_friction_upper, cd_friction_lower);
+            eprintln!("[DRAG_DEBUG] CD_total={:.5} CD_p={:.5}", cd_total, cd_pressure);
+        }
+    }
     
     // === CL and CM from coupled edge velocities ===
     // Extract arc lengths and edge velocities
@@ -258,6 +279,61 @@ pub fn compute_forces_two_surfaces(
     // For CM, use simple approximation (proper CM requires panel geometry)
     // CM ≈ 0 for symmetric airfoils at small AoA
     let cm = 0.0; // TODO: Implement proper CM with panel geometry
+    
+    // === Emit debug events for force comparison with XFOIL ===
+    if is_debug_active() {
+        // Extract TE quantities for breakdown
+        let (theta_te_upper, h_te_upper, ue_te_upper) = upper_te
+            .map(|s| (s.theta, s.h, s.u))
+            .unwrap_or((0.0, 0.0, 0.0));
+        let (theta_te_lower, h_te_lower, ue_te_lower) = lower_te
+            .map(|s| (s.theta, s.h, s.u))
+            .unwrap_or((0.0, 0.0, 0.0));
+        
+        // Compute per-surface pressure drag (Squire-Young at TE)
+        let cd_pressure_upper = if ue_te_upper.abs() > 0.01 {
+            squire_young_drag(theta_te_upper, ue_te_upper.abs(), h_te_upper.clamp(1.0, 4.0))
+        } else {
+            0.0
+        };
+        let cd_pressure_lower = if ue_te_lower.abs() > 0.01 {
+            squire_young_drag(theta_te_lower, ue_te_lower.abs(), h_te_lower.clamp(1.0, 4.0))
+        } else {
+            0.0
+        };
+        
+        // Emit CD breakdown event
+        add_event(DebugEvent::cd_breakdown(
+            0, // iteration would be passed from caller if needed
+            CdBreakdownEvent {
+                cd_friction,
+                cd_pressure,
+                cd_total: cd,
+                cd_friction_upper,
+                cd_friction_lower,
+                cd_pressure_upper,
+                cd_pressure_lower,
+                theta_te_upper,
+                theta_te_lower,
+                h_te_upper,
+                h_te_lower,
+                ue_te_upper,
+                ue_te_lower,
+            },
+        ));
+        
+        // Emit CL detail event
+        add_event(DebugEvent::cl_detail(
+            0, // iteration would be passed from caller if needed
+            ClDetailEvent {
+                cl,
+                cm,
+                cdp: cd_pressure,
+                alpha_rad: 0.0, // Would need to be passed from caller
+                alpha_deg: 0.0,
+            },
+        ));
+    }
     
     AeroForces {
         cl,
@@ -346,14 +422,18 @@ pub fn compute_friction_drag(stations: &[BlStation]) -> f64 {
             let cf2 = pair[1].cf.clamp(0.0, max_physical_cf);
             let cf_avg = 0.5 * (cf1 + cf2);
             
+            // XFOIL uses TAU = 0.5 * ρ * Ue² * Cf for wall shear stress
+            // Friction drag coefficient: CDF = ∫ TAU * dx * 2/(ρ * V∞²)
+            // With normalized ρ=1, V∞=1: CDF = ∫ Ue² * Cf * dx
+            let ue1 = pair[0].u.abs().max(0.01);
+            let ue2 = pair[1].u.abs().max(0.01);
+            let ue_sq_avg = 0.5 * (ue1 * ue1 + ue2 * ue2);
+            
             max_cf_seen = max_cf_seen.max(pair[0].cf.abs()).max(pair[1].cf.abs());
             max_dx_seen = max_dx_seen.max(dx);
             
-            // Simple integration: CDF = ∫ Cf · dx
-            // Note: XFOIL uses TAU = 0.5 * Ue² * Cf, but our Cf already incorporates
-            // Ue effects through Rθ = Re * Ue * θ. The simpler formula gives more
-            // stable results with our BL initialization.
-            cf_avg * dx
+            // Correct integration: CDF = ∫ Ue² · Cf · dx
+            ue_sq_avg * cf_avg * dx
         })
         .sum();
     

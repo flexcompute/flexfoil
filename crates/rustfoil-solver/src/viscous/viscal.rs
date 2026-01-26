@@ -317,7 +317,7 @@ pub fn solve_viscous(
 
         // QVFUE + GAMQV: refresh QVIS from Ue, then GAM from QVIS
         let qvis = update_qvis_from_uedg(stations);
-        let _gamma = update_circulation_from_qvis(&qvis);
+        let gamma = update_circulation_from_qvis(&qvis);
 
         // Check convergence
         residual = update_result.rms_change;
@@ -325,6 +325,9 @@ pub fn solve_viscous(
             converged = true;
         }
 
+        // Debug: Print iteration for single-surface mode
+        // (Two-surface mode has its own tracking below)
+        
         // Emit debug event for iteration result (forces computed later, use 0 for now)
         if rustfoil_bl::is_debug_active() {
             rustfoil_bl::add_event(rustfoil_bl::DebugEvent::viscal_result(
@@ -461,19 +464,6 @@ pub fn solve_viscous_two_surfaces(
     let upper_arc: Vec<f64> = upper_stations.iter().map(|s| s.x).collect();
     let lower_arc: Vec<f64> = lower_stations.iter().map(|s| s.x).collect();
 
-    // Debug: Print initial setup values
-    if rustfoil_bl::is_debug_active() {
-        eprintln!("[DEBUG viscal] Upper surface: {} stations", upper_arc.len());
-        if upper_arc.len() >= 3 {
-            eprintln!("[DEBUG viscal]   arc[0..3] = {:?}", &upper_arc[0..3]);
-            eprintln!("[DEBUG viscal]   ue[0..3]  = {:?}", &upper_ue[0..3]);
-        }
-        eprintln!("[DEBUG viscal] Lower surface: {} stations", lower_arc.len());
-        if lower_arc.len() >= 3 {
-            eprintln!("[DEBUG viscal]   arc[0..3] = {:?}", &lower_arc[0..3]);
-            eprintln!("[DEBUG viscal]   ue[0..3]  = {:?}", &lower_ue[0..3]);
-        }
-    }
 
     // March upper surface (side 1)
     let upper_result = march_surface(&upper_arc, upper_ue, re, msq, &march_config, 1);
@@ -531,6 +521,8 @@ pub fn solve_viscous_two_surfaces(
             upper_stations[target].is_turbulent = station.is_turbulent;
             upper_stations[target].mass_defect = station.mass_defect;
             upper_stations[target].r_theta = station.r_theta;
+            // CRITICAL: Copy edge velocity from march result
+            upper_stations[target].u = station.u;
         }
     }
     // Station 0 (stagnation) keeps its initial values - Newton will skip it or handle
@@ -552,6 +544,8 @@ pub fn solve_viscous_two_surfaces(
             lower_stations[target].is_turbulent = station.is_turbulent;
             lower_stations[target].mass_defect = station.mass_defect;
             lower_stations[target].r_theta = station.r_theta;
+            // CRITICAL: Copy edge velocity from march result
+            lower_stations[target].u = station.u;
         }
     }
     // Station 0 (stagnation) keeps its initial values
@@ -591,7 +585,7 @@ pub fn solve_viscous_two_surfaces(
         .last()
         .unwrap_or(n_lower.saturating_sub(1));
 
-    // Enable global Newton coupling if iterations requested
+    // Enable Newton with detailed debug output for comparison with XFOIL
     let can_run_newton = config.max_iterations > 0 && n_upper >= 3 && n_lower >= 3;
 
     if can_run_newton {
@@ -694,16 +688,10 @@ pub fn solve_viscous_two_surfaces(
 
             // Get residual before solve
             residual = global_system.rms_residual();
-
-            // Debug: show residual
-            if rustfoil_bl::is_debug_active() {
-                eprintln!("[DEBUG Global Newton] iter={}: rms_res={:.6e}, max_res={:.6e}",
-                    iter, residual, global_system.max_residual());
-            }
-
+            
             // Solve the global Newton system
             let deltas = solve_global_system(&mut global_system);
-
+            
             // Check if solution is valid
             let deltas_valid = deltas.iter().all(|d| d.iter().all(|v| v.is_finite()));
             if !deltas_valid {
@@ -731,11 +719,11 @@ pub fn solve_viscous_two_surfaces(
             }
 
             // Apply updates to both surfaces with relaxation
-            // Pass DIJ matrix and inviscid Ue for proper VI coupling
-            // Relaxation for Newton iteration
-            // Note: The delta sign convention was found to be inverted - deltas are SUBTRACTED
-            // Even with corrected signs, Newton is marginally stable. Use small relaxation.
-            let rlx = update_config.relaxation.min(0.1);
+            // XFOIL uses RLX = 1.0 initially, then the UPDATE routine computes
+            // normalized changes and reduces RLX if any variable would change
+            // by more than DHI=1.5 (150% increase) or DLO=-0.5 (50% decrease).
+            // apply_global_updates now implements this normalized relaxation.
+            let rlx = 1.0;
             
             apply_global_updates(
                 upper_stations,
@@ -750,6 +738,7 @@ pub fn solve_viscous_two_surfaces(
                 re,
             );
 
+            
             // === STMOVE-style stagnation point check ===
             // After updating edge velocities, check if stagnation point would move.
             // In XFOIL, STMOVE shifts BL arrays when stagnation moves panels.
@@ -779,16 +768,12 @@ pub fn solve_viscous_two_surfaces(
             }
 
             if residual < config.tolerance {
-                eprintln!("[DEBUG viscal] CONVERGED");
                 converged = true;
                 break;
             }
 
             // Check for divergence or increasing residual
             if !residual.is_finite() || residual > 1e10 {
-                if rustfoil_bl::is_debug_active() {
-                    eprintln!("[DEBUG Global Newton] FAILED: residual={:.6e}, falling back to direct march", residual);
-                }
                 // Restore original values including edge velocity
                 for (i, (theta, dstar, ctau, ampl, h, mass, u)) in upper_backup.iter().enumerate() {
                     upper_stations[i].theta = *theta;
@@ -813,8 +798,10 @@ pub fn solve_viscous_two_surfaces(
                 break;
             }
 
-            // Stop if residual is increasing (Newton not converging)
-            if residual > prev_residual * 1.5 {
+            
+            // Stop if residual is increasing rapidly (Newton diverging badly)
+            // Allow slow increase since our residual may oscillate
+            if iter > 5 && residual > prev_residual * 5.0 {
                 // Restore original values including edge velocity
                 for (i, (theta, dstar, ctau, ampl, h, mass, u)) in upper_backup.iter().enumerate() {
                     upper_stations[i].theta = *theta;
@@ -871,9 +858,37 @@ pub fn solve_viscous_two_surfaces(
     let upper_gamma = update_circulation_from_qvis(&upper_qvis);
     let lower_gamma = update_circulation_from_qvis(&lower_qvis);
 
-    // Compute CL from circulation using the updated gamma distribution
-    // This is more accurate than the pressure-integration based CL
-    let cl_from_gamma = compute_cl_from_gamma(&upper_gamma, &lower_gamma, &upper_arc, &lower_arc);
+    // Compute CL using XFOIL's method: integrate Cp = 1 - V² around the airfoil
+    // This is more accurate than gamma integration for viscous flow
+    // 
+    // XFOIL's CLCALC: CL = ∮ Cp * dx (in wind axes)
+    // where Cp = 1 - (V/V∞)² = 1 - Ue²  (normalized)
+    //
+    // For our arc-length based stations, we approximate:
+    //   CL ≈ -∫_upper Cp ds + ∫_lower Cp ds
+    // (upper surface suction acts upward, lower surface pressure acts upward)
+    let mut cl_from_cp = 0.0;
+    
+    // Upper surface: negative Cp (suction) contributes positive lift
+    for i in 0..upper_gamma.len().saturating_sub(1) {
+        let ue_avg = 0.5 * (upper_gamma[i] + upper_gamma[i + 1]); // gamma = Ue for upper
+        let cp_avg = 1.0 - ue_avg * ue_avg;
+        let ds = (upper_arc[i + 1] - upper_arc[i]).abs();
+        // Upper surface: -Cp * ds contributes to CL (suction = negative Cp = positive lift)
+        cl_from_cp -= cp_avg * ds;
+    }
+    
+    // Lower surface: positive Cp (pressure) contributes positive lift
+    for i in 0..lower_gamma.len().saturating_sub(1) {
+        let ue_avg = 0.5 * (lower_gamma[i] + lower_gamma[i + 1]); // gamma = Ue for lower
+        let cp_avg = 1.0 - ue_avg * ue_avg;
+        let ds = (lower_arc[i + 1] - lower_arc[i]).abs();
+        // Lower surface: +Cp * ds contributes to CL (pressure = positive Cp = positive lift)
+        cl_from_cp += cp_avg * ds;
+    }
+    
+    // Keep gamma-based CL for comparison
+    let _cl_from_gamma = compute_cl_from_gamma(&upper_gamma, &lower_gamma, &upper_arc, &lower_arc);
 
     // === Create and march wake stations for Squire-Young CD computation ===
     // Wake stations extend downstream from TE and are needed for proper far-wake
@@ -901,12 +916,26 @@ pub fn solve_viscous_two_surfaces(
     // Pass wake stations for proper Squire-Young CD
     let mut forces = compute_forces_two_surfaces(upper_stations, lower_stations, config);
 
-    // Use CL from gamma if it's reasonable (gamma method is more accurate for VI coupling)
-    // Fall back to pressure-integration CL if gamma method gives unreasonable values
-    if cl_from_gamma.is_finite() && cl_from_gamma.abs() < 5.0 {
-        // Gamma-based CL is typically more accurate for viscous coupling
-        // since it directly uses the updated edge velocities
-        forces.cl = cl_from_gamma;
+    // Use CL from Cp integration (XFOIL's method) if it's reasonable
+    if cl_from_cp.is_finite() && cl_from_cp.abs() < 5.0 {
+        forces.cl = cl_from_cp;
+    }
+    
+    // Debug: Output BL quantities at all stations for comparison with XFOIL
+    if std::env::var("RUSTFOIL_BL_DEBUG").is_ok() {
+        eprintln!("[BL_DEBUG] UPPER_SURFACE ({} stations):", upper_stations.len());
+        for s in upper_stations.iter() {
+            let flow = if s.is_laminar { "LAM" } else { "TURB" };
+            eprintln!("[BL_DEBUG] x={:.4} Hk={:.3} Cq={:.4} Cf={:.2e} ctau={:.4} {}",
+                s.x, s.hk, s.cq, s.cf, s.ctau, flow);
+        }
+        
+        eprintln!("[BL_DEBUG] LOWER_SURFACE ({} stations):", lower_stations.len());
+        for s in lower_stations.iter() {
+            let flow = if s.is_laminar { "LAM" } else { "TURB" };
+            eprintln!("[BL_DEBUG] x={:.4} Hk={:.3} Cq={:.4} Cf={:.2e} ctau={:.4} {}",
+                s.x, s.hk, s.cq, s.cf, s.ctau, flow);
+        }
     }
 
     // Update CD using wake trailing edge values if wake stations exist

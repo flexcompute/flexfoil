@@ -1122,6 +1122,9 @@ C
 C---- Debug output: dump GGCALC results
       CALL DBGGGCALC(N, AIJ, GAMU(1,1), GAMU(1,2), IQX)
 C
+C---- Debug output: dump FULL AIC base solutions for RustFoil comparison
+      CALL DBGFULLAIC(N, GAMU, IQX)
+C
       RETURN
       END
 
@@ -1272,6 +1275,9 @@ C
 C
 C---- Debug output for DIJ matrix
       CALL DBGQDCALC(N, NW, DIJ, IZX)
+C
+C---- Full DIJ matrix dump for RustFoil comparison
+      CALL DBGFULLDIJ(N+NW, DIJ, IZX)
 C
 C---- Direct file dump of DIJ for comparison with RustFoil
       OPEN(UNIT=88, FILE='xfoil_dij_dump.txt', STATUS='REPLACE')
@@ -1802,6 +1808,21 @@ C---------------------------------------------------------
 C     Sets Ue from inviscid Ue plus all source influence
 C---------------------------------------------------------
       INCLUDE 'XFOIL.INC'
+C---- Debug common block
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+C---- Local arrays to store before state for debug
+      REAL UEDG_BEFORE(IVX,2)
+C
+C---- Save UEDG before modification for debug output
+      IF(LDBG) THEN
+        DO 2 IS=1, 2
+          DO 22 IBL=2, NBL(IS)
+            UEDG_BEFORE(IBL,IS) = UEDG(IBL,IS)
+   22     CONTINUE
+    2   CONTINUE
+      ENDIF
 C
       DO 1 IS=1, 2
         DO 10 IBL=2, NBL(IS)
@@ -1820,6 +1841,9 @@ C
 C
    10   CONTINUE
     1 CONTINUE
+C
+C---- Debug output: dump before/after state
+      CALL DBGUESET(NBL(1), NBL(2), UINV, MASS, UEDG_BEFORE, UEDG, IVX)
 C
       RETURN
       END

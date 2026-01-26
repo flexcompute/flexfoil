@@ -962,6 +962,19 @@ fn blmid(
 ///
 /// # Reference
 /// XFOIL xblsys.f BLDIF (line 1552)
+/// Compute BL equations for similarity station using regular bldif with fixed log values
+pub fn bldif_full_simi(
+    s: &BlStation,
+    flow_type: FlowType,
+    msq: f64,
+    re: f64,
+) -> (BlResiduals, BlJacobian) {
+    // For similarity, XFOIL uses fixed log values (BLDIF with ITYP=0):
+    // XLOG = 1.0, ULOG = BULE = 1.0, TLOG = 0.0, HLOG = 0.0
+    let (res, jac, _) = bldif_with_terms_internal(s, s, flow_type, msq, re, true);
+    (res, jac)
+}
+
 pub fn bldif_with_terms(
     s1: &BlStation,
     s2: &BlStation,
@@ -969,15 +982,38 @@ pub fn bldif_with_terms(
     msq: f64,
     re: f64,
 ) -> (BlResiduals, BlJacobian, BldifTerms) {
+    bldif_with_terms_internal(s1, s2, flow_type, msq, re, false)
+}
+
+fn bldif_with_terms_internal(
+    s1: &BlStation,
+    s2: &BlStation,
+    flow_type: FlowType,
+    msq: f64,
+    re: f64,
+    similarity: bool,
+) -> (BlResiduals, BlJacobian, BldifTerms) {
     let mut res = BlResiduals::default();
     let mut jac = BlJacobian::default();
     let mut terms = BldifTerms::default();
 
-    // === Logarithmic differences (xblsys.f:1574-1585) ===
-    let xlog = (s2.x / s1.x.max(1e-20)).ln();
-    let ulog = (s2.u / s1.u.max(1e-20)).ln();
-    let tlog = (s2.theta / s1.theta.max(1e-20)).ln();
-    let hlog = (s2.hs / s1.hs.max(1e-20)).ln();
+    // === Logarithmic differences (xblsys.f:1630-1648) ===
+    // For similarity station (ITYP=0):
+    //   - Use fixed values: XLOG=1, ULOG=BULE=1, TLOG=0, HLOG=0
+    //   - DDLOG=0 which zeros out many Jacobian log-derivative terms
+    // For normal stations: DDLOG=1
+    let (xlog, ulog, tlog, hlog, ddlog) = if similarity {
+        let bule = 1.0;  // Leading edge pressure gradient parameter
+        (1.0, bule, 0.5 * (1.0 - bule), 0.0, 0.0)  // DDLOG=0 for SIMI
+    } else {
+        (
+            (s2.x / s1.x.max(1e-20)).ln(),
+            (s2.u / s1.u.max(1e-20)).ln(),
+            (s2.theta / s1.theta.max(1e-20)).ln(),
+            (s2.hs / s1.hs.max(1e-20)).ln(),
+            1.0,  // DDLOG=1 for normal
+        )
+    };
     terms.xlog = xlog;
     terms.ulog = ulog;
     terms.tlog = tlog;
@@ -1022,6 +1058,14 @@ pub fn bldif_with_terms(
     let upw_hk2 = upw_hl * hl_hk2 + upw_hd * hd_hk2;
 
     // === First equation: Amplification (laminar) or Shear-lag (turbulent/wake) ===
+    // For similarity (ITYP=0), XFOIL uses a simple constraint: AMPL2 = 0
+    // with VS2(1,1) = 1.0, VS1(1,1) = 0.0, VSREZ(1) = -AMPL2
+    if similarity && flow_type == FlowType::Laminar {
+        res.res_third = -s2.ampl;  // Residual: want ampl = 0
+        jac.vs1[0][0] = 0.0;       // VS1 is zero for SIMI first equation
+        jac.vs2[0][0] = 1.0;       // Simple identity: d(res)/d(ampl2) = 1
+        // All other first-equation derivatives are 0 (already default)
+    } else {
     match flow_type {
         FlowType::Laminar => {
             // Amplification equation (xblsys.f:1654-1682)
@@ -1324,6 +1368,7 @@ pub fn bldif_with_terms(
             jac.vs2[0][4] = z_x2;
         }
     }
+    } // End of else block for non-SIMI first equation
 
     // === Momentum equation (xblsys.f:1864-1920) ===
     // XFOIL reference variables:
@@ -1359,9 +1404,20 @@ pub fn bldif_with_terms(
     res.res_mom = -(tlog + btmp * ulog - xlog * 0.5 * cfx);
 
     // Jacobian coefficients (from XFOIL xblsys.f lines 1887-1897)
-    // Z_CFX = -XLOG*0.5, Z_HA = ULOG, Z_TL = DDLOG = 1.0, Z_UL = DDLOG*BTMP
+    // XFOIL definitions:
+    //   Z_CFX = -XLOG*0.5
+    //   Z_HA  = ULOG
+    //   Z_TL  = DDLOG           (DDLOG=0 for SIMI, 1 otherwise)
+    //   Z_UL  = DDLOG * BTMP
+    //   Z_XL  = -DDLOG * 0.5*CFX
+    //   Z_T1  = -Z_TL/T1 + Z_CFX*CFX_T1
+    //   Z_T2  =  Z_TL/T2 + Z_CFX*CFX_T2
+    //   Z_U1  = -Z_UL/U1
+    //   Z_U2  =  Z_UL/U2
     let z_cfx = -xlog * 0.5;
     let z_ha = ulog;
+    let z_tl = ddlog;  // Key: DDLOG=0 for SIMI!
+    let z_ul = ddlog * btmp;  // Key: DDLOG=0 for SIMI!
     let z_cfm = z_cfx * cfx_cfm;
     let z_cf1 = z_cfx * cfx_cf1;
     let z_cf2 = z_cfx * cfx_cf2;
@@ -1374,8 +1430,10 @@ pub fn bldif_with_terms(
     //   CFX_TA = -.50*CFM*XA/TA**2
     //   CFX_T1 = -.25*CF1*X1/T1**2 + CFX_TA*0.5
     //   CFX_T2 = -.25*CF2*X2/T2**2 + CFX_TA*0.5
-    //   Z_T1 = -Z_TL/T1 + Z_CFX*CFX_T1 + Z_HWA*...
-    //   Z_T2 =  Z_TL/T2 + Z_CFX*CFX_T2 + Z_HWA*...
+    //   Z_T1 = -Z_TL/T1 + Z_CFX*CFX_T1
+    //   Z_T2 =  Z_TL/T2 + Z_CFX*CFX_T2
+    //   Z_U1 = -Z_UL/U1
+    //   Z_U2 =  Z_UL/U2
     //
     // The θ derivatives must include both local and average theta contributions:
     let cfx_ta = -0.5 * cfm * xa / (ta * ta);  // Derivative of CFX w.r.t. average theta
@@ -1384,8 +1442,11 @@ pub fn bldif_with_terms(
     terms.cfx_ta = cfx_ta;
     terms.cfx_t1 = cfx_t1;
     terms.cfx_t2 = cfx_t2;
-    let z_t1 = -1.0 / s1.theta + z_cfx * cfx_t1;
-    let z_t2 = 1.0 / s2.theta + z_cfx * cfx_t2;
+    // Key: z_tl multiplied by DDLOG, so these terms vanish for SIMI
+    let z_t1 = -z_tl / s1.theta + z_cfx * cfx_t1;
+    let z_t2 = z_tl / s2.theta + z_cfx * cfx_t2;
+    let z_u1 = -z_ul / s1.u.max(1e-10);
+    let z_u2 = z_ul / s2.u.max(1e-10);
 
     // Compute chain rule derivatives:
     // H_T (∂H/∂θ) = -δ*/θ² = -H/θ
@@ -1425,13 +1486,37 @@ pub fn bldif_with_terms(
     jac.vs2[1][2] = 0.5 * z_ha * h2_d + z_cfm * cfm_hk2 * hk2_d + z_cf2 * s2.derivs.cf_hk * hk2_d;
 
     // The Ue derivatives (via ULOG and via Cf)
-    // XFOIL: Z_U1 = -Z_UL/U1, Z_U2 = Z_UL/U2 where Z_UL = DDLOG*BTMP = BTMP
-    jac.vs1[1][3] = -btmp / s1.u;
-    jac.vs2[1][3] = btmp / s2.u;
+    // XFOIL: VS1(2,4) = 0.5*Z_MA*M1_U1 + Z_CFM*CFM_U1 + Z_CF1*CF1_U1 + Z_U1
+    // XFOIL: VS2(2,4) = 0.5*Z_MA*M2_U2 + Z_CFM*CFM_U2 + Z_CF2*CF2_U2 + Z_U2
+    // 
+    // Z_MA = -ULOG (from XFOIL line 1985), but M_U is small for incompressible
+    // Key: z_u1, z_u2 include DDLOG factor, so vanish for SIMI
+    // But CFM_U and CF_U contributions remain even for SIMI!
+    //
+    // CFM_U = 0.5*(CFM_HKA*HK_U + CFM_RTA*RT_U + CFM_MA*M_U)
+    // CF_U = CF_HK*HK_U + CF_RT*RT_U + CF_M*M_U (computed as cf2_u above)
+    //
+    // For incompressible (MSQ≈0): HK_U ≈ 0, so CFM_U ≈ 0.5*CFM_RTA*RT_U
+    // RT_U = RT*(1/U) for incompressible (R_U/R and V_U/V ≈ 0)
+    let rt1_u = s1.r_theta / s1.u.max(1e-10);
+    let rt2_u = s2.r_theta / s2.u.max(1e-10);
+    
+    // CF_U = CF_RT * RT_U (HK_U and M_U ≈ 0 for incompressible)
+    let cf1_u = s1.derivs.cf_rt * rt1_u;
+    let cf2_u = s2.derivs.cf_rt * rt2_u;
+    
+    // CFM_U = 0.5 * CFM_RTA * RT_U
+    let cfm_u1 = 0.5 * cfm_rt1 * rt1_u;
+    let cfm_u2 = 0.5 * cfm_rt2 * rt2_u;
+    
+    // Z_MA term: -ULOG * 0.5 * M_U, but M_U ≈ 0 for incompressible, skip
+    // Full Jacobians including CF contributions
+    jac.vs1[1][3] = z_cfm * cfm_u1 + z_cf1 * cf1_u + z_u1;
+    jac.vs2[1][3] = z_cfm * cfm_u2 + z_cf2 * cf2_u + z_u2;
 
     // The x derivatives (via XLOG and CFX)
-    // XFOIL: Z_X1 = -Z_XL/X1 + Z_CFX*CFX_X1 where Z_XL = -DDLOG*0.5*CFX
-    let z_xl = -0.5 * cfx;
+    // XFOIL: Z_XL = -DDLOG*0.5*CFX, Z_X1 = -Z_XL/X1 + Z_CFX*CFX_X1
+    let z_xl = -ddlog * 0.5 * cfx;  // Key: DDLOG factor
     jac.vs1[1][4] = -z_xl / s1.x + z_cfx * (0.25 * s1.cf / s1.theta + 0.5 * cfm / ta * 0.5);
     jac.vs2[1][4] = z_xl / s2.x + z_cfx * (0.25 * s2.cf / s2.theta + 0.5 * cfm / ta * 0.5);
 
@@ -1471,15 +1556,21 @@ pub fn bldif_with_terms(
     res.res_shape = -(hlog + btmp_shape * ulog + xlog * (0.5 * cfx_shape - dix));
 
     // === Z coefficients for shape equation Jacobian (XFOIL lines 1940-1957) ===
+    // XFOIL:
+    //   Z_CFX = XLOG*0.5
+    //   Z_DIX = -XLOG
+    //   Z_HL  = DDLOG                  (Key: DDLOG=0 for SIMI)
+    //   Z_UL  = DDLOG * BTMP           (Key: DDLOG=0 for SIMI)
+    //   Z_XL  = DDLOG * (0.5*CFX-DIX)  (Key: DDLOG=0 for SIMI)
     let z_cfx_shape = xlog * 0.5;
     let z_dix = -xlog;
     terms.z_cfx_shape = z_cfx_shape;
     terms.z_dix_shape = z_dix;
     let z_hca = 2.0 * ulog / hsa;
     let z_ha_shape = -ulog;
-    let z_hl = 1.0; // DDLOG
-    let z_ul_shape = btmp_shape; // DDLOG * BTMP
-    let z_xl_shape = 0.5 * cfx_shape - dix;
+    let z_hl = ddlog;  // Key: DDLOG factor!
+    let z_ul_shape = ddlog * btmp_shape;  // Key: DDLOG factor!
+    let z_xl_shape = ddlog * (0.5 * cfx_shape - dix);  // Key: DDLOG factor!
 
     // Z_UPW = Z_CFX*CFX_UPW + Z_DIX*DIX_UPW
     let z_upw = z_cfx_shape * cfx_upw + z_dix * dix_upw;
@@ -1660,6 +1751,76 @@ pub fn bldif(
     re: f64,
 ) -> (BlResiduals, BlJacobian) {
     let (res, jac, _) = bldif_with_terms(s1, s2, flow_type, msq, re);
+    (res, jac)
+}
+
+/// Compute BL equations for similarity station (XFOIL BLDIF with ITYP=0)
+///
+/// At the similarity station (first BL interval), XFOIL uses fixed logarithmic
+/// differences instead of computing them from station ratios:
+/// - XLOG = 1.0 (not log(X2/X1))
+/// - ULOG = BULE = 1.0 (leading edge pressure gradient parameter)
+/// - TLOG = 0.5*(1.0 - BULE) = 0.0
+/// - HLOG = 0.0
+///
+/// This ensures the BL equations have the correct form at the stagnation region
+/// where both stations are effectively the same point.
+pub fn bldif_simi(
+    s: &BlStation,  // The similarity station (s1 = s2)
+    msq: f64,
+    re: f64,
+) -> (BlResiduals, BlJacobian) {
+    use crate::constants::{GBCON, CTCON};
+    
+    let mut res = BlResiduals::default();
+    let mut jac = BlJacobian::default();
+    
+    // XFOIL similarity: fixed log values
+    let bule = 1.0;  // Leading edge pressure gradient parameter
+    let xlog = 1.0;
+    let ulog = bule;
+    let tlog = 0.5 * (1.0 - bule);  // = 0.0 when BULE=1
+    let hlog = 0.0;
+    
+    // UPW = 1.0 at similarity (since s1 = s2, no upwinding needed)
+    let upw = 1.0;
+    
+    // === First equation: Amplification (laminar) ===
+    // XFOIL sets: VS2(1,1) = 1.0, VSREZ(1) = -AMPL2
+    // This constrains amplification to be zero at similarity
+    res.res_third = -s.ampl;  // Residual: want ampl = 0
+    jac.vs2[0][0] = 1.0;       // d(res)/d(ampl2)
+    // All other first-equation derivatives are 0
+    
+    // === Second equation: Momentum integral ===
+    // CFM = (CF1 + CF2) / 2 at similarity = CF2
+    let cfm = s.cf;
+    
+    // XFOIL momentum equation at similarity (simplified):
+    // REZT = TLOG + (2 + H + M^2*H*(γ-1)/2 - MSQ)*ULOG - 0.5*CFM*X2/T2 * XLOG
+    let hk = s.hk;
+    let gam = 1.4;
+    let h = s.h;
+    let theta = s.theta;
+    let x = s.x;
+    
+    // Coefficient in front of ULOG
+    let bt = (2.0 + h + msq * h * (gam - 1.0) / 2.0 - msq).max(0.0);
+    
+    // REZT = TLOG + BT*ULOG - 0.5*CFM*(X/T)*XLOG
+    res.res_mom = -(tlog + bt * ulog - 0.5 * cfm * (x / theta.max(1e-10)) * xlog);
+    
+    // Jacobian for momentum - simplified at similarity
+    // Main dependency is on theta through X/T term
+    let rezt_t = 0.5 * cfm * (x / (theta * theta).max(1e-20)) * xlog;
+    jac.vs2[1][1] = rezt_t;  // d(res)/d(theta2)
+    
+    // === Third equation: Shape parameter ===
+    // Similar simplification - at similarity, shape equation residual ≈ 0
+    // since both stations are identical
+    res.res_shape = 0.0;
+    jac.vs2[2][2] = 1.0;  // Regularization
+    
     (res, jac)
 }
 

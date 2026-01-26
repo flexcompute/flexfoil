@@ -115,8 +115,17 @@ pub enum DebugData {
     Trchek2Final(Trchek2FinalEvent),
     Mrchue(MrchueEvent),
     Update(UpdateEvent),
+    UpdateDetailed(UpdateDetailedEvent),
+    Ueset(UesetEvent),
     Qdcalc(QdcalcEvent),
     Blsolv(BlsolvEvent),
+    FullInviscid(FullInviscidEvent),
+    FullAic(FullAicEvent),
+    FullDij(FullDijEvent),
+    SetblSystem(SetblSystemEvent),
+    BlsolvSolution(BlsolvSolutionEvent),
+    CdBreakdown(CdBreakdownEvent),
+    ClDetail(ClDetailEvent),
 }
 
 /// VISCAL iteration start event
@@ -564,6 +573,64 @@ pub struct UpdateEvent {
     pub relaxation: f64,
 }
 
+/// UPDATE detailed before/after state event
+/// Captures complete state of BL variables before and after update
+/// for tracking where divergence occurs
+/// Enhanced version includes mass_defect, H, and Hk
+#[derive(Serialize, Clone)]
+pub struct UpdateDetailedEvent {
+    pub side: usize,
+    pub ibl: usize,
+    /// Before state
+    pub ctau_before: f64,
+    pub theta_before: f64,
+    pub delta_star_before: f64,
+    pub ue_before: f64,
+    pub mass_defect_before: f64,
+    pub h_before: f64,
+    pub hk_before: f64,
+    /// Delta values (before relaxation applied)
+    pub delta_ctau: f64,
+    pub delta_theta: f64,
+    pub delta_mass: f64,
+    pub delta_ue: f64,
+    /// Relaxation factor
+    pub relaxation: f64,
+    /// After state
+    pub ctau_after: f64,
+    pub theta_after: f64,
+    pub delta_star_after: f64,
+    pub ue_after: f64,
+    pub mass_defect_after: f64,
+    pub h_after: f64,
+    pub hk_after: f64,
+}
+
+/// UESET edge velocity update event
+/// Captures the edge velocity changes resulting from mass defect influence
+#[derive(Serialize, Clone)]
+pub struct UesetEvent {
+    pub nbl_upper: usize,
+    pub nbl_lower: usize,
+    /// Upper surface data
+    pub upper_surface: UesetSurfaceData,
+    /// Lower surface data
+    pub lower_surface: UesetSurfaceData,
+}
+
+/// UESET surface data for one side
+#[derive(Serialize, Clone)]
+pub struct UesetSurfaceData {
+    /// Inviscid edge velocities
+    pub ue_inviscid: Vec<f64>,
+    /// Mass defect (delta_star * Ue)
+    pub mass_defect: Vec<f64>,
+    /// Edge velocities before UESET
+    pub ue_before: Vec<f64>,
+    /// Edge velocities after UESET
+    pub ue_after: Vec<f64>,
+}
+
 /// QDCALC DIJ matrix event
 #[derive(Serialize, Clone)]
 #[allow(non_snake_case)]
@@ -579,6 +646,120 @@ pub struct QdcalcEvent {
 #[derive(Serialize, Clone)]
 pub struct BlsolvEvent {
     pub system_size: usize,
+}
+
+/// Full inviscid solution event (for XFOIL comparison)
+#[derive(Serialize, Clone)]
+pub struct FullInviscidEvent {
+    /// Full gamma (circulation) distribution at all nodes
+    pub gamma: Vec<f64>,
+    /// Inviscid velocity at all nodes (qinv = gamma for panel method)
+    pub qinv: Vec<f64>,
+    /// Pressure coefficient at all nodes
+    pub cp: Vec<f64>,
+    /// Inviscid lift coefficient
+    pub cl_inv: f64,
+    /// Angle of attack in radians
+    pub alpha: f64,
+}
+
+/// AIC matrix base solutions event (GGCALC equivalent)
+#[derive(Serialize, Clone)]
+pub struct FullAicEvent {
+    /// Number of nodes
+    pub n: usize,
+    /// Base solution for alpha = 0 degrees
+    pub gamu_0: Vec<f64>,
+    /// Base solution for alpha = 90 degrees
+    pub gamu_90: Vec<f64>,
+}
+
+/// Full DIJ influence matrix event
+/// DIJ[i,j] = dUe_i / d(delta_star * Ue)_j
+#[derive(Serialize, Clone)]
+pub struct FullDijEvent {
+    /// System size (number of BL stations)
+    pub nsys: usize,
+    /// Flattened DIJ matrix in row-major order
+    /// dij[i * nsys + j] = DIJ[i,j]
+    pub dij: Vec<f64>,
+}
+
+/// SETBL system dump event - full Newton system after building
+/// Corresponds to XFOIL's SETBL building VA, VB, VM, VDEL arrays
+#[derive(Serialize, Clone)]
+#[allow(non_snake_case)]
+pub struct SetblSystemEvent {
+    /// System size (number of BL stations)
+    pub nsys: usize,
+    /// VA diagonal blocks [IV][eq][var] - 3 equations x 2 variables (ctau/ampl, theta)
+    pub VA: Vec<[[f64; 2]; 3]>,
+    /// VB sub-diagonal blocks [IV][eq][var]
+    pub VB: Vec<[[f64; 2]; 3]>,
+    /// VDEL RHS vectors [IV][eq] - residuals for each station
+    pub VDEL: Vec<[f64; 3]>,
+    /// VM diagonal sample [IV][eq] - mass coupling diagonal elements
+    pub VM_diagonal: Vec<[f64; 3]>,
+    /// VM row 1 sample [JV][eq] - coupling from station 1 to all others
+    pub VM_row1: Vec<[f64; 3]>,
+}
+
+/// BLSOLV solution event - Newton deltas after solving
+/// Contains [dCtau/dAmpl, dTheta, dMass] for each station
+#[derive(Serialize, Clone)]
+pub struct BlsolvSolutionEvent {
+    /// System size (number of BL stations)
+    pub nsys: usize,
+    /// Solution deltas [IV] = [dCtau/dAmpl, dTheta, dMass]
+    pub deltas: Vec<[f64; 3]>,
+}
+
+/// CD breakdown event - detailed drag coefficient components
+/// Matches XFOIL's DBGCDBREAKDOWN output for force comparison
+#[derive(Serialize, Clone)]
+pub struct CdBreakdownEvent {
+    /// Friction drag coefficient (integrated skin friction)
+    pub cd_friction: f64,
+    /// Pressure drag coefficient (from momentum deficit)
+    pub cd_pressure: f64,
+    /// Total drag coefficient
+    pub cd_total: f64,
+    /// Friction drag - upper surface contribution
+    pub cd_friction_upper: f64,
+    /// Friction drag - lower surface contribution
+    pub cd_friction_lower: f64,
+    /// Pressure drag - upper surface contribution
+    pub cd_pressure_upper: f64,
+    /// Pressure drag - lower surface contribution
+    pub cd_pressure_lower: f64,
+    /// Momentum thickness at trailing edge - upper surface
+    pub theta_te_upper: f64,
+    /// Momentum thickness at trailing edge - lower surface
+    pub theta_te_lower: f64,
+    /// Shape factor H at trailing edge - upper surface
+    pub h_te_upper: f64,
+    /// Shape factor H at trailing edge - lower surface
+    pub h_te_lower: f64,
+    /// Edge velocity at trailing edge - upper surface
+    pub ue_te_upper: f64,
+    /// Edge velocity at trailing edge - lower surface
+    pub ue_te_lower: f64,
+}
+
+/// CL detail event - lift coefficient and related quantities
+/// Matches XFOIL's DBGCLDETAIL output for force comparison
+#[derive(Serialize, Clone)]
+pub struct ClDetailEvent {
+    /// Lift coefficient
+    pub cl: f64,
+    /// Moment coefficient
+    pub cm: f64,
+    /// Pressure drag coefficient
+    pub cdp: f64,
+    /// Angle of attack in radians
+    pub alpha_rad: f64,
+    /// Angle of attack in degrees
+    pub alpha_deg: f64,
 }
 
 // Helper functions to create events easily
@@ -989,12 +1170,217 @@ impl DebugEvent {
         }
     }
 
+    /// Create an UPDATE_DETAILED debug event with full before/after state
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_detailed(
+        iteration: usize,
+        side: usize,
+        ibl: usize,
+        // Before state
+        ctau_before: f64,
+        theta_before: f64,
+        delta_star_before: f64,
+        ue_before: f64,
+        mass_defect_before: f64,
+        h_before: f64,
+        hk_before: f64,
+        // Deltas (before relaxation)
+        delta_ctau: f64,
+        delta_theta: f64,
+        delta_mass: f64,
+        delta_ue: f64,
+        // Relaxation factor
+        relaxation: f64,
+        // After state
+        ctau_after: f64,
+        theta_after: f64,
+        delta_star_after: f64,
+        ue_after: f64,
+        mass_defect_after: f64,
+        h_after: f64,
+        hk_after: f64,
+    ) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "UPDATE_DETAILED".to_string(),
+            iteration: Some(iteration),
+            data: DebugData::UpdateDetailed(UpdateDetailedEvent {
+                side,
+                ibl,
+                ctau_before,
+                theta_before,
+                delta_star_before,
+                ue_before,
+                mass_defect_before,
+                h_before,
+                hk_before,
+                delta_ctau,
+                delta_theta,
+                delta_mass,
+                delta_ue,
+                relaxation,
+                ctau_after,
+                theta_after,
+                delta_star_after,
+                ue_after,
+                mass_defect_after,
+                h_after,
+                hk_after,
+            }),
+        }
+    }
+
+    /// Create a UESET debug event with edge velocity update details
+    pub fn ueset(
+        iteration: usize,
+        nbl_upper: usize,
+        nbl_lower: usize,
+        upper_surface: UesetSurfaceData,
+        lower_surface: UesetSurfaceData,
+    ) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "UESET".to_string(),
+            iteration: Some(iteration),
+            data: DebugData::Ueset(UesetEvent {
+                nbl_upper,
+                nbl_lower,
+                upper_surface,
+                lower_surface,
+            }),
+        }
+    }
+
     pub fn blsolv(iteration: usize, system_size: usize) -> Self {
         Self {
             call_id: 0,
             subroutine: "BLSOLV".to_string(),
             iteration: Some(iteration),
             data: DebugData::Blsolv(BlsolvEvent { system_size }),
+        }
+    }
+
+    /// Create a full inviscid solution debug event
+    pub fn full_inviscid(
+        gamma: Vec<f64>,
+        qinv: Vec<f64>,
+        cp: Vec<f64>,
+        cl_inv: f64,
+        alpha: f64,
+    ) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "FULL_INVISCID".to_string(),
+            iteration: None,
+            data: DebugData::FullInviscid(FullInviscidEvent {
+                gamma,
+                qinv,
+                cp,
+                cl_inv,
+                alpha,
+            }),
+        }
+    }
+
+    /// Create a full AIC matrix debug event (GGCALC equivalent)
+    pub fn full_aic(n: usize, gamu_0: Vec<f64>, gamu_90: Vec<f64>) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "FULL_AIC".to_string(),
+            iteration: None,
+            data: DebugData::FullAic(FullAicEvent { n, gamu_0, gamu_90 }),
+        }
+    }
+
+    /// Create a full DIJ influence matrix debug event
+    /// 
+    /// # Arguments
+    /// * `nsys` - System size (number of BL stations)
+    /// * `dij` - Flattened DIJ matrix in row-major order
+    pub fn full_dij(nsys: usize, dij: Vec<f64>) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "FULLDIJ".to_string(),
+            iteration: None,
+            data: DebugData::FullDij(FullDijEvent { nsys, dij }),
+        }
+    }
+
+    /// Create a SETBL system debug event (full Newton system after building)
+    ///
+    /// # Arguments
+    /// * `iteration` - Viscous iteration number
+    /// * `nsys` - System size (number of BL stations)
+    /// * `va` - VA diagonal blocks [IV][eq][var]
+    /// * `vb` - VB sub-diagonal blocks [IV][eq][var]
+    /// * `vdel` - VDEL RHS vectors [IV][eq]
+    /// * `vm_diagonal` - VM diagonal sample [IV][eq]
+    /// * `vm_row1` - VM row 1 sample [JV][eq]
+    #[allow(non_snake_case)]
+    pub fn setbl_system(
+        iteration: usize,
+        nsys: usize,
+        VA: Vec<[[f64; 2]; 3]>,
+        VB: Vec<[[f64; 2]; 3]>,
+        VDEL: Vec<[f64; 3]>,
+        VM_diagonal: Vec<[f64; 3]>,
+        VM_row1: Vec<[f64; 3]>,
+    ) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "SETBL_SYSTEM".to_string(),
+            iteration: Some(iteration),
+            data: DebugData::SetblSystem(SetblSystemEvent {
+                nsys,
+                VA,
+                VB,
+                VDEL,
+                VM_diagonal,
+                VM_row1,
+            }),
+        }
+    }
+
+    /// Create a BLSOLV solution debug event (Newton deltas after solving)
+    ///
+    /// # Arguments
+    /// * `iteration` - Viscous iteration number
+    /// * `nsys` - System size (number of BL stations)
+    /// * `deltas` - Solution deltas [IV] = [dCtau/dAmpl, dTheta, dMass]
+    pub fn blsolv_solution(iteration: usize, nsys: usize, deltas: Vec<[f64; 3]>) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "BLSOLV_SOLUTION".to_string(),
+            iteration: Some(iteration),
+            data: DebugData::BlsolvSolution(BlsolvSolutionEvent { nsys, deltas }),
+        }
+    }
+
+    /// Create a CD breakdown debug event for force comparison
+    ///
+    /// # Arguments
+    /// * `iteration` - Viscous iteration number
+    /// * `event` - CdBreakdownEvent with all drag components
+    pub fn cd_breakdown(iteration: usize, event: CdBreakdownEvent) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "CD_BREAKDOWN".to_string(),
+            iteration: Some(iteration),
+            data: DebugData::CdBreakdown(event),
+        }
+    }
+
+    /// Create a CL detail debug event for force comparison
+    ///
+    /// # Arguments
+    /// * `iteration` - Viscous iteration number
+    /// * `event` - ClDetailEvent with lift/moment data
+    pub fn cl_detail(iteration: usize, event: ClDetailEvent) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "CL_DETAIL".to_string(),
+            iteration: Some(iteration),
+            data: DebugData::ClDetail(event),
         }
     }
 }

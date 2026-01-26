@@ -25,7 +25,8 @@
 //! - SETBL: xbl.f line 21
 
 use nalgebra::{DMatrix, DVector};
-use rustfoil_bl::equations::{bldif, FlowType};
+use rustfoil_bl::closures::Trchek2FullResult;
+use rustfoil_bl::equations::{bldif, trdif_full, FlowType};
 use rustfoil_bl::state::BlStation;
 
 /// Block-tridiagonal system for BL Newton iteration
@@ -182,6 +183,209 @@ impl BlNewtonSystem {
                 // Store VS1 delta_star derivatives (column 2) for forced changes
                 self.vs1_delta[i][eq] = jacobian.vs1[eq][2];
                 // Store VS1 Ue derivatives (column 3) for forced changes
+                self.vs1_ue[i][eq] = jacobian.vs1[eq][3];
+            }
+        }
+    }
+
+    /// Build the Newton system with TRDIF support for transition intervals
+    ///
+    /// This method extends `build()` to handle transition intervals using XFOIL's
+    /// TRDIF formulation. When a transition result is provided for an interval,
+    /// the system uses `trdif_full()` to properly compute the hybrid laminar-turbulent
+    /// residuals and Jacobians with full chain rule through the transition point.
+    ///
+    /// # Arguments
+    /// * `stations` - Slice of BlStation with pre-computed secondary variables
+    /// * `flow_types` - Flow type for each interval (Laminar, Turbulent, or Wake)
+    /// * `msq` - Mach number squared (M²)
+    /// * `re` - Reference Reynolds number
+    /// * `transitions` - Optional transition results for each interval. If `Some`, 
+    ///   the interval uses TRDIF; if `None`, regular BLDIF is used.
+    ///
+    /// # Note
+    /// The `transitions` slice should have length `n-1` (same as `flow_types`).
+    /// Each entry can be `None` (use regular BLDIF) or `Some(Trchek2FullResult)`
+    /// (use TRDIF with full Jacobian transformation).
+    ///
+    /// # Reference
+    /// XFOIL xblsys.f TRDIF (lines 1195-1549)
+    pub fn build_with_transition(
+        &mut self,
+        stations: &[BlStation],
+        flow_types: &[FlowType],
+        msq: f64,
+        re: f64,
+        transitions: &[Option<Trchek2FullResult>],
+    ) {
+        assert!(
+            stations.len() >= 2,
+            "Need at least 2 stations to build Newton system"
+        );
+        assert_eq!(
+            stations.len(),
+            self.n,
+            "Station count must match system size"
+        );
+        assert_eq!(
+            flow_types.len(),
+            self.n - 1,
+            "Need n-1 flow types for n stations"
+        );
+        assert_eq!(
+            transitions.len(),
+            self.n - 1,
+            "Need n-1 transition entries for n stations"
+        );
+
+        // For each interval (between stations i-1 and i)
+        for i in 1..self.n {
+            let s1 = &stations[i - 1]; // Upstream station
+            let s2 = &stations[i]; // Downstream station
+            let flow_type = flow_types[i - 1];
+            let transition = &transitions[i - 1];
+
+            // Compute residuals and Jacobian for this interval
+            // Use TRDIF if transition info is available and indicates transition occurred
+            let (residuals, jacobian) = if let Some(tr) = transition {
+                if tr.transition {
+                    // Use full TRDIF with chain rule through XT derivatives
+                    trdif_full(s1, s2, tr, msq, re)
+                } else {
+                    // No transition occurred in this interval, use regular BLDIF
+                    bldif(s1, s2, flow_type, msq, re)
+                }
+            } else {
+                // No transition info, use regular BLDIF
+                bldif(s1, s2, flow_type, msq, re)
+            };
+
+            // Store residuals (negated to match Newton iteration convention)
+            // Note: bldif already negates residuals, so we use them directly
+            self.rhs[i] = [residuals.res_third, residuals.res_mom, residuals.res_shape];
+
+            // Extract 3x3 blocks from the 3x5 Jacobian matrices
+            // The first 3 columns correspond to [ampl/ctau, theta, delta_star]
+            //
+            // VA[i] comes from vs2 (downstream station derivatives)
+            // VB[i] comes from vs1 (upstream station derivatives)
+
+            for eq in 0..3 {
+                for var in 0..3 {
+                    self.va[i][eq][var] = jacobian.vs2[eq][var];
+                    self.vb[i][eq][var] = jacobian.vs1[eq][var];
+                }
+                // Store edge velocity coupling (column 3 = u variable)
+                self.vs[i][eq] = jacobian.vs2[eq][3];
+                // Store VS2 delta_star derivatives (column 2)
+                self.vs_delta[i][eq] = jacobian.vs2[eq][2];
+                // Store VS2 Ue derivatives (column 3)
+                self.vs_ue[i][eq] = jacobian.vs2[eq][3];
+                // Store VS1 delta_star derivatives (column 2) for forced changes
+                self.vs1_delta[i][eq] = jacobian.vs1[eq][2];
+                // Store VS1 Ue derivatives (column 3) for forced changes
+                self.vs1_ue[i][eq] = jacobian.vs1[eq][3];
+            }
+        }
+    }
+
+    /// Build the Newton system automatically detecting transition intervals
+    ///
+    /// This method automatically detects transition intervals by checking if
+    /// the upstream station is laminar and downstream is turbulent. When detected,
+    /// it computes the transition location and uses TRDIF.
+    ///
+    /// # Arguments
+    /// * `stations` - Slice of BlStation with pre-computed secondary variables
+    /// * `flow_types` - Flow type for each interval
+    /// * `msq` - Mach number squared
+    /// * `re` - Reference Reynolds number
+    /// * `ncrit` - Critical N-factor for transition
+    ///
+    /// # Note
+    /// This is a convenience method that detects transitions automatically.
+    /// For more control, use `build_with_transition()` with explicit transition data.
+    pub fn build_auto_transition(
+        &mut self,
+        stations: &[BlStation],
+        flow_types: &[FlowType],
+        msq: f64,
+        re: f64,
+        ncrit: f64,
+    ) {
+        use rustfoil_bl::closures::trchek2_full;
+
+        assert!(
+            stations.len() >= 2,
+            "Need at least 2 stations to build Newton system"
+        );
+        assert_eq!(
+            stations.len(),
+            self.n,
+            "Station count must match system size"
+        );
+        assert_eq!(
+            flow_types.len(),
+            self.n - 1,
+            "Need n-1 flow types for n stations"
+        );
+
+        // For each interval (between stations i-1 and i)
+        for i in 1..self.n {
+            let s1 = &stations[i - 1]; // Upstream station
+            let s2 = &stations[i]; // Downstream station
+            let flow_type = flow_types[i - 1];
+
+            // Check if this is a transition interval
+            let is_transition_interval = s1.is_laminar && s2.is_turbulent;
+
+            // Compute residuals and Jacobian for this interval
+            let (residuals, jacobian) = if is_transition_interval && ncrit > 0.0 {
+                // Compute transition location using TRCHEK2
+                let tr = trchek2_full(
+                    s1.x,
+                    s2.x,
+                    s1.theta,
+                    s2.theta,
+                    s1.delta_star,
+                    s2.delta_star,
+                    s1.u,
+                    s2.u,
+                    s1.hk,
+                    s2.hk,
+                    s1.r_theta,
+                    s2.r_theta,
+                    s1.ampl,
+                    ncrit,
+                    msq,
+                    re,
+                );
+
+                if tr.transition {
+                    // Use full TRDIF with chain rule
+                    trdif_full(s1, s2, &tr, msq, re)
+                } else {
+                    // No transition, use regular BLDIF
+                    bldif(s1, s2, flow_type, msq, re)
+                }
+            } else {
+                // Not a transition interval, use regular BLDIF
+                bldif(s1, s2, flow_type, msq, re)
+            };
+
+            // Store residuals
+            self.rhs[i] = [residuals.res_third, residuals.res_mom, residuals.res_shape];
+
+            // Extract 3x3 blocks from the 3x5 Jacobian matrices
+            for eq in 0..3 {
+                for var in 0..3 {
+                    self.va[i][eq][var] = jacobian.vs2[eq][var];
+                    self.vb[i][eq][var] = jacobian.vs1[eq][var];
+                }
+                self.vs[i][eq] = jacobian.vs2[eq][3];
+                self.vs_delta[i][eq] = jacobian.vs2[eq][2];
+                self.vs_ue[i][eq] = jacobian.vs2[eq][3];
+                self.vs1_delta[i][eq] = jacobian.vs1[eq][2];
                 self.vs1_ue[i][eq] = jacobian.vs1[eq][3];
             }
         }
@@ -364,7 +568,8 @@ impl BlNewtonSystem {
 
         // Step 6: Add forced changes to residuals
         // XFOIL: VDEL(k,1,IV) = VSREZ(k) + VS1*DDS1 + VS2*DDS2 + VS1*DUE1 + VS2*DUE2
-        self.add_forced_changes(stations, &due);
+        // TODO: Temporarily disabled while debugging VI coupling instability
+        // self.add_forced_changes(stations, &due);
     }
 
     /// Compute edge velocities from mass defect using UESET formula
@@ -387,12 +592,22 @@ impl BlNewtonSystem {
         let n = stations.len();
         let mut ue = vec![0.0; n];
 
+        // Debug: print DIJ dimensions and sample panel indices (only if debug active)
+        if rustfoil_bl::is_debug_active() {
+            eprintln!("[DEBUG UESET] n_stations={}, DIJ dims={}x{}", 
+                n, dij.nrows(), dij.ncols());
+            eprintln!("[DEBUG UESET] panel_idx[0..5]={:?}", 
+                stations.iter().take(5).map(|s| s.panel_idx).collect::<Vec<_>>());
+        }
+
         for i in 0..n {
+            let panel_i = stations[i].panel_idx;
             let mut dui = 0.0;
             for j in 0..n {
-                if i < dij.nrows() && j < dij.ncols() {
-                    // UE_M = -VTI[i] * VTI[j] * DIJ[i,j]
-                    let ue_m = -self.vti[i] * self.vti[j] * dij[(i, j)];
+                let panel_j = stations[j].panel_idx;
+                if panel_i < dij.nrows() && panel_j < dij.ncols() {
+                    // UE_M = -VTI[i] * VTI[j] * DIJ[panel_i, panel_j]
+                    let ue_m = -self.vti[i] * self.vti[j] * dij[(panel_i, panel_j)];
                     dui += ue_m * stations[j].mass_defect;
                 }
             }
@@ -456,17 +671,24 @@ impl BlNewtonSystem {
                 0.0
             };
 
+            // Panel index for this station (maps BL station to DIJ matrix index)
+            let panel_i = s2.panel_idx;
+            let panel_im1 = s1.panel_idx;
+            
             // For each influence station j
             for j in 0..self.n {
                 // U_M[j] with VTI signs (XFOIL formula)
                 // U2_M(JV) = -VTI(IBL,IS)*VTI(JBL,JS)*DIJ(I,J)
-                let u2_m_j = if i < dij.nrows() && j < dij.ncols() {
-                    -self.vti[i] * self.vti[j] * dij[(i, j)]
+                // I = panel index of current station, J = panel index of influence station
+                let panel_j = stations[j].panel_idx;
+                let u2_m_j = if panel_i < dij.nrows() && panel_j < dij.ncols() {
+                    -self.vti[i] * self.vti[j] * dij[(panel_i, panel_j)]
                 } else {
                     0.0
                 };
-                let u1_m_j = if i > 1 && (i - 1) < dij.nrows() && j < dij.ncols() {
-                    -self.vti[i - 1] * self.vti[j] * dij[(i - 1, j)]
+                // U1_M for the upstream station (station i-1)
+                let u1_m_j = if i > 1 && panel_im1 < dij.nrows() && panel_j < dij.ncols() {
+                    -self.vti[i - 1] * self.vti[j] * dij[(panel_im1, panel_j)]
                 } else {
                     0.0
                 };
@@ -1152,5 +1374,241 @@ mod tests {
             "Coupled max_residual should be 0.4, got {}",
             max_res
         );
+    }
+
+    // =========================================================================
+    // TRDIF (Transition) Tests
+    // =========================================================================
+
+    #[test]
+    fn test_build_with_transition_no_transition() {
+        // Test build_with_transition when no transition occurs (all None)
+        let n = 4;
+        let mut stations: Vec<BlStation> = Vec::with_capacity(n);
+        let re = 1e6;
+        let msq = 0.0;
+
+        for i in 0..n {
+            let mut station = BlStation::new();
+            station.x = 0.1 + 0.1 * i as f64;
+            station.u = 1.0 - 0.01 * i as f64;
+            station.theta = 0.001 * (1.0 + 0.2 * i as f64);
+            station.delta_star = 0.0026 * (1.0 + 0.2 * i as f64);
+            station.ampl = 0.5 * i as f64;
+
+            blvar(&mut station, FlowType::Laminar, msq, re);
+            stations.push(station);
+        }
+
+        let mut system = BlNewtonSystem::new(n);
+        let flow_types = vec![FlowType::Laminar; n - 1];
+        let transitions: Vec<Option<Trchek2FullResult>> = vec![None; n - 1];
+        
+        system.build_with_transition(&stations, &flow_types, msq, re, &transitions);
+
+        // Should produce same results as regular build
+        let mut system_regular = BlNewtonSystem::new(n);
+        system_regular.build(&stations, &flow_types, msq, re);
+
+        // Compare residuals
+        for i in 1..n {
+            for eq in 0..3 {
+                assert!(
+                    (system.rhs[i][eq] - system_regular.rhs[i][eq]).abs() < 1e-12,
+                    "Residuals should match regular build when no transition"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_build_with_transition_interval() {
+        // Test build_with_transition with a transition interval
+        let n = 4;
+        let mut stations: Vec<BlStation> = Vec::with_capacity(n);
+        let re = 1e6;
+        let msq = 0.0;
+
+        // Create stations: first 2 laminar, last 2 turbulent
+        for i in 0..n {
+            let mut station = BlStation::new();
+            station.x = 0.1 + 0.1 * i as f64;
+            station.u = 1.0 - 0.01 * i as f64;
+            station.theta = 0.001 * (1.0 + 0.2 * i as f64);
+            station.delta_star = 0.0026 * (1.0 + 0.2 * i as f64);
+            
+            if i < 2 {
+                // Laminar stations
+                station.ampl = 2.0 * i as f64; // Growing amplification
+                station.is_laminar = true;
+                station.is_turbulent = false;
+                blvar(&mut station, FlowType::Laminar, msq, re);
+            } else {
+                // Turbulent stations
+                station.ctau = 0.05;
+                station.ampl = 0.0;
+                station.is_laminar = false;
+                station.is_turbulent = true;
+                blvar(&mut station, FlowType::Turbulent, msq, re);
+            }
+            stations.push(station);
+        }
+
+        // Create transition result for interval 1 (between stations 1 and 2)
+        // This is where transition occurs (laminar -> turbulent)
+        let mut tr = Trchek2FullResult::default();
+        tr.transition = true;
+        tr.xt = 0.25; // Transition at x=0.25 (between 0.2 and 0.3)
+        tr.ampl2 = 9.0; // N-crit
+        tr.wf1 = 0.5;
+        tr.wf2 = 0.5;
+        // Set some non-zero derivatives for testing
+        tr.tt_t1 = 0.5;
+        tr.tt_t2 = 0.5;
+        tr.dt_d1 = 0.5;
+        tr.dt_d2 = 0.5;
+        tr.ut_u1 = 0.5;
+        tr.ut_u2 = 0.5;
+
+        let mut system = BlNewtonSystem::new(n);
+        let flow_types = vec![FlowType::Laminar, FlowType::Turbulent, FlowType::Turbulent];
+        let transitions: Vec<Option<Trchek2FullResult>> = vec![None, Some(tr), None];
+        
+        system.build_with_transition(&stations, &flow_types, msq, re, &transitions);
+
+        // Check that residuals are finite
+        for i in 1..n {
+            for eq in 0..3 {
+                assert!(
+                    system.rhs[i][eq].is_finite(),
+                    "Residual [{},{}] should be finite with transition, got {}",
+                    i, eq, system.rhs[i][eq]
+                );
+            }
+        }
+
+        // The transition interval (i=2) should have different Jacobian structure
+        // due to TRDIF combining laminar and turbulent parts
+        let mut has_nonzero_va = false;
+        let mut has_nonzero_vb = false;
+        for eq in 0..3 {
+            for var in 0..3 {
+                if system.va[2][eq][var].abs() > 1e-15 {
+                    has_nonzero_va = true;
+                }
+                if system.vb[2][eq][var].abs() > 1e-15 {
+                    has_nonzero_vb = true;
+                }
+            }
+        }
+        assert!(has_nonzero_va, "VA at transition interval should have non-zero entries");
+        assert!(has_nonzero_vb, "VB at transition interval should have non-zero entries");
+    }
+
+    #[test]
+    fn test_build_auto_transition() {
+        // Test automatic transition detection
+        let n = 5;
+        let mut stations: Vec<BlStation> = Vec::with_capacity(n);
+        let re = 1e6;
+        let msq = 0.0;
+        let ncrit = 9.0;
+
+        // Create stations with laminar -> turbulent transition
+        for i in 0..n {
+            let mut station = BlStation::new();
+            station.x = 0.05 + 0.1 * i as f64;
+            station.u = 1.0 - 0.02 * i as f64;
+            station.theta = 0.0005 * (1.0 + 0.3 * i as f64);
+            station.delta_star = 0.0013 * (1.0 + 0.3 * i as f64);
+            
+            if i < 3 {
+                // Laminar stations
+                station.ampl = 3.0 * i as f64;
+                station.is_laminar = true;
+                station.is_turbulent = false;
+                blvar(&mut station, FlowType::Laminar, msq, re);
+            } else {
+                // Turbulent stations
+                station.ctau = 0.04;
+                station.ampl = 0.0;
+                station.is_laminar = false;
+                station.is_turbulent = true;
+                blvar(&mut station, FlowType::Turbulent, msq, re);
+            }
+            stations.push(station);
+        }
+
+        let mut system = BlNewtonSystem::new(n);
+        let flow_types = vec![
+            FlowType::Laminar, 
+            FlowType::Laminar, 
+            FlowType::Turbulent, // Transition interval
+            FlowType::Turbulent,
+        ];
+        
+        system.build_auto_transition(&stations, &flow_types, msq, re, ncrit);
+
+        // Check that residuals are finite
+        for i in 1..n {
+            for eq in 0..3 {
+                assert!(
+                    system.rhs[i][eq].is_finite(),
+                    "Residual [{},{}] should be finite with auto-transition, got {}",
+                    i, eq, system.rhs[i][eq]
+                );
+            }
+        }
+
+        // Check that Jacobian blocks are non-trivial
+        let mut total_nonzero = 0;
+        for i in 1..n {
+            for eq in 0..3 {
+                for var in 0..3 {
+                    if system.va[i][eq][var].abs() > 1e-15 {
+                        total_nonzero += 1;
+                    }
+                }
+            }
+        }
+        assert!(total_nonzero > 0, "VA blocks should have non-zero entries with auto-transition");
+    }
+
+    #[test]
+    fn test_build_auto_transition_ncrit_zero_disables() {
+        // When ncrit=0, auto transition should behave like regular build
+        let n = 4;
+        let mut stations: Vec<BlStation> = Vec::with_capacity(n);
+        let re = 1e6;
+        let msq = 0.0;
+
+        for i in 0..n {
+            let mut station = BlStation::new();
+            station.x = 0.1 + 0.1 * i as f64;
+            station.u = 1.0;
+            station.theta = 0.001 * (1.0 + 0.2 * i as f64);
+            station.delta_star = 0.0026 * (1.0 + 0.2 * i as f64);
+            station.ampl = i as f64;
+
+            blvar(&mut station, FlowType::Laminar, msq, re);
+            stations.push(station);
+        }
+
+        let mut system_auto = BlNewtonSystem::new(n);
+        let mut system_regular = BlNewtonSystem::new(n);
+        let flow_types = vec![FlowType::Laminar; n - 1];
+        
+        system_auto.build_auto_transition(&stations, &flow_types, msq, re, 0.0);
+        system_regular.build(&stations, &flow_types, msq, re);
+
+        // Results should match when ncrit=0 (TRDIF disabled)
+        for i in 1..n {
+            for eq in 0..3 {
+                assert!(
+                    (system_auto.rhs[i][eq] - system_regular.rhs[i][eq]).abs() < 1e-12,
+                    "Residuals should match regular build when ncrit=0"
+                );
+            }
+        }
     }
 }

@@ -29,6 +29,7 @@ use crate::influence::{build_source_influence_matrix, psilin};
 use crate::solution::{FlowConditions, InviscidSolution};
 use crate::{InviscidError, Result};
 use nalgebra::{DMatrix, DVector, LU};
+use rustfoil_bl::{add_event, is_debug_active, DebugEvent};
 
 /// Factorized system ready for efficient alpha sweeps.
 ///
@@ -79,6 +80,18 @@ impl FactorizedSystem {
 
         // Compute Cl and Cm by pressure integration (XFOIL's CLCALC)
         let (cl, cm) = self.compute_forces(&cp, flow);
+
+        // Debug output: emit full inviscid solution
+        if is_debug_active() {
+            // qinv is the same as gamma for inviscid panel method
+            add_event(DebugEvent::full_inviscid(
+                gamma.clone(),
+                gamma.clone(), // qinv = gamma for inviscid
+                cp.clone(),
+                cl,
+                flow.alpha,
+            ));
+        }
 
         InviscidSolution {
             gamma,
@@ -254,6 +267,11 @@ pub fn build_and_factorize(geom: &AirfoilGeometry) -> Result<FactorizedSystem> {
     let gamu_90: Vec<f64> = solution_90.iter().take(n).copied().collect();
     let psi0_0 = solution_0[n];
     let psi0_90 = solution_90[n];
+
+    // Debug output: emit full AIC base solutions (GGCALC equivalent)
+    if is_debug_active() {
+        add_event(DebugEvent::full_aic(n, gamu_0.clone(), gamu_90.clone()));
+    }
 
     Ok(FactorizedSystem {
         gamu_0,

@@ -25,6 +25,7 @@
 //! - VISCAL: xoper.f line 2886
 
 pub mod config;
+pub mod circulation;
 pub mod forces;
 pub mod setup;
 pub mod viscal;
@@ -35,7 +36,9 @@ pub use forces::{compute_forces, AeroForces};
 pub use setup::{
     compute_arc_from_stagnation, compute_arc_lengths, extract_surface, extract_surface_xfoil,
     find_stagnation, find_stagnation_by_sign_change, initialize_bl_stations,
-    initialize_surface_stations, interpolate_stagnation, ViscousSetup,
+    initialize_surface_stations, initialize_surface_stations_with_coords, 
+    initialize_surface_stations_with_panel_idx, interpolate_stagnation,
+    ViscousSetup,
     // New integration with rustfoil-inviscid
     setup_from_body, setup_from_coords, SetupError, ViscousSetupResult,
 };

@@ -236,21 +236,17 @@ pub fn update_stations(
     for i in 0..n {
         let (dctau, dthet, ddstr, duedg) = changes[i];
 
-        // Emit debug event before applying updates
-        if rustfoil_bl::is_debug_active() {
-            // Compute mass defect change for debug output
-            let dmass = ddstr * stations[i].u + stations[i].delta_star * duedg;
-            rustfoil_bl::add_event(rustfoil_bl::DebugEvent::update(
-                0, // iteration set by caller
-                1, // side (TODO: track properly)
-                i,
-                rlx * dctau,
-                rlx * dthet,
-                rlx * dmass,
-                rlx * duedg,
-                rlx,
-            ));
-        }
+        // Capture before state for debug
+        let ctau_before = if stations[i].is_laminar { stations[i].ampl } else { stations[i].ctau };
+        let theta_before = stations[i].theta;
+        let delta_star_before = stations[i].delta_star;
+        let ue_before = stations[i].u;
+        let mass_before = stations[i].mass_defect;
+        let h_before = if theta_before.abs() > 1e-12 { delta_star_before / theta_before } else { 2.5 };
+        let hk_before = hkin(h_before, 0.0).hk;
+
+        // Compute mass defect change for debug output
+        let dmass = ddstr * stations[i].u + stations[i].delta_star * duedg;
 
         // Apply relaxed updates
         if stations[i].is_laminar {
@@ -281,6 +277,58 @@ pub fn update_stations(
         // Update shape factor
         if stations[i].theta.abs() > 1e-12 {
             stations[i].h = stations[i].delta_star / stations[i].theta;
+        }
+
+        // Emit detailed debug event after applying updates
+        if rustfoil_bl::is_debug_active() {
+            let ctau_after = if stations[i].is_laminar { stations[i].ampl } else { stations[i].ctau };
+            let h_after = stations[i].h;
+            let hk_after = hkin(h_after, 0.0).hk;
+
+            // Emit basic UPDATE event for compatibility
+            rustfoil_bl::add_event(rustfoil_bl::DebugEvent::update(
+                0, // iteration set by caller
+                1, // side (TODO: track properly)
+                i,
+                rlx * dctau,
+                rlx * dthet,
+                rlx * dmass,
+                rlx * duedg,
+                rlx,
+            ));
+
+            // Emit detailed UPDATE_DETAILED event with full before/after state
+            // Only emit for first 30 stations to match XFOIL behavior
+            if i < 30 {
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::update_detailed(
+                    0, // iteration set by caller
+                    1, // side (TODO: track properly)
+                    i,
+                    // Before state
+                    ctau_before,
+                    theta_before,
+                    delta_star_before,
+                    ue_before,
+                    mass_before,
+                    h_before,
+                    hk_before,
+                    // Deltas (before relaxation)
+                    dctau,
+                    dthet,
+                    dmass,
+                    duedg,
+                    // Relaxation factor
+                    rlx,
+                    // After state
+                    ctau_after,
+                    stations[i].theta,
+                    stations[i].delta_star,
+                    stations[i].u,
+                    stations[i].mass_defect,
+                    h_after,
+                    hk_after,
+                ));
+            }
         }
     }
 
@@ -379,6 +427,10 @@ pub fn set_edge_velocities(
     let default_vti = vec![1.0; n];
     let vti = vti.unwrap_or(&default_vti);
 
+    // Capture before state for debug
+    let ue_before: Vec<f64> = stations.iter().map(|s| s.u).collect();
+    let mass_defect: Vec<f64> = stations.iter().map(|s| s.mass_defect).collect();
+
     // XFOIL formula:
     // UE_M = -VTI(i) * VTI(j) * DIJ(i,j)
     // DUI = sum_j UE_M * MASS(j)
@@ -403,6 +455,38 @@ pub fn set_edge_velocities(
     // Update mass defect after Ue change
     for station in stations.iter_mut() {
         station.mass_defect = station.u * station.delta_star;
+    }
+
+    // Emit UESET debug event
+    if rustfoil_bl::is_debug_active() {
+        let ue_after: Vec<f64> = stations.iter().map(|s| s.u).collect();
+        
+        // Limit to first 20 stations to match XFOIL behavior
+        let limit = 20.min(n);
+        
+        // For now, treat all as single surface (upper)
+        // TODO: Support separate upper/lower surfaces when surface info is available
+        let upper_surface = rustfoil_bl::UesetSurfaceData {
+            ue_inviscid: ue_inviscid[..limit].to_vec(),
+            mass_defect: mass_defect[..limit].to_vec(),
+            ue_before: ue_before[..limit].to_vec(),
+            ue_after: ue_after[..limit].to_vec(),
+        };
+        
+        let lower_surface = rustfoil_bl::UesetSurfaceData {
+            ue_inviscid: vec![],
+            mass_defect: vec![],
+            ue_before: vec![],
+            ue_after: vec![],
+        };
+
+        rustfoil_bl::add_event(rustfoil_bl::DebugEvent::ueset(
+            0, // iteration set by caller
+            limit,
+            0,
+            upper_surface,
+            lower_surface,
+        ));
     }
 }
 

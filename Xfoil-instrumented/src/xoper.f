@@ -2816,6 +2816,9 @@ C---- Debug output: dump SPECAL results
       CALL DBGSPECAL(N, ALFA, GAM, QINV)
       CALL DBGCLCALC(N, CL, CM, CDP, CPI)
 C
+C---- Debug output: dump FULL gamma, Cp arrays for RustFoil comparison
+      CALL DBGFULLGAMMA(N, GAM, QINV, CPI, CL, ALFA)
+C
       RETURN
       END ! SPECAL
  
@@ -3011,6 +3014,10 @@ C------ set updated CL,CD
         CALL CLCALC(N,X,Y,GAM,GAM_A,ALFA,MINF,QINF, XCMREF,YCMREF,
      &              CL,CM,CDP,CL_ALF,CL_MSQ)
         CALL CDCALC
+C
+C------ Debug force breakdown
+        CALL DBGCDBREAKDOWN(ITER)
+        CALL DBGCLDETAIL(ITER)
 C
 C------ Debug iteration result
         CALL DBGVISCRES(ITER, RMSBL, RMXBL, CL, CD, CM, CD-CDF, CDF)

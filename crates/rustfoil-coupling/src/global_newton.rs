@@ -38,7 +38,7 @@
 
 use nalgebra::DMatrix;
 use rustfoil_bl::closures::Trchek2FullResult;
-use rustfoil_bl::equations::{bldif, blvar, trdif_full, FlowType};
+use rustfoil_bl::equations::{bldif, bldif_full_simi, blvar, trdif_full, FlowType};
 use rustfoil_bl::state::BlStation;
 
 /// Global Newton system for coupled upper/lower surface BL iteration
@@ -239,10 +239,11 @@ impl GlobalNewtonSystem {
         let ue_current_lower: Vec<f64> = lower_stations.iter().map(|s| s.u).collect();
 
         // === Step 2: Compute Ue from mass defect (UESET) ===
+        // IMPORTANT: Sum over BOTH surfaces to get proper mass coupling
         let ue_from_mass_upper =
-            self.compute_ue_from_mass(upper_stations, ue_inviscid_upper, dij, 0);
+            self.compute_ue_from_mass_both(upper_stations, lower_stations, ue_inviscid_upper, dij, 0);
         let ue_from_mass_lower =
-            self.compute_ue_from_mass(lower_stations, ue_inviscid_lower, dij, 1);
+            self.compute_ue_from_mass_both(upper_stations, lower_stations, ue_inviscid_lower, dij, 1);
 
         // === Step 3: Build equations for upper surface ===
         self.build_surface_equations(
@@ -275,6 +276,12 @@ impl GlobalNewtonSystem {
         self.build_vz_block(upper_stations, lower_stations);
 
         // === Step 7: Add forced changes to residuals ===
+        // XFOIL formula (xbl.f lines 383-387):
+        // VDEL(k,1,IV) = VSREZ(k) + (VS1(k,4)*DUE1 + VS1(k,3)*DDS1)
+        //                        + (VS2(k,4)*DUE2 + VS2(k,3)*DDS2) + ...
+        // 
+        // DUE = current_Ue - ue_from_mass (change needed to match mass coupling)
+        // DDS = D_U * DUE (delta_star change induced by Ue change)
         self.add_forced_changes(
             upper_stations,
             lower_stations,
@@ -283,6 +290,79 @@ impl GlobalNewtonSystem {
             &ue_from_mass_upper,
             &ue_from_mass_lower,
         );
+        
+        // === Step 8: Negate residuals for Newton sign convention ===
+        // Our bldif computes res = -F (negative of equation value)
+        // XFOIL's VSREZ = -REZC, -REZT, -REZH (also negative)
+        // But the solver expects vdel = -F for Newton: J*delta = -F, x += delta
+        // So we need to ensure the sign is correct. Actually XFOIL does NOT negate
+        // after storing in VSREZ, so we shouldn't either.
+    }
+
+    /// Emit debug event for the built Newton system
+    ///
+    /// This dumps VA, VB, VDEL, and VM samples matching XFOIL's DBGSETBLSYSTEM.
+    /// Should be called after `build_global_system` completes.
+    ///
+    /// # Arguments
+    /// * `iteration` - Viscous iteration number
+    pub fn emit_setbl_debug(&self, iteration: usize) {
+        if !rustfoil_bl::is_debug_active() {
+            return;
+        }
+
+        let nout = self.nsys.min(20);
+
+        // Extract VA blocks (3 equations x 2 variables)
+        // XFOIL VA is (3,2,IVX) - we have (3,3) but only use first 2 columns
+        let mut va_blocks: Vec<[[f64; 2]; 3]> = Vec::with_capacity(nout);
+        for iv in 1..=nout {
+            let mut block = [[0.0; 2]; 3];
+            for k in 0..3 {
+                block[k][0] = self.va[iv][k][0];
+                block[k][1] = self.va[iv][k][1];
+            }
+            va_blocks.push(block);
+        }
+
+        // Extract VB blocks
+        let mut vb_blocks: Vec<[[f64; 2]; 3]> = Vec::with_capacity(nout);
+        for iv in 1..=nout {
+            let mut block = [[0.0; 2]; 3];
+            for k in 0..3 {
+                block[k][0] = self.vb[iv][k][0];
+                block[k][1] = self.vb[iv][k][1];
+            }
+            vb_blocks.push(block);
+        }
+
+        // Extract VDEL (RHS)
+        let mut vdel_rhs: Vec<[f64; 3]> = Vec::with_capacity(nout);
+        for iv in 1..=nout {
+            vdel_rhs.push(self.vdel[iv]);
+        }
+
+        // Extract VM diagonal
+        let mut vm_diag: Vec<[f64; 3]> = Vec::with_capacity(nout);
+        for iv in 1..=nout {
+            vm_diag.push(self.vm[iv][iv]);
+        }
+
+        // Extract VM row 1
+        let mut vm_row1: Vec<[f64; 3]> = Vec::with_capacity(nout);
+        for jv in 1..=nout {
+            vm_row1.push(self.vm[1][jv]);
+        }
+
+        rustfoil_bl::add_event(rustfoil_bl::DebugEvent::setbl_system(
+            iteration,
+            self.nsys,
+            va_blocks,
+            vb_blocks,
+            vdel_rhs,
+            vm_diag,
+            vm_row1,
+        ));
     }
 
     /// Setup index mappings and VTI signs
@@ -311,31 +391,46 @@ impl GlobalNewtonSystem {
     /// Compute Ue from mass defect using UESET formula
     ///
     /// XFOIL formula: Ue[i] = Ue_inv[i] + sum_j(-VTI[i]*VTI[j]*DIJ[i,j] * mass[j])
-    fn compute_ue_from_mass(
+    /// NOTE: Sum is over BOTH surfaces, not just the current one!
+    fn compute_ue_from_mass_both(
         &self,
-        stations: &[BlStation],
+        upper_stations: &[BlStation],
+        lower_stations: &[BlStation],
         ue_inviscid: &[f64],
         dij: &DMatrix<f64>,
         surface: usize,
     ) -> Vec<f64> {
+        let stations = if surface == 0 { upper_stations } else { lower_stations };
         let n = stations.len();
         let mut ue = vec![0.0; n];
 
         for i in 0..n {
-            let _iv = self.to_global(surface, i);
             let panel_i = stations[i].panel_idx;
             let vti_i = if surface == 0 { 1.0 } else { -1.0 };
 
             let mut dui = 0.0;
 
-            // Sum over all stations on both surfaces
-            for j in 0..n {
-                let panel_j = stations[j].panel_idx;
-                let vti_j = if surface == 0 { 1.0 } else { -1.0 };
+            // Sum over upper surface (VTI = +1)
+            // XFOIL starts from JBL=2 (first BL station, skipping stagnation)
+            for j in 1..upper_stations.len() {
+                let panel_j = upper_stations[j].panel_idx;
+                let vti_j = 1.0;  // Upper surface
 
                 if panel_i < dij.nrows() && panel_j < dij.ncols() {
                     let ue_m = -vti_i * vti_j * dij[(panel_i, panel_j)];
-                    dui += ue_m * stations[j].mass_defect;
+                    dui += ue_m * upper_stations[j].mass_defect;
+                }
+            }
+
+            // Sum over lower surface (VTI = -1)
+            // XFOIL starts from JBL=2 (first BL station, skipping stagnation)
+            for j in 1..lower_stations.len() {
+                let panel_j = lower_stations[j].panel_idx;
+                let vti_j = -1.0;  // Lower surface
+
+                if panel_i < dij.nrows() && panel_j < dij.ncols() {
+                    let ue_m = -vti_i * vti_j * dij[(panel_i, panel_j)];
+                    dui += ue_m * lower_stations[j].mass_defect;
                 }
             }
 
@@ -375,44 +470,89 @@ impl GlobalNewtonSystem {
             let flow_type = flow_types.get(i - 1).copied().unwrap_or(FlowType::Laminar);
             let transition = transitions.get(i - 1).and_then(|t| t.as_ref());
             
-            // XFOIL similarity condition: For first interval (i==1), use s2 for both
-            // stations (SIMI = IBL.EQ.2 in XFOIL, sets COM1 = COM2 before BLDIF)
-            let s1 = if i == 1 { s2 } else { &stations[i - 1] };
-
             // Compute residuals and Jacobian
-            let (residuals, jacobian) = if let Some(tr) = transition {
+            // For first interval (i==1), use similarity-specific bldif with XFOIL's
+            // fixed log values (XLOG=1, ULOG=1, TLOG=0, HLOG=0) and DDLOG=0
+            // which zeros out the log-derivative Jacobian terms
+            let (residuals, jacobian) = if i == 1 {
+                bldif_full_simi(s2, flow_type, msq, re)
+            } else if let Some(tr) = transition {
                 if tr.transition {
-                    trdif_full(s1, s2, tr, msq, re)
+                    trdif_full(&stations[i - 1], s2, tr, msq, re)
                 } else {
-                    bldif(s1, s2, flow_type, msq, re)
+                    bldif(&stations[i - 1], s2, flow_type, msq, re)
                 }
             } else {
-                bldif(s1, s2, flow_type, msq, re)
+                bldif(&stations[i - 1], s2, flow_type, msq, re)
             };
 
 
             // Store residuals
             self.vdel[iv] = [residuals.res_third, residuals.res_mom, residuals.res_shape];
+            
 
             // Extract VA and VB blocks from Jacobian
-            for eq in 0..3 {
-                for var in 0..3 {
-                    self.va[iv][eq][var] = jacobian.vs2[eq][var];
-                    self.vb[iv][eq][var] = jacobian.vs1[eq][var];
+            // IMPORTANT: XFOIL's VA only has 2 columns: [ampl/ctau, theta]
+            // The delta_star/mass derivatives go ENTIRELY in VM, not VA!
+            // 
+            // XFOIL (xbl.f lines 340-341, 370-371, 400-401):
+            //   VA(k,1,IV) = VS2(k,1)  -- ∂Fk/∂(ampl or ctau)
+            //   VA(k,2,IV) = VS2(k,2)  -- ∂Fk/∂theta
+            //
+            // For similarity station (i==1), XFOIL combines: VS2 = VS1 + VS2, VS1 = 0
+            if i == 1 {
+                // Similarity station: XFOIL combines VS2 = VS1 + VS2, VS1 = 0
+                // BUT when s1=s2 (both point to same station), vs1 and vs2 from bldif
+                // are IDENTICAL (both compute derivatives w.r.t. same station).
+                // So we should NOT add them - just use vs2 directly!
+                //
+                // In XFOIL's BLDIF, VS1 and VS2 are computed with conceptually different
+                // "upstream" vs "downstream" formulas even when using same state variables.
+                // For SIMI, the final combined VS2 is what we want.
+                //
+                // Since our bldif_full_simi returns vs1=vs2 (same derivatives), we just
+                // use vs2 without adding vs1 to avoid 2x factor.
+                for eq in 0..3 {
+                    // Only columns 0,1 go in VA (ampl/ctau and theta)
+                    // For SIMI, DON'T add vs1+vs2 since they're identical
+                    self.va[iv][eq][0] = jacobian.vs2[eq][0];
+                    self.va[iv][eq][1] = jacobian.vs2[eq][1];
+                    self.va[iv][eq][2] = 0.0; // Not used - mass goes in VM
+                    self.vb[iv][eq][0] = 0.0;
+                    self.vb[iv][eq][1] = 0.0;
+                    self.vb[iv][eq][2] = 0.0;
+                    
+                    // Store delta_star and Ue columns for VM construction
+                    // Same logic - just use vs2, not vs1+vs2
+                    self.vs1_delta[iv][eq] = 0.0;
+                    self.vs1_ue[iv][eq] = 0.0;
+                    self.vs2_delta[iv][eq] = jacobian.vs2[eq][2];
+                    self.vs2_ue[iv][eq] = jacobian.vs2[eq][3];
                 }
-                // Store VS columns for VM construction
-                self.vs1_delta[iv][eq] = jacobian.vs1[eq][2];
-                self.vs1_ue[iv][eq] = jacobian.vs1[eq][3];
-                self.vs2_delta[iv][eq] = jacobian.vs2[eq][2];
-                self.vs2_ue[iv][eq] = jacobian.vs2[eq][3];
+            } else {
+                for eq in 0..3 {
+                    // Only columns 0,1 go in VA and VB (ampl/ctau and theta)
+                    self.va[iv][eq][0] = jacobian.vs2[eq][0];
+                    self.va[iv][eq][1] = jacobian.vs2[eq][1];
+                    self.va[iv][eq][2] = 0.0; // Not used - mass goes in VM
+                    self.vb[iv][eq][0] = jacobian.vs1[eq][0];
+                    self.vb[iv][eq][1] = jacobian.vs1[eq][1];
+                    self.vb[iv][eq][2] = 0.0; // Not used - mass goes in VM
+                    
+                    // Store delta_star and Ue columns for VM construction
+                    self.vs1_delta[iv][eq] = jacobian.vs1[eq][2];
+                    self.vs1_ue[iv][eq] = jacobian.vs1[eq][3];
+                    self.vs2_delta[iv][eq] = jacobian.vs2[eq][2];
+                    self.vs2_ue[iv][eq] = jacobian.vs2[eq][3];
+                }
             }
+            
         }
 
-        // Zero first interval residual (SIMI boundary condition)
-        let iv_first = self.to_global(surface, 1);
-        if iv_first <= self.nsys {
-            self.vdel[iv_first] = [0.0, 0.0, 0.0];
-        }
+        // NOTE: XFOIL does NOT zero the SIMI residuals - they're computed normally
+        // with fixed log values (XLOG=1, ULOG=BULE, TLOG=0, HLOG=0).
+        // The similarity condition is handled by combining Jacobians (VS2 = VS1 + VS2)
+        // which is done in the build_surface_equations loop for i==1.
     }
 
     /// Build global VM matrix with cross-surface coupling
@@ -577,7 +717,8 @@ impl GlobalNewtonSystem {
             .collect();
 
         // Add forced changes to upper surface residuals
-        for ibl in 2..upper_stations.len() {
+        // Start from IBL=1 (which is IV=1 in global indexing, XFOIL's IBL=2)
+        for ibl in 1..upper_stations.len() {
             let iv = self.to_global(0, ibl);
             if iv > self.nsys {
                 continue;
@@ -612,7 +753,8 @@ impl GlobalNewtonSystem {
         }
 
         // Add forced changes to lower surface residuals
-        for ibl in 2..lower_stations.len() {
+        // Start from IBL=1 (which is IV=1+n_upper in global indexing, XFOIL's IBL=2)
+        for ibl in 1..lower_stations.len() {
             let iv = self.to_global(1, ibl);
             if iv > self.nsys {
                 continue;
@@ -861,6 +1003,37 @@ pub fn solve_global_system(system: &mut GlobalNewtonSystem) -> Vec<[f64; 3]> {
     vdel
 }
 
+/// Emit debug event for the BLSOLV solution
+///
+/// This dumps the solution deltas [dCtau/dAmpl, dTheta, dMass] matching XFOIL's DBGBLSOLVSOLUTION.
+/// Should be called after `solve_global_system` returns.
+///
+/// # Arguments
+/// * `iteration` - Viscous iteration number
+/// * `deltas` - Solution from `solve_global_system`
+pub fn emit_blsolv_solution_debug(iteration: usize, deltas: &[[f64; 3]]) {
+    if !rustfoil_bl::is_debug_active() {
+        return;
+    }
+
+    let nsys = deltas.len().saturating_sub(1); // deltas[0] is unused
+    let nout = nsys.min(30);
+
+    // Extract solution deltas (skip index 0)
+    let mut solution_deltas: Vec<[f64; 3]> = Vec::with_capacity(nout);
+    for iv in 1..=nout {
+        if iv < deltas.len() {
+            solution_deltas.push(deltas[iv]);
+        }
+    }
+
+    rustfoil_bl::add_event(rustfoil_bl::DebugEvent::blsolv_solution(
+        iteration,
+        nsys,
+        solution_deltas,
+    ));
+}
+
 /// Apply global Newton updates to both surfaces
 ///
 /// # Arguments
@@ -886,7 +1059,86 @@ pub fn apply_global_updates(
     msq: f64,
     re: f64,
 ) {
-    let rlx = relaxation.clamp(0.0, 1.0);  // Allow 0 for testing
+    // === XFOIL-style normalized relaxation (xbl.f lines 1527-1597) ===
+    // Compute global relaxation factor based on normalized changes
+    let dhi = 1.5;   // Max 150% relative increase
+    let dlo = -0.5;  // Max 50% relative decrease (CRITICAL for ctau stability)
+    
+    let mut rlx = relaxation.clamp(0.0, 1.0);
+    
+    // First pass: compute required relaxation from all stations
+    // Upper surface
+    for ibl in 1..upper_stations.len() {
+        let iv = system.to_global(0, ibl);
+        if iv >= deltas.len() {
+            continue;
+        }
+        let delta = &deltas[iv];
+        let station = &upper_stations[ibl];
+        
+        // Ctau/ampl normalized change (XFOIL lines 1545-1546)
+        let dn1 = if station.is_laminar {
+            delta[0] / 10.0  // Laminar: fixed scale
+        } else if station.ctau.abs() > 1e-10 {
+            delta[0] / station.ctau  // Turbulent: normalize by current value
+        } else {
+            delta[0] / 0.03  // Fallback for near-zero ctau
+        };
+        
+        // Theta normalized change
+        let dn2 = if station.theta.abs() > 1e-12 {
+            delta[1] / station.theta
+        } else {
+            0.0
+        };
+        
+        // Apply relaxation limits (XFOIL lines 1563-1576)
+        let rdn1 = rlx * dn1;
+        if rdn1 > dhi && dn1.abs() > 1e-12 { rlx = dhi / dn1; }
+        if rdn1 < dlo && dn1.abs() > 1e-12 { rlx = dlo / dn1; }
+        
+        let rdn2 = rlx * dn2;
+        if rdn2 > dhi && dn2.abs() > 1e-12 { rlx = dhi / dn2; }
+        if rdn2 < dlo && dn2.abs() > 1e-12 { rlx = dlo / dn2; }
+    }
+    
+    // Lower surface
+    for ibl in 1..lower_stations.len() {
+        let iv = system.to_global(1, ibl);
+        if iv >= deltas.len() {
+            continue;
+        }
+        let delta = &deltas[iv];
+        let station = &lower_stations[ibl];
+        
+        // Ctau/ampl normalized change
+        let dn1 = if station.is_laminar {
+            delta[0] / 10.0
+        } else if station.ctau.abs() > 1e-10 {
+            delta[0] / station.ctau
+        } else {
+            delta[0] / 0.03
+        };
+        
+        // Theta normalized change
+        let dn2 = if station.theta.abs() > 1e-12 {
+            delta[1] / station.theta
+        } else {
+            0.0
+        };
+        
+        // Apply relaxation limits
+        let rdn1 = rlx * dn1;
+        if rdn1 > dhi && dn1.abs() > 1e-12 { rlx = dhi / dn1; }
+        if rdn1 < dlo && dn1.abs() > 1e-12 { rlx = dlo / dn1; }
+        
+        let rdn2 = rlx * dn2;
+        if rdn2 > dhi && dn2.abs() > 1e-12 { rlx = dhi / dn2; }
+        if rdn2 < dlo && dn2.abs() > 1e-12 { rlx = dlo / dn2; }
+    }
+    
+    // Ensure relaxation stays positive
+    rlx = rlx.max(0.01);
 
     // === Step 1: Compute new edge velocities via DIJ coupling ===
     // XFOIL's UPDATE: UNEW(IBL,IS) = UINV(IBL,IS) + sum_j(DIJ * proposed_mass)
@@ -914,34 +1166,49 @@ pub fn apply_global_updates(
         let delta = &deltas[iv];
         let station = &mut upper_stations[ibl];
 
+        // XFOIL UPDATE (xbl.f:1622-1625): x = x + RLX * delta
+        // The normalized relaxation above ensures relative changes are bounded
         if station.is_laminar {
-            station.ampl -= rlx * delta[0];  // TEST: subtract
+            station.ampl += rlx * delta[0];
             station.ampl = station.ampl.max(0.0);
         } else {
-            station.ctau -= rlx * delta[0];  // TEST: subtract
-            station.ctau = station.ctau.clamp(0.0, 0.25);
+            // Store old ctau for additional safeguard
+            let ctau_old = station.ctau;
+            station.ctau += rlx * delta[0];
+            
+            // XFOIL post-update safeguard (xbl.f line 1639-1640):
+            // Only upper bound clamp since normalized relaxation prevents large decreases
+            // But add a floor based on old value as extra protection near transition
+            let ctau_min = (ctau_old * 0.5).max(1e-6);  // Never drop below 50% or 1e-6
+            station.ctau = station.ctau.clamp(ctau_min, 0.25);
         }
 
         // Store old theta for safeguard check
         let theta_old = station.theta;
-        let dstar_old = station.delta_star;
-        // TEST: try SUBTRACTING delta to check sign convention
-        station.theta -= rlx * delta[1];
+        station.theta += rlx * delta[1];
         
         // Safeguard: don't let theta decrease by more than 50% per iteration
-        // and enforce a minimum based on physical constraints
+        // (This should already be handled by normalized relaxation, but add as backup)
         let theta_min = theta_old * 0.5;
         station.theta = station.theta.max(theta_min.max(1e-8));
 
-        // delta[2] is mass change; convert to delta_star using new Ue
+        // delta[2] is mass change; convert to delta_star using XFOIL formula:
+        // DDSTR = (DMASS - DSTR*DUEDG) / UEDG
+        // where DUEDG = UNEW - UEDG is the *proposed* Ue change
         let new_u = upper_new_ue.get(ibl).copied().unwrap_or(station.u);
         let due = new_u - station.u;
-        station.u -= rlx * due;  // TEST: subtract
+        
+        // XFOIL formula: delta_dstar = (delta_mass - dstar * delta_ue) / ue
+        let delta_mass = delta[2];
+        let d_dstar = (delta_mass - station.delta_star * due) / station.u.max(1e-6);
+        
+        // Apply Ue update with relaxation (XFOIL: UEDG = UEDG + RLX*DUEDG)
+        station.u += rlx * due;
         // Safeguard: Ue must remain positive for attached flow
         station.u = station.u.max(0.01);
         
-        let d_dstar = delta[2] / station.u.max(1e-6);
-        station.delta_star -= rlx * d_dstar;  // TEST: subtract
+        // Apply delta_star update (XFOIL: DSTR = DSTR + RLX*DDSTR)
+        station.delta_star += rlx * d_dstar;
         // Ensure H is physical: H >= 1.0 (displacement thickness >= momentum thickness)
         station.delta_star = station.delta_star.max(station.theta);
 
@@ -963,32 +1230,48 @@ pub fn apply_global_updates(
         let delta = &deltas[iv];
         let station = &mut lower_stations[ibl];
 
+        // XFOIL UPDATE (xbl.f:1622-1625): x = x + RLX * delta
+        // The normalized relaxation above ensures relative changes are bounded
         if station.is_laminar {
-            station.ampl -= rlx * delta[0];  // TEST: subtract
+            station.ampl += rlx * delta[0];
             station.ampl = station.ampl.max(0.0);
         } else {
-            station.ctau -= rlx * delta[0];  // TEST: subtract
-            station.ctau = station.ctau.clamp(0.0, 0.25);
+            // Store old ctau for additional safeguard
+            let ctau_old = station.ctau;
+            station.ctau += rlx * delta[0];
+            
+            // XFOIL post-update safeguard (xbl.f line 1639-1640):
+            // Only upper bound clamp since normalized relaxation prevents large decreases
+            // But add a floor based on old value as extra protection near transition
+            let ctau_min = (ctau_old * 0.5).max(1e-6);  // Never drop below 50% or 1e-6
+            station.ctau = station.ctau.clamp(ctau_min, 0.25);
         }
 
         // Store old theta for safeguard check
         let theta_old = station.theta;
-        station.theta -= rlx * delta[1];  // TEST: subtract
+        station.theta += rlx * delta[1];
         
         // Safeguard: don't let theta decrease by more than 50% per iteration
-        // and enforce a minimum based on physical constraints
+        // (This should already be handled by normalized relaxation, but add as backup)
         let theta_min = theta_old * 0.5;
         station.theta = station.theta.max(theta_min.max(1e-8));
 
-        // Update Ue with relaxation
+        // delta[2] is mass change; convert to delta_star using XFOIL formula:
+        // DDSTR = (DMASS - DSTR*DUEDG) / UEDG
         let new_u = lower_new_ue.get(ibl).copied().unwrap_or(station.u);
         let due = new_u - station.u;
-        station.u -= rlx * due;  // TEST: subtract
+        
+        // XFOIL formula: delta_dstar = (delta_mass - dstar * delta_ue) / ue
+        let delta_mass = delta[2];
+        let d_dstar = (delta_mass - station.delta_star * due) / station.u.max(1e-6);
+        
+        // Apply Ue update with relaxation (XFOIL: UEDG = UEDG + RLX*DUEDG)
+        station.u += rlx * due;
         // Safeguard: Ue must remain positive for attached flow
         station.u = station.u.max(0.01);
 
-        let d_dstar = delta[2] / station.u.max(1e-6);
-        station.delta_star -= rlx * d_dstar;  // TEST: subtract
+        // Apply delta_star update (XFOIL: DSTR = DSTR + RLX*DDSTR)
+        station.delta_star += rlx * d_dstar;
         // Ensure H is physical: H >= 1.0 (displacement thickness >= momentum thickness)
         station.delta_star = station.delta_star.max(station.theta);
 

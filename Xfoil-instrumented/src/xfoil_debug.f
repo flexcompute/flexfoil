@@ -49,9 +49,14 @@ C---- Dump TRDIF chain-rule derivatives (XT/WF/TT/DT/UT)
       INTEGER LUDBG, IDBGCALL, IDBGITER
 C
       IF(.NOT.LDBG) RETURN
-C---- Only dump upper surface IBL 30-35 to avoid huge output
-      IF(ISIDE.NE.1) RETURN
-      IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+C---- Limit output to targeted station ranges (including transition ~IBL 38)
+      IF(ISIDE.EQ.1) THEN
+        IF(IBL.LT.36 .OR. IBL.GT.40) RETURN
+      ELSE IF(ISIDE.EQ.2) THEN
+        IF(IBL.LT.65 .OR. IBL.GT.75) RETURN
+      ELSE
+        RETURN
+      ENDIF
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -122,9 +127,14 @@ C---- Dump TRDIF Jacobian and residuals (combined laminar+turbulent)
       INTEGER I, J
 C
       IF(.NOT.LDBG) RETURN
-C---- Only dump upper surface IBL 30-35 to avoid huge output
-      IF(ISIDE.NE.1) RETURN
-      IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+C---- Limit output to targeted station ranges (including transition ~IBL 38)
+      IF(ISIDE.EQ.1) THEN
+        IF(IBL.LT.36 .OR. IBL.GT.40) RETURN
+      ELSE IF(ISIDE.EQ.2) THEN
+        IF(IBL.LT.65 .OR. IBL.GT.75) RETURN
+      ELSE
+        RETURN
+      ENDIF
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -178,8 +188,13 @@ C---- Dump BLPRV state (T2/D2/DW2 after DSWAKI subtraction)
 C
       IF(.NOT.LDBG) RETURN
 C---- Only dump upper surface IBL 30-35 to keep output manageable
-      IF(IS.NE.1) RETURN
-      IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+      IF(IS.EQ.1) THEN
+        IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+      ELSE IF(IS.EQ.2) THEN
+        IF(IBL.LT.70 .OR. IBL.GT.75) RETURN
+      ELSE
+        RETURN
+      ENDIF
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -582,6 +597,182 @@ C
       END
 
 
+C---- Dump UPDATE detailed before/after state
+C     Captures complete state of BL variables before and after update
+C     for tracking where divergence occurs
+C     Enhanced version includes mass_defect, H, and Hk
+      SUBROUTINE DBGUPDATEDETAIL(ISIDE, IBL,
+     &   CTAU_B, THETA_B, DSTAR_B, UE_B,
+     &   MASS_B, H_B, HK_B,
+     &   DCTAU, DTHETA, DMASS, DUE,
+     &   RLX,
+     &   CTAU_A, THETA_A, DSTAR_A, UE_A,
+     &   MASS_A, H_A, HK_A)
+      INTEGER ISIDE, IBL
+      REAL CTAU_B, THETA_B, DSTAR_B, UE_B, MASS_B, H_B, HK_B
+      REAL DCTAU, DTHETA, DMASS, DUE
+      REAL RLX
+      REAL CTAU_A, THETA_A, DSTAR_A, UE_A, MASS_A, H_A, HK_A
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+C
+      IF(.NOT.LDBG) RETURN
+C---- Limit output to first 30 stations per side (extended from 15)
+      IF(IBL.GT.30) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "UPDATE_DETAILED",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "side": ', ISIDE, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+C---- Before state
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ctau_before": ', CTAU_B, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "theta_before": ', THETA_B, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "delta_star_before": ', DSTAR_B, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ue_before": ', UE_B, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "mass_defect_before": ', MASS_B, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "h_before": ', H_B, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "hk_before": ', HK_B, ','
+C---- Delta values (before relaxation)
+      WRITE(LUDBG,'(A,E15.8,A)') '  "delta_ctau": ', DCTAU, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "delta_theta": ', DTHETA, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "delta_mass": ', DMASS, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "delta_ue": ', DUE, ','
+C---- Relaxation factor
+      WRITE(LUDBG,'(A,E15.8,A)') '  "relaxation": ', RLX, ','
+C---- After state
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ctau_after": ', CTAU_A, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "theta_after": ', THETA_A, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "delta_star_after": ', DSTAR_A, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ue_after": ', UE_A, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "mass_defect_after": ', MASS_A, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "h_after": ', H_A, ','
+      WRITE(LUDBG,'(A,E15.8)') '  "hk_after": ', HK_A
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump UESET edge velocity update via DIJ matrix
+C     Called before and after UESET to capture the edge velocity changes
+C     resulting from mass defect influence
+      SUBROUTINE DBGUESET(NBL1, NBL2, UINV, MASS, UEDG_B, UEDG_A, IVX)
+      INTEGER NBL1, NBL2, IVX
+      REAL UINV(IVX,2), MASS(IVX,2), UEDG_B(IVX,2), UEDG_A(IVX,2)
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER I, IS, NOUT
+C
+      IF(.NOT.LDBG) RETURN
+C
+C---- Limit output to first 20 stations per side
+      NOUT = MIN(20, MAX(NBL1, NBL2))
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "UESET",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "nbl_upper": ', NBL1, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "nbl_lower": ', NBL2, ','
+C
+C---- Upper surface (IS=1)
+      WRITE(LUDBG,'(A)') '  "upper_surface": {'
+C---- Ue inviscid
+      WRITE(LUDBG,'(A)') '    "ue_inviscid": ['
+      DO 10 I=2, MIN(NOUT, NBL1)
+        IF(I.LT.MIN(NOUT, NBL1)) THEN
+          WRITE(LUDBG,'(A,E15.8,A)') '      ', UINV(I,1), ','
+        ELSE
+          WRITE(LUDBG,'(A,E15.8)') '      ', UINV(I,1)
+        ENDIF
+   10 CONTINUE
+      WRITE(LUDBG,'(A)') '    ],'
+C---- Mass defect
+      WRITE(LUDBG,'(A)') '    "mass_defect": ['
+      DO 20 I=2, MIN(NOUT, NBL1)
+        IF(I.LT.MIN(NOUT, NBL1)) THEN
+          WRITE(LUDBG,'(A,E15.8,A)') '      ', MASS(I,1), ','
+        ELSE
+          WRITE(LUDBG,'(A,E15.8)') '      ', MASS(I,1)
+        ENDIF
+   20 CONTINUE
+      WRITE(LUDBG,'(A)') '    ],'
+C---- Ue before
+      WRITE(LUDBG,'(A)') '    "ue_before": ['
+      DO 30 I=2, MIN(NOUT, NBL1)
+        IF(I.LT.MIN(NOUT, NBL1)) THEN
+          WRITE(LUDBG,'(A,E15.8,A)') '      ', UEDG_B(I,1), ','
+        ELSE
+          WRITE(LUDBG,'(A,E15.8)') '      ', UEDG_B(I,1)
+        ENDIF
+   30 CONTINUE
+      WRITE(LUDBG,'(A)') '    ],'
+C---- Ue after
+      WRITE(LUDBG,'(A)') '    "ue_after": ['
+      DO 40 I=2, MIN(NOUT, NBL1)
+        IF(I.LT.MIN(NOUT, NBL1)) THEN
+          WRITE(LUDBG,'(A,E15.8,A)') '      ', UEDG_A(I,1), ','
+        ELSE
+          WRITE(LUDBG,'(A,E15.8)') '      ', UEDG_A(I,1)
+        ENDIF
+   40 CONTINUE
+      WRITE(LUDBG,'(A)') '    ]'
+      WRITE(LUDBG,'(A)') '  },'
+C
+C---- Lower surface (IS=2)
+      WRITE(LUDBG,'(A)') '  "lower_surface": {'
+C---- Ue inviscid
+      WRITE(LUDBG,'(A)') '    "ue_inviscid": ['
+      DO 50 I=2, MIN(NOUT, NBL2)
+        IF(I.LT.MIN(NOUT, NBL2)) THEN
+          WRITE(LUDBG,'(A,E15.8,A)') '      ', UINV(I,2), ','
+        ELSE
+          WRITE(LUDBG,'(A,E15.8)') '      ', UINV(I,2)
+        ENDIF
+   50 CONTINUE
+      WRITE(LUDBG,'(A)') '    ],'
+C---- Mass defect
+      WRITE(LUDBG,'(A)') '    "mass_defect": ['
+      DO 60 I=2, MIN(NOUT, NBL2)
+        IF(I.LT.MIN(NOUT, NBL2)) THEN
+          WRITE(LUDBG,'(A,E15.8,A)') '      ', MASS(I,2), ','
+        ELSE
+          WRITE(LUDBG,'(A,E15.8)') '      ', MASS(I,2)
+        ENDIF
+   60 CONTINUE
+      WRITE(LUDBG,'(A)') '    ],'
+C---- Ue before
+      WRITE(LUDBG,'(A)') '    "ue_before": ['
+      DO 70 I=2, MIN(NOUT, NBL2)
+        IF(I.LT.MIN(NOUT, NBL2)) THEN
+          WRITE(LUDBG,'(A,E15.8,A)') '      ', UEDG_B(I,2), ','
+        ELSE
+          WRITE(LUDBG,'(A,E15.8)') '      ', UEDG_B(I,2)
+        ENDIF
+   70 CONTINUE
+      WRITE(LUDBG,'(A)') '    ],'
+C---- Ue after
+      WRITE(LUDBG,'(A)') '    "ue_after": ['
+      DO 80 I=2, MIN(NOUT, NBL2)
+        IF(I.LT.MIN(NOUT, NBL2)) THEN
+          WRITE(LUDBG,'(A,E15.8,A)') '      ', UEDG_A(I,2), ','
+        ELSE
+          WRITE(LUDBG,'(A,E15.8)') '      ', UEDG_A(I,2)
+        ENDIF
+   80 CONTINUE
+      WRITE(LUDBG,'(A)') '    ]'
+      WRITE(LUDBG,'(A)') '  }'
+C
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
 C---- Dump QDCALC DIJ matrix (condensed - just dimensions and sample)
       SUBROUTINE DBGQDCALC(N, NW, DIJ, IZX)
       INTEGER N, NW, IZX
@@ -891,6 +1082,159 @@ C
       WRITE(LUDBG,'(A)') '  "subroutine": "BLSOLV",'
       WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
       WRITE(LUDBG,'(A,I4)') '  "system_size": ', NSYS
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump full SETBL Newton system (VA, VB, VDEL arrays)
+C     Called AFTER SETBL builds the global Newton system.
+C     VA(3,2,*) - diagonal block matrices [3 equations x 2 vars (ctau/theta)]
+C     VB(3,2,*) - sub-diagonal block matrices
+C     VM(3,*,*) - mass defect coupling matrix
+C     VDEL(3,2,*) - RHS (col 1) and alpha sensitivity (col 2)
+      SUBROUTINE DBGSETBLSYSTEM(NSYS, VA, VB, VM, VDEL, IVX, IZX)
+      INTEGER NSYS, IVX, IZX
+      REAL VA(3,2,IVX), VB(3,2,IVX)
+      REAL VM(3,IZX,IVX), VDEL(3,2,IVX)
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER IV, K, J, NOUT
+C
+      IF(.NOT.LDBG) RETURN
+C
+C---- Limit output to first 20 stations for large systems
+      NOUT = MIN(NSYS, 20)
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "SETBL_SYSTEM",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "nsys": ', NSYS, ','
+C
+C---- VA blocks (diagonal) - output all stations up to NOUT
+      WRITE(LUDBG,'(A)') '  "VA": ['
+      DO 10 IV=1, NOUT
+        WRITE(LUDBG,'(A)') '    ['
+        DO 15 K=1, 3
+          IF(K.LT.3) THEN
+            WRITE(LUDBG,'(A,E14.7,A,E14.7,A)')
+     &        '      [', VA(K,1,IV), ', ', VA(K,2,IV), '],'
+          ELSE
+            WRITE(LUDBG,'(A,E14.7,A,E14.7,A)')
+     &        '      [', VA(K,1,IV), ', ', VA(K,2,IV), ']'
+          ENDIF
+   15   CONTINUE
+        IF(IV.LT.NOUT) THEN
+          WRITE(LUDBG,'(A)') '    ],'
+        ELSE
+          WRITE(LUDBG,'(A)') '    ]'
+        ENDIF
+   10 CONTINUE
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- VB blocks (sub-diagonal) - output all stations up to NOUT
+      WRITE(LUDBG,'(A)') '  "VB": ['
+      DO 20 IV=1, NOUT
+        WRITE(LUDBG,'(A)') '    ['
+        DO 25 K=1, 3
+          IF(K.LT.3) THEN
+            WRITE(LUDBG,'(A,E14.7,A,E14.7,A)')
+     &        '      [', VB(K,1,IV), ', ', VB(K,2,IV), '],'
+          ELSE
+            WRITE(LUDBG,'(A,E14.7,A,E14.7,A)')
+     &        '      [', VB(K,1,IV), ', ', VB(K,2,IV), ']'
+          ENDIF
+   25   CONTINUE
+        IF(IV.LT.NOUT) THEN
+          WRITE(LUDBG,'(A)') '    ],'
+        ELSE
+          WRITE(LUDBG,'(A)') '    ]'
+        ENDIF
+   20 CONTINUE
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- VDEL (RHS and alpha sensitivity) - output all stations up to NOUT
+      WRITE(LUDBG,'(A)') '  "VDEL": ['
+      DO 30 IV=1, NOUT
+        IF(IV.LT.NOUT) THEN
+          WRITE(LUDBG,'(A,3(E14.7,A),A)')
+     &      '    [', (VDEL(K,1,IV), ', ', K=1,2), VDEL(3,1,IV), '],'
+        ELSE
+          WRITE(LUDBG,'(A,3(E14.7,A),A)')
+     &      '    [', (VDEL(K,1,IV), ', ', K=1,2), VDEL(3,1,IV), ']'
+        ENDIF
+   30 CONTINUE
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- VM diagonal (mass coupling on diagonal) - sample first NOUT
+      WRITE(LUDBG,'(A)') '  "VM_diagonal": ['
+      DO 40 IV=1, NOUT
+        IF(IV.LT.NOUT) THEN
+          WRITE(LUDBG,'(A,3(E14.7,A),A)')
+     &      '    [', (VM(K,IV,IV), ', ', K=1,2), VM(3,IV,IV), '],'
+        ELSE
+          WRITE(LUDBG,'(A,3(E14.7,A),A)')
+     &      '    [', (VM(K,IV,IV), ', ', K=1,2), VM(3,IV,IV), ']'
+        ENDIF
+   40 CONTINUE
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- VM first row sample (coupling from station 1 to all others)
+      WRITE(LUDBG,'(A)') '  "VM_row1": ['
+      DO 50 J=1, NOUT
+        IF(J.LT.NOUT) THEN
+          WRITE(LUDBG,'(A,3(E14.7,A),A)')
+     &      '    [', (VM(K,J,1), ', ', K=1,2), VM(3,J,1), '],'
+        ELSE
+          WRITE(LUDBG,'(A,3(E14.7,A),A)')
+     &      '    [', (VM(K,J,1), ', ', K=1,2), VM(3,J,1), ']'
+        ENDIF
+   50 CONTINUE
+      WRITE(LUDBG,'(A)') '  ]'
+C
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump BLSOLV solution (Newton deltas after solving)
+C     VDEL(1:3,1,1:NSYS) contains the solution [dCtau, dTheta, dMass]
+      SUBROUTINE DBGBLSOLVSOLUTION(NSYS, VDEL, IVX)
+      INTEGER NSYS, IVX
+      REAL VDEL(3,2,IVX)
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER IV, K, NOUT
+C
+      IF(.NOT.LDBG) RETURN
+C
+C---- Limit output to first 30 stations for large systems
+      NOUT = MIN(NSYS, 30)
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "BLSOLV_SOLUTION",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "nsys": ', NSYS, ','
+C
+C---- Solution deltas [dCtau, dTheta, dMass] for each station
+      WRITE(LUDBG,'(A)') '  "deltas": ['
+      DO 10 IV=1, NOUT
+        IF(IV.LT.NOUT) THEN
+          WRITE(LUDBG,'(A,3(E14.7,A),A)')
+     &      '    [', (VDEL(K,1,IV), ', ', K=1,2), VDEL(3,1,IV), '],'
+        ELSE
+          WRITE(LUDBG,'(A,3(E14.7,A),A)')
+     &      '    [', (VDEL(K,1,IV), ', ', K=1,2), VDEL(3,1,IV), ']'
+        ENDIF
+   10 CONTINUE
+      WRITE(LUDBG,'(A)') '  ]'
+C
       WRITE(LUDBG,'(A)') '}'
       RETURN
       END
@@ -1435,9 +1779,14 @@ C     exact system being solved: VS2 * dx = VSREZ
       INTEGER I, J
 C
       IF(.NOT.LDBG) RETURN
-C---- Only dump upper surface IBL 30-35 to avoid huge output
-      IF(IS.NE.1) RETURN
-      IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+C---- Limit output to targeted station ranges
+      IF(IS.EQ.1) THEN
+        IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+      ELSE IF(IS.EQ.2) THEN
+        IF(IBL.LT.70 .OR. IBL.GT.75) RETURN
+      ELSE
+        RETURN
+      ENDIF
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -1477,8 +1826,13 @@ C---- Dump MRCHUE mode decision details (direct vs inverse)
       INTEGER LUDBG, IDBGCALL, IDBGITER
 C
       IF(.NOT.LDBG) RETURN
-      IF(IS.NE.1) RETURN
-      IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+      IF(IS.EQ.1) THEN
+        IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+      ELSE IF(IS.EQ.2) THEN
+        IF(IBL.LT.70 .OR. IBL.GT.75) RETURN
+      ELSE
+        RETURN
+      ENDIF
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -1519,9 +1873,14 @@ C     the Newton update: dx = [d_ctau/d_ampl, d_theta, d_dstar, d_ue]
       INTEGER I
 C
       IF(.NOT.LDBG) RETURN
-C---- Only dump upper surface IBL 30-35 to avoid huge output
-      IF(IS.NE.1) RETURN
-      IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+C---- Limit output to targeted station ranges
+      IF(IS.EQ.1) THEN
+        IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+      ELSE IF(IS.EQ.2) THEN
+        IF(IBL.LT.70 .OR. IBL.GT.75) RETURN
+      ELSE
+        RETURN
+      ENDIF
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -1538,6 +1897,54 @@ C---- VSREZ (solution vector after GAUSS)
       END
 
 
+C---- Dump BLDIF primary state (X1/U1/T1/D1/S1 and X2/U2/T2/D2/S2)
+      SUBROUTINE DBGBLDIF_STATE(IS, IBL, ITYP,
+     &                          X1, U1, T1, D1, S1,
+     &                          X2, U2, T2, D2, S2)
+      INTEGER IS, IBL, ITYP
+      REAL X1, U1, T1, D1, S1
+      REAL X2, U2, T2, D2, S2
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      COMMON /XDBGIT/ ITBLDBG
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER ITBLDBG
+C
+      IF(.NOT.LDBG) RETURN
+C---- Limit output to early stations for Newton debugging
+      IF(IS.EQ.1) THEN
+        IF(IBL.GT.5) RETURN
+      ELSE IF(IS.EQ.2) THEN
+        IF(IBL.GT.5) RETURN
+      ELSE
+        RETURN
+      ENDIF
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I0,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "BLDIF_STATE",'
+      WRITE(LUDBG,'(A,I0,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I0,A)') '  "side": ', IS, ','
+      WRITE(LUDBG,'(A,I0,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I0,A)') '  "newton_iter": ', ITBLDBG, ','
+      WRITE(LUDBG,'(A,I0,A)') '  "flow_type": ', ITYP, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "X1": ', X1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "U1": ', U1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "T1": ', T1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "D1": ', D1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "S1": ', S1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "X2": ', X2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "U2": ', U2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "T2": ', T2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "D2": ', D2, ','
+      WRITE(LUDBG,'(A,E15.8)') '  "S2": ', S2
+      WRITE(LUDBG,'(A)') '}'
+C
+      RETURN
+      END
+
+
 C---- Dump shape equation Jacobian intermediates
 C     This captures all the Z_ coefficients and derivatives for verifying
 C     the shape equation Jacobian computation in bldif
@@ -1550,7 +1957,9 @@ C     the shape equation Jacobian computation in bldif
      &                    HC2_T2, HC2_D2, HC2_U2,
      &                    H2_T2, H2_D2,
      &                    UPW_T2, UPW_D2, UPW_U2,
-     &                    VS2_31, VS2_32, VS2_33, VS2_34)
+     &                    VS2_31, VS2_32, VS2_33, VS2_34,
+     &                    CF1, CF2, DI1, DI2, XOT1, XOT2,
+     &                    XLOG, CFX_UPW, DIX_UPW, Z_CFX, Z_DIX)
       INTEGER IS, IBL, ITYP
       REAL Z_HS2, Z_CF2, Z_DI2, Z_T2, Z_U2
       REAL Z_HCA, Z_HA, Z_UPW
@@ -1561,6 +1970,8 @@ C     the shape equation Jacobian computation in bldif
       REAL H2_T2, H2_D2
       REAL UPW_T2, UPW_D2, UPW_U2
       REAL VS2_31, VS2_32, VS2_33, VS2_34
+      REAL CF1, CF2, DI1, DI2, XOT1, XOT2
+      REAL XLOG, CFX_UPW, DIX_UPW, Z_CFX, Z_DIX
       COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
       COMMON /XDBGIT/ ITBLDBG
       LOGICAL LDBG
@@ -1568,9 +1979,14 @@ C     the shape equation Jacobian computation in bldif
       INTEGER ITBLDBG
 C
       IF(.NOT.LDBG) RETURN
-C---- Only dump for upper surface IBL 30-35 to keep output manageable
-      IF(IS.NE.1) RETURN
-      IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+C---- Limit output to targeted station ranges
+      IF(IS.EQ.1) THEN
+        IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+      ELSE IF(IS.EQ.2) THEN
+        IF(IBL.LT.70 .OR. IBL.GT.75) RETURN
+      ELSE
+        RETURN
+      ENDIF
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -1618,7 +2034,18 @@ C---- Final VS2 row 3 values (shape equation Jacobian)
       WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_3_1": ', VS2_31, ','
       WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_3_2": ', VS2_32, ','
       WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_3_3": ', VS2_33, ','
-      WRITE(LUDBG,'(A,E15.8)') '  "VS2_3_4": ', VS2_34
+      WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_3_4": ', VS2_34, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CF1": ', CF1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CF2": ', CF2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DI1": ', DI1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DI2": ', DI2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "XOT1": ', XOT1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "XOT2": ', XOT2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "XLOG": ', XLOG, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CFX_UPW": ', CFX_UPW, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DIX_UPW": ', DIX_UPW, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "Z_CFX": ', Z_CFX, ','
+      WRITE(LUDBG,'(A,E15.8)') '  "Z_DIX": ', Z_DIX
       WRITE(LUDBG,'(A)') '}'
       RETURN
       END
@@ -1646,9 +2073,14 @@ C     Captures terms used in VS2(2,2..4) for comparison with Rust
       INTEGER ITBLDBG
 C
       IF(.NOT.LDBG) RETURN
-C---- Only dump upper surface IBL 30-35 to keep output manageable
-      IF(IS.NE.1) RETURN
-      IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+C---- Limit output to targeted station ranges
+      IF(IS.EQ.1) THEN
+        IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+      ELSE IF(IS.EQ.2) THEN
+        IF(IBL.LT.70 .OR. IBL.GT.75) RETURN
+      ELSE
+        RETURN
+      ENDIF
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -1740,6 +2172,345 @@ C
       WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_1_2": ', VS2_12, ','
       WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_1_3": ', VS2_13, ','
       WRITE(LUDBG,'(A,E15.8)') '  "VS2_1_4": ', VS2_14
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C***********************************************************************
+C    FULL ARRAY DEBUG ROUTINES FOR INVISCID SOLVER COMPARISON
+C    These dump complete arrays for validating the Rust implementation
+C***********************************************************************
+
+
+C---- Dump FULL gamma, velocity, and Cp distributions for given alpha
+C     This outputs complete arrays (not samples) for comparison
+      SUBROUTINE DBGFULLGAMMA(N, GAM, QINV, CP, CL, ALFA)
+      INTEGER N
+      REAL GAM(N), QINV(N), CP(N)
+      REAL CL, ALFA
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER I
+C
+      IF(.NOT.LDBG) RETURN
+      CALL DBGCOMMA()
+C
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "FULLGAMMA",'
+      WRITE(LUDBG,'(A,I4,A)') '  "n": ', N, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "alpha_rad": ', ALFA, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "CL": ', CL, ','
+C---- Full GAM array
+      WRITE(LUDBG,'(A)') '  "GAM": ['
+      DO 10 I=1, N
+        IF(I.LT.N) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '    ', GAM(I), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '    ', GAM(I)
+        ENDIF
+   10 CONTINUE
+      WRITE(LUDBG,'(A)') '  ],'
+C---- Full QINV array
+      WRITE(LUDBG,'(A)') '  "QINV": ['
+      DO 20 I=1, N
+        IF(I.LT.N) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '    ', QINV(I), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '    ', QINV(I)
+        ENDIF
+   20 CONTINUE
+      WRITE(LUDBG,'(A)') '  ],'
+C---- Full CP array
+      WRITE(LUDBG,'(A)') '  "CP": ['
+      DO 30 I=1, N
+        IF(I.LT.N) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '    ', CP(I), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '    ', CP(I)
+        ENDIF
+   30 CONTINUE
+      WRITE(LUDBG,'(A)') '  ]'
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump FULL AIC base solutions (GAMU arrays for alpha=0 and alpha=90)
+C     This outputs complete arrays (not samples) for comparison
+      SUBROUTINE DBGFULLAIC(N, GAMU, IZX)
+      INTEGER N, IZX
+      REAL GAMU(IZX,2)
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER I
+C
+      IF(.NOT.LDBG) RETURN
+      CALL DBGCOMMA()
+C
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "FULLAIC",'
+      WRITE(LUDBG,'(A,I4,A)') '  "n": ', N, ','
+C---- Full GAMU(:,1) - alpha=0 solution
+      WRITE(LUDBG,'(A)') '  "gamu_0": ['
+      DO 10 I=1, N
+        IF(I.LT.N) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '    ', GAMU(I,1), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '    ', GAMU(I,1)
+        ENDIF
+   10 CONTINUE
+      WRITE(LUDBG,'(A)') '  ],'
+C---- Full GAMU(:,2) - alpha=90 solution
+      WRITE(LUDBG,'(A)') '  "gamu_90": ['
+      DO 20 I=1, N
+        IF(I.LT.N) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '    ', GAMU(I,2), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '    ', GAMU(I,2)
+        ENDIF
+   20 CONTINUE
+      WRITE(LUDBG,'(A)') '  ]'
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump FULL DIJ influence matrix for comparison with RustFoil
+C     DIJ(I,J) = dUe_i / d(delta_star * Ue)_j
+C     Outputs all matrix elements as nested JSON arrays
+      SUBROUTINE DBGFULLDIJ(NSYS, DIJ, IZX)
+      INTEGER NSYS, IZX
+      REAL DIJ(IZX,IZX)
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER I, J
+C
+      IF(.NOT.LDBG) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "FULLDIJ",'
+      WRITE(LUDBG,'(A,I4,A)') '  "nsys": ', NSYS, ','
+C---- Output flattened DIJ matrix in row-major order
+      WRITE(LUDBG,'(A)') '  "dij": ['
+      DO 10 I=1, NSYS
+        WRITE(LUDBG,'(A)',ADVANCE='NO') '    ['
+        DO 20 J=1, NSYS
+          IF(J.LT.NSYS) THEN
+            WRITE(LUDBG,'(E17.10,A)',ADVANCE='NO') DIJ(I,J), ', '
+          ELSE
+            WRITE(LUDBG,'(E17.10)',ADVANCE='NO') DIJ(I,J)
+          ENDIF
+   20   CONTINUE
+        IF(I.LT.NSYS) THEN
+          WRITE(LUDBG,'(A)') '],'
+        ELSE
+          WRITE(LUDBG,'(A)') ']'
+        ENDIF
+   10 CONTINUE
+      WRITE(LUDBG,'(A)') '  ]'
+      WRITE(LUDBG,'(A)') '}'
+C
+      RETURN
+      END
+
+
+C---- Dump force calculation detail (CL, CD, CM breakdown + TE quantities)
+C     Called after CLCALC and CDCALC to capture force breakdown for comparison
+      SUBROUTINE DBGFORCEDETAIL(ITER)
+      INTEGER ITER
+      INCLUDE 'XFOIL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+C     Local variables for trailing edge quantities
+      REAL THT_UP, THT_LO, DST_UP, DST_LO, UE_UP, UE_LO, H_UP, H_LO
+C
+      IF(.NOT.LDBG) RETURN
+      IF(.NOT.LVISC .OR. .NOT.LBLINI) RETURN
+C
+C---- Extract trailing edge BL quantities
+      THT_UP = THET(IBLTE(1), 1)
+      THT_LO = THET(IBLTE(2), 2)
+      DST_UP = DSTR(IBLTE(1), 1)
+      DST_LO = DSTR(IBLTE(2), 2)
+      UE_UP  = UEDG(IBLTE(1), 1)
+      UE_LO  = UEDG(IBLTE(2), 2)
+C---- Compute shape factors
+      IF(THT_UP .GT. 1.0E-12) THEN
+        H_UP = DST_UP / THT_UP
+      ELSE
+        H_UP = 0.0
+      ENDIF
+      IF(THT_LO .GT. 1.0E-12) THEN
+        H_LO = DST_LO / THT_LO
+      ELSE
+        H_LO = 0.0
+      ENDIF
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "FORCE_DETAIL",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', ITER, ','
+C---- Force coefficients
+      WRITE(LUDBG,'(A,E17.10,A)') '  "CL": ', CL, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "CD_pressure": ', CDP, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "CD_friction": ', CDF, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "CD_total": ', CD, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "CM": ', CM, ','
+C---- Upper surface TE quantities
+      WRITE(LUDBG,'(A,E17.10,A)') '  "theta_te_upper": ', THT_UP, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "delta_star_te_upper": ',DST_UP,','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "ue_te_upper": ', UE_UP, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "h_te_upper": ', H_UP, ','
+C---- Lower surface TE quantities
+      WRITE(LUDBG,'(A,E17.10,A)') '  "theta_te_lower": ', THT_LO, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "delta_star_te_lower": ',DST_LO,','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "ue_te_lower": ', UE_LO, ','
+      WRITE(LUDBG,'(A,E17.10)') '  "h_te_lower": ', H_LO
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump CD breakdown for force comparison
+C     Outputs friction, pressure, and total CD plus TE BL quantities
+C     Called after CDCALC in VISCAL
+      SUBROUTINE DBGCDBREAKDOWN(ITER)
+      INTEGER ITER
+      INCLUDE 'XFOIL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+C     Local variables for TE quantities
+      REAL THT_UP, THT_LO, DST_UP, DST_LO, UE_UP, UE_LO
+      REAL H_UP, H_LO, CDF_UP, CDF_LO, CDP_UP, CDP_LO
+C
+      IF(.NOT.LDBG) RETURN
+      IF(.NOT.LVISC .OR. .NOT.LBLINI) RETURN
+C
+C---- Extract trailing edge BL quantities
+      THT_UP = THET(IBLTE(1), 1)
+      THT_LO = THET(IBLTE(2), 2)
+      DST_UP = DSTR(IBLTE(1), 1)
+      DST_LO = DSTR(IBLTE(2), 2)
+      UE_UP  = UEDG(IBLTE(1), 1)
+      UE_LO  = UEDG(IBLTE(2), 2)
+C---- Compute shape factors at TE
+      IF(THT_UP .GT. 1.0E-12) THEN
+        H_UP = DST_UP / THT_UP
+      ELSE
+        H_UP = 0.0
+      ENDIF
+      IF(THT_LO .GT. 1.0E-12) THEN
+        H_LO = DST_LO / THT_LO
+      ELSE
+        H_LO = 0.0
+      ENDIF
+C
+C---- Per-surface friction drag from TAU integration
+C     Note: This requires computing the integrals - approximate for now
+C     using the fact that CDF is the total integrated value
+      CDF_UP = 0.0
+      CDF_LO = 0.0
+C---- Integrate friction on upper surface (IS=1)
+      DO 10 IBL=3, IBLTE(1)
+        I = IPAN(IBL,1)
+        IM = IPAN(IBL-1,1)
+        DX = (X(I) - X(IM))*CA + (Y(I) - Y(IM))*SA
+        CDF_UP = CDF_UP + 0.5*(TAU(IBL,1)+TAU(IBL-1,1))*DX
+   10 CONTINUE
+      CDF_UP = CDF_UP * 2.0/QINF**2
+C---- Integrate friction on lower surface (IS=2)
+      DO 20 IBL=3, IBLTE(2)
+        I = IPAN(IBL,2)
+        IM = IPAN(IBL-1,2)
+        DX = (X(I) - X(IM))*CA + (Y(I) - Y(IM))*SA
+        CDF_LO = CDF_LO + 0.5*(TAU(IBL,2)+TAU(IBL-1,2))*DX
+   20 CONTINUE
+      CDF_LO = CDF_LO * 2.0/QINF**2
+C
+C---- Pressure drag per surface (from momentum deficit)
+C     CDP = 2 * theta * Ue^((5+H)/2) at TE
+      IF(UE_UP .GT. 0.01) THEN
+        CDP_UP = 2.0 * THT_UP * UE_UP**((5.0+H_UP)/2.0)
+      ELSE
+        CDP_UP = 0.0
+      ENDIF
+      IF(UE_LO .GT. 0.01) THEN
+        CDP_LO = 2.0 * THT_LO * UE_LO**((5.0+H_LO)/2.0)
+      ELSE
+        CDP_LO = 0.0
+      ENDIF
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "CD_BREAKDOWN",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', ITER, ','
+C---- Total force coefficients
+      WRITE(LUDBG,'(A,E17.10,A)') '  "cd_friction": ', CDF, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "cd_pressure": ', CDP, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "cd_total": ', CD, ','
+C---- Per-surface friction breakdown
+      WRITE(LUDBG,'(A,E17.10,A)') '  "cd_friction_upper": ', CDF_UP, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "cd_friction_lower": ', CDF_LO, ','
+C---- Per-surface pressure breakdown (approximate)
+      WRITE(LUDBG,'(A,E17.10,A)') '  "cd_pressure_upper": ', CDP_UP, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "cd_pressure_lower": ', CDP_LO, ','
+C---- Upper surface TE quantities
+      WRITE(LUDBG,'(A,E17.10,A)') '  "theta_te_upper": ', THT_UP, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "delta_star_te_upper": ',DST_UP,','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "ue_te_upper": ', UE_UP, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "h_te_upper": ', H_UP, ','
+C---- Lower surface TE quantities
+      WRITE(LUDBG,'(A,E17.10,A)') '  "theta_te_lower": ', THT_LO, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "delta_star_te_lower": ',DST_LO,','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "ue_te_lower": ', UE_LO, ','
+      WRITE(LUDBG,'(A,E17.10)') '  "h_te_lower": ', H_LO
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump CL detail for force comparison
+C     Outputs CL, CM, CDP, alpha for comparison with RustFoil
+C     Called after CLCALC in VISCAL
+      SUBROUTINE DBGCLDETAIL(ITER)
+      INTEGER ITER
+      INCLUDE 'XFOIL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+C     Local variable for degrees
+      REAL ADEG
+C
+      IF(.NOT.LDBG) RETURN
+C
+      ADEG = ALFA / DTOR
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "CL_DETAIL",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', ITER, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "cl": ', CL, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "cm": ', CM, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "cdp": ', CDP, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "alpha_rad": ', ALFA, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "alpha_deg": ', ADEG, ','
+C---- Also output GAMTE if available (trailing edge circulation)
+      WRITE(LUDBG,'(A,E17.10,A)') '  "gamte": ', GAMTE, ','
+C---- CL sensitivity to alpha
+      WRITE(LUDBG,'(A,E17.10)') '  "cl_alpha": ', CL_ALF
       WRITE(LUDBG,'(A)') '}'
       RETURN
       END

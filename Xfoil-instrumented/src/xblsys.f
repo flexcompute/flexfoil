@@ -1623,6 +1623,10 @@ C---- Debug common block
       COMMON /BLVDBG/ IBLDBG, ISDBG
       INTEGER IBLDBG, ISDBG
 C
+      CALL DBGBLDIF_STATE(ISDBG, IBLDBG, ITYP,
+     &                    X1, U1, T1, D1, S1,
+     &                    X2, U2, T2, D2, S2)
+C
       IF(ITYP.EQ.0) THEN
 C----- similarity logarithmic differences  (prescribed)
        XLOG = 1.0
@@ -2097,7 +2101,9 @@ C---- Debug output for shape equation intermediates
      &              HC2_T2, HC2_D2, HC2_U2,
      &              H2_T2, H2_D2,
      &              UPW_T2, UPW_D2, UPW_U2,
-     &              VS2(3,1), VS2(3,2), VS2(3,3), VS2(3,4))
+     &              VS2(3,1), VS2(3,2), VS2(3,3), VS2(3,4),
+     &              CF1, CF2, DI1, DI2, XOT1, XOT2,
+     &              XLOG, CFX_UPW, DIX_UPW, Z_CFX, Z_DIX)
 C
 C---- Debug output
       CALL DBGBLDIF(ISDBG, IBLDBG, ITYP,

@@ -110,8 +110,13 @@ pub struct BlDerivatives {
 #[derive(Debug, Clone)]
 pub struct BlStation {
     // === Primary Variables (Newton unknowns) ===
-    /// Arc length position along surface
+    /// Arc length position along surface (used in BL equations)
     pub x: f64,
+    /// Panel x-coordinate for reporting x/c transition location (not arc length)
+    pub x_coord: f64,
+    /// Panel index in the global DIJ matrix (for VI coupling)
+    /// Maps this BL station to the corresponding panel in the inviscid solution.
+    pub panel_idx: usize,
     /// Edge velocity Ue (normalized by freestream)
     pub u: f64,
     /// Momentum thickness θ
@@ -172,6 +177,8 @@ impl BlStation {
     pub fn new() -> Self {
         Self {
             x: 0.0,
+            x_coord: 0.0,
+            panel_idx: 0,
             u: 1.0,
             theta: 0.001,
             delta_star: 0.002,
@@ -219,6 +226,8 @@ impl BlStation {
     pub fn stagnation(ue: f64, re: f64) -> Self {
         let mut station = Self::new();
         station.u = ue;
+        // x_coord will be set by the caller (typically near LE, so ~0)
+        station.x_coord = 0.0;
 
         // Hiemenz stagnation point solution
         // theta = 0.29234 * sqrt(nu/Ue) where nu = Ue*L/Re, so nu/Ue = L/Re

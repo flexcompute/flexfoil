@@ -26,6 +26,7 @@
 
 use crate::geometry::AirfoilGeometry;
 use crate::{QOPI, HOPI};
+use nalgebra::DMatrix;
 use std::f64::consts::PI;
 
 /// Result from computing influence coefficients at a single field point.
@@ -82,109 +83,174 @@ pub struct PanelContribution {
 /// # Returns
 ///
 /// A `PsilinResult` containing the stream function and influence coefficients.
-pub fn psilin(
+pub fn psilin(geom: &AirfoilGeometry, i: usize, xi: f64, yi: f64) -> PsilinResult {
+    psilin_internal(geom, i, xi, yi, false)
+}
+
+/// Compute influence coefficients including source sensitivity (SIGLIN).
+pub fn psilin_with_sources(
     geom: &AirfoilGeometry,
     i: usize,
     xi: f64,
     yi: f64,
 ) -> PsilinResult {
+    psilin_internal(geom, i, xi, yi, true)
+}
+
+fn psilin_internal(
+    geom: &AirfoilGeometry,
+    i: usize,
+    xi: f64,
+    yi: f64,
+    compute_sources: bool,
+) -> PsilinResult {
     let n = geom.n;
-    
+
     // Initialize influence coefficient arrays
     let mut dzdg = vec![0.0; n];
-    let dzdm = vec![0.0; n];
-    
+    let mut dzdm = vec![0.0; n];
+
     // Initialize accumulated values (TODO: compute these in full PSILIN)
     let psi = 0.0;
     let qtan1 = 0.0;
     let qtan2 = 0.0;
-    
+
     // Distance tolerance for TE panel skip
     let seps = geom.total_arc_length() * 1e-5;
-    
+
     // TE panel coefficients
     let (scs, sds) = geom.te_coefficients();
-    
+
     // Saved values for TE panel treatment
     let mut te_contrib: Option<PanelContribution> = None;
-    
+
+    let sgn_surface = if i < n { 1.0 } else { 0.0 };
+
     // Loop over all panels (JO = 0 to N-1 in 0-based indexing)
     for jo in 0..n {
-        let jp = (jo + 1) % n;  // JP = JO+1, wrapping for TE panel
-        
+        let jp = (jo + 1) % n; // JP = JO+1, wrapping for TE panel
+
         // Panel endpoints
         let x_jo = geom.x[jo];
         let y_jo = geom.y[jo];
         let x_jp = geom.x[jp];
         let y_jp = geom.y[jp];
-        
+
         // Panel vector and length
         let dx = x_jp - x_jo;
         let dy = y_jp - y_jo;
         let ds_sq = dx * dx + dy * dy;
-        
+
         // TE panel (jo = n-1) uses special handling after the main loop, so skip here
         // XFOIL line 245: IF(JO.EQ.N) GO TO 11 - skips regular vortex calculation for TE
         if jo == n - 1 {
             continue;
         }
-        
+
         // Skip zero-length panels
         if ds_sq < 1e-24 {
             continue;
         }
-        
+
         let dso = ds_sq.sqrt();
         let dsio = 1.0 / dso;
-        
+
         // Unit tangent vector along panel
         let sx = dx * dsio;
         let sy = dy * dsio;
-        
+
         // Vector from panel endpoints to field point
         let rx1 = xi - x_jo;
         let ry1 = yi - y_jo;
         let rx2 = xi - x_jp;
         let ry2 = yi - y_jp;
-        
+
         // Transform to panel-local coordinates
         // x1, x2: along panel direction
         // yy: perpendicular to panel
         let x1 = sx * rx1 + sy * ry1;
         let x2 = sx * rx2 + sy * ry2;
         let yy = sx * ry1 - sy * rx1;
-        
+
         // Squared distances to endpoints
         let rs1 = rx1 * rx1 + ry1 * ry1;
         let rs2 = rx2 * rx2 + ry2 * ry2;
-        
+
         // Logarithm and arctangent terms
-        // Handle singularities when field point is at panel endpoint
+        // XFOIL uses SGN=1 on the airfoil, and sign(yy) in the wake.
+        let sgn = if sgn_surface != 0.0 {
+            1.0
+        } else if yy >= 0.0 {
+            1.0
+        } else {
+            -1.0
+        };
+        let pi_offset = (0.5 - 0.5 * sgn) * PI; // 0 when sgn=1, PI when sgn=-1
+
         let (g1, t1) = if i != jo && rs1 > 1e-20 {
-            (rs1.ln(), x1.atan2(yy))
+            (rs1.ln(), (sgn * x1).atan2(sgn * yy) + pi_offset)
         } else {
             (0.0, 0.0)
         };
-        
+
         let (g2, t2) = if i != jp && rs2 > 1e-20 {
-            (rs2.ln(), x2.atan2(yy))
+            (rs2.ln(), (sgn * x2).atan2(sgn * yy) + pi_offset)
         } else {
             (0.0, 0.0)
         };
-        
+
+        if compute_sources {
+            let apan = geom.apanel[jo];
+
+            let x0 = 0.5 * (x1 + x2);
+            let rs0 = x0 * x0 + yy * yy;
+            let g0 = if rs0 > 0.0 { rs0.ln() } else { 0.0 };
+            let t0 = (sgn * x0).atan2(sgn * yy) + pi_offset;
+
+            let dxinv = safe_inv(x1 - x0);
+            let psum = x0 * (t0 - apan) - x1 * (t1 - apan) + 0.5 * yy * (g1 - g0);
+            let pdif = ((x1 + x0) * psum
+                + rs1 * (t1 - apan)
+                - rs0 * (t0 - apan)
+                + (x0 - x1) * yy)
+                * dxinv;
+
+            let jm = if jo == 0 { jo } else { jo - 1 };
+            let jq = if jo == n - 2 { jp } else { jp + 1 };
+
+            let dsm = ((geom.x[jp] - geom.x[jm]).powi(2) + (geom.y[jp] - geom.y[jm]).powi(2)).sqrt();
+            let dsim = safe_inv(dsm);
+
+            dzdm[jm] += QOPI * (-psum * dsim + pdif * dsim);
+            dzdm[jo] += QOPI * (-psum * dsio - pdif * dsio);
+            dzdm[jp] += QOPI * (psum * (dsio + dsim) + pdif * (dsio - dsim));
+
+            let dxinv = safe_inv(x0 - x2);
+            let psum = x2 * (t2 - apan) - x0 * (t0 - apan) + 0.5 * yy * (g0 - g2);
+            let pdif = ((x0 + x2) * psum
+                + rs0 * (t0 - apan)
+                - rs2 * (t2 - apan)
+                + (x2 - x0) * yy)
+                * dxinv;
+
+            let dsp = ((geom.x[jq] - geom.x[jo]).powi(2) + (geom.y[jq] - geom.y[jo]).powi(2)).sqrt();
+            let dsip = safe_inv(dsp);
+
+            dzdm[jo] += QOPI * (-psum * (dsip + dsio) - pdif * (dsip - dsio));
+            dzdm[jp] += QOPI * (psum * dsio - pdif * dsio);
+            dzdm[jq] += QOPI * (psum * dsip + pdif * dsip);
+        }
+
         // Compute PSIS and PSID (sum/difference formulation)
         let contrib = compute_psis_psid(x1, x2, yy, rs1, rs2, g1, g2, t1, t2);
-        
-        // For inviscid-only (no sources), all panels including TE are treated the same
-        // XFOIL's SIGLIN=.FALSE. case - pure vortex panels
-        
+
         // Accumulate influence coefficients
         // ψ += QOPI * (PSIS*(γ_JO+γ_JP) + PSID*(γ_JP-γ_JO))
         // Rearranging: ψ += QOPI * ((PSIS-PSID)*γ_JO + (PSIS+PSID)*γ_JP)
         dzdg[jo] += QOPI * (contrib.psis - contrib.psid);
         dzdg[jp] += QOPI * (contrib.psis + contrib.psid);
     }
-    
+
     // TE panel special treatment (XFOIL lines 407-438)
     // This handles the trailing edge "wake" panel (from node N-1 to node 0)
     // using a different formula with HOPI, SCS, SDS
@@ -192,66 +258,76 @@ pub fn psilin(
         // TE panel: jo = n-1, jp = 0
         let jo = n - 1;
         let jp = 0;
-        
+
         let x_jo = geom.x[jo];
         let y_jo = geom.y[jo];
         let x_jp = geom.x[jp];
         let y_jp = geom.y[jp];
-        
+
         let dx = x_jp - x_jo;
         let dy = y_jp - y_jo;
         let ds_sq = dx * dx + dy * dy;
-        
+
         if ds_sq > seps * seps {
             let dso = ds_sq.sqrt();
             let dsio = 1.0 / dso;
-            
+
             let sx = dx * dsio;
             let sy = dy * dsio;
-            
+
             let rx1 = xi - x_jo;
             let ry1 = yi - y_jo;
             let rx2 = xi - x_jp;
             let ry2 = yi - y_jp;
-            
+
             let x1 = sx * rx1 + sy * ry1;
             let x2 = sx * rx2 + sy * ry2;
             let yy = sx * ry1 - sy * rx1;
-            
+
             let rs1 = rx1 * rx1 + ry1 * ry1;
             let rs2 = rx2 * rx2 + ry2 * ry2;
-            
+
             // TE panel angle (APAN in XFOIL) - average of adjacent panels
             let apan = 0.5 * (geom.apanel[jo] + geom.apanel[0] + PI);
-            
+
+            // SGN reflection for TE panel
+            let sgn = if sgn_surface != 0.0 {
+                1.0
+            } else if yy >= 0.0 {
+                1.0
+            } else {
+                -1.0
+            };
+            let pi_offset = (0.5 - 0.5 * sgn) * PI;
+
             let (g1, t1_raw) = if i != jo && rs1 > 1e-20 {
-                (rs1.ln(), x1.atan2(yy))
+                (rs1.ln(), (sgn * x1).atan2(sgn * yy) + pi_offset)
             } else {
                 (0.0, 0.0)
             };
-            
+
             let (g2, t2_raw) = if i != jp && rs2 > 1e-20 {
-                (rs2.ln(), x2.atan2(yy))
+                (rs2.ln(), (sgn * x2).atan2(sgn * yy) + pi_offset)
             } else {
                 (0.0, 0.0)
             };
-            
+
             // XFOIL formulas (lines 408-409):
             // PSIG = 0.5*YY*(G1-G2) + X2*(T2-APAN) - X1*(T1-APAN)
             // PGAM = 0.5*X1*G1 - 0.5*X2*G2 + X2 - X1 + YY*(T1-T2)
             let psig = 0.5 * yy * (g1 - g2) + x2 * (t2_raw - apan) - x1 * (t1_raw - apan);
             let pgam = 0.5 * x1 * g1 - 0.5 * x2 * g2 + x2 - x1 + yy * (t1_raw - t2_raw);
-            
+
             // TE panel dPsi/dGam (XFOIL lines 434-438):
             // DZDG(JO) += -HOPI*PSIG*SCS*0.5 + HOPI*PGAM*SDS*0.5
             // DZDG(JP) += +HOPI*PSIG*SCS*0.5 - HOPI*PGAM*SDS*0.5
             dzdg[jo] += HOPI * (-psig * scs + pgam * sds) * 0.5;
-            dzdg[jp] += HOPI * ( psig * scs - pgam * sds) * 0.5;
+            dzdg[jp] += HOPI * (psig * scs - pgam * sds) * 0.5;
         }
     }
-    
+
     let _ = te_contrib; // Suppress unused warning
-    
+
     PsilinResult {
         psi,
         qtan1,
@@ -259,6 +335,37 @@ pub fn psilin(
         dzdg,
         dzdm,
     }
+}
+
+fn safe_inv(value: f64) -> f64 {
+    if value.abs() > 1e-20 {
+        1.0 / value
+    } else {
+        0.0
+    }
+}
+
+/// Build the source influence matrix BIJ (dPsi/dSig) for airfoil nodes.
+pub fn build_source_influence_matrix(geom: &AirfoilGeometry) -> DMatrix<f64> {
+    let n = geom.n;
+    let mut bij = DMatrix::zeros(n + 1, n);
+
+    for i in 0..n {
+        let xi = geom.x[i];
+        let yi = geom.y[i];
+        let result = psilin_with_sources(geom, i, xi, yi);
+
+        for j in 0..n {
+            bij[(i, j)] = -result.dzdm[j];
+        }
+    }
+
+    // Kutta row has no direct source influence
+    for j in 0..n {
+        bij[(n, j)] = 0.0;
+    }
+
+    bij
 }
 
 /// Compute PSIS and PSID for a single panel contribution.
@@ -349,14 +456,18 @@ pub fn psilin_single_panel(
     let rs1 = rx1 * rx1 + ry1 * ry1;
     let rs2 = rx2 * rx2 + ry2 * ry2;
     
+    // SGN reflection
+    let sgn = if yy >= 0.0 { 1.0 } else { -1.0 };
+    let pi_offset = (0.5 - 0.5 * sgn) * PI;
+    
     let (g1, t1) = if i != jo && rs1 > 1e-20 {
-        (rs1.ln(), x1.atan2(yy))
+        (rs1.ln(), (sgn * x1).atan2(sgn * yy) + pi_offset)
     } else {
         (0.0, 0.0)
     };
     
     let (g2, t2) = if i != jp && rs2 > 1e-20 {
-        (rs2.ln(), x2.atan2(yy))
+        (rs2.ln(), (sgn * x2).atan2(sgn * yy) + pi_offset)
     } else {
         (0.0, 0.0)
     };
@@ -471,14 +582,18 @@ pub fn psilin_debug(
         let rs2 = rx2 * rx2 + ry2 * ry2;
         
         // Log and angle terms with singularity handling
+        // SGN reflection
+        let sgn = if yy >= 0.0 { 1.0 } else { -1.0 };
+        let pi_offset = (0.5 - 0.5 * sgn) * PI;
+        
         let (g1, t1) = if i != jo && rs1 > 1e-20 {
-            (rs1.ln(), x1.atan2(yy))
+            (rs1.ln(), (sgn * x1).atan2(sgn * yy) + pi_offset)
         } else {
             (0.0, 0.0)
         };
         
         let (g2, t2) = if i != jp && rs2 > 1e-20 {
-            (rs2.ln(), x2.atan2(yy))
+            (rs2.ln(), (sgn * x2).atan2(sgn * yy) + pi_offset)
         } else {
             (0.0, 0.0)
         };

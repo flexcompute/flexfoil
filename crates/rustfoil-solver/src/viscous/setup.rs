@@ -506,9 +506,37 @@ pub fn initialize_bl_stations(
 ///
 /// # Returns
 /// Vector of BlStation objects for one surface.
+///
+/// # Note
+/// This version does not populate `x_coord`. Use `initialize_surface_stations_with_coords`
+/// if you need proper x/c transition location reporting.
 pub fn initialize_surface_stations(arc_lengths: &[f64], ue: &[f64], re: f64) -> Vec<BlStation> {
+    // Fallback: use arc lengths as x_coord (will give > 1.0 values for x_tr)
+    initialize_surface_stations_with_coords(arc_lengths, ue, arc_lengths, re)
+}
+
+/// Initialize BL stations for one surface with panel x-coordinates for x/c reporting.
+///
+/// This creates stations going downstream from the stagnation point
+/// toward the trailing edge on either the upper or lower surface.
+///
+/// # Arguments
+/// * `arc_lengths` - Arc lengths from stagnation (should increase downstream)
+/// * `ue` - Edge velocities (all positive for attached flow)
+/// * `panel_x` - Panel x-coordinates (for transition x/c reporting)
+/// * `re` - Reynolds number
+///
+/// # Returns
+/// Vector of BlStation objects for one surface.
+pub fn initialize_surface_stations_with_coords(
+    arc_lengths: &[f64],
+    ue: &[f64],
+    panel_x: &[f64],
+    re: f64,
+) -> Vec<BlStation> {
     let n = arc_lengths.len();
-    assert_eq!(n, ue.len(), "Arrays must have same length");
+    assert_eq!(n, ue.len(), "arc_lengths and ue must have same length");
+    assert_eq!(n, panel_x.len(), "arc_lengths and panel_x must have same length");
     assert!(n >= 2, "Need at least 2 stations");
 
     let mut stations = Vec::with_capacity(n);
@@ -517,6 +545,7 @@ pub fn initialize_surface_stations(arc_lengths: &[f64], ue: &[f64], re: f64) -> 
     let ue_stag = ue[0].abs().max(0.01);
     let mut station = BlStation::stagnation(ue_stag, re);
     station.x = arc_lengths[0];
+    station.x_coord = panel_x[0];
     station.u = ue[0].abs();
     station.mass_defect = station.u * station.delta_star;
     stations.push(station);
@@ -525,6 +554,79 @@ pub fn initialize_surface_stations(arc_lengths: &[f64], ue: &[f64], re: f64) -> 
     for i in 1..n {
         let mut station = BlStation::new();
         station.x = arc_lengths[i];
+        station.x_coord = panel_x[i];
+        station.u = ue[i].abs();
+        station.is_laminar = true;
+        station.is_turbulent = false;
+        station.r_theta = re * station.u * station.theta;
+        station.mass_defect = station.u * station.delta_star;
+        stations.push(station);
+    }
+
+    stations
+}
+
+/// Initialize BL stations with panel indices for VI coupling.
+///
+/// This version properly maps each BL station to its corresponding panel
+/// in the global DIJ matrix, enabling proper viscous-inviscid coupling.
+///
+/// # Arguments
+/// * `arc_lengths` - Arc lengths from stagnation (should increase downstream)
+/// * `ue` - Edge velocities (all positive for attached flow)
+/// * `panel_x` - Panel x-coordinates (for transition x/c reporting)
+/// * `stagnation_idx` - Index of stagnation point in full panel array
+/// * `is_upper` - True for upper surface, false for lower
+/// * `re` - Reynolds number
+///
+/// # Panel Index Mapping (Selig format)
+/// - Upper surface: panel_idx = stagnation_idx - local_idx (decreasing toward panel 0 = upper TE)
+/// - Lower surface: panel_idx = stagnation_idx + local_idx (increasing toward panel N-1 = lower TE)
+pub fn initialize_surface_stations_with_panel_idx(
+    arc_lengths: &[f64],
+    ue: &[f64],
+    panel_x: &[f64],
+    stagnation_idx: usize,
+    is_upper: bool,
+    re: f64,
+) -> Vec<BlStation> {
+    let n = arc_lengths.len();
+    assert_eq!(n, ue.len(), "arc_lengths and ue must have same length");
+    assert_eq!(n, panel_x.len(), "arc_lengths and panel_x must have same length");
+    assert!(n >= 2, "Need at least 2 stations");
+
+    let mut stations = Vec::with_capacity(n);
+
+    // First station is at stagnation
+    let ue_stag = ue[0].abs().max(0.01);
+    let mut station = BlStation::stagnation(ue_stag, re);
+    station.x = arc_lengths[0];
+    station.x_coord = panel_x[0];
+    station.panel_idx = stagnation_idx;
+    station.u = ue[0].abs();
+    station.mass_defect = station.u * station.delta_star;
+    stations.push(station);
+
+    // Remaining stations
+    for i in 1..n {
+        let mut station = BlStation::new();
+        station.x = arc_lengths[i];
+        station.x_coord = panel_x[i];
+        // Map BL station to panel index
+        // Upper: goes from stagnation (ist) toward upper TE (panel 0), so ist - i
+        // Lower: goes from stagnation (ist) toward lower TE (panel N-1), so ist + i
+        // Note: The number of BL stations may exceed the number of actual panels
+        // due to virtual stagnation point, so we clamp to valid range.
+        // The DIJ lookup will use these clamped indices, which is approximate
+        // but prevents out-of-bounds access.
+        station.panel_idx = if is_upper {
+            stagnation_idx.saturating_sub(i)
+        } else {
+            // For lower surface, we need to know total panels to clamp
+            // Since we don't have that info here, use a large value as proxy
+            // This will be clamped at DIJ lookup time anyway
+            stagnation_idx.saturating_add(i)
+        };
         station.u = ue[i].abs();
         station.is_laminar = true;
         station.is_turbulent = false;
@@ -658,7 +760,7 @@ pub fn setup_from_body(body: &Body, alpha_deg: f64) -> Result<ViscousSetupResult
     let (ist, sst, _ue_stag) = interpolate_stagnation(&ue_inviscid, &arc_lengths);
     
     // Build DIJ matrix
-    let dij = build_dij_matrix(&node_x, &node_y);
+    let dij = factorized.build_dij()?;
     
     // Determine upper/lower counts based on stagnation
     let n = arc_lengths.len();
@@ -716,7 +818,7 @@ pub fn setup_from_coords(coords: &[(f64, f64)], alpha_deg: f64) -> Result<Viscou
     let ue_inviscid = inv_solution.gamma.clone();
     let arc_lengths = compute_arc_lengths(&node_x, &node_y);
     let (ist, sst, _) = interpolate_stagnation(&ue_inviscid, &arc_lengths);
-    let dij = build_dij_matrix(&node_x, &node_y);
+    let dij = factorized.build_dij()?;
     
     let n = arc_lengths.len();
     let n_upper = n - ist;
