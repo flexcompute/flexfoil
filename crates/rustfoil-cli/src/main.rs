@@ -539,8 +539,6 @@ fn run_viscous_analysis(
     let (lower_arc, lower_x, _lower_y, lower_ue) =
         extract_surface_xfoil(ist, sst, ue_stag, full_arc, node_x, node_y, &ue_inviscid, false);
 
-    // (Surface debug removed)
-
     // Step 4: Initialize BL stations for each surface
     if upper_arc.len() < 2 || lower_arc.len() < 2 {
         return Err(CliError::Solver(format!(

@@ -596,8 +596,9 @@ pub fn solve_viscous_two_surfaces(
 
     if can_run_newton {
         // Save original station values in case Newton diverges
-        let upper_backup: Vec<_> = upper_stations.iter().map(|s| (s.theta, s.delta_star, s.ctau, s.ampl, s.h, s.mass_defect)).collect();
-        let lower_backup: Vec<_> = lower_stations.iter().map(|s| (s.theta, s.delta_star, s.ctau, s.ampl, s.h, s.mass_defect)).collect();
+        // IMPORTANT: Include station.u which is modified by VI coupling
+        let upper_backup: Vec<_> = upper_stations.iter().map(|s| (s.theta, s.delta_star, s.ctau, s.ampl, s.h, s.mass_defect, s.u)).collect();
+        let lower_backup: Vec<_> = lower_stations.iter().map(|s| (s.theta, s.delta_star, s.ctau, s.ampl, s.h, s.mass_defect, s.u)).collect();
 
         // Create global Newton system with cross-surface coupling
         let mut global_system = GlobalNewtonSystem::new(n_upper, n_lower, iblte_upper, iblte_lower);
@@ -706,9 +707,26 @@ pub fn solve_viscous_two_surfaces(
             // Check if solution is valid
             let deltas_valid = deltas.iter().all(|d| d.iter().all(|v| v.is_finite()));
             if !deltas_valid {
-                if rustfoil_bl::is_debug_active() {
-                    eprintln!("[DEBUG Global Newton] FAILED: invalid deltas");
+                // Restore original values including edge velocity
+                for (i, (theta, dstar, ctau, ampl, h, mass, u)) in upper_backup.iter().enumerate() {
+                    upper_stations[i].theta = *theta;
+                    upper_stations[i].delta_star = *dstar;
+                    upper_stations[i].ctau = *ctau;
+                    upper_stations[i].ampl = *ampl;
+                    upper_stations[i].h = *h;
+                    upper_stations[i].mass_defect = *mass;
+                    upper_stations[i].u = *u;
                 }
+                for (i, (theta, dstar, ctau, ampl, h, mass, u)) in lower_backup.iter().enumerate() {
+                    lower_stations[i].theta = *theta;
+                    lower_stations[i].delta_star = *dstar;
+                    lower_stations[i].ctau = *ctau;
+                    lower_stations[i].ampl = *ampl;
+                    lower_stations[i].h = *h;
+                    lower_stations[i].mass_defect = *mass;
+                    lower_stations[i].u = *u;
+                }
+                iteration = 0;
                 break;
             }
 
@@ -766,22 +784,24 @@ pub fn solve_viscous_two_surfaces(
                 if rustfoil_bl::is_debug_active() {
                     eprintln!("[DEBUG Global Newton] FAILED: residual={:.6e}, falling back to direct march", residual);
                 }
-                // Restore original values
-                for (i, (theta, dstar, ctau, ampl, h, mass)) in upper_backup.iter().enumerate() {
+                // Restore original values including edge velocity
+                for (i, (theta, dstar, ctau, ampl, h, mass, u)) in upper_backup.iter().enumerate() {
                     upper_stations[i].theta = *theta;
                     upper_stations[i].delta_star = *dstar;
                     upper_stations[i].ctau = *ctau;
                     upper_stations[i].ampl = *ampl;
                     upper_stations[i].h = *h;
                     upper_stations[i].mass_defect = *mass;
+                    upper_stations[i].u = *u;
                 }
-                for (i, (theta, dstar, ctau, ampl, h, mass)) in lower_backup.iter().enumerate() {
+                for (i, (theta, dstar, ctau, ampl, h, mass, u)) in lower_backup.iter().enumerate() {
                     lower_stations[i].theta = *theta;
                     lower_stations[i].delta_star = *dstar;
                     lower_stations[i].ctau = *ctau;
                     lower_stations[i].ampl = *ampl;
                     lower_stations[i].h = *h;
                     lower_stations[i].mass_defect = *mass;
+                    lower_stations[i].u = *u;
                 }
                 converged = true; // Fall back to direct march result
                 iteration = 0;
@@ -790,25 +810,24 @@ pub fn solve_viscous_two_surfaces(
 
             // Stop if residual is increasing (Newton not converging)
             if residual > prev_residual * 1.5 {
-                if rustfoil_bl::is_debug_active() {
-                    eprintln!("[DEBUG Global Newton] residual increasing, stopping");
-                }
-                // Restore original values
-                for (i, (theta, dstar, ctau, ampl, h, mass)) in upper_backup.iter().enumerate() {
+                // Restore original values including edge velocity
+                for (i, (theta, dstar, ctau, ampl, h, mass, u)) in upper_backup.iter().enumerate() {
                     upper_stations[i].theta = *theta;
                     upper_stations[i].delta_star = *dstar;
                     upper_stations[i].ctau = *ctau;
                     upper_stations[i].ampl = *ampl;
                     upper_stations[i].h = *h;
                     upper_stations[i].mass_defect = *mass;
+                    upper_stations[i].u = *u;
                 }
-                for (i, (theta, dstar, ctau, ampl, h, mass)) in lower_backup.iter().enumerate() {
+                for (i, (theta, dstar, ctau, ampl, h, mass, u)) in lower_backup.iter().enumerate() {
                     lower_stations[i].theta = *theta;
                     lower_stations[i].delta_star = *dstar;
                     lower_stations[i].ctau = *ctau;
                     lower_stations[i].ampl = *ampl;
                     lower_stations[i].h = *h;
                     lower_stations[i].mass_defect = *mass;
+                    lower_stations[i].u = *u;
                 }
                 converged = true;
                 iteration = 0;
