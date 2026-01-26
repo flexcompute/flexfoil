@@ -38,7 +38,7 @@
 
 use nalgebra::DMatrix;
 use rustfoil_bl::closures::Trchek2FullResult;
-use rustfoil_bl::equations::{bldif, trdif_full, FlowType};
+use rustfoil_bl::equations::{bldif, blvar, trdif_full, FlowType};
 use rustfoil_bl::state::BlStation;
 
 /// Global Newton system for coupled upper/lower surface BL iteration
@@ -390,6 +390,7 @@ impl GlobalNewtonSystem {
                 bldif(s1, s2, flow_type, msq, re)
             };
 
+
             // Store residuals
             self.vdel[iv] = [residuals.res_third, residuals.res_mom, residuals.res_shape];
 
@@ -696,6 +697,7 @@ pub fn solve_global_system(system: &mut GlobalNewtonSystem) -> Vec<[f64; 3]> {
         return vec![[0.0; 3]; nsys + 1];
     }
 
+
     // VACCEL threshold for sparse VM elimination
     let vaccel = 0.005;
 
@@ -855,7 +857,7 @@ pub fn solve_global_system(system: &mut GlobalNewtonSystem) -> Vec<[f64; 3]> {
             vdel[kv][2] -= vm_mod[kv][iv][2] * vtmp;
         }
     }
-    
+
     vdel
 }
 
@@ -870,6 +872,8 @@ pub fn solve_global_system(system: &mut GlobalNewtonSystem) -> Vec<[f64; 3]> {
 /// * `dij` - Optional DIJ influence matrix for VI coupling
 /// * `upper_ue_inv` - Optional inviscid edge velocities (upper surface)
 /// * `lower_ue_inv` - Optional inviscid edge velocities (lower surface)
+/// * `msq` - Mach number squared for blvar
+/// * `re` - Reynolds number for blvar
 pub fn apply_global_updates(
     upper_stations: &mut [BlStation],
     lower_stations: &mut [BlStation],
@@ -879,8 +883,10 @@ pub fn apply_global_updates(
     dij: Option<&nalgebra::DMatrix<f64>>,
     upper_ue_inv: Option<&[f64]>,
     lower_ue_inv: Option<&[f64]>,
+    msq: f64,
+    re: f64,
 ) {
-    let rlx = relaxation.clamp(0.01, 1.0);
+    let rlx = relaxation.clamp(0.0, 1.0);  // Allow 0 for testing
 
     // === Step 1: Compute new edge velocities via DIJ coupling ===
     // XFOIL's UPDATE: UNEW(IBL,IS) = UINV(IBL,IS) + sum_j(DIJ * proposed_mass)
@@ -909,16 +915,18 @@ pub fn apply_global_updates(
         let station = &mut upper_stations[ibl];
 
         if station.is_laminar {
-            station.ampl += rlx * delta[0];
+            station.ampl -= rlx * delta[0];  // TEST: subtract
             station.ampl = station.ampl.max(0.0);
         } else {
-            station.ctau += rlx * delta[0];
+            station.ctau -= rlx * delta[0];  // TEST: subtract
             station.ctau = station.ctau.clamp(0.0, 0.25);
         }
 
         // Store old theta for safeguard check
         let theta_old = station.theta;
-        station.theta += rlx * delta[1];
+        let dstar_old = station.delta_star;
+        // TEST: try SUBTRACTING delta to check sign convention
+        station.theta -= rlx * delta[1];
         
         // Safeguard: don't let theta decrease by more than 50% per iteration
         // and enforce a minimum based on physical constraints
@@ -928,17 +936,21 @@ pub fn apply_global_updates(
         // delta[2] is mass change; convert to delta_star using new Ue
         let new_u = upper_new_ue.get(ibl).copied().unwrap_or(station.u);
         let due = new_u - station.u;
-        station.u += rlx * due;  // Update edge velocity with relaxation
+        station.u -= rlx * due;  // TEST: subtract
         // Safeguard: Ue must remain positive for attached flow
         station.u = station.u.max(0.01);
         
         let d_dstar = delta[2] / station.u.max(1e-6);
-        station.delta_star += rlx * d_dstar;
+        station.delta_star -= rlx * d_dstar;  // TEST: subtract
         // Ensure H is physical: H >= 1.0 (displacement thickness >= momentum thickness)
         station.delta_star = station.delta_star.max(station.theta);
 
         station.h = (station.delta_star / station.theta).clamp(1.0, 20.0);
         station.mass_defect = station.u * station.delta_star;
+        
+        // Recompute secondary variables (Hk, Cf, Cd, etc.) for next iteration
+        let flow_type = if station.is_laminar { FlowType::Laminar } else { FlowType::Turbulent };
+        blvar(station, flow_type, msq, re);
     }
 
     // === Step 3: Update lower surface BL variables ===
@@ -952,16 +964,16 @@ pub fn apply_global_updates(
         let station = &mut lower_stations[ibl];
 
         if station.is_laminar {
-            station.ampl += rlx * delta[0];
+            station.ampl -= rlx * delta[0];  // TEST: subtract
             station.ampl = station.ampl.max(0.0);
         } else {
-            station.ctau += rlx * delta[0];
+            station.ctau -= rlx * delta[0];  // TEST: subtract
             station.ctau = station.ctau.clamp(0.0, 0.25);
         }
 
         // Store old theta for safeguard check
         let theta_old = station.theta;
-        station.theta += rlx * delta[1];
+        station.theta -= rlx * delta[1];  // TEST: subtract
         
         // Safeguard: don't let theta decrease by more than 50% per iteration
         // and enforce a minimum based on physical constraints
@@ -971,17 +983,21 @@ pub fn apply_global_updates(
         // Update Ue with relaxation
         let new_u = lower_new_ue.get(ibl).copied().unwrap_or(station.u);
         let due = new_u - station.u;
-        station.u += rlx * due;
+        station.u -= rlx * due;  // TEST: subtract
         // Safeguard: Ue must remain positive for attached flow
         station.u = station.u.max(0.01);
 
         let d_dstar = delta[2] / station.u.max(1e-6);
-        station.delta_star += rlx * d_dstar;
+        station.delta_star -= rlx * d_dstar;  // TEST: subtract
         // Ensure H is physical: H >= 1.0 (displacement thickness >= momentum thickness)
         station.delta_star = station.delta_star.max(station.theta);
 
         station.h = (station.delta_star / station.theta).clamp(1.0, 20.0);
         station.mass_defect = station.u * station.delta_star;
+        
+        // Recompute secondary variables (Hk, Cf, Cd, etc.) for next iteration
+        let flow_type = if station.is_laminar { FlowType::Laminar } else { FlowType::Turbulent };
+        blvar(station, flow_type, msq, re);
     }
 }
 
