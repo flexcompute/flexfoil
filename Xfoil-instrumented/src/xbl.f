@@ -687,11 +687,28 @@ C
 C--------- DEBUG: Dump 4x4 system BEFORE solve
            CALL DBGVS2_BEFORE(IS, IBL, ITBL, VS2, VSREZ)
 C
+C--------- Direct dump of residuals at IBL=2
+           IF(ITBL.EQ.1 .AND. IBL.EQ.2) THEN
+             WRITE(*,'(A,I2,A,I3)') 'BLSOLV VSREZ IS=',IS,' IBL=',IBL
+             WRITE(*,'(A,4E12.4)') '  Sta1: x,u,th,ds=',
+     &         X1, U1, T1, D1
+             WRITE(*,'(A,4E12.4)') '  Sta2: x,u,th,ds=',
+     &         X2, U2, T2, D2
+             WRITE(*,'(A,4E12.4)') '  Before: ',
+     &         (VSREZ(KK), KK=1,4)
+           ENDIF
+C
 C--------- solve Newton system for current "2" station
            CALL GAUSS(4,4,VS2,VSREZ,1)
 C
 C--------- DEBUG: Dump solution vector AFTER solve
            CALL DBGVSREZ_AFTER(IS, IBL, ITBL, VSREZ)
+C
+C--------- Direct dump of solution at IBL=2
+           IF(ITBL.EQ.1 .AND. IBL.EQ.2) THEN
+             WRITE(*,'(A,4E12.4)') '  After:  ',
+     &         (VSREZ(KK), KK=1,4)
+           ENDIF
 C
 C--------- determine max changes and underrelax if necessary
            DMAX = MAX( ABS(VSREZ(2)/THI),
@@ -1348,6 +1365,25 @@ C
 C
 C---- calculate new Ue distribution assuming no under-relaxation
 C-    also set the sensitivity of Ue wrt to alpha or Re
+C
+C---- Debug: dump MASS, panel info, ISYS mapping
+      IF(IDBGITER.LE.1) THEN
+        WRITE(*,'(A)') '=== XFOIL UPDATE DEBUG ==='
+        WRITE(*,'(A,I4)') 'NSYS=', NSYS
+        DO 8001 IS=1, 2
+          WRITE(*,'(A,I2,A,I3)') 'Surface IS=',IS,' NBL=',NBL(IS)
+          DO 8002 IBL=2, MIN(5, NBL(IS))
+            JV = ISYS(IBL,IS)
+            VDEL_MASS = 0.0
+            IF(JV.GT.0 .AND. JV.LE.NSYS) VDEL_MASS = VDEL(3,1,JV)
+            WRITE(*,'(A,I3,A,I4,A,I4,A,E11.4,A,E11.4)') 
+     &        '  IBL=',IBL,' IPAN=',IPAN(IBL,IS),' ISYS=',JV,
+     &        ' MASS=',MASS(IBL,IS),' VDEL=',VDEL_MASS
+ 8002     CONTINUE
+ 8001   CONTINUE
+        WRITE(*,'(A)') '==========================='
+      ENDIF
+C
       DO 1 IS=1, 2
         DO 10 IBL=2, NBL(IS)
           I = IPAN(IBL,IS)
@@ -1373,6 +1409,22 @@ C-------- UINV depends on "AC" only if "AC" is alpha
 C
           UNEW(IBL,IS) = UINV(IBL,IS) + DUI
           U_AC(IBL,IS) = UINV_AC      + DUI_AC
+C
+C-------- Debug dump for first viscal iteration
+          IF(IDBGITER.LE.1 .AND. IBL.EQ.2) THEN
+            JV2 = ISYS(IBL,IS)
+            WRITE(*,'(A,I2,A,I3)') 'UPDATE IS=',IS,' IBL=',IBL
+            WRITE(*,'(A,I4)') '  Panel I=', I
+            WRITE(*,'(A,F10.6)') '  UINV=', UINV(IBL,IS)
+            WRITE(*,'(A,E14.6)') '  DUI=', DUI
+            WRITE(*,'(A,F10.6)') '  UNEW=', UNEW(IBL,IS)
+            WRITE(*,'(A,F10.6)') '  VTI=', VTI(IBL,IS)
+            WRITE(*,'(A,E14.6)') '  MASS=', MASS(IBL,IS)
+            IF(JV2.GT.0 .AND. JV2.LE.NSYS) THEN
+              WRITE(*,'(A,E14.6)') '  VDEL3=', VDEL(3,1,JV2)
+              WRITE(*,'(A,E14.6)') '  sum=', MASS(IBL,IS)+VDEL(3,1,JV2)
+            ENDIF
+          ENDIF
 C
    10   CONTINUE
     1 CONTINUE

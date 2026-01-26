@@ -27,8 +27,9 @@ use rustfoil_inviscid::{
 use rustfoil_solver::inviscid::{FlowConditions, InviscidSolver};
 use rustfoil_solver::viscous::{
     compute_arc_lengths, extract_surface_xfoil, initialize_surface_stations,
-    interpolate_stagnation, solve_viscous_two_surfaces, ViscousResult, ViscousSolverConfig,
-    ViscousSetup,
+    initialize_surface_stations_with_coords, initialize_surface_stations_with_panel_idx,
+    interpolate_stagnation, solve_viscous_two_surfaces,
+    ViscousResult, ViscousSolverConfig, ViscousSetup,
     // New integration with rustfoil-inviscid
     setup_from_body, SetupError,
 };
@@ -265,7 +266,7 @@ fn run_analyze(file: &PathBuf, alpha: f64, panels: Option<usize>, verbose: bool)
     let points = if let Some(n) = panels {
         let spline = CubicSpline::from_points(&points)?;
         let repaneled = spline.resample_xfoil(n, &PanelingParams::default());
-        eprintln!("Repaneled from {} to {} points (XFOIL-style)", points.len(), repaneled.len());
+        // (Repanel message removed for cleaner output)
         repaneled
     } else {
         points
@@ -507,30 +508,7 @@ fn run_viscous_analysis(
     // gamma IS the surface velocity in XFOIL's linear vortex panel method
     let ue_inviscid = inv_solution.gamma.clone();
 
-    // Debug: check inviscid solution
-    eprintln!(
-        "Inviscid (new solver): CL={:.4}, CM={:.4}",
-        inv_solution.cl, inv_solution.cm
-    );
-    
-    // Check gamma/Ue values around LE
-    let min_ue_idx = ue_inviscid
-        .iter()
-        .enumerate()
-        .min_by(|(_, a), (_, b)| a.abs().partial_cmp(&b.abs()).unwrap())
-        .map(|(i, _)| i)
-        .unwrap_or(0);
-    let max_ue_idx = ue_inviscid
-        .iter()
-        .enumerate()
-        .max_by(|(_, a), (_, b)| a.abs().partial_cmp(&b.abs()).unwrap())
-        .map(|(i, _)| i)
-        .unwrap_or(0);
-    eprintln!(
-        "Gamma: min={:.4} at idx={} (x={:.4}), max={:.4} at idx={} (x={:.4})",
-        ue_inviscid[min_ue_idx], min_ue_idx, node_x[min_ue_idx],
-        ue_inviscid[max_ue_idx], max_ue_idx, node_x[max_ue_idx]
-    );
+    // (Debug output removed for cleaner output)
 
     // Step 2: Get full arc lengths from setup
     let full_arc = &setup_result.setup.arc_lengths;
@@ -551,42 +529,17 @@ fn run_viscous_analysis(
         .map(|(i, _)| i)
         .unwrap_or(0);
 
-    eprintln!(
-        "Stagnation: ist={}, sst={:.6}, Ue_stag={:.6}",
-        ist, sst, ue_stag
-    );
-    eprintln!(
-        "Geometric LE at idx={} (x={:.6}), Stag panel idx={} (x={:.6})",
-        le_idx, node_x[le_idx], ist, node_x[ist]
-    );
+    // (Stagnation debug removed)
+    let _ = le_idx; // suppress unused warning
 
     // Step 3: Extract surfaces with XFOIL-style arc lengths (IBLPAN + XICALC)
     // Includes virtual stagnation point at arc=0 with Ue≈0 (like XFOIL's IBL=1)
-    let (upper_arc, _upper_x, _upper_y, upper_ue) =
+    let (upper_arc, upper_x, _upper_y, upper_ue) =
         extract_surface_xfoil(ist, sst, ue_stag, full_arc, node_x, node_y, &ue_inviscid, true);
-    let (lower_arc, _lower_x, _lower_y, lower_ue) =
+    let (lower_arc, lower_x, _lower_y, lower_ue) =
         extract_surface_xfoil(ist, sst, ue_stag, full_arc, node_x, node_y, &ue_inviscid, false);
 
-    eprintln!(
-        "Upper: {} pts, arc[0]={:.6}, arc[1]={:.6}, Ue[0]={:.6}, Ue[1]={:.6}",
-        upper_arc.len(),
-        upper_arc.get(0).unwrap_or(&0.0),
-        upper_arc.get(1).unwrap_or(&0.0),
-        upper_ue.get(0).unwrap_or(&0.0),
-        upper_ue.get(1).unwrap_or(&0.0),
-    );
-    eprintln!(
-        "Lower: {} pts, arc[0]={:.6}, arc[1]={:.6}, Ue[0]={:.6}, Ue[1]={:.6}",
-        lower_arc.len(),
-        lower_arc.get(0).unwrap_or(&0.0),
-        lower_arc.get(1).unwrap_or(&0.0),
-        lower_ue.get(0).unwrap_or(&0.0),
-        lower_ue.get(1).unwrap_or(&0.0),
-    );
-
-    // Debug: show first few values to verify monotonic Ue
-    eprintln!("Upper first 5 arc: {:?}", &upper_arc[..5.min(upper_arc.len())]);
-    eprintln!("Upper first 5 Ue:  {:?}", &upper_ue[..5.min(upper_ue.len())]);
+    // (Surface debug removed)
 
     // Step 4: Initialize BL stations for each surface
     if upper_arc.len() < 2 || lower_arc.len() < 2 {
@@ -597,8 +550,11 @@ fn run_viscous_analysis(
         )));
     }
 
-    let mut upper_stations = initialize_surface_stations(&upper_arc, &upper_ue, config.reynolds);
-    let mut lower_stations = initialize_surface_stations(&lower_arc, &lower_ue, config.reynolds);
+    // Initialize stations with panel indices for VI coupling
+    let mut upper_stations = initialize_surface_stations_with_panel_idx(
+        &upper_arc, &upper_ue, &upper_x, ist, true, config.reynolds);
+    let mut lower_stations = initialize_surface_stations_with_panel_idx(
+        &lower_arc, &lower_ue, &lower_x, ist, false, config.reynolds);
 
     // Step 5: Use setup from new solver (DIJ matrix, etc.)
     let setup = &setup_result.setup;
@@ -614,10 +570,10 @@ fn run_viscous_analysis(
     )
     .map_err(|e| CliError::Solver(e.to_string()))?;
 
-    // Set alpha and CL/CM from inviscid solution
+    // Set alpha (CL/CM are already set by the viscous solver)
     result.alpha = alpha;
-    result.cl = inv_solution.cl;  // From inviscid (viscous iteration would adjust this)
-    result.cm = inv_solution.cm;
+    // Note: result.cl and result.cm are set by solve_viscous_two_surfaces
+    // and should NOT be overwritten with inviscid values
 
     Ok(result)
 }
@@ -665,9 +621,9 @@ fn run_viscous_analysis_old(
     let full_arc = compute_arc_lengths(&node_x, &node_y);
     let (ist, sst, ue_stag) = interpolate_stagnation(&ue_inviscid, &full_arc);
 
-    let (upper_arc, _upper_x, _upper_y, upper_ue) =
+    let (upper_arc, upper_x, _upper_y, upper_ue) =
         extract_surface_xfoil(ist, sst, ue_stag, &full_arc, &node_x, &node_y, &ue_inviscid, true);
-    let (lower_arc, _lower_x, _lower_y, lower_ue) =
+    let (lower_arc, lower_x, _lower_y, lower_ue) =
         extract_surface_xfoil(ist, sst, ue_stag, &full_arc, &node_x, &node_y, &ue_inviscid, false);
 
     if upper_arc.len() < 2 || lower_arc.len() < 2 {
@@ -678,8 +634,11 @@ fn run_viscous_analysis_old(
         )));
     }
 
-    let mut upper_stations = initialize_surface_stations(&upper_arc, &upper_ue, config.reynolds);
-    let mut lower_stations = initialize_surface_stations(&lower_arc, &lower_ue, config.reynolds);
+    // Initialize stations with panel indices for VI coupling
+    let mut upper_stations = initialize_surface_stations_with_panel_idx(
+        &upper_arc, &upper_ue, &upper_x, ist, true, config.reynolds);
+    let mut lower_stations = initialize_surface_stations_with_panel_idx(
+        &lower_arc, &lower_ue, &lower_x, ist, false, config.reynolds);
 
     let setup = ViscousSetup::from_raw(
         full_arc.clone(),
@@ -719,11 +678,6 @@ fn run_viscous(cmd: ViscousCmd) -> Result<(), CliError> {
             .map_err(|e| CliError::Geometry(e))?;
         let repaneled = spline.resample_xfoil(cmd.panels, &PanelingParams::default());
         
-        eprintln!(
-            "Repaneled from {} to {} points (XFOIL-style distribution)",
-            points.len(),
-            repaneled.len()
-        );
         repaneled
     };
 

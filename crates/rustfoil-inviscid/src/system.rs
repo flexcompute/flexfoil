@@ -25,10 +25,10 @@
 //! - `xsolve.f`: LUDCMP, BAKSUB
 
 use crate::geometry::AirfoilGeometry;
-use crate::influence::psilin;
+use crate::influence::{build_source_influence_matrix, psilin};
 use crate::solution::{FlowConditions, InviscidSolution};
 use crate::{InviscidError, Result};
-use nalgebra::{DMatrix, DVector};
+use nalgebra::{DMatrix, DVector, LU};
 
 /// Factorized system ready for efficient alpha sweeps.
 ///
@@ -46,6 +46,8 @@ pub struct FactorizedSystem {
     pub psi0_90: f64,
     /// Cached geometry for solution computation
     pub(crate) geom: AirfoilGeometry,
+    /// LU factorization of the influence matrix (AIJ)
+    pub(crate) lu: LU<f64, nalgebra::Dynamic, nalgebra::Dynamic>,
 }
 
 impl FactorizedSystem {
@@ -144,6 +146,43 @@ impl FactorizedSystem {
     pub fn geometry(&self) -> &AirfoilGeometry {
         &self.geom
     }
+
+    /// Back-substitute a vector through the influence matrix.
+    ///
+    /// Solves: AIJ × x = b for x.
+    pub fn back_substitute(&self, rhs: &[f64]) -> Result<Vec<f64>> {
+        let rhs_vec = DVector::from_column_slice(rhs);
+        let solution = self
+            .lu
+            .solve(&rhs_vec)
+            .ok_or(InviscidError::SingularMatrix)?;
+        Ok(solution.iter().copied().collect())
+    }
+
+    /// Build the mass defect influence matrix DIJ = AIJ⁻¹ × BIJ.
+    pub fn build_dij(&self) -> Result<DMatrix<f64>> {
+        let n = self.geom.n;
+        if n == 0 {
+            return Ok(DMatrix::zeros(0, 0));
+        }
+
+        let bij = build_source_influence_matrix(&self.geom);
+        let mut dij = DMatrix::zeros(n, n);
+
+        for j in 0..n {
+            let rhs = bij.column(j).clone_owned();
+            let solution = self
+                .lu
+                .solve(&rhs)
+                .ok_or(InviscidError::SingularMatrix)?;
+
+            for i in 0..n {
+                dij[(i, j)] = solution[i];
+            }
+        }
+        
+        Ok(dij)
+    }
 }
 
 /// Build and factorize the influence coefficient system.
@@ -222,6 +261,7 @@ pub fn build_and_factorize(geom: &AirfoilGeometry) -> Result<FactorizedSystem> {
         psi0_0,
         psi0_90,
         geom: geom.clone(),
+        lu,
     })
 }
 

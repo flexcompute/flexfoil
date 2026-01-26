@@ -1273,6 +1273,31 @@ C
 C---- Debug output for DIJ matrix
       CALL DBGQDCALC(N, NW, DIJ, IZX)
 C
+C---- Direct file dump of DIJ for comparison with RustFoil
+      OPEN(UNIT=88, FILE='xfoil_dij_dump.txt', STATUS='REPLACE')
+      WRITE(88,'(A,I4)') 'N_PANELS=', N
+      WRITE(88,'(A,I4)') 'N_WAKE=', NW
+      WRITE(88,'(A)') '# DIJ diagonal (first 20)'
+      DO 901 I=1, MIN(20, N)
+        WRITE(88,'(I4,E18.10)') I, DIJ(I,I)
+  901 CONTINUE
+      WRITE(88,'(A)') '# DIJ row 1 (cols 1-20)'
+      DO 902 J=1, MIN(20, N)
+        WRITE(88,'(I4,E18.10)') J, DIJ(1,J)
+  902 CONTINUE
+      WRITE(88,'(A)') '# DIJ row 80 (cols 75-85)'
+      DO 903 J=75, MIN(85, N)
+        WRITE(88,'(I4,E18.10)') J, DIJ(80,J)
+  903 CONTINUE
+      WRITE(88,'(A)') '# DIJ stag region'
+      DO 904 I=78, MIN(82, N)
+        DO 905 J=78, MIN(82, N)
+          WRITE(88,'(2I4,E18.10)') I, J, DIJ(I,J)
+  905   CONTINUE
+  904 CONTINUE
+      CLOSE(88)
+      WRITE(*,*) 'DIJ written to xfoil_dij_dump.txt'
+C
       RETURN
       END
 

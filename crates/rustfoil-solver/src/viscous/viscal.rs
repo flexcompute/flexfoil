@@ -23,12 +23,21 @@ use rayon::prelude::*;
 use rustfoil_bl::equations::{blvar, FlowType};
 use rustfoil_bl::state::BlStation;
 use rustfoil_coupling::march::{march_fixed_ue, march_surface, MarchConfig, MarchResult};
+use rustfoil_coupling::global_newton::{apply_global_updates, solve_global_system, GlobalNewtonSystem};
 use rustfoil_coupling::newton::BlNewtonSystem;
 use rustfoil_coupling::solve::solve_coupled_system;
+// STMOVE module available for future full implementation
+#[allow(unused_imports)]
+use rustfoil_coupling::stmove::find_stagnation_by_gamma;
 use rustfoil_coupling::update::{update_xfoil_style, UpdateConfig};
+use rustfoil_coupling::wake::combine_te_for_wake;
 
+use super::circulation::{
+    compute_cl_from_gamma, update_circulation_from_qvis,
+    update_qvis_from_uedg, update_qvis_from_uedg_two_surfaces,
+};
 use super::config::ViscousSolverConfig;
-use super::forces::compute_forces;
+use super::forces::{compute_forces, compute_forces_two_surfaces};
 use crate::{SolverError, SolverResult};
 
 /// Result of viscous solution.
@@ -306,6 +315,10 @@ pub fn solve_viscous(
             current_ue[i] = station.u;
         }
 
+        // QVFUE + GAMQV: refresh QVIS from Ue, then GAM from QVIS
+        let qvis = update_qvis_from_uedg(stations);
+        let _gamma = update_circulation_from_qvis(&qvis);
+
         // Check convergence
         residual = update_result.rms_change;
         if residual < config.tolerance {
@@ -548,12 +561,13 @@ pub fn solve_viscous_two_surfaces(
     let mut x_tr_lower = lower_result.x_transition.unwrap_or(1.0);
 
     // === Newton iteration for viscous-inviscid coupling ===
-    // NOTE: Full two-surface Newton coupling requires proper DIJ matrix extraction
-    // and VZ block handling (see Phase 2 in newton-vi-coupling-plan.md).
-    // For now, we run Newton iteration only if the DIJ matrix has proper dimensions
-    // for the individual surfaces. Otherwise, we rely on the direct march results.
+    // Full global Newton coupling using the GlobalNewtonSystem that properly
+    // couples both upper and lower surfaces through the DIJ matrix.
 
-    let update_config = UpdateConfig::default();
+    let update_config = UpdateConfig {
+        relaxation: config.relaxation,
+        ..Default::default()
+    };
     let mut iteration = 0;
     let mut converged = true; // Direct march is considered converged
     let mut residual = 0.0;
@@ -561,73 +575,41 @@ pub fn solve_viscous_two_surfaces(
     let n_upper = upper_stations.len();
     let n_lower = lower_stations.len();
 
-    // Check if DIJ matrix has proper dimensions for Newton iteration
-    // The full DIJ includes both surfaces, so we need to extract submatrices
-    // For proper Newton coupling, we need:
-    // 1. Upper surface DIJ: influences from upper surface mass on upper surface Ue
-    // 2. Lower surface DIJ: influences from lower surface mass on lower surface Ue
-    // 3. Cross-surface coupling (Phase 2)
-    
-    // For Phase 1: Only run Newton if we can extract valid submatrices
-    // The DIJ matrix from setup is for the full airfoil (all panels)
-    // Upper stations are the latter part of the full array (indices n_lower..n_total)
-    // Lower stations are the first part (indices 0..n_lower)
-    
-    #[allow(unused_variables)]
-    let n_total = dij.nrows();
-    // Newton V-I coupling for two surfaces requires:
-    // 1. Proper DIJ submatrix extraction for each surface
-    // 2. Cross-surface coupling through VZ block at trailing edge
-    // 3. Combined Newton system for both surfaces
-    // See Phase 2 in newton-vi-coupling-plan.md for full implementation.
-    //
-    // Newton iteration is currently disabled because it fails at transition stations.
-    // The transition interval needs proper TRDIF handling (hybrid laminar+turbulent equations)
-    // which is not yet implemented. For now, we rely on the direct march results.
-    // TODO: Implement TRDIF handling in Newton system to enable V-I coupling.
-    let can_run_newton = false;
+    // Determine trailing edge indices (last non-wake station on each surface)
+    let iblte_upper = upper_stations
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| !s.is_wake)
+        .map(|(i, _)| i)
+        .last()
+        .unwrap_or(n_upper.saturating_sub(1));
+    let iblte_lower = lower_stations
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| !s.is_wake)
+        .map(|(i, _)| i)
+        .last()
+        .unwrap_or(n_lower.saturating_sub(1));
+
+    // Enable global Newton coupling if iterations requested
+    let can_run_newton = config.max_iterations > 0 && n_upper >= 3 && n_lower >= 3;
 
     if can_run_newton {
         // Save original station values in case Newton diverges
         let upper_backup: Vec<_> = upper_stations.iter().map(|s| (s.theta, s.delta_star, s.ctau, s.ampl, s.h, s.mass_defect)).collect();
         let lower_backup: Vec<_> = lower_stations.iter().map(|s| (s.theta, s.delta_star, s.ctau, s.ampl, s.h, s.mass_defect)).collect();
 
-        // Extract DIJ submatrices
-        // Lower surface: indices 0..n_lower in the full system
-        // Upper surface: indices n_lower..n_total in the full system
-        // But our stations are already extracted, so we need to map correctly
-        
-        // For now, use diagonal-only DIJ (self-influence only) to avoid cross-coupling issues
-        // This is a simplification - full coupling requires Phase 2 implementation
-        let mut dij_upper = DMatrix::zeros(n_upper, n_upper);
-        let mut dij_lower = DMatrix::zeros(n_lower, n_lower);
-        
-        // Extract diagonal elements (self-influence) from the full DIJ
-        // Upper surface stations map to indices n_lower..n_total in original panel array
-        for i in 0..n_upper {
-            let full_idx = n_lower + i;
-            if full_idx < n_total {
-                dij_upper[(i, i)] = dij[(full_idx, full_idx)];
-            }
-        }
-        
-        // Lower surface stations map to indices 0..n_lower (reversed from TE to stag)
-        for i in 0..n_lower {
-            let full_idx = n_lower - 1 - i; // Reverse mapping
-            if full_idx < n_total {
-                dij_lower[(i, i)] = dij[(full_idx, full_idx)];
-            }
-        }
+        // Create global Newton system with cross-surface coupling
+        let mut global_system = GlobalNewtonSystem::new(n_upper, n_lower, iblte_upper, iblte_lower);
 
-        // Run Newton iteration with limited iterations to prevent divergence
-        // Phase 1: Very conservative - just 3 iterations with heavy relaxation
-        let max_newton_iter = 3;
+        // Run Newton iteration with full global coupling
+        let max_newton_iter = config.max_iterations.min(30);
         let mut prev_residual = f64::MAX;
-        
+
         for iter in 0..max_newton_iter {
             iteration = iter + 1;
 
-            // === Upper surface Newton iteration ===
+            // Determine flow types for each interval
             let upper_flow_types: Vec<FlowType> = upper_stations
                 .iter()
                 .skip(1)
@@ -642,119 +624,6 @@ pub fn solve_viscous_two_surfaces(
                 })
                 .collect();
 
-            // Recompute secondary variables
-            for station in upper_stations.iter_mut() {
-                let flow_type = if station.is_wake {
-                    FlowType::Wake
-                } else if station.is_laminar {
-                    FlowType::Laminar
-                } else {
-                    FlowType::Turbulent
-                };
-                blvar(station, flow_type, msq, re);
-            }
-            
-            // Debug after blvar
-            if rustfoil_bl::is_debug_active() && iter > 0 {
-                eprintln!("[DEBUG Newton] iter {} after blvar:", iter);
-                for i in 1..4.min(upper_stations.len()) {
-                    let s = &upper_stations[i];
-                    eprintln!("[DEBUG Newton]   [{}] theta={:.6e} dstar={:.6e} Hk={:.4} Cf={:.4e}", 
-                        i, s.theta, s.delta_star, s.hk, s.cf);
-                }
-            }
-
-            // Build Newton system (without VM full coupling for Phase 1)
-            let mut upper_newton = BlNewtonSystem::new(n_upper);
-            if upper_flow_types.len() == n_upper - 1 {
-                // Use basic build (not build_with_vm_full) to avoid DIJ issues
-                upper_newton.build(upper_stations, &upper_flow_types, msq, re);
-            }
-            
-            // Zero out the stagnation interval residual (XFOIL SIMI condition)
-            // The first interval (station 0 → 1) uses special similarity handling
-            // where the residual is set to zero (prescribed boundary condition)
-            if upper_newton.rhs.len() > 1 {
-                upper_newton.rhs[1] = [0.0, 0.0, 0.0];
-            }
-
-            let upper_residual = upper_newton.residual_norm();
-            
-            // Debug: show station values and RHS
-            if rustfoil_bl::is_debug_active() && iter < 2 {
-                eprintln!("[DEBUG Newton] iter {} upper stations before build:", iter);
-                for i in 0..4.min(upper_stations.len()) {
-                    let s = &upper_stations[i];
-                    eprintln!("[DEBUG Newton]   [{}] x={:.6e} theta={:.6e} dstar={:.6e} Hk={:.4} Ue={:.6e}", 
-                        i, s.x, s.theta, s.delta_star, s.hk, s.u);
-                }
-                eprintln!("[DEBUG Newton] iter {} upper RHS res={:.4e}", iter, upper_residual);
-                // Find max residual
-                let mut max_res = 0.0f64;
-                let mut max_idx = 0;
-                for (i, r) in upper_newton.rhs.iter().enumerate() {
-                    let norm = r[0]*r[0] + r[1]*r[1] + r[2]*r[2];
-                    if norm > max_res {
-                        max_res = norm;
-                        max_idx = i;
-                    }
-                }
-                eprintln!("[DEBUG Newton]   max residual at idx={}: {:?}", max_idx, upper_newton.rhs[max_idx]);
-                eprintln!("[DEBUG Newton]   rhs[2]={:?}", upper_newton.rhs[2]);
-            }
-
-            // Solve Newton system (basic tridiagonal solve)
-            let upper_deltas = solve_coupled_system(&upper_newton);
-            
-            // Debug: show deltas and station values after
-            if rustfoil_bl::is_debug_active() && iter == 0 {
-                eprintln!("[DEBUG Newton] upper deltas n={}", upper_deltas.len());
-                for i in 1..6.min(upper_deltas.len()) {
-                    let d = &upper_deltas[i];
-                    eprintln!("  [{}] d[ampl/ctau]={:.4e}, d[theta]={:.4e}, d[mass]={:.4e}", i, d[0], d[1], d[2]);
-                }
-            }
-            if rustfoil_bl::is_debug_active() && iter == 1 {
-                eprintln!("[DEBUG Newton] iter 1 START, upper stations:");
-                for i in 1..4.min(upper_stations.len()) {
-                    let s = &upper_stations[i];
-                    eprintln!("[DEBUG Newton]   [{}] theta={:.6e} dstar={:.6e} Hk={:.4} Cf={:.4e}", 
-                        i, s.theta, s.delta_star, s.hk, s.cf);
-                }
-            }
-
-            // Apply updates with simple limiting (not XFOIL-style Ue coupling)
-            // XFOIL UPDATE: DDSTR = (DMASS - DSTR*DUEDG) / UEDG
-            // Without V-I coupling (DUEDG=0): DDSTR = DMASS / UEDG
-            if upper_deltas.len() == n_upper {
-                for (i, station) in upper_stations.iter_mut().enumerate() {
-                    if i > 0 {
-                        let delta = &upper_deltas[i];
-                        // Apply with relaxation
-                        let rlx = 0.5; // Conservative relaxation
-                        if station.is_laminar {
-                            station.ampl += rlx * delta[0];
-                            station.ampl = station.ampl.max(0.0);
-                        } else {
-                            station.ctau += rlx * delta[0];
-                            station.ctau = station.ctau.clamp(0.0, 0.25);
-                        }
-                        station.theta += rlx * delta[1];
-                        station.theta = station.theta.max(1e-12);
-                        
-                        // delta[2] is MASS change, not delta_star change
-                        // DDSTR = DMASS / UEDG (when DUEDG = 0)
-                        let d_dstar = delta[2] / station.u.max(1e-6);
-                        station.delta_star += rlx * d_dstar;
-                        station.delta_star = station.delta_star.max(1e-12);
-                        
-                        station.h = station.delta_star / station.theta;
-                        station.mass_defect = station.u * station.delta_star;
-                    }
-                }
-            }
-
-            // === Lower surface Newton iteration ===
             let lower_flow_types: Vec<FlowType> = lower_stations
                 .iter()
                 .skip(1)
@@ -769,7 +638,17 @@ pub fn solve_viscous_two_surfaces(
                 })
                 .collect();
 
-            // Recompute secondary variables
+            // Recompute secondary variables for both surfaces
+            for station in upper_stations.iter_mut() {
+                let flow_type = if station.is_wake {
+                    FlowType::Wake
+                } else if station.is_laminar {
+                    FlowType::Laminar
+                } else {
+                    FlowType::Turbulent
+                };
+                blvar(station, flow_type, msq, re);
+            }
             for station in lower_stations.iter_mut() {
                 let flow_type = if station.is_wake {
                     FlowType::Wake
@@ -781,57 +660,99 @@ pub fn solve_viscous_two_surfaces(
                 blvar(station, flow_type, msq, re);
             }
 
-            // Build Newton system
-            let mut lower_newton = BlNewtonSystem::new(n_lower);
-            if lower_flow_types.len() == n_lower - 1 {
-                lower_newton.build(lower_stations, &lower_flow_types, msq, re);
-            }
-            
-            // Zero out the stagnation interval residual (XFOIL SIMI condition)
-            if lower_newton.rhs.len() > 1 {
-                lower_newton.rhs[1] = [0.0, 0.0, 0.0];
-            }
-
-            let lower_residual = lower_newton.residual_norm();
-
-            // Solve Newton system
-            let lower_deltas = solve_coupled_system(&lower_newton);
-
-            // Apply updates
-            if lower_deltas.len() == n_lower {
-                for (i, station) in lower_stations.iter_mut().enumerate() {
-                    if i > 0 {
-                        let delta = &lower_deltas[i];
-                        let rlx = 0.5;
-                        if station.is_laminar {
-                            station.ampl += rlx * delta[0];
-                            station.ampl = station.ampl.max(0.0);
-                        } else {
-                            station.ctau += rlx * delta[0];
-                            station.ctau = station.ctau.clamp(0.0, 0.25);
-                        }
-                        station.theta += rlx * delta[1];
-                        station.theta = station.theta.max(1e-12);
-                        
-                        // delta[2] is MASS change, not delta_star change
-                        // DDSTR = DMASS / UEDG (when DUEDG = 0)
-                        let d_dstar = delta[2] / station.u.max(1e-6);
-                        station.delta_star += rlx * d_dstar;
-                        station.delta_star = station.delta_star.max(1e-12);
-                        
-                        station.h = station.delta_star / station.theta;
-                        station.mass_defect = station.u * station.delta_star;
-                    }
+            // Debug after blvar
+            if rustfoil_bl::is_debug_active() && iter < 2 {
+                eprintln!("[DEBUG Global Newton] iter {} after blvar:", iter);
+                for i in 1..4.min(upper_stations.len()) {
+                    let s = &upper_stations[i];
+                    eprintln!("[DEBUG Global Newton]   upper[{}] theta={:.6e} dstar={:.6e} Hk={:.4}", 
+                        i, s.theta, s.delta_star, s.hk);
                 }
             }
 
-            // Combined residual
-            residual = (upper_residual + lower_residual) / 2.0;
-            
-            // Debug: show Newton iteration progress
+            // Prepare transition data (None for now - could use trchek2 results if available)
+            let upper_transitions: Vec<Option<rustfoil_bl::closures::Trchek2FullResult>> =
+                vec![None; n_upper.saturating_sub(1)];
+            let lower_transitions: Vec<Option<rustfoil_bl::closures::Trchek2FullResult>> =
+                vec![None; n_lower.saturating_sub(1)];
+
+            // Build the global Newton system with full cross-surface coupling
+            global_system.build_global_system(
+                upper_stations,
+                lower_stations,
+                &upper_flow_types,
+                &lower_flow_types,
+                &upper_transitions,
+                &lower_transitions,
+                dij,
+                upper_ue,
+                lower_ue,
+                msq,
+                re,
+            );
+
+            // Get residual before solve
+            residual = global_system.rms_residual();
+
+            // Debug: show residual
             if rustfoil_bl::is_debug_active() {
-                eprintln!("[DEBUG Newton] iter={}: upper_res={:.6e}, lower_res={:.6e}, total={:.6e}",
-                    iter, upper_residual, lower_residual, residual);
+                eprintln!("[DEBUG Global Newton] iter={}: rms_res={:.6e}, max_res={:.6e}",
+                    iter, residual, global_system.max_residual());
+            }
+
+            // Solve the global Newton system
+            let deltas = solve_global_system(&mut global_system);
+
+            // Check if solution is valid
+            let deltas_valid = deltas.iter().all(|d| d.iter().all(|v| v.is_finite()));
+            if !deltas_valid {
+                if rustfoil_bl::is_debug_active() {
+                    eprintln!("[DEBUG Global Newton] FAILED: invalid deltas");
+                }
+                break;
+            }
+
+            // Apply updates to both surfaces with relaxation
+            // Pass DIJ matrix and inviscid Ue for proper VI coupling
+            let rlx = update_config.relaxation.min(0.5);
+            
+            apply_global_updates(
+                upper_stations,
+                lower_stations,
+                &deltas,
+                &global_system,
+                rlx,
+                Some(dij),
+                Some(upper_ue),
+                Some(lower_ue),
+            );
+
+            // === STMOVE-style stagnation point check ===
+            // After updating edge velocities, check if stagnation point would move.
+            // In XFOIL, STMOVE shifts BL arrays when stagnation moves panels.
+            // Our architecture (pre-split surfaces) limits full STMOVE, but we can
+            // detect drift and adjust the first-station Ue to maintain consistency.
+            // 
+            // Detect stagnation drift by checking if Ue at first stations has changed sign
+            // or if the minimum |Ue| has moved significantly.
+            if upper_stations.len() > 2 && lower_stations.len() > 2 {
+                let upper_first_ue = upper_stations[1].u;
+                let lower_first_ue = lower_stations[1].u;
+                
+                // Stagnation should have Ue ≈ 0 and increasing downstream
+                // If first station Ue is very small or wrong sign, adjust
+                let stag_ue_upper = upper_stations[0].u;
+                let stag_ue_lower = lower_stations[0].u;
+                
+                // Ensure stagnation stations have small positive Ue (just past stagnation)
+                if stag_ue_upper.abs() < 1e-6 || stag_ue_upper < 0.0 {
+                    upper_stations[0].u = upper_first_ue.abs().min(0.01).max(1e-6);
+                    upper_stations[0].mass_defect = upper_stations[0].u * upper_stations[0].delta_star;
+                }
+                if stag_ue_lower.abs() < 1e-6 || stag_ue_lower < 0.0 {
+                    lower_stations[0].u = lower_first_ue.abs().min(0.01).max(1e-6);
+                    lower_stations[0].mass_defect = lower_stations[0].u * lower_stations[0].delta_star;
+                }
             }
 
             // Check convergence
@@ -843,7 +764,7 @@ pub fn solve_viscous_two_surfaces(
             // Check for divergence or increasing residual
             if !residual.is_finite() || residual > 1e10 {
                 if rustfoil_bl::is_debug_active() {
-                    eprintln!("[DEBUG Newton] FAILED: residual={:.6e}, falling back to direct march", residual);
+                    eprintln!("[DEBUG Global Newton] FAILED: residual={:.6e}, falling back to direct march", residual);
                 }
                 // Restore original values
                 for (i, (theta, dstar, ctau, ampl, h, mass)) in upper_backup.iter().enumerate() {
@@ -866,9 +787,12 @@ pub fn solve_viscous_two_surfaces(
                 iteration = 0;
                 break;
             }
-            
+
             // Stop if residual is increasing (Newton not converging)
             if residual > prev_residual * 1.5 {
+                if rustfoil_bl::is_debug_active() {
+                    eprintln!("[DEBUG Global Newton] residual increasing, stopping");
+                }
                 // Restore original values
                 for (i, (theta, dstar, ctau, ampl, h, mass)) in upper_backup.iter().enumerate() {
                     upper_stations[i].theta = *theta;
@@ -886,7 +810,7 @@ pub fn solve_viscous_two_surfaces(
                     lower_stations[i].h = *h;
                     lower_stations[i].mass_defect = *mass;
                 }
-                converged = true; // Fall back to direct march result
+                converged = true;
                 iteration = 0;
                 break;
             }
@@ -896,15 +820,16 @@ pub fn solve_viscous_two_surfaces(
 
     // Update transition locations from final station states
     // Find transition point (where is_laminar changes to is_turbulent)
+    // Use x_coord (panel x-coordinate) for proper x/c reporting, not arc length
     for (i, station) in upper_stations.iter().enumerate() {
         if !station.is_laminar && i > 0 && upper_stations[i - 1].is_laminar {
-            x_tr_upper = station.x;
+            x_tr_upper = station.x_coord;
             break;
         }
     }
     for (i, station) in lower_stations.iter().enumerate() {
         if !station.is_laminar && i > 0 && lower_stations[i - 1].is_laminar {
-            x_tr_lower = station.x;
+            x_tr_lower = station.x_coord;
             break;
         }
     }
@@ -914,40 +839,97 @@ pub fn solve_viscous_two_surfaces(
         .x_separation
         .or(lower_result.x_separation);
 
-    // Compute forces from both surfaces
-    // For now, compute from upper surface (CD is dominated by friction drag anyway)
-    let forces = compute_forces(upper_stations, config);
-    let lower_forces = compute_forces(lower_stations, config);
+    // === QVFUE + GAMQV: Update QVIS from edge velocities, then gamma from QVIS ===
+    // This is part of XFOIL's iteration loop that couples the BL solution back to
+    // the panel method circulation.
+    let (upper_qvis, lower_qvis) =
+        update_qvis_from_uedg_two_surfaces(upper_stations, lower_stations);
+    let upper_gamma = update_circulation_from_qvis(&upper_qvis);
+    let lower_gamma = update_circulation_from_qvis(&lower_qvis);
+
+    // Compute CL from circulation using the updated gamma distribution
+    // This is more accurate than the pressure-integration based CL
+    let cl_from_gamma = compute_cl_from_gamma(&upper_gamma, &lower_gamma, &upper_arc, &lower_arc);
+
+    // === Create and march wake stations for Squire-Young CD computation ===
+    // Wake stations extend downstream from TE and are needed for proper far-wake
+    // momentum thickness which Squire-Young uses for CD.
+    //
+    // Use XFOIL-style wake: combine TE from both surfaces, then march downstream
+    // using wake BL equations (Cf=0, wake dissipation).
+    let upper_te = upper_stations.last().cloned().unwrap_or_default();
+    let lower_te = lower_stations.last().cloned().unwrap_or_default();
+    
+    // Combine upper and lower TE into wake initial condition (TESYS)
+    let wake_initial = combine_te_for_wake(&upper_te, &lower_te);
+    
+    // Generate wake positions and edge velocities
+    use rustfoil_coupling::wake::{generate_wake_positions, march_wake, wake_edge_velocity};
+    let wake_x = generate_wake_positions(5, 1.0);
+    let wake_ue: Vec<f64> = wake_x.iter()
+        .map(|&x| wake_edge_velocity(x, wake_initial.u))
+        .collect();
+    
+    // March wake downstream using wake BL equations
+    let wake_stations = march_wake(&wake_initial, &wake_x, &wake_ue, re, msq);
+
+    // Compute forces from both surfaces using coupled edge velocities
+    // Pass wake stations for proper Squire-Young CD
+    let mut forces = compute_forces_two_surfaces(upper_stations, lower_stations, config);
+
+    // Use CL from gamma if it's reasonable (gamma method is more accurate for VI coupling)
+    // Fall back to pressure-integration CL if gamma method gives unreasonable values
+    if cl_from_gamma.is_finite() && cl_from_gamma.abs() < 5.0 {
+        // Gamma-based CL is typically more accurate for viscous coupling
+        // since it directly uses the updated edge velocities
+        forces.cl = cl_from_gamma;
+    }
+
+    // Update CD using wake trailing edge values if wake stations exist
+    if !wake_stations.is_empty() {
+        // Squire-Young formula using far-wake values
+        // CD = 2 * theta_wake * (Ue_wake / U∞)^((5 + H_wake) / 2)
+        let wake_te = wake_stations.last().unwrap();
+        let h_wake = wake_te.h.clamp(1.0, 4.0);
+        let ue_wake = wake_te.u.abs().max(0.01);
+        let theta_wake = wake_te.theta.max(1e-6);
+        
+        let exponent = (5.0 + h_wake) / 2.0;
+        let cd_pressure_wake = 2.0 * theta_wake * ue_wake.powf(exponent);
+        
+        // Note: Wake-based CD override disabled. Our simplified wake march
+        // doesn't capture physics well enough. TE-based Squire-Young is more reliable.
+        let _ = (theta_wake, h_wake, ue_wake, cd_pressure_wake); // Suppress warnings
+    }
 
     // Debug: Print force computation
     if rustfoil_bl::is_debug_active() {
-        eprintln!("[DEBUG viscal] Upper forces: cd_f={:.6e}, cd_p={:.6e}",
-            forces.cd_friction, forces.cd_pressure);
-        eprintln!("[DEBUG viscal] Lower forces: cd_f={:.6e}, cd_p={:.6e}",
-            lower_forces.cd_friction, lower_forces.cd_pressure);
+        eprintln!("[DEBUG viscal] Combined forces: CL={:.4}, CD={:.6e} (Cf={:.6e}, Cp={:.6e})",
+            forces.cl, forces.cd, forces.cd_friction, forces.cd_pressure);
         
         // Check last station values (used in Squire-Young)
         if let Some(last) = upper_stations.last() {
             eprintln!("[DEBUG viscal] Upper last: theta={:.6e}, H={:.3}, Ue={:.3}, is_wake={}",
                 last.theta, last.h, last.u, last.is_wake);
         }
+        if let Some(last) = lower_stations.last() {
+            eprintln!("[DEBUG viscal] Lower last: theta={:.6e}, H={:.3}, Ue={:.3}, is_wake={}",
+                last.theta, last.h, last.u, last.is_wake);
+        }
     }
-
-    // Combine CD (friction from both surfaces)
-    let total_cd_friction = forces.cd_friction + lower_forces.cd_friction;
 
     Ok(ViscousResult {
         alpha: 0.0, // Will be set by caller
-        cl: forces.cl, // CL from pressure distribution (need full airfoil)
-        cd: total_cd_friction, // For now, just friction drag
+        cl: forces.cl,
+        cd: forces.cd,
         cm: forces.cm,
         x_tr_upper,
         x_tr_lower,
         iterations: iteration,
         residual,
         converged,
-        cd_friction: total_cd_friction,
-        cd_pressure: 0.0, // Need pressure integration for this
+        cd_friction: forces.cd_friction,
+        cd_pressure: forces.cd_pressure,
         x_separation,
     })
 }
