@@ -549,10 +549,11 @@ fn run_viscous_analysis(
     }
 
     // Initialize stations with panel indices for VI coupling
+    let n_airfoil_panels = node_x.len();
     let mut upper_stations = initialize_surface_stations_with_panel_idx(
-        &upper_arc, &upper_ue, &upper_x, ist, true, config.reynolds);
+        &upper_arc, &upper_ue, &upper_x, ist, n_airfoil_panels, true, config.reynolds);
     let mut lower_stations = initialize_surface_stations_with_panel_idx(
-        &lower_arc, &lower_ue, &lower_x, ist, false, config.reynolds);
+        &lower_arc, &lower_ue, &lower_x, ist, n_airfoil_panels, false, config.reynolds);
 
     // Step 5: Use setup from new solver (DIJ matrix, etc.)
     let setup = &setup_result.setup;
@@ -633,10 +634,11 @@ fn run_viscous_analysis_old(
     }
 
     // Initialize stations with panel indices for VI coupling
+    let n_airfoil_panels = node_x.len();
     let mut upper_stations = initialize_surface_stations_with_panel_idx(
-        &upper_arc, &upper_ue, &upper_x, ist, true, config.reynolds);
+        &upper_arc, &upper_ue, &upper_x, ist, n_airfoil_panels, true, config.reynolds);
     let mut lower_stations = initialize_surface_stations_with_panel_idx(
-        &lower_arc, &lower_ue, &lower_x, ist, false, config.reynolds);
+        &lower_arc, &lower_ue, &lower_x, ist, n_airfoil_panels, false, config.reynolds);
 
     let setup = ViscousSetup::from_raw(
         full_arc.clone(),
