@@ -287,8 +287,9 @@ fn psilin_internal(
             let rs1 = rx1 * rx1 + ry1 * ry1;
             let rs2 = rx2 * rx2 + ry2 * ry2;
 
-            // TE panel angle (APAN in XFOIL) - average of adjacent panels
-            let apan = 0.5 * (geom.apanel[jo] + geom.apanel[0] + PI);
+            // TE panel angle (APAN in XFOIL)
+            // XFOIL xpanel.f line 184: APAN = APANEL(JO)
+            let apan = geom.apanel[jo];
 
             // SGN reflection for TE panel
             let sgn = if sgn_surface != 0.0 {
@@ -456,8 +457,15 @@ pub fn psilin_single_panel(
     let rs1 = rx1 * rx1 + ry1 * ry1;
     let rs2 = rx2 * rx2 + ry2 * ry2;
     
-    // SGN reflection
-    let sgn = if yy >= 0.0 { 1.0 } else { -1.0 };
+    // SGN reflection - match main psilin function
+    // XFOIL: IF(IO.GE.1 .AND. IO.LE.N) THEN SGN = 1.0 (on surface)
+    let sgn = if i < n {
+        1.0  // On airfoil surface - no reflection needed
+    } else if yy >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
     let pi_offset = (0.5 - 0.5 * sgn) * PI;
     
     let (g1, t1) = if i != jo && rs1 > 1e-20 {
@@ -582,8 +590,15 @@ pub fn psilin_debug(
         let rs2 = rx2 * rx2 + ry2 * ry2;
         
         // Log and angle terms with singularity handling
-        // SGN reflection
-        let sgn = if yy >= 0.0 { 1.0 } else { -1.0 };
+        // SGN reflection - match main psilin function
+        // XFOIL: IF(IO.GE.1 .AND. IO.LE.N) THEN SGN = 1.0 (on surface)
+        let sgn = if i < n {
+            1.0  // On airfoil surface - no reflection needed
+        } else if yy >= 0.0 {
+            1.0
+        } else {
+            -1.0
+        };
         let pi_offset = (0.5 - 0.5 * sgn) * PI;
         
         let (g1, t1) = if i != jo && rs1 > 1e-20 {
