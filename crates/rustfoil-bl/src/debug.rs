@@ -683,6 +683,10 @@ pub struct FullDijEvent {
     /// Flattened DIJ matrix in row-major order
     /// dij[i * nsys + j] = DIJ[i,j]
     pub dij: Vec<f64>,
+    /// Diagonal elements (first 20 values)
+    pub dij_diagonal_sample: Vec<f64>,
+    /// Row 1 elements (first 20 values)
+    pub dij_row1_sample: Vec<f64>,
 }
 
 /// SETBL system dump event - full Newton system after building
@@ -1297,12 +1301,24 @@ impl DebugEvent {
     /// # Arguments
     /// * `nsys` - System size (number of BL stations)
     /// * `dij` - Flattened DIJ matrix in row-major order
-    pub fn full_dij(nsys: usize, dij: Vec<f64>) -> Self {
+    /// * `dij_diagonal_sample` - Diagonal elements (first 20 values)
+    /// * `dij_row1_sample` - Row 1 elements (first 20 values)
+    pub fn full_dij(
+        nsys: usize,
+        dij: Vec<f64>,
+        dij_diagonal_sample: Vec<f64>,
+        dij_row1_sample: Vec<f64>,
+    ) -> Self {
         Self {
             call_id: 0,
             subroutine: "FULLDIJ".to_string(),
             iteration: None,
-            data: DebugData::FullDij(FullDijEvent { nsys, dij }),
+            data: DebugData::FullDij(FullDijEvent {
+                nsys,
+                dij,
+                dij_diagonal_sample,
+                dij_row1_sample,
+            }),
         }
     }
 

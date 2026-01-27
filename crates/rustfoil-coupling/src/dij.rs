@@ -178,7 +178,13 @@ fn emit_full_dij_debug(dij: &DMatrix<f64>) {
         }
     }
 
-    rustfoil_bl::add_event(rustfoil_bl::DebugEvent::full_dij(n, flattened));
+    // Extract diagonal sample (first 20 values)
+    let diag_sample: Vec<f64> = (0..n.min(20)).map(|i| dij[(i, i)]).collect();
+    
+    // Extract row 1 sample (first 20 values)
+    let row1_sample: Vec<f64> = (0..n.min(20)).map(|j| dij[(0, j)]).collect();
+
+    rustfoil_bl::add_event(rustfoil_bl::DebugEvent::full_dij(n, flattened, diag_sample, row1_sample));
 }
 
 /// Build DIJ matrix with explicit panel geometry
