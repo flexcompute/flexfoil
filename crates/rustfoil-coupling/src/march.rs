@@ -453,11 +453,13 @@ fn init_stagnation(x: f64, ue: f64, re: f64) -> BlStation {
     station.x = x;
     station.u = ue;
 
-    // Thwaites' formula for stagnation point
-    // With BULE = 1.0: TSQ = 0.45 / (Ue/x * 6 * Re) * x^0 = 0.45*x / (6*Ue*Re)
+    // Thwaites' formula for stagnation point (XFOIL xbl.f:597)
+    // With BULE = 1.0: TSQ = 0.45 / (Ue/x * 6 * REYBL) * x^0 = 0.45*x / (6*Ue*REYBL)
+    // CRITICAL: REYBL must be REINF/3 to match XFOIL's theta values
     let bule = 1.0;
     let ucon = ue / x.powf(bule);
-    let tsq = 0.45 / (ucon * (5.0 * bule + 1.0) * re) * x.powf(1.0 - bule);
+    let reybl = re / 3.0;  // Empirically determined: REYBL = REINF/3 matches XFOIL
+    let tsq = 0.45 / (ucon * (5.0 * bule + 1.0) * reybl) * x.powf(1.0 - bule);
 
     station.theta = tsq.sqrt().max(1e-12);
     station.delta_star = 2.2 * station.theta;

@@ -1,0 +1,254 @@
+{
+  "foil": "naca0012",
+  "reynolds": 3000000.0,
+  "results": [
+    {
+      "alpha": -15.0,
+      "reynolds": 3000000.0,
+      "cl": -1.5521,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_-015.0.json"
+    },
+    {
+      "alpha": -14.0,
+      "reynolds": 3000000.0,
+      "cl": -1.4758,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_-014.0.json"
+    },
+    {
+      "alpha": -13.0,
+      "reynolds": 3000000.0,
+      "cl": -1.3931,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_-013.0.json"
+    },
+    {
+      "alpha": -12.0,
+      "reynolds": 3000000.0,
+      "cl": -1.3007,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_-012.0.json"
+    },
+    {
+      "alpha": -11.0,
+      "reynolds": 3000000.0,
+      "cl": -1.2082,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_-011.0.json"
+    },
+    {
+      "alpha": -10.0,
+      "reynolds": 3000000.0,
+      "cl": -1.1177,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_-010.0.json"
+    },
+    {
+      "alpha": -9.0,
+      "reynolds": 3000000.0,
+      "cl": -1.0227,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_-009.0.json"
+    },
+    {
+      "alpha": -8.0,
+      "reynolds": 3000000.0,
+      "cl": -0.8965,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_-008.0.json"
+    },
+    {
+      "alpha": -7.0,
+      "reynolds": 3000000.0,
+      "cl": -0.769,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_-007.0.json"
+    },
+    {
+      "alpha": -6.0,
+      "reynolds": 3000000.0,
+      "cl": -0.6556,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_-006.0.json"
+    },
+    {
+      "alpha": -5.0,
+      "reynolds": 3000000.0,
+      "cl": -0.5498,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_-005.0.json"
+    },
+    {
+      "alpha": -4.0,
+      "reynolds": 3000000.0,
+      "cl": -0.4424,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_-004.0.json"
+    },
+    {
+      "alpha": -3.0,
+      "reynolds": 3000000.0,
+      "cl": -0.3333,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_-003.0.json"
+    },
+    {
+      "alpha": -2.0,
+      "reynolds": 3000000.0,
+      "cl": -0.2231,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_-002.0.json"
+    },
+    {
+      "alpha": -1.0,
+      "reynolds": 3000000.0,
+      "cl": -0.1118,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_-001.0.json"
+    },
+    {
+      "alpha": 0.0,
+      "reynolds": 3000000.0,
+      "cl": -0.0,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_+000.0.json"
+    },
+    {
+      "alpha": 1.0,
+      "reynolds": 3000000.0,
+      "cl": 0.1118,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_+001.0.json"
+    },
+    {
+      "alpha": 2.0,
+      "reynolds": 3000000.0,
+      "cl": 0.2231,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_+002.0.json"
+    },
+    {
+      "alpha": 3.0,
+      "reynolds": 3000000.0,
+      "cl": 0.3333,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_+003.0.json"
+    },
+    {
+      "alpha": 4.0,
+      "reynolds": 3000000.0,
+      "cl": 0.4424,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_+004.0.json"
+    },
+    {
+      "alpha": 5.0,
+      "reynolds": 3000000.0,
+      "cl": 0.5498,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_+005.0.json"
+    },
+    {
+      "alpha": 6.0,
+      "reynolds": 3000000.0,
+      "cl": 0.6557,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_+006.0.json"
+    },
+    {
+      "alpha": 7.0,
+      "reynolds": 3000000.0,
+      "cl": 0.769,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_+007.0.json"
+    },
+    {
+      "alpha": 8.0,
+      "reynolds": 3000000.0,
+      "cl": 0.8965,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_+008.0.json"
+    },
+    {
+      "alpha": 9.0,
+      "reynolds": 3000000.0,
+      "cl": 1.0228,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_+009.0.json"
+    },
+    {
+      "alpha": 10.0,
+      "reynolds": 3000000.0,
+      "cl": 1.1176,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_+010.0.json"
+    },
+    {
+      "alpha": 11.0,
+      "reynolds": 3000000.0,
+      "cl": 1.2082,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_+011.0.json"
+    },
+    {
+      "alpha": 12.0,
+      "reynolds": 3000000.0,
+      "cl": 1.3009,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_+012.0.json"
+    },
+    {
+      "alpha": 13.0,
+      "reynolds": 3000000.0,
+      "cl": 1.3934,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_+013.0.json"
+    },
+    {
+      "alpha": 14.0,
+      "reynolds": 3000000.0,
+      "cl": 1.4763,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_+014.0.json"
+    },
+    {
+      "alpha": 15.0,
+      "reynolds": 3000000.0,
+      "cl": 1.5528,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil/naca0012/re3e06/alpha_+015.0.json"
+    }
+  ]
+}

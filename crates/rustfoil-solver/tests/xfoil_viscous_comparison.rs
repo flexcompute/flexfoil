@@ -771,10 +771,11 @@ fn test_viscous_cl_cd_end_to_end() {
     // panel indices for VI coupling. Without this, all stations map to panel 0.
     use rustfoil_solver::viscous::initialize_surface_stations_with_panel_idx;
     
+    let n_airfoil_panels = setup_result.node_x.len();
     let mut upper_stations = initialize_surface_stations_with_panel_idx(
-        &upper_arc, &upper_ue, &upper_x, ist, true, config.reynolds);
+        &upper_arc, &upper_ue, &upper_x, ist, n_airfoil_panels, true, config.reynolds);
     let mut lower_stations = initialize_surface_stations_with_panel_idx(
-        &lower_arc, &lower_ue, &lower_x, ist, false, config.reynolds);
+        &lower_arc, &lower_ue, &lower_x, ist, n_airfoil_panels, false, config.reynolds);
     
     println!("  Upper stations initialized: {}", upper_stations.len());
     println!("  Lower stations initialized: {}", lower_stations.len());
@@ -893,10 +894,11 @@ fn run_viscous_at_alpha(alpha_deg: f64) -> Option<(f64, f64, f64, f64, f64, f64)
     // panel indices for VI coupling. Without this, all stations map to panel 0 and
     // the DIJ influence matrix is not used correctly.
     use rustfoil_solver::viscous::initialize_surface_stations_with_panel_idx;
+    let n_airfoil_panels = result.node_x.len();
     let mut upper_stations = initialize_surface_stations_with_panel_idx(
-        &upper_arc, &upper_ue, &upper_x, ist, true, config.reynolds);
+        &upper_arc, &upper_ue, &upper_x, ist, n_airfoil_panels, true, config.reynolds);
     let mut lower_stations = initialize_surface_stations_with_panel_idx(
-        &lower_arc, &lower_ue, &lower_x, ist, false, config.reynolds);
+        &lower_arc, &lower_ue, &lower_x, ist, n_airfoil_panels, false, config.reynolds);
     
     use rustfoil_solver::viscous::solve_viscous_two_surfaces;
     let visc_result = solve_viscous_two_surfaces(

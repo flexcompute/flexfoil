@@ -471,9 +471,10 @@ pub fn initialize_bl_stations(
 
     for i in 0..n {
         let mut station = if i == stag_idx {
-            // At stagnation point, use Hiemenz solution
+            // At stagnation point, use Thwaites formula (XFOIL-compatible)
+            let x_stag = arc_lengths[i].max(1e-12);
             let ue_stag = ue_inviscid[i].abs().max(0.01);
-            BlStation::stagnation(ue_stag, re)
+            BlStation::stagnation(x_stag, ue_stag, re)
         } else {
             // Away from stagnation, use default initialization
             BlStation::new()
@@ -543,8 +544,9 @@ pub fn initialize_surface_stations_with_coords(
     let mut stations = Vec::with_capacity(n);
 
     // First station is at stagnation
+    let x_stag = arc_lengths[0].max(1e-12);
     let ue_stag = ue[0].abs().max(0.01);
-    let mut station = BlStation::stagnation(ue_stag, re);
+    let mut station = BlStation::stagnation(x_stag, ue_stag, re);
     station.x = arc_lengths[0];
     station.x_coord = panel_x[0];
     station.u = ue[0].abs();
@@ -577,17 +579,21 @@ pub fn initialize_surface_stations_with_coords(
 /// * `ue` - Edge velocities (all positive for attached flow)
 /// * `panel_x` - Panel x-coordinates (for transition x/c reporting)
 /// * `stagnation_idx` - Index of stagnation point in full panel array
+/// * `n_airfoil_panels` - Total number of airfoil panels (for wake panel offset)
 /// * `is_upper` - True for upper surface, false for lower
 /// * `re` - Reynolds number
 ///
 /// # Panel Index Mapping (Selig format)
 /// - Upper surface: panel_idx = stagnation_idx - local_idx (decreasing toward panel 0 = upper TE)
+///   - When local_idx > stagnation_idx, maps to wake panels N, N+1, ...
 /// - Lower surface: panel_idx = stagnation_idx + local_idx (increasing toward panel N-1 = lower TE)
+///   - When stagnation_idx + local_idx >= N, maps to wake panels N, N+1, ...
 pub fn initialize_surface_stations_with_panel_idx(
     arc_lengths: &[f64],
     ue: &[f64],
     panel_x: &[f64],
     stagnation_idx: usize,
+    n_airfoil_panels: usize,
     is_upper: bool,
     re: f64,
 ) -> Vec<BlStation> {
@@ -599,8 +605,9 @@ pub fn initialize_surface_stations_with_panel_idx(
     let mut stations = Vec::with_capacity(n);
 
     // First station is at stagnation
+    let x_stag = arc_lengths[0].max(1e-12);
     let ue_stag = ue[0].abs().max(0.01);
-    let mut station = BlStation::stagnation(ue_stag, re);
+    let mut station = BlStation::stagnation(x_stag, ue_stag, re);
     station.x = arc_lengths[0];
     station.x_coord = panel_x[0];
     station.panel_idx = stagnation_idx;
@@ -614,19 +621,24 @@ pub fn initialize_surface_stations_with_panel_idx(
         station.x = arc_lengths[i];
         station.x_coord = panel_x[i];
         // Map BL station to panel index
-        // Upper: goes from stagnation (ist) toward upper TE (panel 0), so ist - i
-        // Lower: goes from stagnation (ist) toward lower TE (panel N-1), so ist + i
-        // Note: The number of BL stations may exceed the number of actual panels
-        // due to virtual stagnation point, so we clamp to valid range.
-        // The DIJ lookup will use these clamped indices, which is approximate
-        // but prevents out-of-bounds access.
+        // Upper: goes from stagnation (ist) toward upper TE (panel 0)
+        //   - Stations 0..=stagnation_idx map to panels stagnation_idx..=0
+        //   - Stations beyond stagnation_idx are wake: panels N, N+1, ...
+        // Lower: goes from stagnation (ist) toward lower TE (panel N-1)
+        //   - Stations naturally map to panels stagnation_idx, stagnation_idx+1, ...
+        //   - When >= N, these are wake panels
         station.panel_idx = if is_upper {
-            stagnation_idx.saturating_sub(i)
+            if i <= stagnation_idx {
+                stagnation_idx - i  // Normal airfoil panel
+            } else {
+                // Wake panel: station is past upper TE
+                // XFOIL assigns wake panels indices N, N+1, N+2, ...
+                n_airfoil_panels + (i - stagnation_idx - 1)
+            }
         } else {
-            // For lower surface, we need to know total panels to clamp
-            // Since we don't have that info here, use a large value as proxy
-            // This will be clamped at DIJ lookup time anyway
-            stagnation_idx.saturating_add(i)
+            // Lower surface: stagnation_idx + i
+            // This naturally gives N, N+1, ... for wake when i is large enough
+            stagnation_idx + i
         };
         station.u = ue[i].abs();
         station.is_laminar = true;
@@ -634,6 +646,17 @@ pub fn initialize_surface_stations_with_panel_idx(
         station.r_theta = re * station.u * station.theta;
         station.mass_defect = station.u * station.delta_star;
         stations.push(station);
+    }
+
+    // Debug: print panel indices for first few and last few stations
+    if rustfoil_bl::is_debug_active() {
+        let surface_name = if is_upper { "Upper" } else { "Lower" };
+        eprintln!("[DEBUG setup] {} surface: n={}, stagnation_idx={}, n_airfoil={}", 
+            surface_name, n, stagnation_idx, n_airfoil_panels);
+        eprintln!("[DEBUG setup]   First 5 panel_idx: {:?}", 
+            stations.iter().take(5).map(|s| s.panel_idx).collect::<Vec<_>>());
+        eprintln!("[DEBUG setup]   Last 5 panel_idx: {:?}", 
+            stations.iter().rev().take(5).rev().map(|s| s.panel_idx).collect::<Vec<_>>());
     }
 
     stations
@@ -760,8 +783,9 @@ pub fn setup_from_body(body: &Body, alpha_deg: f64) -> Result<ViscousSetupResult
     // Find stagnation using XFOIL's interpolation method
     let (ist, sst, _ue_stag) = interpolate_stagnation(&ue_inviscid, &arc_lengths);
     
-    // Build DIJ matrix
-    let dij = factorized.build_dij()?;
+    // Build DIJ matrix with wake panels (XFOIL-style, wake length = 1 chord)
+    let (wake_x, wake_y) = factorized.build_wake_coordinates(1.0);
+    let dij = factorized.build_dij_with_wake(&wake_x, &wake_y)?;
     
     // Emit FULLDIJ debug event if debug collection is active
     if debug::is_debug_active() {
@@ -841,7 +865,10 @@ pub fn setup_from_coords(coords: &[(f64, f64)], alpha_deg: f64) -> Result<Viscou
     let ue_inviscid = inv_solution.gamma.clone();
     let arc_lengths = compute_arc_lengths(&node_x, &node_y);
     let (ist, sst, _) = interpolate_stagnation(&ue_inviscid, &arc_lengths);
-    let dij = factorized.build_dij()?;
+    
+    // Build DIJ matrix with wake panels (XFOIL-style, wake length = 1 chord)
+    let (wake_x, wake_y) = factorized.build_wake_coordinates(1.0);
+    let dij = factorized.build_dij_with_wake(&wake_x, &wake_y)?;
     
     // Emit FULLDIJ debug event if debug collection is active
     if debug::is_debug_active() {
