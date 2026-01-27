@@ -621,23 +621,35 @@ pub fn initialize_surface_stations_with_panel_idx(
         station.x = arc_lengths[i];
         station.x_coord = panel_x[i];
         // Map BL station to panel index
-        // Upper: goes from stagnation (ist) toward upper TE (panel 0)
-        //   - Stations 0..=stagnation_idx map to panels stagnation_idx..=0
-        //   - Stations beyond stagnation_idx are wake: panels N, N+1, ...
-        // Lower: goes from stagnation (ist) toward lower TE (panel N-1)
-        //   - Stations naturally map to panels stagnation_idx, stagnation_idx+1, ...
-        //   - When >= N, these are wake panels
+        //
+        // IMPORTANT: extract_surface_xfoil() prepends a virtual stagnation point,
+        // so the station indices are offset by 1 from the panel data:
+        //   - Station 0 = virtual stagnation (interpolated between panels)
+        //   - Station 1 = data from panel ist
+        //   - Station 2 = data from panel ist-1 (for upper) or ist+1 (for lower)
+        //   - etc.
+        //
+        // Upper surface: stations go from virtual stag (0) toward upper TE (panel 0)
+        //   - Station i (for i >= 1) corresponds to panel ist - (i - 1)
+        //   - When ist - (i - 1) < 0, we've passed TE and entered wake
+        //
+        // Lower surface: stations go from virtual stag (0) toward lower TE (panel N-1)
+        //   - Station i (for i >= 1) corresponds to panel ist + i
+        //   - When ist + i >= N, we've entered wake
         station.panel_idx = if is_upper {
-            if i <= stagnation_idx {
-                stagnation_idx - i  // Normal airfoil panel
+            // Upper surface: station i maps to panel ist - (i - 1)
+            // The -1 accounts for the virtual stagnation point at station 0
+            let panel = stagnation_idx as i64 - (i as i64 - 1);
+            if panel >= 0 {
+                panel as usize  // Normal airfoil panel
             } else {
-                // Wake panel: station is past upper TE
+                // Wake panel: station is past upper TE (panel 0)
                 // XFOIL assigns wake panels indices N, N+1, N+2, ...
-                n_airfoil_panels + (i - stagnation_idx - 1)
+                n_airfoil_panels + (-panel - 1) as usize
             }
         } else {
-            // Lower surface: stagnation_idx + i
-            // This naturally gives N, N+1, ... for wake when i is large enough
+            // Lower surface: station i maps to panel ist + i
+            // This naturally gives N, N+1, ... for wake when large enough
             stagnation_idx + i
         };
         station.u = ue[i].abs();
