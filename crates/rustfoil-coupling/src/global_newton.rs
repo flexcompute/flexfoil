@@ -623,7 +623,7 @@ impl GlobalNewtonSystem {
                 };
 
                 let u1_m_j = if ibl_i > 1 && panel_im1 < dij.nrows() && panel_j < dij.ncols() {
-                    -self.vti[iv - 1].max(self.vti[iv]) * self.vti[jv] * dij[(panel_im1, panel_j)]
+                    -self.vti[iv - 1] * self.vti[jv] * dij[(panel_im1, panel_j)]
                 } else {
                     0.0
                 };
@@ -1058,7 +1058,7 @@ pub fn apply_global_updates(
     lower_ue_inv: Option<&[f64]>,
     msq: f64,
     re: f64,
-) {
+) -> f64 {
     // === XFOIL-style normalized relaxation (xbl.f lines 1527-1597) ===
     // Compute global relaxation factor based on normalized changes
     let dhi = 1.5;   // Max 150% relative increase
@@ -1066,7 +1066,11 @@ pub fn apply_global_updates(
     
     let mut rlx = relaxation.clamp(0.0, 1.0);
     
-    // First pass: compute required relaxation from all stations
+    // CRITICAL FIX: We need to compute new Ue FIRST to check Ue changes,
+    // but we'll do a preliminary check on mass changes using current Ue
+    // to get an initial relaxation estimate, then refine it after computing new Ue.
+    
+    // First pass: compute required relaxation from theta and ctau/ampl changes
     // Upper surface
     for ibl in 1..upper_stations.len() {
         let iv = system.to_global(0, ibl);
@@ -1128,13 +1132,38 @@ pub fn apply_global_updates(
         };
         
         // Apply relaxation limits
+        // CRITICAL FIX: Check absolute value of normalized change to catch both positive and negative large changes
         let rdn1 = rlx * dn1;
-        if rdn1 > dhi && dn1.abs() > 1e-12 { rlx = dhi / dn1; }
-        if rdn1 < dlo && dn1.abs() > 1e-12 { rlx = dlo / dn1; }
+        if rdn1.abs() > dhi && dn1.abs() > 1e-12 {
+            let new_rlx = dhi / dn1.abs();
+            if new_rlx < rlx {
+                rlx = new_rlx;
+                if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+                    eprintln!("[DEBUG apply_global_updates] Reduced rlx to {:.6e} due to ctau/ampl change at lower[{}]: dn1={:.6e}, delta[0]={:.6e}, ctau={:.6e}",
+                        rlx, ibl, dn1, delta[0], station.ctau);
+                }
+            }
+        }
+        if rdn1.abs() > dlo.abs() && dn1.abs() > 1e-12 && dn1 < 0.0 {
+            let new_rlx = dlo.abs() / dn1.abs();
+            if new_rlx < rlx {
+                rlx = new_rlx;
+                if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+                    eprintln!("[DEBUG apply_global_updates] Reduced rlx to {:.6e} due to negative ctau/ampl change at lower[{}]: dn1={:.6e}",
+                        rlx, ibl, dn1);
+                }
+            }
+        }
         
         let rdn2 = rlx * dn2;
-        if rdn2 > dhi && dn2.abs() > 1e-12 { rlx = dhi / dn2; }
-        if rdn2 < dlo && dn2.abs() > 1e-12 { rlx = dlo / dn2; }
+        if rdn2.abs() > dhi && dn2.abs() > 1e-12 {
+            let new_rlx = dhi / dn2.abs();
+            if new_rlx < rlx { rlx = new_rlx; }
+        }
+        if rdn2.abs() > dlo.abs() && dn2.abs() > 1e-12 && dn2 < 0.0 {
+            let new_rlx = dlo.abs() / dn2.abs();
+            if new_rlx < rlx { rlx = new_rlx; }
+        }
     }
     
     // Ensure relaxation stays positive
@@ -1155,6 +1184,129 @@ pub fn apply_global_updates(
             lower_stations.iter().map(|s| s.u).collect::<Vec<_>>()
         )
     };
+    
+    // === Step 1.5: Refine relaxation based on Ue and delta_star changes ===
+    // CRITICAL FIX: Check normalized Ue and delta_star changes to prevent explosion
+    // Upper surface
+    for ibl in 1..upper_stations.len() {
+        let iv = system.to_global(0, ibl);
+        if iv >= deltas.len() {
+            continue;
+        }
+        let delta = &deltas[iv];
+        let station = &upper_stations[ibl];
+        let new_u = upper_new_ue.get(ibl).copied().unwrap_or(station.u);
+        let due = new_u - station.u;
+        
+        // Normalized Ue change (limit to reasonable range)
+        let dn4 = if station.u.abs() > 1e-6 {
+            due / station.u
+        } else {
+            due / 0.1  // Fallback for very small Ue
+        };
+        
+        // Normalized delta_star change
+        // Compute d_dstar using current Ue (will be refined after relaxation)
+        let d_dstar = (delta[2] - station.delta_star * due) / station.u.max(1e-6);
+        let dn3 = if station.delta_star.abs() > 1e-12 {
+            d_dstar / station.delta_star
+        } else {
+            d_dstar / 1e-6  // Fallback for very small delta_star
+        };
+        
+        // Apply relaxation limits to Ue changes
+        let rdn4 = rlx * dn4;
+        let rlx_before_ue = rlx;
+        if rdn4.abs() > dhi && dn4.abs() > 1e-12 {
+            let new_rlx = dhi / dn4.abs();
+            if new_rlx < rlx { rlx = new_rlx; }
+        }
+        if rdn4.abs() > dlo.abs() && dn4.abs() > 1e-12 && dn4 < 0.0 {
+            let new_rlx = dlo.abs() / dn4.abs();
+            if new_rlx < rlx { rlx = new_rlx; }
+        }
+        if rlx < rlx_before_ue && rustfoil_bl::is_debug_active() {
+            eprintln!("[DEBUG apply_global_updates] Reduced rlx from {:.6e} to {:.6e} due to Ue change at upper[{}]: dn4={:.6e}",
+                rlx_before_ue, rlx, ibl, dn4);
+        }
+        
+        // Apply relaxation limits to delta_star changes
+        let rdn3 = rlx * dn3;
+        let rlx_before_dstar = rlx;
+        if rdn3.abs() > dhi && dn3.abs() > 1e-12 {
+            let new_rlx = dhi / dn3.abs();
+            if new_rlx < rlx { rlx = new_rlx; }
+        }
+        if rdn3.abs() > dlo.abs() && dn3.abs() > 1e-12 && dn3 < 0.0 {
+            let new_rlx = dlo.abs() / dn3.abs();
+            if new_rlx < rlx { rlx = new_rlx; }
+        }
+        if rlx < rlx_before_dstar && rustfoil_bl::is_debug_active() {
+            eprintln!("[DEBUG apply_global_updates] Reduced rlx from {:.6e} to {:.6e} due to delta_star change at upper[{}]: dn3={:.6e}",
+                rlx_before_dstar, rlx, ibl, dn3);
+        }
+    }
+    
+    // Lower surface
+    for ibl in 1..lower_stations.len() {
+        let iv = system.to_global(1, ibl);
+        if iv >= deltas.len() {
+            continue;
+        }
+        let delta = &deltas[iv];
+        let station = &lower_stations[ibl];
+        let new_u = lower_new_ue.get(ibl).copied().unwrap_or(station.u);
+        let due = new_u - station.u;
+        
+        // Normalized Ue change
+        let dn4 = if station.u.abs() > 1e-6 {
+            due / station.u
+        } else {
+            due / 0.1
+        };
+        
+        // Normalized delta_star change
+        let d_dstar = (delta[2] - station.delta_star * due) / station.u.max(1e-6);
+        let dn3 = if station.delta_star.abs() > 1e-12 {
+            d_dstar / station.delta_star
+        } else {
+            d_dstar / 1e-6
+        };
+        
+        // Apply relaxation limits
+        let rdn4 = rlx * dn4;
+        let rlx_before_ue = rlx;
+        if rdn4.abs() > dhi && dn4.abs() > 1e-12 {
+            let new_rlx = dhi / dn4.abs();
+            if new_rlx < rlx { rlx = new_rlx; }
+        }
+        if rdn4.abs() > dlo.abs() && dn4.abs() > 1e-12 && dn4 < 0.0 {
+            let new_rlx = dlo.abs() / dn4.abs();
+            if new_rlx < rlx { rlx = new_rlx; }
+        }
+        if rlx < rlx_before_ue && rustfoil_bl::is_debug_active() {
+            eprintln!("[DEBUG apply_global_updates] Reduced rlx from {:.6e} to {:.6e} due to Ue change at lower[{}]: dn4={:.6e}",
+                rlx_before_ue, rlx, ibl, dn4);
+        }
+        
+        let rdn3 = rlx * dn3;
+        let rlx_before_dstar = rlx;
+        if rdn3.abs() > dhi && dn3.abs() > 1e-12 {
+            let new_rlx = dhi / dn3.abs();
+            if new_rlx < rlx { rlx = new_rlx; }
+        }
+        if rdn3.abs() > dlo.abs() && dn3.abs() > 1e-12 && dn3 < 0.0 {
+            let new_rlx = dlo.abs() / dn3.abs();
+            if new_rlx < rlx { rlx = new_rlx; }
+        }
+        if rlx < rlx_before_dstar && rustfoil_bl::is_debug_active() {
+            eprintln!("[DEBUG apply_global_updates] Reduced rlx from {:.6e} to {:.6e} due to delta_star change at lower[{}]: dn3={:.6e}",
+                rlx_before_dstar, rlx, ibl, dn3);
+        }
+    }
+    
+    // Ensure relaxation stays positive and reasonable
+    rlx = rlx.max(0.01).min(1.0);
 
     // === Step 2: Update upper surface BL variables ===
     for ibl in 1..upper_stations.len() {
@@ -1187,10 +1339,18 @@ pub fn apply_global_updates(
         let theta_old = station.theta;
         station.theta += rlx * delta[1];
         
-        // Safeguard: don't let theta decrease by more than 50% per iteration
-        // (This should already be handled by normalized relaxation, but add as backup)
+        // Safeguard: limit theta changes to prevent blow-up or collapse
+        // - Don't let theta decrease by more than 50% per iteration
+        // - Don't let theta increase by more than 2x per iteration (matches direct march)
+        // - Absolute maximum: 0.1 (physically reasonable for TE stations)
+        // CRITICAL FIX: Without upper bound, Newton can produce huge theta values
+        // (e.g., theta=0.398 at α=-4° causing CD=0.59 instead of 0.0008)
         let theta_min = theta_old * 0.5;
-        station.theta = station.theta.max(theta_min.max(1e-8));
+        let theta_max = theta_old * 2.0;  // Max 2x increase per iteration
+        let theta_abs_max = 0.1;  // Absolute maximum (matches march.rs line 543)
+        station.theta = station.theta
+            .max(theta_min.max(1e-8))
+            .min(theta_max.min(theta_abs_max));
 
         // delta[2] is mass change; convert to delta_star using XFOIL formula:
         // DDSTR = (DMASS - DSTR*DUEDG) / UEDG
@@ -1264,10 +1424,18 @@ pub fn apply_global_updates(
         let theta_old = station.theta;
         station.theta += rlx * delta[1];
         
-        // Safeguard: don't let theta decrease by more than 50% per iteration
-        // (This should already be handled by normalized relaxation, but add as backup)
+        // Safeguard: limit theta changes to prevent blow-up or collapse
+        // - Don't let theta decrease by more than 50% per iteration
+        // - Don't let theta increase by more than 2x per iteration (matches direct march)
+        // - Absolute maximum: 0.1 (physically reasonable for TE stations)
+        // CRITICAL FIX: Without upper bound, Newton can produce huge theta values
+        // (e.g., theta=0.398 at α=-4° causing CD=0.59 instead of 0.0008)
         let theta_min = theta_old * 0.5;
-        station.theta = station.theta.max(theta_min.max(1e-8));
+        let theta_max = theta_old * 2.0;  // Max 2x increase per iteration
+        let theta_abs_max = 0.1;  // Absolute maximum (matches march.rs line 543)
+        station.theta = station.theta
+            .max(theta_min.max(1e-8))
+            .min(theta_max.min(theta_abs_max));
 
         // delta[2] is mass change; convert to delta_star using XFOIL formula:
         // DDSTR = (DMASS - DSTR*DUEDG) / UEDG
@@ -1308,6 +1476,9 @@ pub fn apply_global_updates(
         let flow_type = if station.is_laminar { FlowType::Laminar } else { FlowType::Turbulent };
         blvar(station, flow_type, msq, re);
     }
+    
+    // Return the actual relaxation factor used
+    rlx
 }
 
 /// Compute new edge velocities via DIJ influence matrix.

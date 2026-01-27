@@ -783,6 +783,8 @@ fn test_viscous_cl_cd_end_to_end() {
     // Run the two-surface viscous solver
     use rustfoil_solver::viscous::solve_viscous_two_surfaces;
     
+    // Pass alpha in radians and panel geometry for XFOIL-exact CLCALC
+    let alpha_rad = alpha_deg.to_radians();
     let visc_result = solve_viscous_two_surfaces(
         &mut upper_stations,
         &mut lower_stations,
@@ -790,6 +792,9 @@ fn test_viscous_cl_cd_end_to_end() {
         &lower_ue,
         &setup_result.setup.dij,
         &config,
+        alpha_rad,
+        &setup_result.node_x,
+        &setup_result.node_y,
     );
     
     match visc_result {
@@ -901,6 +906,9 @@ fn run_viscous_at_alpha(alpha_deg: f64) -> Option<(f64, f64, f64, f64, f64, f64)
         &lower_arc, &lower_ue, &lower_x, ist, n_airfoil_panels, false, config.reynolds);
     
     use rustfoil_solver::viscous::solve_viscous_two_surfaces;
+    
+    // Pass alpha in radians and panel geometry for XFOIL-exact CLCALC
+    let alpha_rad = alpha_deg.to_radians();
     let visc_result = solve_viscous_two_surfaces(
         &mut upper_stations,
         &mut lower_stations,
@@ -908,6 +916,9 @@ fn run_viscous_at_alpha(alpha_deg: f64) -> Option<(f64, f64, f64, f64, f64, f64)
         &lower_ue,
         &result.setup.dij,
         &config,
+        alpha_rad,
+        &result.node_x,
+        &result.node_y,
     ).ok()?;
     
     Some((visc_result.cl, visc_result.cd, visc_result.cd_friction, 
