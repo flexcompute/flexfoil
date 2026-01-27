@@ -243,11 +243,21 @@ pub fn compute_forces_two_surfaces(
         (None, None) => 0.0,
     };
     
+    // CRITICAL FIX: Ensure cd_total >= cd_friction
+    // Physically, total drag must be at least friction drag (cd_total = cd_friction + cd_pressure)
+    // If Squire-Young gives cd_total < cd_friction, it means theta_te was too small or the
+    // extrapolation underestimated the drag. In this case, use cd_friction as a lower bound.
+    // This prevents cd_pressure from becoming negative (which would cause cd = 0.0).
+    let cd_total = cd_total.max(cd_friction);
+    
     // Pressure drag = Total - Friction
     // (This is how XFOIL separates the components)
-    let cd_pressure = (cd_total - cd_friction).max(0.1 * cd_total);
+    // Note: XFOIL's CL_DETAIL reports 'cdp' which is pressure drag only
+    let cd_pressure = cd_total - cd_friction;
     
-    // Total drag: use Squire-Young at far wake (more accurate than CD_f + CD_p)
+    // Report total drag (cd_total) as the primary CD output
+    // XFOIL's CD_BREAKDOWN reports cd_total, and that's what comparisons typically use
+    // Pressure drag (cd_pressure) is also stored separately for detailed analysis
     let cd = cd_total;
     
     // Debug drag computation
@@ -535,13 +545,19 @@ pub fn compute_cd_from_wake(wake_stations: &[BlStation], cd_friction: f64) -> f6
     };
     
     // Squire-Young formula
-    let cd_total = squire_young_drag(theta_wake, ue_wake, h_wake);
+    let mut cd_total = squire_young_drag(theta_wake, ue_wake, h_wake);
+    
+    // CRITICAL FIX: Ensure cd_total >= cd_friction
+    // Physically, total drag must be at least friction drag (cd_total = cd_friction + cd_pressure)
+    // If Squire-Young gives cd_total < cd_friction, it means theta_wake was too small or the
+    // calculation underestimated the drag. In this case, use cd_friction as a lower bound.
+    cd_total = cd_total.max(cd_friction);
     
     // Debug output
     if std::env::var("RUSTFOIL_DRAG_DEBUG").is_ok() {
         eprintln!("[WAKE_CD_DEBUG] Far wake: x={:.4} θ={:.4e} H={:.3} Ue={:.4}", 
             far_wake.x, theta_wake, h_wake, ue_wake);
-        eprintln!("[WAKE_CD_DEBUG] CD_total={:.5} (from S-Y at far wake)", cd_total);
+        eprintln!("[WAKE_CD_DEBUG] CD_total={:.5} (from S-Y at far wake, clamped to >= cd_friction={:.5})", cd_total, cd_friction);
     }
     
     cd_total

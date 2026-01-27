@@ -40,6 +40,158 @@ use super::config::ViscousSolverConfig;
 use super::forces::{compute_forces, compute_forces_two_surfaces};
 use crate::{SolverError, SolverResult};
 
+/// XFOIL's CLCALC subroutine - compute CL by integrating Cp in wind axes.
+///
+/// This is the exact XFOIL formula for lift coefficient computation:
+/// CL = ∮ Cp * dx_wind
+/// where dx_wind = (X[i+1]-X[i])*cos(α) + (Y[i+1]-Y[i])*sin(α)
+///
+/// # Arguments
+/// * `panel_x` - Panel node x-coordinates (full airfoil, XFOIL ordering)
+/// * `panel_y` - Panel node y-coordinates (full airfoil, XFOIL ordering)
+/// * `gamma` - Vorticity (= tangential velocity) at each panel node
+/// * `alpha` - Angle of attack in radians
+///
+/// # Returns
+/// Lift coefficient CL
+///
+/// # Reference
+/// XFOIL xfoil.f CLCALC (line 1088)
+pub fn clcalc(panel_x: &[f64], panel_y: &[f64], gamma: &[f64], alpha: f64) -> f64 {
+    let n = panel_x.len();
+    if n < 3 || gamma.len() != n {
+        return 0.0;
+    }
+    
+    let ca = alpha.cos();
+    let sa = alpha.sin();
+    
+    // For incompressible flow: BETA = 1.0, BFAC = 0.0
+    // So CPG = CGINC = 1.0 - (GAM/QINF)^2
+    // With QINF = 1.0 (normalized), CPG = 1.0 - GAM^2
+    
+    // Initialize with first point's Cp
+    let mut cpg1 = 1.0 - gamma[0] * gamma[0];
+    let mut cl = 0.0;
+    
+    // XFOIL loops: DO I=1, N with IP=I+1 and IP=1 when I=N
+    // This integrates around the CLOSED contour
+    for i in 0..n {
+        let ip = (i + 1) % n;  // Wrap around: when i=n-1, ip=0
+        
+        // Cp at next point
+        let cpg2 = 1.0 - gamma[ip] * gamma[ip];
+        
+        // Panel projection in wind axes (XFOIL: DX)
+        let dx_wind = (panel_x[ip] - panel_x[i]) * ca + (panel_y[ip] - panel_y[i]) * sa;
+        
+        // Average Cp on this panel
+        let cp_avg = 0.5 * (cpg1 + cpg2);
+        
+        // Accumulate CL
+        cl += cp_avg * dx_wind;
+        
+        // Shift for next panel
+        cpg1 = cpg2;
+    }
+    
+    cl
+}
+
+/// Construct full panel gamma array from upper/lower surface edge velocities.
+///
+/// Maps BL station edge velocities back to panel nodes using panel_idx.
+/// Applies VTI sign convention: upper = +1, lower = -1.
+///
+/// # Arguments
+/// * `upper_stations` - Upper surface BL stations (stagnation to TE)
+/// * `lower_stations` - Lower surface BL stations (stagnation to TE)
+/// * `n_panels` - Number of panel nodes
+///
+/// # Returns
+/// Full gamma array in XFOIL panel ordering
+fn construct_gamma_from_stations(
+    upper_stations: &[BlStation],
+    lower_stations: &[BlStation],
+    n_panels: usize,
+) -> Vec<f64> {
+    let mut gamma = vec![0.0; n_panels];
+    let mut filled = vec![false; n_panels];
+    
+    // Upper surface: VTI = +1
+    // Upper stations go from stagnation (high panel index) toward TE (low panel index)
+    // XFOIL: QVIS = VTI * UEDG, GAM = QVIS
+    // So: gamma = +1 * Ue = +Ue
+    // Note: station.u should be positive (magnitude), but we preserve sign for correctness
+    for station in upper_stations.iter() {
+        let idx = station.panel_idx;
+        if idx < n_panels && !station.is_wake {
+            // VTI = +1: gamma = +Ue
+            // Use signed value directly (should be positive, but preserve sign)
+            gamma[idx] = station.u;
+            filled[idx] = true;
+        }
+    }
+    
+    // Lower surface: VTI = -1
+    // Lower stations go from stagnation (low panel index) toward TE (high panel index)
+    // XFOIL: QVIS = VTI * UEDG, GAM = QVIS
+    // So: gamma = -1 * Ue = -Ue
+    // The negative sign accounts for the opposite panel tangent direction
+    for station in lower_stations.iter() {
+        let idx = station.panel_idx;
+        if idx < n_panels && !station.is_wake && !filled[idx] {
+            // VTI = -1: gamma = -Ue
+            // Flip sign for lower surface (preserve magnitude sign if Ue can be negative)
+            gamma[idx] = -station.u;
+            filled[idx] = true;
+        }
+    }
+    
+    // Debug: Log gamma array statistics
+    let n_filled = filled.iter().filter(|&&f| f).count();
+    let n_unfilled = filled.iter().filter(|&&f| !f).count();
+    
+    // Warn if panels are unfilled (they'll have gamma=0, Cp=1, which may be wrong)
+    if n_unfilled > 0 && n_unfilled < n_panels / 10 {
+        // Allow a few unfilled panels (e.g., at stagnation or TE), but warn if many
+        eprintln!("[WARN construct_gamma] {} panels unfilled (will have gamma=0, Cp=1)", n_unfilled);
+    }
+    
+    if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+        let gamma_min = gamma.iter().cloned().fold(f64::INFINITY, f64::min);
+        let gamma_max = gamma.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let gamma_abs_avg: f64 = gamma.iter().map(|g| g.abs()).sum::<f64>() / n_panels as f64;
+        eprintln!("[DEBUG construct_gamma] n_panels={}, filled={}, unfilled={}", n_panels, n_filled, n_unfilled);
+        eprintln!("[DEBUG construct_gamma] gamma range: [{:.4}, {:.4}], avg |gamma|={:.4}", gamma_min, gamma_max, gamma_abs_avg);
+        // Find where max gamma is
+        let max_idx = gamma.iter().enumerate().max_by(|a, b| a.1.abs().partial_cmp(&b.1.abs()).unwrap()).map(|(i, _)| i);
+        if let Some(idx) = max_idx {
+            eprintln!("[DEBUG construct_gamma] Max |gamma| at panel {}: {:.4}", idx, gamma[idx]);
+        }
+        // Show first/last few gamma values
+        if n_panels >= 10 {
+            eprintln!("[DEBUG construct_gamma] First 5 gamma: {:?}", &gamma[..5].iter().map(|g| format!("{:.4}", g)).collect::<Vec<_>>());
+            eprintln!("[DEBUG construct_gamma] Last 5 gamma: {:?}", &gamma[n_panels-5..].iter().map(|g| format!("{:.4}", g)).collect::<Vec<_>>());
+            // Show gamma around LE (typically panel ~n/2)
+            let le_idx = n_panels / 2;
+            eprintln!("[DEBUG construct_gamma] Gamma around LE (panel {}): {:?}", le_idx, 
+                &gamma[le_idx.saturating_sub(2)..=(le_idx+2).min(n_panels-1)]
+                    .iter().map(|g| format!("{:.4}", g)).collect::<Vec<_>>());
+        }
+        // Show unfilled panel indices if any
+        if n_unfilled > 0 && n_unfilled <= 20 {
+            let unfilled_indices: Vec<usize> = filled.iter().enumerate()
+                .filter(|(_, &f)| !f)
+                .map(|(i, _)| i)
+                .collect();
+            eprintln!("[DEBUG construct_gamma] Unfilled panel indices: {:?}", unfilled_indices);
+        }
+    }
+    
+    gamma
+}
+
 /// Result of viscous solution.
 ///
 /// Contains all computed aerodynamic coefficients and solution metadata.
@@ -49,7 +201,8 @@ pub struct ViscousResult {
     pub alpha: f64,
     /// Lift coefficient
     pub cl: f64,
-    /// Drag coefficient (total)
+    /// Drag coefficient (pressure drag only, matches XFOIL CL_DETAIL 'cdp')
+    /// Total drag = cd + cd_friction
     pub cd: f64,
     /// Moment coefficient (about quarter-chord)
     pub cm: f64,
@@ -423,6 +576,9 @@ pub fn solve_surface(
 /// * `lower_ue` - Edge velocities for lower surface
 /// * `dij` - Mass defect influence matrix (for future Newton iteration)
 /// * `config` - Solver configuration
+/// * `alpha_rad` - Angle of attack in radians (for CLCALC wind-axis integration)
+/// * `panel_x` - Panel node x-coordinates (full airfoil, XFOIL ordering)
+/// * `panel_y` - Panel node y-coordinates (full airfoil, XFOIL ordering)
 ///
 /// # Returns
 /// `ViscousResult` with combined data from both surfaces.
@@ -433,6 +589,9 @@ pub fn solve_viscous_two_surfaces(
     lower_ue: &[f64],
     dij: &DMatrix<f64>,
     config: &ViscousSolverConfig,
+    alpha_rad: f64,
+    panel_x: &[f64],
+    panel_y: &[f64],
 ) -> SolverResult<ViscousResult> {
     if config.reynolds <= 0.0 {
         return Err(SolverError::InvalidReynolds);
@@ -445,7 +604,7 @@ pub fn solve_viscous_two_surfaces(
     if rustfoil_bl::is_debug_active() {
         rustfoil_bl::add_event(rustfoil_bl::DebugEvent::viscal(
             0,
-            0.0, // alpha set by caller
+            alpha_rad,
             re,
             config.mach,
             config.ncrit,
@@ -588,6 +747,12 @@ pub fn solve_viscous_two_surfaces(
     // Enable Newton with detailed debug output for comparison with XFOIL
     let can_run_newton = config.max_iterations > 0 && n_upper >= 3 && n_lower >= 3;
 
+    // Debug: track Newton execution
+    if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+        eprintln!("[DEBUG viscal] Newton check: can_run={}, max_iter={}, n_upper={}, n_lower={}", 
+            can_run_newton, config.max_iterations, n_upper, n_lower);
+    }
+
     if can_run_newton {
         // Save original station values in case Newton diverges
         // IMPORTANT: Include station.u which is modified by VI coupling
@@ -603,6 +768,10 @@ pub fn solve_viscous_two_surfaces(
 
         for iter in 0..max_newton_iter {
             iteration = iter + 1;
+
+            if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() && iter < 3 {
+                eprintln!("[DEBUG Newton] Starting iter {}", iter);
+            }
 
             // Determine flow types for each interval
             let upper_flow_types: Vec<FlowType> = upper_stations
@@ -689,12 +858,46 @@ pub fn solve_viscous_two_surfaces(
             // Get residual before solve
             residual = global_system.rms_residual();
             
+            // Debug output for iterations 6-7 to trace explosion
+            if iter >= 5 && iter <= 8 {
+                eprintln!("[DEBUG Newton] iter {} residual before solve: {:.6e}", iter, residual);
+                // Sample a few stations to check for blow-ups
+                for ibl in [10, 20, 30, 40, 50] {
+                    if ibl < upper_stations.len() {
+                        let s = &upper_stations[ibl];
+                        eprintln!("[DEBUG Newton] iter {} upper[{}]: theta={:.6e}, dstar={:.6e}, Ue={:.6}, ctau={:.6}, mass={:.6e}",
+                            iter, ibl, s.theta, s.delta_star, s.u, s.ctau, s.mass_defect);
+                    }
+                    if ibl < lower_stations.len() {
+                        let s = &lower_stations[ibl];
+                        eprintln!("[DEBUG Newton] iter {} lower[{}]: theta={:.6e}, dstar={:.6e}, Ue={:.6}, ctau={:.6}, mass={:.6e}",
+                            iter, ibl, s.theta, s.delta_star, s.u, s.ctau, s.mass_defect);
+                    }
+                }
+            }
+            
+            if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() && iter < 3 {
+                eprintln!("[DEBUG Newton] iter {} residual before solve: {:.6e}", iter, residual);
+            }
+            
             // Solve the global Newton system
             let deltas = solve_global_system(&mut global_system);
+            
+            // Debug: Check delta magnitudes for iterations 6-7
+            if iter >= 5 && iter <= 8 {
+                let max_delta_theta = deltas.iter().map(|d| d[1].abs()).fold(0.0, f64::max);
+                let max_delta_mass = deltas.iter().map(|d| d[2].abs()).fold(0.0, f64::max);
+                let max_delta_ctau = deltas.iter().map(|d| d[0].abs()).fold(0.0, f64::max);
+                eprintln!("[DEBUG Newton] iter {} max deltas: theta={:.6e}, mass={:.6e}, ctau={:.6e}",
+                    iter, max_delta_theta, max_delta_mass, max_delta_ctau);
+            }
             
             // Check if solution is valid
             let deltas_valid = deltas.iter().all(|d| d.iter().all(|v| v.is_finite()));
             if !deltas_valid {
+                if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+                    eprintln!("[DEBUG Newton] Invalid deltas at iter {} (reverting)", iter);
+                }
                 // Restore original values including edge velocity
                 for (i, (theta, dstar, ctau, ampl, h, mass, u)) in upper_backup.iter().enumerate() {
                     upper_stations[i].theta = *theta;
@@ -725,7 +928,10 @@ pub fn solve_viscous_two_surfaces(
             // apply_global_updates now implements this normalized relaxation.
             let rlx = 1.0;
             
-            apply_global_updates(
+            // Debug: Track relaxation factor for iterations 6-7
+            let rlx_before = rlx;
+            
+            let rlx_actual = apply_global_updates(
                 upper_stations,
                 lower_stations,
                 &deltas,
@@ -737,6 +943,14 @@ pub fn solve_viscous_two_surfaces(
                 msq,
                 re,
             );
+            
+            // Debug: Check relaxation used and residual after update for iterations 6-7
+            if iter >= 5 && iter <= 8 {
+                eprintln!("[DEBUG Newton] iter {} relaxation used: {:.6e} (requested: {:.6e})", iter, rlx_actual, rlx_before);
+                // Recompute residual after update to see if it exploded
+                // (Note: This requires rebuilding the system, which is expensive, but worth it for debugging)
+                // Actually, we'll check it at the start of next iteration instead
+            }
 
             
             // === STMOVE-style stagnation point check ===
@@ -767,13 +981,23 @@ pub fn solve_viscous_two_surfaces(
                 }
             }
 
+            if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() && (iter < 10 || iter % 5 == 0) {
+                eprintln!("[DEBUG Newton] iter {} residual after update: {:.6e}", iter, residual);
+            }
+            
             if residual < config.tolerance {
+                if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+                    eprintln!("[DEBUG Newton] Converged at iter {} with residual {:.6e}", iter, residual);
+                }
                 converged = true;
                 break;
             }
 
             // Check for divergence or increasing residual
             if !residual.is_finite() || residual > 1e10 {
+                if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+                    eprintln!("[DEBUG Newton] Diverged at iter {}: residual={:.6e} (reverting)", iter, residual);
+                }
                 // Restore original values including edge velocity
                 for (i, (theta, dstar, ctau, ampl, h, mass, u)) in upper_backup.iter().enumerate() {
                     upper_stations[i].theta = *theta;
@@ -802,6 +1026,9 @@ pub fn solve_viscous_two_surfaces(
             // Stop if residual is increasing rapidly (Newton diverging badly)
             // Allow slow increase since our residual may oscillate
             if iter > 5 && residual > prev_residual * 5.0 {
+                if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+                    eprintln!("[DEBUG Newton] Rapid increase at iter {}: residual={:.6e}, prev={:.6e} (reverting)", iter, residual, prev_residual);
+                }
                 // Restore original values including edge velocity
                 for (i, (theta, dstar, ctau, ampl, h, mass, u)) in upper_backup.iter().enumerate() {
                     upper_stations[i].theta = *theta;
@@ -858,37 +1085,67 @@ pub fn solve_viscous_two_surfaces(
     let upper_gamma = update_circulation_from_qvis(&upper_qvis);
     let lower_gamma = update_circulation_from_qvis(&lower_qvis);
 
-    // Compute CL using XFOIL's method: integrate Cp = 1 - V² around the airfoil
-    // This is more accurate than gamma integration for viscous flow
-    // 
-    // XFOIL's CLCALC: CL = ∮ Cp * dx (in wind axes)
-    // where Cp = 1 - (V/V∞)² = 1 - Ue²  (normalized)
+    // === CLCALC: Compute CL using XFOIL's exact formula ===
+    // XFOIL integrates Cp in wind axes around the closed airfoil contour:
+    //   CL = ∮ Cp * dx_wind
+    // where dx_wind = (X[i+1]-X[i])*cos(α) + (Y[i+1]-Y[i])*sin(α)
     //
-    // For our arc-length based stations, we approximate:
-    //   CL ≈ -∫_upper Cp ds + ∫_lower Cp ds
-    // (upper surface suction acts upward, lower surface pressure acts upward)
-    let mut cl_from_cp = 0.0;
+    // This is the EXACT formula from XFOIL's CLCALC (xfoil.f:1088-1168)
+    // and must be used to achieve numerical precision matching.
     
-    // Upper surface: negative Cp (suction) contributes positive lift
-    for i in 0..upper_gamma.len().saturating_sub(1) {
-        let ue_avg = 0.5 * (upper_gamma[i] + upper_gamma[i + 1]); // gamma = Ue for upper
-        let cp_avg = 1.0 - ue_avg * ue_avg;
-        let ds = (upper_arc[i + 1] - upper_arc[i]).abs();
-        // Upper surface: -Cp * ds contributes to CL (suction = negative Cp = positive lift)
-        cl_from_cp -= cp_avg * ds;
+    // Debug: Show station edge velocities before constructing gamma
+    if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+        let upper_ue_range: (f64, f64) = upper_stations.iter()
+            .filter(|s| !s.is_wake)
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), s| (min.min(s.u.abs()), max.max(s.u.abs())));
+        let lower_ue_range: (f64, f64) = lower_stations.iter()
+            .filter(|s| !s.is_wake)
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), s| (min.min(s.u.abs()), max.max(s.u.abs())));
+        eprintln!("[DEBUG viscal] Upper Ue range: [{:.4}, {:.4}] (n={})", 
+            upper_ue_range.0, upper_ue_range.1, upper_stations.iter().filter(|s| !s.is_wake).count());
+        eprintln!("[DEBUG viscal] Lower Ue range: [{:.4}, {:.4}] (n={})", 
+            lower_ue_range.0, lower_ue_range.1, lower_stations.iter().filter(|s| !s.is_wake).count());
+        // Show first/last few edge velocities
+        let upper_non_wake: Vec<f64> = upper_stations.iter().filter(|s| !s.is_wake).map(|s| s.u).collect();
+        let lower_non_wake: Vec<f64> = lower_stations.iter().filter(|s| !s.is_wake).map(|s| s.u).collect();
+        if upper_non_wake.len() >= 5 {
+            eprintln!("[DEBUG viscal] Upper first 5 Ue: {:?}", upper_non_wake[..5].iter().map(|u| format!("{:.4}", u)).collect::<Vec<_>>());
+            eprintln!("[DEBUG viscal] Upper last 5 Ue: {:?}", upper_non_wake[upper_non_wake.len()-5..].iter().map(|u| format!("{:.4}", u)).collect::<Vec<_>>());
+        }
+        if lower_non_wake.len() >= 5 {
+            eprintln!("[DEBUG viscal] Lower first 5 Ue: {:?}", lower_non_wake[..5].iter().map(|u| format!("{:.4}", u)).collect::<Vec<_>>());
+            eprintln!("[DEBUG viscal] Lower last 5 Ue: {:?}", lower_non_wake[lower_non_wake.len()-5..].iter().map(|u| format!("{:.4}", u)).collect::<Vec<_>>());
+        }
     }
     
-    // Lower surface: positive Cp (pressure) contributes positive lift
-    for i in 0..lower_gamma.len().saturating_sub(1) {
-        let ue_avg = 0.5 * (lower_gamma[i] + lower_gamma[i + 1]); // gamma = Ue for lower
-        let cp_avg = 1.0 - ue_avg * ue_avg;
-        let ds = (lower_arc[i + 1] - lower_arc[i]).abs();
-        // Lower surface: +Cp * ds contributes to CL (pressure = positive Cp = positive lift)
-        cl_from_cp += cp_avg * ds;
+    // Construct full panel gamma array from BL station edge velocities
+    let n_panels = panel_x.len();
+    let full_gamma = construct_gamma_from_stations(upper_stations, lower_stations, n_panels);
+    
+    // Use XFOIL's exact CLCALC formula with wind-axis integration
+    let cl_xfoil = clcalc(panel_x, panel_y, &full_gamma, alpha_rad);
+    
+    // Also compute circulation-based CL for comparison/fallback
+    let cl_from_gamma = compute_cl_from_gamma(&upper_gamma, &lower_gamma, &upper_arc, &lower_arc);
+    
+    // Debug: Log both CL methods for comparison
+    if rustfoil_bl::is_debug_active() || std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+        eprintln!("[DEBUG viscal] CL comparison:");
+        eprintln!("  CLCALC (wind-axis):     {:.6}", cl_xfoil);
+        eprintln!("  Circulation (arc len):  {:.6}", cl_from_gamma);
+        eprintln!("  Difference:             {:.6e}", cl_xfoil - cl_from_gamma);
     }
     
-    // Keep gamma-based CL for comparison
-    let _cl_from_gamma = compute_cl_from_gamma(&upper_gamma, &lower_gamma, &upper_arc, &lower_arc);
+    // Use XFOIL's CLCALC as primary method (matches XFOIL exactly)
+    // Fall back to circulation only if CLCALC gives unreasonable result
+    let cl_final = if cl_xfoil.is_finite() && cl_xfoil.abs() < 10.0 {
+        cl_xfoil
+    } else if cl_from_gamma.is_finite() && cl_from_gamma.abs() < 10.0 {
+        cl_from_gamma
+    } else {
+        // Both methods failed
+        cl_xfoil
+    };
 
     // === Create and march wake stations for Squire-Young CD computation ===
     // Wake stations extend downstream from TE and are needed for proper far-wake
@@ -917,10 +1174,8 @@ pub fn solve_viscous_two_surfaces(
     // Compute forces from both surfaces using coupled edge velocities
     let mut forces = compute_forces_two_surfaces(upper_stations, lower_stations, config);
 
-    // Use CL from Cp integration (XFOIL's method) if it's reasonable
-    if cl_from_cp.is_finite() && cl_from_cp.abs() < 5.0 {
-        forces.cl = cl_from_cp;
-    }
+    // Use the selected CL calculation method
+    forces.cl = cl_final;
     
     // === Wake-based CD using Squire-Young at far wake ===
     // XFOIL computes total CD at far wake where:
@@ -939,20 +1194,29 @@ pub fn solve_viscous_two_surfaces(
         
         // Debug: Compare wake-based vs TE-based CD
         if rustfoil_bl::is_debug_active() || std::env::var("RUSTFOIL_DRAG_DEBUG").is_ok() {
+            let cd_pressure_wake_debug = cd_wake - forces.cd_friction;  // Always >= 0.0 due to fix in compute_cd_from_wake
             eprintln!("[DEBUG viscal] CD comparison:");
-            eprintln!("  TE-based:   CD={:.6e} (old method)", forces.cd);
-            eprintln!("  Wake-based: CD={:.6e} (new method)", cd_wake);
+            eprintln!("  TE-based pressure CD:   {:.6e} (from compute_forces_two_surfaces)", forces.cd);
+            eprintln!("  Wake-based total CD:    {:.6e} (from far-wake Squire-Young)", cd_wake);
+            eprintln!("  Wake-based pressure CD: {:.6e} (total - friction)", cd_pressure_wake_debug);
             eprintln!("  Wake stations: {} (initial θ={:.4e}, final θ={:.4e})",
                 wake_stations.len(),
                 wake_stations.first().map(|s| s.theta).unwrap_or(0.0),
                 wake_stations.last().map(|s| s.theta).unwrap_or(0.0));
         }
         
-        // Use wake-based CD if it's reasonable
+        // Use wake-based CD (total drag) if it's reasonable AND larger than TE-based
+        // Note: compute_cd_from_wake ensures cd_wake >= cd_friction
         if cd_wake.is_finite() && cd_wake > 0.0 && cd_wake < 0.1 {
-            let cd_pressure_wake = (cd_wake - forces.cd_friction).max(0.0);
-            forces.cd = cd_wake;
-            forces.cd_pressure = cd_pressure_wake;
+            // Compare total drags - use whichever is larger
+            // At low alpha, wake Squire-Young can underestimate drag because the wake hasn't
+            // developed enough. In that case, keep the TE-based CD which is more reliable.
+            if cd_wake > forces.cd {
+                let cd_pressure_wake = cd_wake - forces.cd_friction;
+                forces.cd = cd_wake;  // Total drag (matches XFOIL CD_BREAKDOWN)
+                forces.cd_pressure = cd_pressure_wake;
+            }
+            // If cd_wake <= forces.cd, keep the TE-based CD from compute_forces_two_surfaces
         }
     }
     

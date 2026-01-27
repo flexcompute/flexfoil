@@ -118,21 +118,13 @@ pub fn cf_turbulent(hk: f64, rt: f64, msq: f64) -> CfResult {
         / fc;
 
     // Derivative w.r.t. Rθ
-    // Only contributes when grt > 3.0 (not clamped)
-    let cf_rt = if grt_raw > 3.0 {
-        gex * cfo / (fc * grt) / rt
-    } else {
-        0.0
-    };
+    // XFOIL always computes this using the (possibly clamped) GRT value
+    // This is different from setting it to 0 when clamped!
+    let cf_rt = gex * cfo / (fc * grt) / rt;
 
     // Derivative w.r.t. M²
-    // Has two terms: one from CFO via grt, one from FC in denominator
-    let cf_msq = if grt_raw > 3.0 {
-        gex * cfo / (fc * grt) * (-0.25 * gm1 / fc.powi(2)) - 0.25 * gm1 * cf / fc.powi(2)
-    } else {
-        // When clamped, only the FC denominator term contributes
-        -0.25 * gm1 * cf / fc.powi(2)
-    };
+    // XFOIL always computes full expression using (possibly clamped) GRT
+    let cf_msq = gex * cfo / (fc * grt) * (-0.25 * gm1 / fc.powi(2)) - 0.25 * gm1 * cf / fc.powi(2);
 
     CfResult {
         cf,

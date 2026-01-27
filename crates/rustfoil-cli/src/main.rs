@@ -559,6 +559,8 @@ fn run_viscous_analysis(
     let setup = &setup_result.setup;
 
     // Step 6: Solve viscous for both surfaces
+    // Pass alpha in radians and panel geometry for XFOIL-exact CLCALC
+    let alpha_rad = alpha.to_radians();
     let mut result = solve_viscous_two_surfaces(
         &mut upper_stations,
         &mut lower_stations,
@@ -566,6 +568,9 @@ fn run_viscous_analysis(
         &lower_ue,
         &setup.dij,
         config,
+        alpha_rad,
+        node_x,
+        node_y,
     )
     .map_err(|e| CliError::Solver(e.to_string()))?;
 
@@ -647,6 +652,8 @@ fn run_viscous_analysis_old(
         node_y.clone(),
     );
 
+    // Pass alpha in radians and panel geometry for XFOIL-exact CLCALC
+    let alpha_rad = alpha.to_radians();
     let mut result = solve_viscous_two_surfaces(
         &mut upper_stations,
         &mut lower_stations,
@@ -654,6 +661,9 @@ fn run_viscous_analysis_old(
         &lower_ue,
         &setup.dij,
         config,
+        alpha_rad,
+        &node_x,
+        &node_y,
     )
     .map_err(|e| CliError::Solver(e.to_string()))?;
 
