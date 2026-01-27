@@ -14,6 +14,7 @@
 //! types from the real inviscid solver.
 
 use nalgebra::DMatrix;
+use rustfoil_bl::debug;
 use rustfoil_bl::state::BlStation;
 use rustfoil_coupling::dij::build_dij_matrix;
 
@@ -762,6 +763,28 @@ pub fn setup_from_body(body: &Body, alpha_deg: f64) -> Result<ViscousSetupResult
     // Build DIJ matrix
     let dij = factorized.build_dij()?;
     
+    // Emit FULLDIJ debug event if debug collection is active
+    if debug::is_debug_active() {
+        let nsys = dij.nrows();
+        if nsys > 0 {
+            // Flatten to row-major order
+            let mut flattened = Vec::with_capacity(nsys * nsys);
+            for i in 0..nsys {
+                for j in 0..nsys {
+                    flattened.push(dij[(i, j)]);
+                }
+            }
+            
+            // Extract diagonal sample (first 20 values)
+            let diag_sample: Vec<f64> = (0..nsys.min(20)).map(|i| dij[(i, i)]).collect();
+            
+            // Extract row 1 sample (first 20 values)
+            let row1_sample: Vec<f64> = (0..nsys.min(20)).map(|j| dij[(0, j)]).collect();
+            
+            debug::add_event(debug::DebugEvent::full_dij(nsys, flattened, diag_sample, row1_sample));
+        }
+    }
+    
     // Determine upper/lower counts based on stagnation
     let n = arc_lengths.len();
     let n_upper = n - ist;
@@ -819,6 +842,28 @@ pub fn setup_from_coords(coords: &[(f64, f64)], alpha_deg: f64) -> Result<Viscou
     let arc_lengths = compute_arc_lengths(&node_x, &node_y);
     let (ist, sst, _) = interpolate_stagnation(&ue_inviscid, &arc_lengths);
     let dij = factorized.build_dij()?;
+    
+    // Emit FULLDIJ debug event if debug collection is active
+    if debug::is_debug_active() {
+        let nsys = dij.nrows();
+        if nsys > 0 {
+            // Flatten to row-major order
+            let mut flattened = Vec::with_capacity(nsys * nsys);
+            for i in 0..nsys {
+                for j in 0..nsys {
+                    flattened.push(dij[(i, j)]);
+                }
+            }
+            
+            // Extract diagonal sample (first 20 values)
+            let diag_sample: Vec<f64> = (0..nsys.min(20)).map(|i| dij[(i, i)]).collect();
+            
+            // Extract row 1 sample (first 20 values)
+            let row1_sample: Vec<f64> = (0..nsys.min(20)).map(|j| dij[(0, j)]).collect();
+            
+            debug::add_event(debug::DebugEvent::full_dij(nsys, flattened, diag_sample, row1_sample));
+        }
+    }
     
     let n = arc_lengths.len();
     let n_upper = n - ist;
