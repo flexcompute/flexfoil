@@ -455,10 +455,16 @@ fn init_stagnation(x: f64, ue: f64, re: f64) -> BlStation {
 
     // Thwaites' formula for stagnation point (XFOIL xbl.f:597)
     // With BULE = 1.0: TSQ = 0.45 / (Ue/x * 6 * REYBL) * x^0 = 0.45*x / (6*Ue*REYBL)
-    // CRITICAL: REYBL must be REINF/3 to match XFOIL's theta values
+    //
+    // XFOIL computes REYBL from (xbl.f:73):
+    //   REYBL = REINF * SQRT(HERAT**3) * (1.0+HVRAT)/(HERAT+HVRAT)
+    // For incompressible flow (M→0), HERAT=1.0, HVRAT=0.35:
+    //   REYBL = REINF * 1.0 * 1.35/1.35 = REINF
+    //
+    // Previous bug: used re/3.0 which gave theta 84% too high
     let bule = 1.0;
     let ucon = ue / x.powf(bule);
-    let reybl = re / 3.0;  // Empirically determined: REYBL = REINF/3 matches XFOIL
+    let reybl = re;  // REYBL = REINF for incompressible (XFOIL xbl.f:73)
     let tsq = 0.45 / (ucon * (5.0 * bule + 1.0) * reybl) * x.powf(1.0 - bule);
 
     station.theta = tsq.sqrt().max(1e-12);
