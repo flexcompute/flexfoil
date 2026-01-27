@@ -491,6 +491,62 @@ pub fn compute_wake_drag(wake_stations: &[BlStation]) -> f64 {
     2.0 * last.theta
 }
 
+/// Compute total drag using far-wake Squire-Young formula.
+///
+/// XFOIL computes total CD using Squire-Young at the far wake where:
+/// - Ue ≈ 1.0 (approaches freestream)
+/// - Hk ≈ 1.0-1.1 (thin wake limit)
+/// - θ comes from momentum conservation through the wake
+///
+/// The Squire-Young formula is: CD = 2 * θ * Ue^((5+H)/2)
+///
+/// At the TE, H≈2.5 gives exponent≈3.75, which overestimates drag by ~50%
+/// compared to using far-wake values where H≈1.04 gives exponent≈3.02.
+///
+/// # Arguments
+/// * `wake_stations` - Marched wake stations from TE downstream
+/// * `cd_friction` - Already-computed friction drag coefficient
+///
+/// # Returns
+/// Total drag coefficient (CD) from Squire-Young at far wake
+pub fn compute_cd_from_wake(wake_stations: &[BlStation], cd_friction: f64) -> f64 {
+    if wake_stations.is_empty() {
+        return cd_friction;
+    }
+    
+    // Find the station furthest downstream with valid values
+    // This is the "far wake" station for Squire-Young
+    let far_wake = wake_stations
+        .iter()
+        .rev()
+        .find(|s| s.theta > 1e-10 && s.u > 0.01 && s.h.is_finite())
+        .unwrap_or_else(|| wake_stations.last().unwrap());
+    
+    let theta_wake = far_wake.theta;
+    let ue_wake = far_wake.u.abs().max(0.01);
+    // In far wake, H approaches 1.0 (thin wake limit)
+    // Use computed Hk if reasonable, otherwise use asymptotic value
+    let h_wake = if far_wake.hk > 0.9 && far_wake.hk < 2.0 {
+        far_wake.hk
+    } else if far_wake.h > 0.9 && far_wake.h < 2.0 {
+        far_wake.h
+    } else {
+        1.04 // XFOIL-typical far-wake value
+    };
+    
+    // Squire-Young formula
+    let cd_total = squire_young_drag(theta_wake, ue_wake, h_wake);
+    
+    // Debug output
+    if std::env::var("RUSTFOIL_DRAG_DEBUG").is_ok() {
+        eprintln!("[WAKE_CD_DEBUG] Far wake: x={:.4} θ={:.4e} H={:.3} Ue={:.4}", 
+            far_wake.x, theta_wake, h_wake, ue_wake);
+        eprintln!("[WAKE_CD_DEBUG] CD_total={:.5} (from S-Y at far wake)", cd_total);
+    }
+    
+    cd_total
+}
+
 /// Compute CL and CM from coupled edge velocities.
 ///
 /// This implements the viscous-coupled lift and moment computation.

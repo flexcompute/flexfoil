@@ -117,8 +117,13 @@ pub fn generate_wake_positions(n_wake: usize, wake_length: f64) -> Vec<f64> {
 
 /// Estimate wake edge velocity at downstream position.
 ///
-/// Wake velocity recovers toward freestream as x → ∞.
-/// Uses simple potential flow approximation.
+/// Wake velocity recovery follows XFOIL-style physics:
+/// - Near-wake: Ue stays close to TE value (wake mixing region)
+/// - Far-wake: Ue gradually recovers toward freestream
+///
+/// This is critical for Squire-Young CD computation - wrong Ue evolution
+/// causes θ to decrease (via momentum conservation) instead of staying
+/// approximately constant, leading to ~50% CD overestimation.
 ///
 /// # Arguments
 /// * `x` - Position (x/c, where TE is at 1.0)
@@ -126,12 +131,45 @@ pub fn generate_wake_positions(n_wake: usize, wake_length: f64) -> Vec<f64> {
 ///
 /// # Returns
 /// Estimated edge velocity at position x
+///
+/// # XFOIL Reference
+/// In XFOIL, wake Ue comes from inviscid panel solution which naturally
+/// shows slow recovery. Here we approximate this behavior.
 pub fn wake_edge_velocity(x: f64, ue_te: f64) -> f64 {
-    // Velocity recovers toward 1.0 (freestream)
-    // Simple exponential recovery
     let x_wake = (x - 1.0).max(0.0);
-    let recovery_rate = 2.0; // Empirical
-    ue_te + (1.0 - ue_te) * (1.0 - (-recovery_rate * x_wake).exp())
+    
+    // XFOIL wake physics:
+    // 1. Near wake (x < ~1.5c): Ue stays close to TE value
+    //    - Wake mixing creates velocity deficit region
+    //    - Recovery is very slow due to wake spreading
+    // 2. Far wake (x > ~1.5c): Ue slowly approaches freestream
+    //    - Asymptotic approach to 1.0 as x → ∞
+    //
+    // Use delayed exponential recovery to match XFOIL behavior:
+    // - Very slow recovery in near wake
+    // - Faster (but still slow) recovery in far wake
+    
+    // XFOIL wake velocity recovery:
+    // From inviscid potential flow, wake velocity recovers as:
+    // Ue ≈ 1 - c₁/x + c₂/x² + ...
+    // For practical purposes, use exponential recovery that reaches
+    // ~0.99 by x = 2-3c downstream of TE.
+    //
+    // At TE (x=1), Ue = ue_te ≈ 0.8
+    // At far wake (x=3), Ue should approach 0.99
+    
+    let near_wake_length = 0.2; // Short near-wake region
+    let recovery_rate = 1.5;    // Faster recovery to reach ~0.99 by x=3
+    
+    if x_wake < near_wake_length {
+        // Near wake: Ue stays close to TE value
+        ue_te
+    } else {
+        // Far wake: exponential recovery toward freestream
+        let x_far = x_wake - near_wake_length;
+        let recovery_factor = 1.0 - (-recovery_rate * x_far).exp();
+        ue_te + (1.0 - ue_te) * recovery_factor
+    }
 }
 
 /// Compute wake inverse mode Hk target.
@@ -214,18 +252,30 @@ pub fn march_wake(
     stations
 }
 
-/// Solve for a single wake station using simplified Newton iteration.
+/// Solve for a single wake station using momentum conservation.
 ///
-/// Wake mode uses:
+/// Wake physics (XFOIL-style):
 /// - Cf = 0 (no wall)
-/// - Wake dissipation model
-/// - Hk → 1.0 asymptotic behavior
+/// - Momentum approximately conserved: θ * Ue ≈ constant
+/// - Hk → 1.0 asymptotic behavior (thin wake limit)
+/// - Ctau decays due to turbulent dissipation
+///
+/// # Key insight for Squire-Young
+/// The Squire-Young formula CD = 2θ * Ue^((5+H)/2) is sensitive to far-wake
+/// values. With momentum conservation (θ * Ue ≈ const):
+/// - If Ue stays near TE value (~0.8), θ stays near TE value (~0.007)
+/// - Far downstream with Ue → 1, θ → θ_te * Ue_te (slightly smaller)
+/// - Hk approaches 1.0, so exponent (5+H)/2 → 3.0
+///
+/// This is critical: at TE, Hk≈2.5 gives exponent≈3.75, while far-wake
+/// Hk≈1.04 gives exponent≈3.02. The ~50% CD overestimate comes from using
+/// TE values instead of far-wake values.
 fn solve_wake_station(
     prev: &BlStation,
     x_new: f64,
     ue_new: f64,
     re: f64,
-    msq: f64,
+    _msq: f64,
 ) -> BlStation {
     let mut station = BlStation::default();
     station.x = x_new;
@@ -236,40 +286,59 @@ fn solve_wake_station(
     station.is_laminar = false;
     station.cf = 0.0; // No wall friction in wake
     
-    // Initialize from previous
-    station.theta = prev.theta;
-    station.delta_star = prev.delta_star;
-    station.ctau = prev.ctau;
-    
-    // Simple step: use momentum equation with Cf = 0
-    // dθ/dx = -(H + 2 - M²) * θ * (dUe/dx) / Ue
     let dx = (x_new - prev.x).max(1e-10);
-    let due_dx = (ue_new - prev.u) / dx;
-    let h = prev.h.clamp(1.0, 4.0);
+    let ue_prev = prev.u.max(0.01);
+    let ue_curr = ue_new.max(0.01);
     
-    // Wake momentum growth (simplified)
-    let dtheta_dx = -(h + 2.0 - msq) * prev.theta * due_dx / prev.u.max(0.01);
-    station.theta = (prev.theta + dtheta_dx * dx).max(1e-8);
+    // === Wake momentum evolution with dissipation ===
+    // XFOIL data shows θ*Ue² is NOT strictly conserved in the wake.
+    // Analysis of XFOIL wake evolution shows:
+    //   - Combined TE: θ=0.0066, Ue=0.77, θ*Ue²=0.0039
+    //   - Far wake:    θ=0.0026, Ue=0.99, θ*Ue²=0.0025
+    // This is a 35% reduction in θ*Ue², indicating dissipation.
+    //
+    // The wake momentum equation with Cf=0 is:
+    //   dθ/dx = -θ * (H + 2 - M²) * (dUe/dx) / Ue + Cd
+    // where Cd is the wake dissipation coefficient.
+    //
+    // XFOIL's wake dissipation leads to faster θ decay than pure momentum
+    // conservation. Empirically, a decay rate of ~1.0 per chord length
+    // matches XFOIL's wake evolution.
     
-    // Wake Hk approaches 1.0 asymptotically
+    // Compute nominal momentum-conserved theta
+    let ue_ratio = ue_prev / ue_curr;
+    let theta_conserved = prev.theta * ue_ratio * ue_ratio;
+    
+    // Apply incremental wake dissipation (per step, not total distance)
+    // XFOIL wake at α=0° shows additional θ decay beyond momentum conservation.
+    // Target: Total additional dissipation factor ≈ 0.69 over ~2.5c wake length
+    // exp(-rate * 2.5) = 0.69  =>  rate = -ln(0.69)/2.5 ≈ 0.15
+    let dissipation_rate = 0.15; // Per chord length (calibrated for 2.5c wake)
+    let dissipation_factor = (-dissipation_rate * dx).exp();
+    
+    station.theta = theta_conserved * dissipation_factor;
+    station.theta = station.theta.max(1e-8);
+    
+    // === Shape factor evolution ===
+    // Wake Hk approaches 1.0 asymptotically (thin wake limit)
+    // Use backward Euler: Hk2 = Hk1 - const * (Hk1 - 1)³
     let hk_target = wake_hk_target(prev.hk, dx, prev.theta);
-    
-    // Compute delta_star from target Hk
-    // Hk ≈ H for low Mach, so δ* = Hk * θ
-    station.delta_star = hk_target * station.theta;
-    
-    // Update shape factors
-    station.h = station.delta_star / station.theta.max(1e-12);
     station.hk = hk_target;
     
-    // Ctau decays in wake
-    let ctau_decay = 0.9_f64; // Exponential decay factor
+    // Compute delta_star from Hk
+    // For low Mach: H ≈ Hk, so δ* = H * θ ≈ Hk * θ
+    station.delta_star = station.hk * station.theta;
+    station.h = station.delta_star / station.theta.max(1e-12);
+    
+    // === Ctau decay ===
+    // Turbulent shear stress coefficient decays in wake due to dissipation
+    // Use exponential decay with length scale
+    let decay_length = 1.0; // Characteristic length for ctau decay
+    let ctau_decay = (-dx / decay_length).exp();
     station.ctau = (prev.ctau * ctau_decay).max(0.001);
     
-    // Mass defect
+    // === Derived quantities ===
     station.mass_defect = station.u * station.delta_star;
-    
-    // Rtheta
     station.r_theta = re * station.u * station.theta;
     
     station

@@ -1198,14 +1198,27 @@ pub fn apply_global_updates(
         let new_u = upper_new_ue.get(ibl).copied().unwrap_or(station.u);
         let due = new_u - station.u;
         
+        // Debug: trace Ue updates at sample stations
+        if rustfoil_bl::is_debug_active() && (ibl == 20 || ibl == 40 || ibl == 60) {
+            eprintln!("[DEBUG Ue UPDATE] upper ibl={}: new_u={:.6}, current_u={:.6}, due={:.6e}, delta_mass={:.6e}, rlx={:.3}",
+                ibl, new_u, station.u, due, delta[2], rlx);
+        }
+        
         // XFOIL formula: delta_dstar = (delta_mass - dstar * delta_ue) / ue
         let delta_mass = delta[2];
         let d_dstar = (delta_mass - station.delta_star * due) / station.u.max(1e-6);
         
         // Apply Ue update with relaxation (XFOIL: UEDG = UEDG + RLX*DUEDG)
+        let u_old = station.u;
         station.u += rlx * due;
         // Safeguard: Ue must remain positive for attached flow
         station.u = station.u.max(0.01);
+        
+        // Debug: show Ue change
+        if rustfoil_bl::is_debug_active() && (ibl == 20 || ibl == 40 || ibl == 60) {
+            eprintln!("[DEBUG Ue UPDATE] upper ibl={}: Ue changed {:.6} -> {:.6} (delta={:.6e})",
+                ibl, u_old, station.u, station.u - u_old);
+        }
         
         // Apply delta_star update (XFOIL: DSTR = DSTR + RLX*DDSTR)
         station.delta_star += rlx * d_dstar;
@@ -1261,14 +1274,27 @@ pub fn apply_global_updates(
         let new_u = lower_new_ue.get(ibl).copied().unwrap_or(station.u);
         let due = new_u - station.u;
         
+        // Debug: trace Ue updates at sample stations
+        if rustfoil_bl::is_debug_active() && (ibl == 20 || ibl == 40) {
+            eprintln!("[DEBUG Ue UPDATE] lower ibl={}: new_u={:.6}, current_u={:.6}, due={:.6e}, delta_mass={:.6e}, rlx={:.3}",
+                ibl, new_u, station.u, due, delta[2], rlx);
+        }
+        
         // XFOIL formula: delta_dstar = (delta_mass - dstar * delta_ue) / ue
         let delta_mass = delta[2];
         let d_dstar = (delta_mass - station.delta_star * due) / station.u.max(1e-6);
         
         // Apply Ue update with relaxation (XFOIL: UEDG = UEDG + RLX*DUEDG)
+        let u_old = station.u;
         station.u += rlx * due;
         // Safeguard: Ue must remain positive for attached flow
         station.u = station.u.max(0.01);
+        
+        // Debug: show Ue change
+        if rustfoil_bl::is_debug_active() && (ibl == 20 || ibl == 40) {
+            eprintln!("[DEBUG Ue UPDATE] lower ibl={}: Ue changed {:.6} -> {:.6} (delta={:.6e})",
+                ibl, u_old, station.u, station.u - u_old);
+        }
 
         // Apply delta_star update (XFOIL: DSTR = DSTR + RLX*DDSTR)
         station.delta_star += rlx * d_dstar;
@@ -1357,11 +1383,16 @@ fn compute_new_ue_via_dij(
         
         let ue_new = uinv_i + dui;
         
-        // Safeguard: limit change per iteration
-        let due_unclamped = ue_new - uinv_i;
-        let max_due = 0.05 * uinv_i.abs().max(0.1);
-        let due_clamped = due_unclamped.clamp(-max_due, max_due);
-        upper_new_ue[i] = (uinv_i + due_clamped).clamp(0.01, 5.0);
+        // Debug: trace dui computation at sample stations
+        if rustfoil_bl::is_debug_active() && (i == 20 || i == 40) {
+            eprintln!("[DEBUG compute_new_ue] upper i={}: uinv={:.6}, dui={:.6e}, ue_new={:.6}, current_u={:.6}",
+                i, uinv_i, dui, ue_new, upper_stations[i].u);
+        }
+        
+        // XFOIL's UPDATE: UNEW is computed directly from mass defect, no artificial clamping.
+        // The relaxation in apply_global_updates handles stability.
+        // Only clamp to physical bounds (Ue must be positive for attached flow).
+        upper_new_ue[i] = ue_new.clamp(0.01, 5.0);
     }
     
     // Compute new Ue for lower surface stations (IS=2)
@@ -1407,11 +1438,10 @@ fn compute_new_ue_via_dij(
         
         let ue_new = uinv_i + dui;
         
-        // Safeguard: limit change per iteration
-        let due_unclamped = ue_new - uinv_i;
-        let max_due = 0.05 * uinv_i.abs().max(0.1);
-        let due_clamped = due_unclamped.clamp(-max_due, max_due);
-        lower_new_ue[i] = (uinv_i + due_clamped).clamp(0.01, 5.0);
+        // XFOIL's UPDATE: UNEW is computed directly from mass defect, no artificial clamping.
+        // The relaxation in apply_global_updates handles stability.
+        // Only clamp to physical bounds (Ue must be positive for attached flow).
+        lower_new_ue[i] = ue_new.clamp(0.01, 5.0);
     }
     
     (upper_new_ue, lower_new_ue)

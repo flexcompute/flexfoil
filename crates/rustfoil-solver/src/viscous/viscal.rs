@@ -903,8 +903,10 @@ pub fn solve_viscous_two_surfaces(
     let wake_initial = combine_te_for_wake(&upper_te, &lower_te);
     
     // Generate wake positions and edge velocities
+    // XFOIL marches wake to x ≈ 2c with many stations for Hk → 1.0 decay
+    // More stations + longer wake allows proper far-wake Squire-Young calculation
     use rustfoil_coupling::wake::{generate_wake_positions, march_wake, wake_edge_velocity};
-    let wake_x = generate_wake_positions(5, 1.0);
+    let wake_x = generate_wake_positions(15, 2.0);
     let wake_ue: Vec<f64> = wake_x.iter()
         .map(|&x| wake_edge_velocity(x, wake_initial.u))
         .collect();
@@ -913,12 +915,45 @@ pub fn solve_viscous_two_surfaces(
     let wake_stations = march_wake(&wake_initial, &wake_x, &wake_ue, re, msq);
 
     // Compute forces from both surfaces using coupled edge velocities
-    // Pass wake stations for proper Squire-Young CD
     let mut forces = compute_forces_two_surfaces(upper_stations, lower_stations, config);
 
     // Use CL from Cp integration (XFOIL's method) if it's reasonable
     if cl_from_cp.is_finite() && cl_from_cp.abs() < 5.0 {
         forces.cl = cl_from_cp;
+    }
+    
+    // === Wake-based CD using Squire-Young at far wake ===
+    // XFOIL computes total CD at far wake where:
+    // - Ue ≈ freestream (momentum nearly conserved)
+    // - Hk → 1.0 (thin wake limit)
+    // 
+    // At TE, Hk≈2.5 gives exponent (5+H)/2 ≈ 3.75
+    // At far wake, Hk≈1.04 gives exponent ≈ 3.02
+    // This difference accounts for ~50% CD overestimate at low alpha.
+    //
+    // Use the marched wake stations for proper far-wake Squire-Young.
+    use super::forces::compute_cd_from_wake;
+    
+    if !wake_stations.is_empty() && wake_stations.len() > 1 {
+        let cd_wake = compute_cd_from_wake(&wake_stations, forces.cd_friction);
+        
+        // Debug: Compare wake-based vs TE-based CD
+        if rustfoil_bl::is_debug_active() || std::env::var("RUSTFOIL_DRAG_DEBUG").is_ok() {
+            eprintln!("[DEBUG viscal] CD comparison:");
+            eprintln!("  TE-based:   CD={:.6e} (old method)", forces.cd);
+            eprintln!("  Wake-based: CD={:.6e} (new method)", cd_wake);
+            eprintln!("  Wake stations: {} (initial θ={:.4e}, final θ={:.4e})",
+                wake_stations.len(),
+                wake_stations.first().map(|s| s.theta).unwrap_or(0.0),
+                wake_stations.last().map(|s| s.theta).unwrap_or(0.0));
+        }
+        
+        // Use wake-based CD if it's reasonable
+        if cd_wake.is_finite() && cd_wake > 0.0 && cd_wake < 0.1 {
+            let cd_pressure_wake = (cd_wake - forces.cd_friction).max(0.0);
+            forces.cd = cd_wake;
+            forces.cd_pressure = cd_pressure_wake;
+        }
     }
     
     // Debug: Output BL quantities at all stations for comparison with XFOIL
@@ -938,22 +973,7 @@ pub fn solve_viscous_two_surfaces(
         }
     }
 
-    // Update CD using wake trailing edge values if wake stations exist
-    if !wake_stations.is_empty() {
-        // Squire-Young formula using far-wake values
-        // CD = 2 * theta_wake * (Ue_wake / U∞)^((5 + H_wake) / 2)
-        let wake_te = wake_stations.last().unwrap();
-        let h_wake = wake_te.h.clamp(1.0, 4.0);
-        let ue_wake = wake_te.u.abs().max(0.01);
-        let theta_wake = wake_te.theta.max(1e-6);
-        
-        let exponent = (5.0 + h_wake) / 2.0;
-        let cd_pressure_wake = 2.0 * theta_wake * ue_wake.powf(exponent);
-        
-        // Note: Wake-based CD override disabled. Our simplified wake march
-        // doesn't capture physics well enough. TE-based Squire-Young is more reliable.
-        let _ = (theta_wake, h_wake, ue_wake, cd_pressure_wake); // Suppress warnings
-    }
+    let _ = (&upper_te, &lower_te); // Suppress unused warnings
 
     // Debug: Print force computation
     if rustfoil_bl::is_debug_active() {
