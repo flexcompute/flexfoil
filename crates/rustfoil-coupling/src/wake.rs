@@ -279,7 +279,11 @@ fn solve_wake_station(
 ) -> BlStation {
     let mut station = BlStation::default();
     station.x = x_new;
-    station.x_coord = x_new;
+    // CRITICAL FIX: x_coord should be clamped to TE (x=1.0) for wake stations
+    // because they don't have a corresponding surface position. x_coord is used
+    // for reporting transition locations and surface analysis, and wake stations
+    // should not appear as "surface at x > 1.0".
+    station.x_coord = 1.0;
     station.u = ue_new;
     station.is_wake = true;
     station.is_turbulent = true;

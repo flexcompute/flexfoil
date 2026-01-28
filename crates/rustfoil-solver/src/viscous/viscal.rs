@@ -26,9 +26,8 @@ use rustfoil_coupling::march::{march_fixed_ue, march_surface, MarchConfig, March
 use rustfoil_coupling::global_newton::{apply_global_updates, solve_global_system, GlobalNewtonSystem};
 use rustfoil_coupling::newton::BlNewtonSystem;
 use rustfoil_coupling::solve::solve_coupled_system;
-// STMOVE module available for future full implementation
-#[allow(unused_imports)]
-use rustfoil_coupling::stmove::find_stagnation_by_gamma;
+// STMOVE module for stagnation point finding and coupling
+use rustfoil_coupling::stmove::{find_stagnation_by_gamma, find_stagnation_with_derivs};
 use rustfoil_coupling::update::{update_xfoil_style, UpdateConfig};
 use rustfoil_coupling::wake::combine_te_for_wake;
 
@@ -762,6 +761,47 @@ pub fn solve_viscous_two_surfaces(
         // Create global Newton system with cross-surface coupling
         let mut global_system = GlobalNewtonSystem::new(n_upper, n_lower, iblte_upper, iblte_lower);
 
+        // === Compute stagnation point derivatives (SST_GO, SST_GP) ===
+        // XFOIL computes these in STFIND using panel gamma and arc lengths.
+        // We estimate from the Ue distribution: gamma changes sign at stagnation,
+        // with Ue_upper positive and Ue_lower positive (both grow from 0).
+        // 
+        // Approximation: SST_GO and SST_GP relate stagnation arc length to gamma changes.
+        // From XFOIL: SST_GO = (SST - S(IST+1)) / DGAM, SST_GP = (S(IST) - SST) / DGAM
+        // where DGAM is the gamma difference across the stagnation panel.
+        //
+        // Near stagnation: gamma ≈ ±Ue, so DGAM ≈ -Ue_upper[1] - Ue_lower[1]
+        // and DS ≈ arc_length[1] (small). SST_GO/SST_GP ~ DS / |DGAM| ~ O(0.01).
+        let (sst_go, sst_gp) = {
+            // Get Ue at first station after stagnation on each surface
+            let ue_upper_1 = upper_ue.get(1).copied().unwrap_or(0.1).abs();
+            let ue_lower_1 = lower_ue.get(1).copied().unwrap_or(0.1).abs();
+            let ds_upper = upper_arc.get(1).copied().unwrap_or(0.01);
+            let ds_lower = lower_arc.get(1).copied().unwrap_or(0.01);
+            
+            // DGAM = gamma(IST+1) - gamma(IST) = -gamma_upper_1 - gamma_lower_1
+            // Since gamma_upper = +Ue, gamma_lower = -Ue (for lower surface in panel ordering)
+            // DGAM ≈ -ue_upper_1 - (-ue_lower_1) = ue_lower_1 - ue_upper_1 (usually small)
+            // But to avoid division by zero, use a safer estimate.
+            let dgam = (ue_upper_1 + ue_lower_1).max(0.01);
+            let ds = (ds_upper + ds_lower) / 2.0;
+            
+            // SST is approximately at the midpoint between IST and IST+1
+            // SST_GO = (SST - S(IST+1)) / DGAM ≈ -DS/2 / DGAM
+            // SST_GP = (S(IST) - SST) / DGAM ≈ -DS/2 / DGAM
+            // Signs: In XFOIL, SST_GO is typically positive, SST_GP negative
+            let sst_go = ds / dgam;
+            let sst_gp = -ds / dgam;
+            
+            (sst_go, sst_gp)
+        };
+        
+        global_system.set_stagnation_derivs(sst_go, sst_gp);
+        
+        if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+            eprintln!("[DEBUG viscal] Stagnation derivatives: SST_GO={:.6e}, SST_GP={:.6e}", sst_go, sst_gp);
+        }
+
         // Run Newton iteration with full global coupling
         let max_newton_iter = config.max_iterations.min(30);
         let mut prev_residual = f64::MAX;
@@ -772,6 +812,105 @@ pub fn solve_viscous_two_surfaces(
             if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() && iter < 3 {
                 eprintln!("[DEBUG Newton] Starting iter {}", iter);
             }
+            
+            // Emit NEWTON_ITER debug event at start of iteration
+            if rustfoil_bl::is_debug_active() {
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::newton_iter(
+                    iter,
+                    residual,
+                    prev_residual,
+                    n_upper,
+                    n_lower,
+                ));
+            }
+
+            // === RE-MARCH BOUNDARY LAYERS WITH CURRENT Ue ===
+            // CRITICAL FIX: XFOIL re-marches the BL at EVERY iteration, allowing H to exceed
+            // htmax nonlinearly. This is essential for stall prediction.
+            // The previous implementation only marched once before the Newton loop, then used
+            // only Jacobian updates which cannot capture the nonlinear behavior of separated flow.
+            
+            if rustfoil_bl::is_debug_active() || std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+                eprintln!("[DEBUG Newton] Re-marching BL at iteration {}", iter);
+            }
+            
+            // Extract current Ue from stations (which were updated by previous iteration)
+            let current_upper_ue: Vec<f64> = upper_stations.iter().map(|s| s.u).collect();
+            let current_lower_ue: Vec<f64> = lower_stations.iter().map(|s| s.u).collect();
+            
+            // Re-march upper surface with current Ue
+            let upper_result_iter = march_surface(&upper_arc, &current_upper_ue, re, msq, &march_config, 1);
+            
+            // Re-march lower surface with current Ue
+            let lower_result_iter = march_surface(&lower_arc, &current_lower_ue, re, msq, &march_config, 2);
+            
+            // Copy march results back to stations (reuse logic from initial march)
+            // Note: march_surface skips stagnation (index 0), so result[i] corresponds to stations[i+1]
+            for (i, station) in upper_result_iter.stations.iter().enumerate() {
+                let target = i + upper_offset;
+                if target < upper_stations.len() {
+                    upper_stations[target].theta = station.theta;
+                    upper_stations[target].delta_star = station.delta_star;
+                    upper_stations[target].h = station.h;
+                    upper_stations[target].hk = station.hk;
+                    upper_stations[target].cf = station.cf;
+                    upper_stations[target].ctau = station.ctau;
+                    upper_stations[target].ampl = station.ampl;
+                    upper_stations[target].is_laminar = station.is_laminar;
+                    upper_stations[target].is_turbulent = station.is_turbulent;
+                    upper_stations[target].mass_defect = station.mass_defect;
+                    upper_stations[target].r_theta = station.r_theta;
+                    // Keep the edge velocity from stations (updated by Newton coupling)
+                    // Don't overwrite station.u - it comes from VI coupling
+                }
+            }
+            
+            for (i, station) in lower_result_iter.stations.iter().enumerate() {
+                let target = i + lower_offset;
+                if target < lower_stations.len() {
+                    lower_stations[target].theta = station.theta;
+                    lower_stations[target].delta_star = station.delta_star;
+                    lower_stations[target].h = station.h;
+                    lower_stations[target].hk = station.hk;
+                    lower_stations[target].cf = station.cf;
+                    lower_stations[target].ctau = station.ctau;
+                    lower_stations[target].ampl = station.ampl;
+                    lower_stations[target].is_laminar = station.is_laminar;
+                    lower_stations[target].is_turbulent = station.is_turbulent;
+                    lower_stations[target].mass_defect = station.mass_defect;
+                    lower_stations[target].r_theta = station.r_theta;
+                    // Keep the edge velocity from stations (updated by Newton coupling)
+                    // Don't overwrite station.u - it comes from VI coupling
+                }
+            }
+            
+            // Update transition locations from re-march results
+            if let Some(xtr) = upper_result_iter.x_transition {
+                x_tr_upper = xtr;
+            }
+            if let Some(xtr) = lower_result_iter.x_transition {
+                x_tr_lower = xtr;
+            }
+            
+            // Debug: Show effect of re-march on critical stations
+            if (rustfoil_bl::is_debug_active() || std::env::var("RUSTFOIL_CL_DEBUG").is_ok()) && iter < 3 {
+                // Show upper TE region
+                if let Some(te_idx) = iblte_upper.checked_sub(2) {
+                    if te_idx < upper_stations.len() {
+                        let s = &upper_stations[te_idx];
+                        eprintln!("[DEBUG Newton] iter {} after re-march: upper[{}] Hk={:.4}, H={:.4}, theta={:.6e}", 
+                            iter, te_idx, s.hk, s.h, s.theta);
+                    }
+                }
+                // Show TE
+                if iblte_upper < upper_stations.len() {
+                    let s = &upper_stations[iblte_upper];
+                    eprintln!("[DEBUG Newton] iter {} after re-march: upper[TE={}] Hk={:.4}, H={:.4}, theta={:.6e}", 
+                        iter, iblte_upper, s.hk, s.h, s.theta);
+                }
+            }
+            
+            // === END RE-MARCH ===
 
             // Determine flow types for each interval
             let upper_flow_types: Vec<FlowType> = upper_stations
@@ -824,13 +963,57 @@ pub fn solve_viscous_two_surfaces(
                 blvar(station, flow_type, msq, re);
             }
 
-            // Debug after blvar
-            if rustfoil_bl::is_debug_active() && iter < 2 {
-                eprintln!("[DEBUG Global Newton] iter {} after blvar:", iter);
-                for i in 1..4.min(upper_stations.len()) {
-                    let s = &upper_stations[i];
-                    eprintln!("[DEBUG Global Newton]   upper[{}] theta={:.6e} dstar={:.6e} Hk={:.4}", 
-                        i, s.theta, s.delta_star, s.hk);
+            // Debug after blvar - emit BL state summaries
+            if rustfoil_bl::is_debug_active() {
+                // Collect upper surface station states (every 10th station)
+                let upper_station_states: Vec<rustfoil_bl::StationState> = upper_stations
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i % 10 == 0 || *i == upper_stations.len() - 1)
+                    .map(|(i, s)| rustfoil_bl::StationState {
+                        ibl: i,
+                        x: s.x,
+                        theta: s.theta,
+                        delta_star: s.delta_star,
+                        ctau: s.ctau,
+                        ue: s.u,
+                        mass: s.mass_defect,
+                    })
+                    .collect();
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::bl_state_summary(
+                    iter,
+                    "upper",
+                    upper_station_states,
+                ));
+                
+                // Collect lower surface station states (every 10th station)
+                let lower_station_states: Vec<rustfoil_bl::StationState> = lower_stations
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i % 10 == 0 || *i == lower_stations.len() - 1)
+                    .map(|(i, s)| rustfoil_bl::StationState {
+                        ibl: i,
+                        x: s.x,
+                        theta: s.theta,
+                        delta_star: s.delta_star,
+                        ctau: s.ctau,
+                        ue: s.u,
+                        mass: s.mass_defect,
+                    })
+                    .collect();
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::bl_state_summary(
+                    iter,
+                    "lower",
+                    lower_station_states,
+                ));
+                
+                if iter < 2 {
+                    eprintln!("[DEBUG Global Newton] iter {} after blvar:", iter);
+                    for i in 1..4.min(upper_stations.len()) {
+                        let s = &upper_stations[i];
+                        eprintln!("[DEBUG Global Newton]   upper[{}] theta={:.6e} dstar={:.6e} Hk={:.4}", 
+                            i, s.theta, s.delta_star, s.hk);
+                    }
                 }
             }
 
@@ -853,10 +1036,104 @@ pub fn solve_viscous_two_surfaces(
                 lower_ue,
                 msq,
                 re,
+                iter,  // Pass iteration number for debug events
             );
+
+            // Emit SETBL_SYSTEM debug event after building the global system
+            if rustfoil_bl::is_debug_active() {
+                // Convert VA and VB from 3x3 blocks to 3x2 format for XFOIL compatibility
+                let va_blocks: Vec<[[f64; 2]; 3]> = global_system.va.iter()
+                    .skip(1) // Skip index 0
+                    .take(global_system.nsys)
+                    .map(|block| [
+                        [block[0][0], block[0][1]],
+                        [block[1][0], block[1][1]],
+                        [block[2][0], block[2][1]],
+                    ])
+                    .collect();
+                let vb_blocks: Vec<[[f64; 2]; 3]> = global_system.vb.iter()
+                    .skip(1) // Skip index 0
+                    .take(global_system.nsys)
+                    .map(|block| [
+                        [block[0][0], block[0][1]],
+                        [block[1][0], block[1][1]],
+                        [block[2][0], block[2][1]],
+                    ])
+                    .collect();
+                let vdel_vec: Vec<[f64; 3]> = global_system.vdel.iter()
+                    .skip(1) // Skip index 0
+                    .take(global_system.nsys)
+                    .cloned()
+                    .collect();
+                // VM diagonal: extract diagonal elements
+                let vm_diag: Vec<[f64; 3]> = (1..=global_system.nsys.min(global_system.vm.len().saturating_sub(1)))
+                    .map(|iv| {
+                        if iv < global_system.vm.len() && iv < global_system.vm[iv].len() {
+                            global_system.vm[iv][iv]
+                        } else {
+                            [0.0, 0.0, 0.0]
+                        }
+                    })
+                    .collect();
+                // VM row 1: coupling from station 1 to all others
+                let vm_row1: Vec<[f64; 3]> = if global_system.vm.len() > 1 {
+                    global_system.vm[1].iter()
+                        .skip(1)
+                        .take(global_system.nsys)
+                        .cloned()
+                        .collect()
+                } else {
+                    vec![]
+                };
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::setbl_system(
+                    iter,
+                    global_system.nsys,
+                    va_blocks,
+                    vb_blocks,
+                    vdel_vec,
+                    vm_diag,
+                    vm_row1,
+                ));
+            }
 
             // Get residual before solve
             residual = global_system.rms_residual();
+            
+            // Debug: print actual VDEL values at a few stations to understand magnitude
+            if iter < 1 && std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+                eprintln!("[DEBUG Newton] iter {} VDEL sample:", iter);
+                // Print station data at problematic indices
+                let n_upper = global_system.n_upper;
+                eprintln!("  n_upper={}, nsys={}", n_upper, global_system.nsys);
+                
+                // Upper surface first stations - include mass_defect for DUE analysis
+                eprintln!("  Upper[0]: x={:.6e}, theta={:.6e}, dstar={:.6e}, u={:.6}, mass={:.6e}", 
+                    upper_stations[0].x, upper_stations[0].theta, upper_stations[0].delta_star, upper_stations[0].u, upper_stations[0].mass_defect);
+                eprintln!("  Upper[1]: x={:.6e}, theta={:.6e}, dstar={:.6e}, u={:.6}, mass={:.6e}", 
+                    upper_stations[1].x, upper_stations[1].theta, upper_stations[1].delta_star, upper_stations[1].u, upper_stations[1].mass_defect);
+                eprintln!("  Upper[2]: x={:.6e}, theta={:.6e}, dstar={:.6e}, u={:.6}, mass={:.6e}", 
+                    upper_stations[2].x, upper_stations[2].theta, upper_stations[2].delta_star, upper_stations[2].u, upper_stations[2].mass_defect);
+                    
+                // Lower surface first stations
+                eprintln!("  Lower[0]: x={:.6e}, theta={:.6e}, dstar={:.6e}, u={:.6}, mass={:.6e}", 
+                    lower_stations[0].x, lower_stations[0].theta, lower_stations[0].delta_star, lower_stations[0].u, lower_stations[0].mass_defect);
+                eprintln!("  Lower[1]: x={:.6e}, theta={:.6e}, dstar={:.6e}, u={:.6}, mass={:.6e}", 
+                    lower_stations[1].x, lower_stations[1].theta, lower_stations[1].delta_star, lower_stations[1].u, lower_stations[1].mass_defect);
+                eprintln!("  Lower[2]: x={:.6e}, theta={:.6e}, dstar={:.6e}, u={:.6}, mass={:.6e}", 
+                    lower_stations[2].x, lower_stations[2].theta, lower_stations[2].delta_star, lower_stations[2].u, lower_stations[2].mass_defect);
+                
+                // VDEL at problematic stations
+                for iv in [1, 2, n_upper, n_upper+1].iter() {
+                    if *iv <= global_system.nsys {
+                        let vdel = global_system.vdel[*iv];
+                        let mag = (vdel[0]*vdel[0] + vdel[1]*vdel[1] + vdel[2]*vdel[2]).sqrt();
+                        eprintln!("  IV={}: VDEL=[{:.6e}, {:.6e}, {:.6e}] mag={:.6e}", iv, vdel[0], vdel[1], vdel[2], mag);
+                    }
+                }
+                
+                // Print DUE and DULE values
+                eprintln!("  DULE1={:.6e}, DULE2={:.6e}", global_system.dule1, global_system.dule2);
+            }
             
             // Debug output for iterations 6-7 to trace explosion
             if iter >= 5 && iter <= 8 {
@@ -882,6 +1159,32 @@ pub fn solve_viscous_two_surfaces(
             
             // Solve the global Newton system
             let deltas = solve_global_system(&mut global_system);
+            
+            // Emit BLSOLV_SOLUTION debug event with all Newton deltas (full system)
+            if rustfoil_bl::is_debug_active() {
+                let deltas_full: Vec<[f64; 3]> = deltas
+                    .iter()
+                    .skip(1)  // Skip index 0 (unused)
+                    .take(global_system.nsys)
+                    .cloned()
+                    .collect();
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::blsolv_solution(
+                    iter,
+                    global_system.nsys,
+                    deltas_full,
+                ));
+            }
+            
+            // Emit SOLUTION debug event with Newton deltas (sample for compatibility)
+            if rustfoil_bl::is_debug_active() {
+                let deltas_sample: Vec<[f64; 3]> = deltas
+                    .iter()
+                    .skip(1)  // Skip index 0 (unused)
+                    .take(30)
+                    .cloned()
+                    .collect();
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::solution(iter, deltas_sample));
+            }
             
             // Debug: Check delta magnitudes for iterations 6-7
             if iter >= 5 && iter <= 8 {
@@ -931,7 +1234,7 @@ pub fn solve_viscous_two_surfaces(
             // Debug: Track relaxation factor for iterations 6-7
             let rlx_before = rlx;
             
-            let rlx_actual = apply_global_updates(
+            let update_result = apply_global_updates(
                 upper_stations,
                 lower_stations,
                 &deltas,
@@ -944,12 +1247,14 @@ pub fn solve_viscous_two_surfaces(
                 re,
             );
             
+            // Use RMS of normalized changes (XFOIL's RMSBL) for convergence check
+            // This is the correct metric - NOT the raw residuals from VDEL
+            residual = update_result.rms_change;
+            
             // Debug: Check relaxation used and residual after update for iterations 6-7
             if iter >= 5 && iter <= 8 {
-                eprintln!("[DEBUG Newton] iter {} relaxation used: {:.6e} (requested: {:.6e})", iter, rlx_actual, rlx_before);
-                // Recompute residual after update to see if it exploded
-                // (Note: This requires rebuilding the system, which is expensive, but worth it for debugging)
-                // Actually, we'll check it at the start of next iteration instead
+                eprintln!("[DEBUG Newton] iter {} relaxation used: {:.6e} (requested: {:.6e}), rms_change: {:.6e}", 
+                    iter, update_result.relaxation_used, rlx_before, residual);
             }
 
             
@@ -982,12 +1287,14 @@ pub fn solve_viscous_two_surfaces(
             }
 
             if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() && (iter < 10 || iter % 5 == 0) {
-                eprintln!("[DEBUG Newton] iter {} residual after update: {:.6e}", iter, residual);
+                eprintln!("[DEBUG Newton] iter {} RMSBL after update: {:.6e} (max_change: {:.6e})", 
+                    iter, residual, update_result.max_change);
             }
             
             if residual < config.tolerance {
                 if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
-                    eprintln!("[DEBUG Newton] Converged at iter {} with residual {:.6e}", iter, residual);
+                    eprintln!("[DEBUG Newton] Converged at iter {} with RMSBL={:.6e} < tolerance={:.6e}", 
+                        iter, residual, config.tolerance);
                 }
                 converged = true;
                 break;
@@ -1052,6 +1359,42 @@ pub fn solve_viscous_two_surfaces(
                 iteration = 0;
                 break;
             }
+            // Emit FULL_BL_STATE debug event with complete BL state for both surfaces
+            if rustfoil_bl::is_debug_active() {
+                let upper_bl = rustfoil_bl::SurfaceBlState {
+                    x: upper_stations.iter().map(|s| s.x).collect(),
+                    theta: upper_stations.iter().map(|s| s.theta).collect(),
+                    delta_star: upper_stations.iter().map(|s| s.delta_star).collect(),
+                    ue: upper_stations.iter().map(|s| s.u).collect(),
+                    hk: upper_stations.iter().map(|s| s.hk).collect(),
+                    cf: upper_stations.iter().map(|s| s.cf).collect(),
+                    mass_defect: upper_stations.iter().map(|s| s.mass_defect).collect(),
+                };
+                let lower_bl = rustfoil_bl::SurfaceBlState {
+                    x: lower_stations.iter().map(|s| s.x).collect(),
+                    theta: lower_stations.iter().map(|s| s.theta).collect(),
+                    delta_star: lower_stations.iter().map(|s| s.delta_star).collect(),
+                    ue: lower_stations.iter().map(|s| s.u).collect(),
+                    hk: lower_stations.iter().map(|s| s.hk).collect(),
+                    cf: lower_stations.iter().map(|s| s.cf).collect(),
+                    mass_defect: lower_stations.iter().map(|s| s.mass_defect).collect(),
+                };
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::full_bl_state(
+                    iteration,
+                    upper_bl,
+                    lower_bl,
+                ));
+
+                // Emit FULL_NFACTOR debug event with N-factors at all stations
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::full_nfactor(
+                    iteration,
+                    upper_stations.iter().map(|s| s.ampl).collect(),
+                    lower_stations.iter().map(|s| s.ampl).collect(),
+                    upper_stations.iter().map(|s| s.x).collect(),
+                    lower_stations.iter().map(|s| s.x).collect(),
+                ));
+            }
+
             prev_residual = residual;
         }
     }
@@ -1121,6 +1464,14 @@ pub fn solve_viscous_two_surfaces(
     // Construct full panel gamma array from BL station edge velocities
     let n_panels = panel_x.len();
     let full_gamma = construct_gamma_from_stations(upper_stations, lower_stations, n_panels);
+    
+    // Emit FULL_GAMMA_ITER debug event with circulation at all panels
+    if rustfoil_bl::is_debug_active() {
+        rustfoil_bl::add_event(rustfoil_bl::DebugEvent::full_gamma_iter(
+            iteration,
+            full_gamma.clone(),
+        ));
+    }
     
     // Use XFOIL's exact CLCALC formula with wind-axis integration
     let cl_xfoil = clcalc(panel_x, panel_y, &full_gamma, alpha_rad);

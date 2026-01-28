@@ -38,7 +38,7 @@
 
 use nalgebra::DMatrix;
 use rustfoil_bl::closures::Trchek2FullResult;
-use rustfoil_bl::equations::{bldif, bldif_full_simi, blvar, trdif_full, FlowType};
+use rustfoil_bl::equations::{bldif, bldif_full_simi, blvar, FlowType};
 use rustfoil_bl::state::BlStation;
 
 /// Global Newton system for coupled upper/lower surface BL iteration
@@ -73,7 +73,8 @@ pub struct GlobalNewtonSystem {
     /// Lower diagonal blocks VB[IV] (3x3) - derivatives w.r.t. upstream station
     pub vb: Vec<[[f64; 3]; 3]>,
     /// TE coupling block VZ (3x2) - couples upper TE to lower wake start
-    pub vz: [[f64; 3]; 2],
+    /// Dimensions: 3 equations (rows) x 2 coupling terms (columns)
+    pub vz: [[f64; 2]; 3],
     /// Mass influence matrix VM[IV][JV][k] - sensitivity of eq k at IV to mass at JV
     /// Dimensions: nsys x nsys x 3
     pub vm: Vec<Vec<[f64; 3]>>,
@@ -97,6 +98,22 @@ pub struct GlobalNewtonSystem {
     pub vs2_delta: Vec<[f64; 3]>,
     /// VS2 columns for Ue derivatives
     pub vs2_ue: Vec<[f64; 3]>,
+    
+    // === Stagnation point coupling terms (XFOIL XI_ULE) ===
+    /// VS1 column 5 (X derivatives) for stagnation coupling
+    pub vs1_x: Vec<[f64; 3]>,
+    /// VS2 column 5 (X derivatives) for stagnation coupling
+    pub vs2_x: Vec<[f64; 3]>,
+    /// SST_GO: dSST/dGAM(IST) - stagnation arc length derivative
+    pub sst_go: f64,
+    /// SST_GP: dSST/dGAM(IST+1) - stagnation arc length derivative
+    pub sst_gp: f64,
+    /// DULE1: Forced change in leading edge Ue (upper surface)
+    pub dule1: f64,
+    /// DULE2: Forced change in leading edge Ue (lower surface)
+    pub dule2: f64,
+    /// Current Newton iteration number (for debug output)
+    pub current_iteration: usize,
 }
 
 impl GlobalNewtonSystem {
@@ -126,7 +143,7 @@ impl GlobalNewtonSystem {
             iblte_lower,
             va: vec![[[0.0; 3]; 3]; nsys + 1],
             vb: vec![[[0.0; 3]; 3]; nsys + 1],
-            vz: [[0.0; 3]; 2],
+            vz: [[0.0; 2]; 3],
             vm: vec![vec![[0.0; 3]; nsys + 1]; nsys + 1],
             vdel: vec![[0.0; 3]; nsys + 1],
             vti: vec![1.0; nsys + 1],
@@ -136,6 +153,15 @@ impl GlobalNewtonSystem {
             vs1_ue: vec![[0.0; 3]; nsys + 1],
             vs2_delta: vec![[0.0; 3]; nsys + 1],
             vs2_ue: vec![[0.0; 3]; nsys + 1],
+            // Stagnation coupling - initialized to zero, computed in build
+            vs1_x: vec![[0.0; 3]; nsys + 1],
+            vs2_x: vec![[0.0; 3]; nsys + 1],
+            sst_go: 0.0,
+            sst_gp: 0.0,
+            dule1: 0.0,
+            dule2: 0.0,
+            // Current iteration - set in build_global_system
+            current_iteration: 0,
         }
     }
 
@@ -178,6 +204,22 @@ impl GlobalNewtonSystem {
         }
     }
 
+    /// Set the stagnation point derivatives for XI_ULE coupling.
+    ///
+    /// These values come from `find_stagnation_with_derivs` and are used
+    /// to couple the stagnation point location to the Newton system.
+    ///
+    /// # Arguments
+    /// * `sst_go` - dSST/dGAM(IST) - sensitivity to upstream gamma
+    /// * `sst_gp` - dSST/dGAM(IST+1) - sensitivity to downstream gamma
+    ///
+    /// # XFOIL Reference
+    /// xpanel.f STFIND (lines 1438-1439)
+    pub fn set_stagnation_derivs(&mut self, sst_go: f64, sst_gp: f64) {
+        self.sst_go = sst_go;
+        self.sst_gp = sst_gp;
+    }
+
     /// Build the global Newton system from BL stations
     ///
     /// This implements XFOIL's SETBL algorithm including:
@@ -198,6 +240,7 @@ impl GlobalNewtonSystem {
     /// * `ue_inviscid_lower` - Inviscid edge velocities (lower)
     /// * `msq` - Mach number squared
     /// * `re` - Reynolds number
+    /// * `iteration` - Newton iteration number (for debug output)
     ///
     /// # XFOIL Reference
     /// XFOIL xbl.f SETBL (lines 21-500)
@@ -215,7 +258,10 @@ impl GlobalNewtonSystem {
         ue_inviscid_lower: &[f64],
         msq: f64,
         re: f64,
+        iteration: usize,
     ) {
+        // Store iteration for debug events
+        self.current_iteration = iteration;
         // Reset arrays
         for iv in 0..=self.nsys {
             self.va[iv] = [[0.0; 3]; 3];
@@ -225,11 +271,14 @@ impl GlobalNewtonSystem {
             self.vs1_ue[iv] = [0.0; 3];
             self.vs2_delta[iv] = [0.0; 3];
             self.vs2_ue[iv] = [0.0; 3];
+            self.vs1_x[iv] = [0.0; 3];
+            self.vs2_x[iv] = [0.0; 3];
             for jv in 0..=self.nsys {
                 self.vm[iv][jv] = [0.0; 3];
             }
         }
-        self.vz = [[0.0; 3]; 2];
+        self.vz = [[0.0; 2]; 3];
+        // Note: sst_go, sst_gp, dule1, dule2 are computed in add_forced_changes
 
         // === Setup index mappings and VTI signs ===
         self.setup_index_mappings(upper_stations, lower_stations);
@@ -289,14 +338,47 @@ impl GlobalNewtonSystem {
             &ue_current_lower,
             &ue_from_mass_upper,
             &ue_from_mass_lower,
+            ue_inviscid_upper,
+            ue_inviscid_lower,
         );
         
-        // === Step 8: Negate residuals for Newton sign convention ===
-        // Our bldif computes res = -F (negative of equation value)
-        // XFOIL's VSREZ = -REZC, -REZT, -REZH (also negative)
-        // But the solver expects vdel = -F for Newton: J*delta = -F, x += delta
-        // So we need to ensure the sign is correct. Actually XFOIL does NOT negate
-        // after storing in VSREZ, so we shouldn't either.
+        // Debug: print final VDEL after forced changes
+        if std::env::var("RUSTFOIL_NEWTON_DEBUG").is_ok() {
+            eprintln!("\n[NEWTON DEBUG] After forced changes (FINAL VDEL):");
+            for ibl in 1..=5.min(upper_stations.len().saturating_sub(1)) {
+                let iv = self.to_global(0, ibl);
+                if iv <= self.nsys {
+                    eprintln!("  upper IBL={} IV={}: VDEL=[{:>12.6e}, {:>12.6e}, {:>12.6e}]",
+                        ibl, iv, self.vdel[iv][0], self.vdel[iv][1], self.vdel[iv][2]);
+                }
+            }
+            for ibl in 1..=3.min(lower_stations.len().saturating_sub(1)) {
+                let iv = self.to_global(1, ibl);
+                if iv <= self.nsys {
+                    eprintln!("  lower IBL={} IV={}: VDEL=[{:>12.6e}, {:>12.6e}, {:>12.6e}]",
+                        ibl, iv, self.vdel[iv][0], self.vdel[iv][1], self.vdel[iv][2]);
+                }
+            }
+        }
+        
+        // === Step 8: Zero SIMI station residuals ===
+        // IMPORTANT: XFOIL does NOT zero SIMI residuals. The large residuals at SIMI
+        // stations (-42.30, 31.47 for NACA 0012 α=4°) are the forced change terms
+        // that drive convergence. We previously zeroed these, which may have been
+        // causing divergence issues.
+        //
+        // DISABLED: Let SIMI residuals contribute to the Newton system
+        // let iv_upper_simi = 1;
+        // let iv_lower_simi = self.n_upper;
+        // 
+        // if iv_upper_simi <= self.nsys {
+        //     self.vdel[iv_upper_simi][1] = 0.0; // Momentum
+        //     self.vdel[iv_upper_simi][2] = 0.0; // Shape
+        // }
+        // if iv_lower_simi <= self.nsys {
+        //     self.vdel[iv_lower_simi][1] = 0.0; // Momentum
+        //     self.vdel[iv_lower_simi][2] = 0.0; // Shape
+        // }
     }
 
     /// Emit debug event for the built Newton system
@@ -409,6 +491,8 @@ impl GlobalNewtonSystem {
             let vti_i = if surface == 0 { 1.0 } else { -1.0 };
 
             let mut dui = 0.0;
+            let mut dui_upper = 0.0;
+            let mut dui_lower = 0.0;
 
             // Sum over upper surface (VTI = +1)
             // XFOIL starts from JBL=2 (first BL station, skipping stagnation)
@@ -419,6 +503,7 @@ impl GlobalNewtonSystem {
                 if panel_i < dij.nrows() && panel_j < dij.ncols() {
                     let ue_m = -vti_i * vti_j * dij[(panel_i, panel_j)];
                     dui += ue_m * upper_stations[j].mass_defect;
+                    dui_upper += ue_m * upper_stations[j].mass_defect;
                 }
             }
 
@@ -431,6 +516,60 @@ impl GlobalNewtonSystem {
                 if panel_i < dij.nrows() && panel_j < dij.ncols() {
                     let ue_m = -vti_i * vti_j * dij[(panel_i, panel_j)];
                     dui += ue_m * lower_stations[j].mass_defect;
+                    dui_lower += ue_m * lower_stations[j].mass_defect;
+                }
+            }
+
+            // Debug: print DUI breakdown at first few stations
+            if std::env::var("RUSTFOIL_DUI_DEBUG").is_ok() && i <= 3 {
+                let surface_name = if surface == 0 { "upper" } else { "lower" };
+                let ue_inv_i = ue_inviscid.get(i).copied().unwrap_or(0.0);
+                
+                // Also print DIJ diagonal for this panel
+                let dij_diag = if panel_i < dij.nrows() { dij[(panel_i, panel_i)] } else { 0.0 };
+                
+                eprintln!("[DUI DEBUG] {}[{}] panel={}: ue_inv={:.6}, dui_upper={:.6e}, dui_lower={:.6e}, dui_total={:.6e}, dij_diag={:.6e}",
+                    surface_name, i, panel_i, ue_inv_i, dui_upper, dui_lower, dui, dij_diag);
+                    
+                // For station 1, trace cumulative DUI sum
+                if i == 1 && surface == 0 {
+                    eprintln!("[DUI TRACE] Breaking down upper[1] DIJ sum:");
+                    let mut cum_upper = 0.0;
+                    for jj in 1..upper_stations.len().min(20) {
+                        let panel_jj = upper_stations[jj].panel_idx;
+                        let vti_jj = 1.0;
+                        if panel_i < dij.nrows() && panel_jj < dij.ncols() {
+                            let dij_val = dij[(panel_i, panel_jj)];
+                            let ue_m_jj = -vti_i * vti_jj * dij_val;
+                            let mass_jj = upper_stations[jj].mass_defect;
+                            let contrib = ue_m_jj * mass_jj;
+                            cum_upper += contrib;
+                            if jj <= 10 {
+                                eprintln!("  j={:2} panel={:3}: DIJ={:>10.4e}, mass={:>10.4e}, contrib={:>10.4e}, cum={:>10.4e}",
+                                    jj, panel_jj, dij_val, mass_jj, contrib, cum_upper);
+                            }
+                        }
+                    }
+                    eprintln!("  ... cumulative after j=20: {:.4e}", cum_upper);
+                    eprintln!("  TOTAL dui_upper: {:.4e}", dui_upper);
+                    
+                    // Also trace lower surface contribution
+                    eprintln!("[DUI TRACE] Breaking down lower contribution to upper[1]:");
+                    let mut cum_lower = 0.0;
+                    for jj in 1..lower_stations.len().min(10) {
+                        let panel_jj = lower_stations[jj].panel_idx;
+                        let vti_jj = -1.0;  // Lower surface VTI
+                        if panel_i < dij.nrows() && panel_jj < dij.ncols() {
+                            let dij_val = dij[(panel_i, panel_jj)];
+                            let ue_m_jj = -vti_i * vti_jj * dij_val;
+                            let mass_jj = lower_stations[jj].mass_defect;
+                            let contrib = ue_m_jj * mass_jj;
+                            cum_lower += contrib;
+                            eprintln!("  j={:2} panel={:3}: DIJ={:>10.4e}, mass={:>10.4e}, contrib={:>10.4e}, cum={:>10.4e}",
+                                jj, panel_jj, dij_val, mass_jj, contrib, cum_lower);
+                        }
+                    }
+                    eprintln!("  TOTAL dui_lower: {:.4e}", dui_lower);
                 }
             }
 
@@ -468,28 +607,119 @@ impl GlobalNewtonSystem {
 
             let s2 = &stations[i];
             let flow_type = flow_types.get(i - 1).copied().unwrap_or(FlowType::Laminar);
-            let transition = transitions.get(i - 1).and_then(|t| t.as_ref());
+            // Note: transitions parameter is no longer used - XFOIL doesn't use TRDIF in global Newton
+            let _ = transitions;  // Silence unused warning
             
             // Compute residuals and Jacobian
             // For first interval (i==1), use similarity-specific bldif with XFOIL's
             // fixed log values (XLOG=1, ULOG=1, TLOG=0, HLOG=0) and DDLOG=0
             // which zeros out the log-derivative Jacobian terms
-            let (residuals, jacobian) = if i == 1 {
+            // 
+            // IMPORTANT: XFOIL uses regular BLSYS/BLDIF for ALL stations in global Newton,
+            // including the transition station. TRDIF is only used during MRCHUE (march phase)
+            // for local Newton iterations. Using TRDIF in global Newton causes the shear-lag
+            // residual to be 10 orders of magnitude too large!
+            //
+            // NOTE: For SIMI (i==1), XFOIL's march already converged the similarity equations.
+            // Our march uses universal correction factors that give good approximations but
+            // don't exactly satisfy bldif_full_simi. To avoid huge SIMI residuals disrupting
+            // Newton convergence, we set SIMI residuals to zero (treating it as a boundary
+            // condition). The Jacobians are still computed to provide proper coupling.
+            let (mut residuals, jacobian) = if i == 1 {
                 bldif_full_simi(s2, flow_type, msq, re)
-            } else if let Some(tr) = transition {
-                if tr.transition {
-                    trdif_full(&stations[i - 1], s2, tr, msq, re)
-                } else {
-                    bldif(&stations[i - 1], s2, flow_type, msq, re)
-                }
             } else {
                 bldif(&stations[i - 1], s2, flow_type, msq, re)
             };
+            
+            // Zero out SIMI residuals (boundary condition approach)
+            // The march has already set similarity values; we just need to couple them
+            if i == 1 {
+                residuals.res_mom = 0.0;
+                residuals.res_shape = 0.0;
+                // Keep res_third (ampl) as-is since it's already -ampl ≈ 0 for laminar
+            }
 
 
             // Store residuals
             self.vdel[iv] = [residuals.res_third, residuals.res_mom, residuals.res_shape];
             
+            // Debug print moved AFTER VA/VB assignment to show stored values
+            
+            // Debug: print raw bldif residuals at first few stations (before forced changes)
+            if std::env::var("RUSTFOIL_RAW_RES_DEBUG").is_ok() && i <= 3 {
+                let surface_name = if surface == 0 { "upper" } else { "lower" };
+                eprintln!("[RAW RES] {}[{}] IV={}: raw=[{:.6e}, {:.6e}, {:.6e}]", 
+                    surface_name, i, iv, residuals.res_third, residuals.res_mom, residuals.res_shape);
+            }
+            
+            // Debug: print Newton system at i=2 (XFOIL IBL=3) for comparison
+            if std::env::var("RUSTFOIL_NEWTON_CMP").is_ok() && i == 2 && surface == 0 {
+                eprintln!("\n=== RustFoil Newton System at i=2 (XFOIL IBL=3) ===");
+                eprintln!("VS1 (upstream Jacobian, 3x5):");
+                for eq in 0..3 {
+                    eprintln!("  [{:.6e}, {:.6e}, {:.6e}, {:.6e}, {:.6e}]",
+                        jacobian.vs1[eq][0], jacobian.vs1[eq][1], jacobian.vs1[eq][2], 
+                        jacobian.vs1[eq][3], jacobian.vs1[eq][4]);
+                }
+                eprintln!("VS2 (downstream Jacobian, 3x5):");
+                for eq in 0..3 {
+                    eprintln!("  [{:.6e}, {:.6e}, {:.6e}, {:.6e}, {:.6e}]",
+                        jacobian.vs2[eq][0], jacobian.vs2[eq][1], jacobian.vs2[eq][2], 
+                        jacobian.vs2[eq][3], jacobian.vs2[eq][4]);
+                }
+                eprintln!("VDEL (raw residuals):");
+                eprintln!("  [{:.6e}, {:.6e}, {:.6e}]", 
+                    residuals.res_third, residuals.res_mom, residuals.res_shape);
+            }
+            
+            // Debug: log residuals at transition stations
+            if std::env::var("RUSTFOIL_TRANS_DEBUG").is_ok() {
+                // Check if this is near the transition station
+                let surface_name = if surface == 0 { "upper" } else { "lower" };
+                let trans_idx = stations.iter().position(|s| !s.is_laminar);
+                if let Some(trans) = trans_idx {
+                    // Log stations from trans-2 to trans+5
+                    if i >= trans.saturating_sub(2) && i <= trans + 5 {
+                        let is_trans_station = i == trans;
+                        let trans_mark = if is_trans_station { " <-- TRANSITION" } else { "" };
+                        eprintln!("[VSREZ DEBUG] {surface_name}[{i}]: vsrez[0]={:.4e}, vsrez[1]={:.4e}, vsrez[2]={:.4e}, ctau={:.4e}, cq={:.4e}{trans_mark}",
+                            residuals.res_third, residuals.res_mom, residuals.res_shape,
+                            stations[i].ctau, stations[i].cq);
+                    }
+                }
+            }
+            
+            // Emit JACOBIAN debug event for every 10th station
+            if rustfoil_bl::is_debug_active() && i % 10 == 0 {
+                // Convert 4x5 jacobian to 3x5 for debug output (skip 4th equation)
+                let vs1_3x5: [[f64; 5]; 3] = [
+                    jacobian.vs1[0],
+                    jacobian.vs1[1],
+                    jacobian.vs1[2],
+                ];
+                let vs2_3x5: [[f64; 5]; 3] = [
+                    jacobian.vs2[0],
+                    jacobian.vs2[1],
+                    jacobian.vs2[2],
+                ];
+                let vsrez_3: [f64; 3] = [residuals.res_third, residuals.res_mom, residuals.res_shape];
+                
+                let flow_type_str = match flow_type {
+                    FlowType::Laminar => "laminar",
+                    FlowType::Turbulent => "turbulent",
+                    FlowType::Wake => "wake",
+                };
+                
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::jacobian(
+                    self.current_iteration,
+                    i,
+                    surface,
+                    vs1_3x5,
+                    vs2_3x5,
+                    vsrez_3,
+                    flow_type_str,
+                ));
+            }
 
             // Extract VA and VB blocks from Jacobian
             // IMPORTANT: XFOIL's VA only has 2 columns: [ampl/ctau, theta]
@@ -500,34 +730,33 @@ impl GlobalNewtonSystem {
             //   VA(k,2,IV) = VS2(k,2)  -- ∂Fk/∂theta
             //
             // For similarity station (i==1), XFOIL combines: VS2 = VS1 + VS2, VS1 = 0
+            // This DOUBLES the jacobian because at SIMI, VS1 and VS2 are identical
+            // for columns 1-4 (theta, dstr, ue, x). Column 0 (ampl) is special.
             if i == 1 {
                 // Similarity station: XFOIL combines VS2 = VS1 + VS2, VS1 = 0
-                // BUT when s1=s2 (both point to same station), vs1 and vs2 from bldif
-                // are IDENTICAL (both compute derivatives w.r.t. same station).
-                // So we should NOT add them - just use vs2 directly!
+                // This effectively doubles the jacobian for columns 1-4.
+                // The combining is done in XFOIL's BLDIF after computing both VS matrices.
                 //
-                // In XFOIL's BLDIF, VS1 and VS2 are computed with conceptually different
-                // "upstream" vs "downstream" formulas even when using same state variables.
-                // For SIMI, the final combined VS2 is what we want.
-                //
-                // Since our bldif_full_simi returns vs1=vs2 (same derivatives), we just
-                // use vs2 without adding vs1 to avoid 2x factor.
+                // CRITICAL FIX: We MUST add vs1+vs2 to match XFOIL's combined jacobian.
+                // This is NOT a 2x error - XFOIL intentionally doubles the sensitivity
+                // at the SIMI station because both "upstream" and "downstream" affect
+                // the same physical location.
                 for eq in 0..3 {
                     // Only columns 0,1 go in VA (ampl/ctau and theta)
-                    // For SIMI, DON'T add vs1+vs2 since they're identical
-                    self.va[iv][eq][0] = jacobian.vs2[eq][0];
-                    self.va[iv][eq][1] = jacobian.vs2[eq][1];
+                    // For SIMI, add vs1+vs2 to match XFOIL's combining
+                    self.va[iv][eq][0] = jacobian.vs1[eq][0] + jacobian.vs2[eq][0];
+                    self.va[iv][eq][1] = jacobian.vs1[eq][1] + jacobian.vs2[eq][1];
                     self.va[iv][eq][2] = 0.0; // Not used - mass goes in VM
                     self.vb[iv][eq][0] = 0.0;
                     self.vb[iv][eq][1] = 0.0;
                     self.vb[iv][eq][2] = 0.0;
                     
                     // Store delta_star and Ue columns for VM construction
-                    // Same logic - just use vs2, not vs1+vs2
+                    // These also need combining: vs2_combined = vs1 + vs2
                     self.vs1_delta[iv][eq] = 0.0;
                     self.vs1_ue[iv][eq] = 0.0;
-                    self.vs2_delta[iv][eq] = jacobian.vs2[eq][2];
-                    self.vs2_ue[iv][eq] = jacobian.vs2[eq][3];
+                    self.vs2_delta[iv][eq] = jacobian.vs1[eq][2] + jacobian.vs2[eq][2];
+                    self.vs2_ue[iv][eq] = jacobian.vs1[eq][3] + jacobian.vs2[eq][3];
                 }
             } else {
                 for eq in 0..3 {
@@ -544,6 +773,34 @@ impl GlobalNewtonSystem {
                     self.vs1_ue[iv][eq] = jacobian.vs1[eq][3];
                     self.vs2_delta[iv][eq] = jacobian.vs2[eq][2];
                     self.vs2_ue[iv][eq] = jacobian.vs2[eq][3];
+                    
+                    // Store X derivatives (column 4, 0-indexed) for stagnation coupling
+                    // XFOIL: VS1(k,5), VS2(k,5) - derivatives w.r.t. arc length
+                    self.vs1_x[iv][eq] = jacobian.vs1[eq][4];
+                    self.vs2_x[iv][eq] = jacobian.vs2[eq][4];
+                }
+            }
+            
+            // Debug: print Newton matrix comparison data for first few stations
+            // Placed AFTER VA/VB assignment to show actual stored values
+            if std::env::var("RUSTFOIL_NEWTON_DEBUG").is_ok() && i <= 5 {
+                let surface_name = if surface == 0 { "upper" } else { "lower" };
+                eprintln!("\n[NEWTON DEBUG] {} IBL={} IV={}", surface_name, i, iv);
+                eprintln!("  VA (stored in system):");
+                eprintln!("    [0]: [{:>12.6e}, {:>12.6e}]", self.va[iv][0][0], self.va[iv][0][1]);
+                eprintln!("    [1]: [{:>12.6e}, {:>12.6e}]", self.va[iv][1][0], self.va[iv][1][1]);
+                eprintln!("    [2]: [{:>12.6e}, {:>12.6e}]", self.va[iv][2][0], self.va[iv][2][1]);
+                eprintln!("  VB (stored in system):");
+                eprintln!("    [0]: [{:>12.6e}, {:>12.6e}]", self.vb[iv][0][0], self.vb[iv][0][1]);
+                eprintln!("    [1]: [{:>12.6e}, {:>12.6e}]", self.vb[iv][1][0], self.vb[iv][1][1]);
+                eprintln!("    [2]: [{:>12.6e}, {:>12.6e}]", self.vb[iv][2][0], self.vb[iv][2][1]);
+                eprintln!("  VSREZ (raw residuals):");
+                eprintln!("    [0] res_ampl : {:>12.6e}", residuals.res_third);
+                eprintln!("    [1] res_mom  : {:>12.6e}", residuals.res_mom);
+                eprintln!("    [2] res_shape: {:>12.6e}", residuals.res_shape);
+                if i == 1 {
+                    eprintln!("  [SIMI combining: vs1[1][1]={:.6e} + vs2[1][1]={:.6e} = {:.6e}]",
+                        jacobian.vs1[1][1], jacobian.vs2[1][1], jacobian.vs1[1][1] + jacobian.vs2[1][1]);
                 }
             }
             
@@ -651,7 +908,76 @@ impl GlobalNewtonSystem {
                         + self.vs2_ue[iv][k] * u2_m_j
                         + self.vs1_delta[iv][k] * d1_m_j
                         + self.vs1_ue[iv][k] * u1_m_j;
+                    
+                    // === Stagnation point coupling (XFOIL XI_ULE terms for VM) ===
+                    // XFOIL: + (VS1(k,5) + VS2(k,5) + VSX(k)) * (XI_ULE1*ULE1_M(JV) + XI_ULE2*ULE2_M(JV))
+                    // ULE1_M(JV) = -VTI(2,1)*VTI(JBL,JS)*DIJ(ILE1,J)  
+                    // ULE2_M(JV) = -VTI(2,2)*VTI(JBL,JS)*DIJ(ILE2,J)
+                    // where ILE1/ILE2 are panel indices of first station after stagnation
+                    
+                    // Get panel indices for leading edge stations
+                    let ile1 = if upper_stations.len() > 1 {
+                        upper_stations[1].panel_idx
+                    } else {
+                        0
+                    };
+                    let ile2 = if lower_stations.len() > 1 {
+                        lower_stations[1].panel_idx
+                    } else {
+                        0
+                    };
+                    
+                    // Compute ULE_M derivatives
+                    // VTI(2,1) = +1.0 (first station after stagnation on upper)
+                    // VTI(2,2) = -1.0 (first station after stagnation on lower)
+                    let vti_le1 = 1.0;  // Upper surface
+                    let vti_le2 = -1.0; // Lower surface
+                    
+                    let ule1_m_j = if ile1 < dij.nrows() && panel_j < dij.ncols() {
+                        -vti_le1 * self.vti[jv] * dij[(ile1, panel_j)]
+                    } else {
+                        0.0
+                    };
+                    
+                    let ule2_m_j = if ile2 < dij.nrows() && panel_j < dij.ncols() {
+                        -vti_le2 * self.vti[jv] * dij[(ile2, panel_j)]
+                    } else {
+                        0.0
+                    };
+                    
+                    // XI_ULE depends on which surface we're on
+                    // Upper surface (IS=1): XI_ULE1 = SST_GO, XI_ULE2 = -SST_GP
+                    // Lower surface (IS=2): XI_ULE1 = -SST_GO, XI_ULE2 = SST_GP
+                    let (xi_ule1, xi_ule2) = if surface_i == 0 {
+                        (self.sst_go, -self.sst_gp)
+                    } else {
+                        (-self.sst_go, self.sst_gp)
+                    };
+                    
+                    // Add stagnation coupling term
+                    let vs_x = self.vs1_x[iv][k] + self.vs2_x[iv][k]; // VSX typically 0
+                    self.vm[iv][jv][k] += vs_x * (xi_ule1 * ule1_m_j + xi_ule2 * ule2_m_j);
                 }
+            }
+            
+            // Emit VM_BLOCK debug event for every 10th station
+            if rustfoil_bl::is_debug_active() && iv % 10 == 0 {
+                // Collect near-diagonal VM entries (|IV - JV| <= 5)
+                let mut vm_near: Vec<(usize, [f64; 3])> = Vec::new();
+                let jv_start = if iv > 5 { iv - 5 } else { 1 };
+                let jv_end = (iv + 5).min(self.nsys);
+                for jv in jv_start..=jv_end {
+                    if jv != iv {
+                        vm_near.push((jv, self.vm[iv][jv]));
+                    }
+                }
+                
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::vm_block(
+                    self.current_iteration,
+                    iv,
+                    self.vm[iv][iv],
+                    vm_near,
+                ));
             }
         }
     }
@@ -689,6 +1015,9 @@ impl GlobalNewtonSystem {
     ///
     /// The forced changes account for the mismatch between current Ue values
     /// and what UESET would compute from current mass defect.
+    ///
+    /// This also includes the stagnation point coupling (XI_ULE terms) from XFOIL,
+    /// which accounts for how leading edge Ue changes affect the entire BL solution.
     fn add_forced_changes(
         &mut self,
         upper_stations: &[BlStation],
@@ -697,13 +1026,17 @@ impl GlobalNewtonSystem {
         ue_current_lower: &[f64],
         ue_from_mass_upper: &[f64],
         ue_from_mass_lower: &[f64],
+        ue_inviscid_upper: &[f64],
+        ue_inviscid_lower: &[f64],
     ) {
         // Compute DUE for upper surface
+        // XFOIL swaps after UESET: UEDG = march_Ue, USAV = mass_Ue
+        // Then: DUE = UEDG - USAV = current - from_mass
         let due_upper: Vec<f64> = (0..upper_stations.len())
             .map(|i| {
                 let curr = ue_current_upper.get(i).copied().unwrap_or(0.0);
                 let from_mass = ue_from_mass_upper.get(i).copied().unwrap_or(0.0);
-                curr - from_mass
+                curr - from_mass  // XFOIL: DUE = UEDG - USAV = current - from_mass
             })
             .collect();
 
@@ -712,9 +1045,45 @@ impl GlobalNewtonSystem {
             .map(|i| {
                 let curr = ue_current_lower.get(i).copied().unwrap_or(0.0);
                 let from_mass = ue_from_mass_lower.get(i).copied().unwrap_or(0.0);
-                curr - from_mass
+                curr - from_mass  // XFOIL: DUE = UEDG - USAV = current - from_mass
             })
             .collect();
+
+        // === Stagnation point coupling (XFOIL XI_ULE terms) ===
+        // DULE1, DULE2 are the forced changes in leading edge Ue (station 1 = first after stagnation)
+        // XFOIL: DULE1 = UEDG(2,1) - USAV(2,1)  (IBL=2 is first station after stagnation)
+        self.dule1 = due_upper.get(1).copied().unwrap_or(0.0);
+        self.dule2 = due_lower.get(1).copied().unwrap_or(0.0);
+        
+        // Debug: print DUE for first few stations to understand the mismatch
+        if std::env::var("RUSTFOIL_DUE_DEBUG").is_ok() {
+            eprintln!("[DUE DEBUG] Upper surface DUE at first stations:");
+            for i in 0..5.min(due_upper.len()) {
+                let curr = ue_current_upper.get(i).copied().unwrap_or(0.0);
+                let from_mass = ue_from_mass_upper.get(i).copied().unwrap_or(0.0);
+                eprintln!("  Upper[{}]: ue_curr={:.6}, ue_mass={:.6}, DUE={:.6e}", 
+                    i, curr, from_mass, due_upper[i]);
+            }
+            eprintln!("[DUE DEBUG] Lower surface DUE at first stations:");
+            for i in 0..5.min(due_lower.len()) {
+                let curr = ue_current_lower.get(i).copied().unwrap_or(0.0);
+                let from_mass = ue_from_mass_lower.get(i).copied().unwrap_or(0.0);
+                eprintln!("  Lower[{}]: ue_curr={:.6}, ue_mass={:.6}, DUE={:.6e}", 
+                    i, curr, from_mass, due_lower[i]);
+            }
+        }
+
+        // Debug: print VDEL before forced changes for first few stations
+        if std::env::var("RUSTFOIL_NEWTON_DEBUG").is_ok() {
+            eprintln!("\n[NEWTON DEBUG] Before forced changes:");
+            for ibl in 1..=5.min(upper_stations.len().saturating_sub(1)) {
+                let iv = self.to_global(0, ibl);
+                if iv <= self.nsys {
+                    eprintln!("  upper IBL={} IV={}: VDEL=[{:>12.6e}, {:>12.6e}, {:>12.6e}]",
+                        ibl, iv, self.vdel[iv][0], self.vdel[iv][1], self.vdel[iv][2]);
+                }
+            }
+        }
 
         // Add forced changes to upper surface residuals
         // Start from IBL=1 (which is IV=1 in global indexing, XFOIL's IBL=2)
@@ -744,11 +1113,57 @@ impl GlobalNewtonSystem {
             let due2 = due_upper.get(ibl).copied().unwrap_or(0.0);
             let due1 = due_upper.get(ibl - 1).copied().unwrap_or(0.0);
 
+            // Emit forced changes debug event at key stations (every 10th)
+            if rustfoil_bl::is_debug_active() && ibl % 10 == 0 {
+                let ue_from_mass_i = ue_from_mass_upper.get(ibl).copied().unwrap_or(0.0);
+                let ue_inviscid_i = ue_inviscid_upper.get(ibl).copied().unwrap_or(0.0);
+                let ue_current_i = ue_current_upper.get(ibl).copied().unwrap_or(0.0);
+                
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::forced_changes(
+                    self.current_iteration,
+                    ibl,
+                    0,  // side = upper
+                    due1,
+                    due2,
+                    dds1,
+                    dds2,
+                    ue_from_mass_i,
+                    ue_inviscid_i,
+                    ue_current_i,
+                ));
+            }
+
+            // Debug: print forced change contributions at station 2 (first iteration only)
+            if std::env::var("RUSTFOIL_FC_DEBUG").is_ok() && ibl == 2 {
+                eprintln!("[FC DEBUG] upper[2]: due1={:.6e}, due2={:.6e}, dds1={:.6e}, dds2={:.6e}",
+                    due1, due2, dds1, dds2);
+                eprintln!("[FC DEBUG]   vs1_ue=[{:.6e}, {:.6e}, {:.6e}]",
+                    self.vs1_ue[iv][0], self.vs1_ue[iv][1], self.vs1_ue[iv][2]);
+                eprintln!("[FC DEBUG]   vs2_ue=[{:.6e}, {:.6e}, {:.6e}]",
+                    self.vs2_ue[iv][0], self.vs2_ue[iv][1], self.vs2_ue[iv][2]);
+                let fc0 = self.vs1_delta[iv][0] * dds1 + self.vs2_delta[iv][0] * dds2
+                        + self.vs1_ue[iv][0] * due1 + self.vs2_ue[iv][0] * due2;
+                let fc1 = self.vs1_delta[iv][1] * dds1 + self.vs2_delta[iv][1] * dds2
+                        + self.vs1_ue[iv][1] * due1 + self.vs2_ue[iv][1] * due2;
+                let fc2 = self.vs1_delta[iv][2] * dds1 + self.vs2_delta[iv][2] * dds2
+                        + self.vs1_ue[iv][2] * due1 + self.vs2_ue[iv][2] * due2;
+                eprintln!("[FC DEBUG]   forced_change=[{:.6e}, {:.6e}, {:.6e}]", fc0, fc1, fc2);
+            }
+            
             for k in 0..3 {
                 self.vdel[iv][k] += self.vs1_delta[iv][k] * dds1
                     + self.vs2_delta[iv][k] * dds2
                     + self.vs1_ue[iv][k] * due1
                     + self.vs2_ue[iv][k] * due2;
+                
+                // === Stagnation point coupling (XFOIL XI_ULE terms) ===
+                // XFOIL: + (VS1(k,5) + VS2(k,5) + VSX(k)) * (XI_ULE1*DULE1 + XI_ULE2*DULE2)
+                // For upper surface (IS=1): XI_ULE1 = SST_GO, XI_ULE2 = -SST_GP
+                // VSX is usually 0 for turbulent flow, we skip it for now
+                let xi_ule1 = self.sst_go;
+                let xi_ule2 = -self.sst_gp;
+                let vs_x = self.vs1_x[iv][k] + self.vs2_x[iv][k]; // VSX typically 0
+                self.vdel[iv][k] += vs_x * (xi_ule1 * self.dule1 + xi_ule2 * self.dule2);
             }
         }
 
@@ -779,11 +1194,40 @@ impl GlobalNewtonSystem {
             let due2 = due_lower.get(ibl).copied().unwrap_or(0.0);
             let due1 = due_lower.get(ibl - 1).copied().unwrap_or(0.0);
 
+            // Emit forced changes debug event at key stations (every 10th)
+            if rustfoil_bl::is_debug_active() && ibl % 10 == 0 {
+                let ue_from_mass_i = ue_from_mass_lower.get(ibl).copied().unwrap_or(0.0);
+                let ue_inviscid_i = ue_inviscid_lower.get(ibl).copied().unwrap_or(0.0);
+                let ue_current_i = ue_current_lower.get(ibl).copied().unwrap_or(0.0);
+                
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::forced_changes(
+                    self.current_iteration,
+                    ibl,
+                    1,  // side = lower
+                    due1,
+                    due2,
+                    dds1,
+                    dds2,
+                    ue_from_mass_i,
+                    ue_inviscid_i,
+                    ue_current_i,
+                ));
+            }
+
             for k in 0..3 {
                 self.vdel[iv][k] += self.vs1_delta[iv][k] * dds1
                     + self.vs2_delta[iv][k] * dds2
                     + self.vs1_ue[iv][k] * due1
                     + self.vs2_ue[iv][k] * due2;
+                
+                // === Stagnation point coupling (XFOIL XI_ULE terms) ===
+                // XFOIL: + (VS1(k,5) + VS2(k,5) + VSX(k)) * (XI_ULE1*DULE1 + XI_ULE2*DULE2)
+                // For lower surface (IS=2): XI_ULE1 = -SST_GO, XI_ULE2 = SST_GP
+                // VSX is usually 0 for turbulent flow, we skip it for now
+                let xi_ule1 = -self.sst_go;
+                let xi_ule2 = self.sst_gp;
+                let vs_x = self.vs1_x[iv][k] + self.vs2_x[iv][k]; // VSX typically 0
+                self.vdel[iv][k] += vs_x * (xi_ule1 * self.dule1 + xi_ule2 * self.dule2);
             }
         }
     }
@@ -1034,6 +1478,21 @@ pub fn emit_blsolv_solution_debug(iteration: usize, deltas: &[[f64; 3]]) {
     ));
 }
 
+/// Result of applying global updates
+///
+/// Contains the actual relaxation factor used and the RMS of normalized changes
+/// (XFOIL's RMSBL metric for convergence).
+#[derive(Debug, Clone)]
+pub struct GlobalUpdateResult {
+    /// Actual relaxation factor used (may be reduced from requested)
+    pub relaxation_used: f64,
+    /// RMS of normalized changes (XFOIL's RMSBL)
+    /// This is sqrt(sum(DN1² + DN2² + DN3² + DN4²) / (4*N))
+    pub rms_change: f64,
+    /// Maximum normalized change across all stations
+    pub max_change: f64,
+}
+
 /// Apply global Newton updates to both surfaces
 ///
 /// # Arguments
@@ -1047,6 +1506,9 @@ pub fn emit_blsolv_solution_debug(iteration: usize, deltas: &[[f64; 3]]) {
 /// * `lower_ue_inv` - Optional inviscid edge velocities (lower surface)
 /// * `msq` - Mach number squared for blvar
 /// * `re` - Reynolds number for blvar
+///
+/// # Returns
+/// `GlobalUpdateResult` containing the actual relaxation used and RMS of normalized changes
 pub fn apply_global_updates(
     upper_stations: &mut [BlStation],
     lower_stations: &mut [BlStation],
@@ -1058,7 +1520,7 @@ pub fn apply_global_updates(
     lower_ue_inv: Option<&[f64]>,
     msq: f64,
     re: f64,
-) -> f64 {
+) -> GlobalUpdateResult {
     // === XFOIL-style normalized relaxation (xbl.f lines 1527-1597) ===
     // Compute global relaxation factor based on normalized changes
     let dhi = 1.5;   // Max 150% relative increase
@@ -1198,12 +1660,10 @@ pub fn apply_global_updates(
         let new_u = upper_new_ue.get(ibl).copied().unwrap_or(station.u);
         let due = new_u - station.u;
         
-        // Normalized Ue change (limit to reasonable range)
-        let dn4 = if station.u.abs() > 1e-6 {
-            due / station.u
-        } else {
-            due / 0.1  // Fallback for very small Ue
-        };
+        // Normalized Ue change - XFOIL uses fixed constant 0.25, NOT current Ue!
+        // xbl.f line 1572: DN4 = ABS(DUEDG)/0.25
+        // This prevents huge normalized changes at stations near stagnation (small Ue)
+        let dn4 = due.abs() / 0.25;
         
         // Normalized delta_star change
         // Compute d_dstar using current Ue (will be refined after relaxation)
@@ -1258,12 +1718,9 @@ pub fn apply_global_updates(
         let new_u = lower_new_ue.get(ibl).copied().unwrap_or(station.u);
         let due = new_u - station.u;
         
-        // Normalized Ue change
-        let dn4 = if station.u.abs() > 1e-6 {
-            due / station.u
-        } else {
-            due / 0.1
-        };
+        // Normalized Ue change - XFOIL uses fixed constant 0.25
+        // xbl.f line 1572: DN4 = ABS(DUEDG)/0.25
+        let dn4 = due.abs() / 0.25;
         
         // Normalized delta_star change
         let d_dstar = (delta[2] - station.delta_star * due) / station.u.max(1e-6);
@@ -1307,6 +1764,56 @@ pub fn apply_global_updates(
     
     // Ensure relaxation stays positive and reasonable
     rlx = rlx.max(0.01).min(1.0);
+    
+    // Store computed relaxation before applying
+    let rlx_computed = relaxation;
+    
+    // === Accumulate RMS of normalized changes (XFOIL's RMSBL) ===
+    // RMSBL = sqrt(sum(DN1² + DN2² + DN3² + DN4²) / (4*N))
+    // where DN1-DN4 are normalized changes in ctau/ampl, theta, delta*, and Ue
+    let mut rms_sum = 0.0;
+    let mut max_dn = 0.0_f64;
+    let mut n_stations = 0usize;
+    
+    // Collect sample update data for debug output
+    let mut sample_updates: Vec<rustfoil_bl::SampleUpdateData> = Vec::new();
+    let mut limiting_station: Option<usize> = None;
+    let mut limiting_reason: Option<String> = None;
+    
+    // Track which station limited relaxation most
+    if rlx < relaxation * 0.99 {
+        // Find the limiting station by checking normalized changes
+        for ibl in 1..upper_stations.len() {
+            let iv = system.to_global(0, ibl);
+            if iv >= deltas.len() { continue; }
+            let station = &upper_stations[ibl];
+            let new_u = upper_new_ue.get(ibl).copied().unwrap_or(station.u);
+            let due = new_u - station.u;
+            
+            let dn1 = if station.is_laminar {
+                deltas[iv][0] / 10.0
+            } else if station.ctau.abs() > 1e-10 {
+                deltas[iv][0] / station.ctau
+            } else {
+                deltas[iv][0] / 0.03
+            };
+            let dn2 = if station.theta.abs() > 1e-12 { deltas[iv][1] / station.theta } else { 0.0 };
+            // XFOIL: DN4 = ABS(DUEDG)/0.25 (fixed constant, not relative to Ue)
+            let dn4 = due.abs() / 0.25;
+            
+            if (rlx * dn1).abs() >= dhi || (rlx * dn2).abs() >= dhi || (rlx * dn4).abs() >= dhi {
+                limiting_station = Some(ibl);
+                if (rlx * dn1).abs() >= dhi {
+                    limiting_reason = Some(format!("upper ctau dn1={:.3}", dn1));
+                } else if (rlx * dn2).abs() >= dhi {
+                    limiting_reason = Some(format!("upper theta dn2={:.3}", dn2));
+                } else {
+                    limiting_reason = Some(format!("upper Ue dn4={:.3}", dn4));
+                }
+                break;
+            }
+        }
+    }
 
     // === Step 2: Update upper surface BL variables ===
     for ibl in 1..upper_stations.len() {
@@ -1391,6 +1898,41 @@ pub fn apply_global_updates(
         // Recompute secondary variables (Hk, Cf, Cd, etc.) for next iteration
         let flow_type = if station.is_laminar { FlowType::Laminar } else { FlowType::Turbulent };
         blvar(station, flow_type, msq, re);
+        
+        // === Accumulate normalized changes for RMSBL (XFOIL xbl.f lines 1545-1572) ===
+        // CRITICAL: RMSBL uses PROPOSED changes (no rlx), not APPLIED changes
+        // XFOIL computes DN1-DN4 from raw deltas, then applies relaxation separately
+        // DN1 = normalized ctau/ampl change
+        // DN2 = normalized theta change  
+        // DN3 = normalized delta_star change
+        // DN4 = normalized Ue change (XFOIL uses fixed 0.25 constant)
+        let dn1 = if upper_stations[ibl].is_laminar {
+            delta[0] / 10.0  // Laminar: fixed scale (NO rlx!)
+        } else if upper_stations[ibl].ctau.abs() > 1e-10 {
+            delta[0] / upper_stations[ibl].ctau
+        } else {
+            delta[0] / 0.03
+        };
+        
+        let dn2 = if upper_stations[ibl].theta.abs() > 1e-12 {
+            delta[1] / upper_stations[ibl].theta
+        } else {
+            0.0
+        };
+        
+        // For DN3 and DN4, use the PROPOSED changes (no rlx)
+        let dn3 = if upper_stations[ibl].delta_star.abs() > 1e-12 {
+            d_dstar / upper_stations[ibl].delta_star
+        } else {
+            d_dstar / 1e-6
+        };
+        
+        // XFOIL: DN4 = ABS(DUEDG)/0.25 (fixed constant, not relative to Ue)
+        let dn4 = due.abs() / 0.25;
+        
+        rms_sum += dn1 * dn1 + dn2 * dn2 + dn3 * dn3 + dn4 * dn4;
+        max_dn = max_dn.max(dn1.abs()).max(dn2.abs()).max(dn3.abs()).max(dn4.abs());
+        n_stations += 1;
     }
 
     // === Step 3: Update lower surface BL variables ===
@@ -1475,10 +2017,129 @@ pub fn apply_global_updates(
         // Recompute secondary variables (Hk, Cf, Cd, etc.) for next iteration
         let flow_type = if station.is_laminar { FlowType::Laminar } else { FlowType::Turbulent };
         blvar(station, flow_type, msq, re);
+        
+        // === Accumulate normalized changes for RMSBL (XFOIL xbl.f lines 1545-1572) ===
+        // CRITICAL: RMSBL uses PROPOSED changes (no rlx), not APPLIED changes
+        // XFOIL: IF(IBL.GE.ITRAN(IS)) DN1 = DCTAU / CTAU(IBL,IS)
+        let dn1 = if lower_stations[ibl].is_laminar {
+            delta[0] / 10.0  // NO rlx!
+        } else if lower_stations[ibl].ctau.abs() > 1e-10 {
+            delta[0] / lower_stations[ibl].ctau
+        } else {
+            delta[0] / 0.03
+        };
+        
+        let dn2 = if lower_stations[ibl].theta.abs() > 1e-12 {
+            delta[1] / lower_stations[ibl].theta
+        } else {
+            0.0
+        };
+        
+        // Use PROPOSED changes (no rlx) for DN3 and DN4
+        let dn3 = if lower_stations[ibl].delta_star.abs() > 1e-12 {
+            d_dstar / lower_stations[ibl].delta_star
+        } else {
+            d_dstar / 1e-6
+        };
+        
+        // XFOIL: DN4 = ABS(DUEDG)/0.25 (fixed constant)
+        let dn4 = due.abs() / 0.25;
+        
+        // Debug transition stations (60-70 on lower surface)
+        if ibl >= 60 && ibl <= 70 && std::env::var("RUSTFOIL_TRANS_DEBUG").is_ok() {
+            // Find first turbulent station index for reference
+            let trans_idx = lower_stations.iter()
+                .position(|s| !s.is_laminar)
+                .unwrap_or(9999);
+            let is_trans = ibl == trans_idx;
+            let normalizer = if lower_stations[ibl].is_laminar {
+                "10.0".to_string()
+            } else if lower_stations[ibl].ctau.abs() > 1e-10 {
+                format!("ctau={:.6e}", lower_stations[ibl].ctau)
+            } else {
+                "0.03".to_string()
+            };
+            eprintln!("[TRANS DEBUG] lower[{}]: is_laminar={}, ctau={:.6e}, theta={:.6e}, dstr={:.6e}, Ue={:.4}{}",
+                ibl, lower_stations[ibl].is_laminar, lower_stations[ibl].ctau, 
+                lower_stations[ibl].theta, lower_stations[ibl].delta_star, lower_stations[ibl].u,
+                if is_trans { " <-- TRANSITION" } else { "" });
+            eprintln!("              delta[0]={:.6e}, delta[1]={:.6e}, delta[2]={:.6e}",
+                delta[0], delta[1], delta[2]);
+            eprintln!("              dn1={:.4} (div by {}), dn2={:.4}, dn3={:.4}, dn4={:.4}",
+                dn1, normalizer, dn2, dn3, dn4);
+            // Show the raw calculation for transition station
+            if is_trans {
+                eprintln!("              [TRANS] dn1 = delta[0]/ctau = {:.6e}/{:.6e} = {:.4}",
+                    delta[0], lower_stations[ibl].ctau, delta[0] / lower_stations[ibl].ctau.max(1e-10));
+            }
+        }
+        
+        rms_sum += dn1 * dn1 + dn2 * dn2 + dn3 * dn3 + dn4 * dn4;
+        max_dn = max_dn.max(dn1.abs()).max(dn2.abs()).max(dn3.abs()).max(dn4.abs());
+        n_stations += 1;
     }
     
-    // Return the actual relaxation factor used
-    rlx
+    // Emit UPDATE_SUMMARY debug event with relaxation details
+    if rustfoil_bl::is_debug_active() {
+        // Collect sample update data for every 10th station (upper surface)
+        // Skip station 0 (stagnation point) - start from ibl=1
+        for ibl in (1..upper_stations.len()).filter(|i| i % 10 == 0) {
+            let iv = system.to_global(0, ibl);
+            if iv >= deltas.len() { continue; }
+            
+            let station = &upper_stations[ibl];
+            let new_u = upper_new_ue.get(ibl).copied().unwrap_or(station.u);
+            let due = new_u - station.u;
+            
+            let dn1 = if station.is_laminar {
+                deltas[iv][0] / 10.0
+            } else if station.ctau.abs() > 1e-10 {
+                deltas[iv][0] / station.ctau
+            } else {
+                deltas[iv][0] / 0.03
+            };
+            let dn2 = if station.theta.abs() > 1e-12 { deltas[iv][1] / station.theta } else { 0.0 };
+            let d_dstar = (deltas[iv][2] - station.delta_star * due) / station.u.max(1e-6);
+            let dn3 = if station.delta_star.abs() > 1e-12 { d_dstar / station.delta_star } else { 0.0 };
+            // XFOIL: DN4 = ABS(DUEDG)/0.25 (fixed constant)
+            let dn4 = due.abs() / 0.25;
+            
+            sample_updates.push(rustfoil_bl::SampleUpdateData {
+                ibl,
+                dn1,
+                dn2,
+                dn3,
+                dn4,
+                d_ctau: deltas[iv][0],
+                d_theta: deltas[iv][1],
+                d_dstar,
+                d_ue: due,
+            });
+        }
+        
+        rustfoil_bl::add_event(rustfoil_bl::DebugEvent::update_summary(
+            0,  // iteration will be set by caller context
+            rlx_computed,
+            rlx,
+            limiting_station,
+            limiting_reason,
+            sample_updates,
+        ));
+    }
+    
+    // === Compute final RMS of normalized changes (XFOIL's RMSBL) ===
+    // RMSBL = sqrt(sum(DN1² + DN2² + DN3² + DN4²) / (4*N))
+    let rms_change = if n_stations > 0 {
+        (rms_sum / (4.0 * n_stations as f64)).sqrt()
+    } else {
+        0.0
+    };
+    
+    GlobalUpdateResult {
+        relaxation_used: rlx,
+        rms_change,
+        max_change: max_dn,
+    }
 }
 
 /// Compute new edge velocities via DIJ influence matrix.
@@ -1505,8 +2166,12 @@ fn compute_new_ue_via_dij(
     let vti_upper = 1.0_f64;
     let vti_lower = -1.0_f64;
     
-    // Compute new Ue for upper surface stations (IS=1)
-    for i in 0..n_upper {
+    // Skip station 0 (stagnation point) - XFOIL starts from ibl=2
+    // Keep original Ue at stagnation point (Ue≈0.001)
+    upper_new_ue[0] = upper_stations[0].u;
+    
+    // Compute new Ue for upper surface stations (IS=1), starting from station 1
+    for i in 1..n_upper {
         let panel_i = upper_stations[i].panel_idx;
         if panel_i >= dij.nrows() {
             upper_new_ue[i] = upper_stations[i].u;
@@ -1523,7 +2188,8 @@ fn compute_new_ue_via_dij(
         
         // Upper surface contribution (JS=1, VTI_j = +1)
         // UE_M = -VTI_upper * VTI_upper * DIJ = -1 * 1 * DIJ = -DIJ
-        for j in 0..n_upper {
+        // XFOIL starts from JBL=2 (skips stagnation), so we start from j=1
+        for j in 1..n_upper {
             let panel_j = upper_stations[j].panel_idx;
             if panel_j >= dij.ncols() {
                 continue;
@@ -1539,7 +2205,8 @@ fn compute_new_ue_via_dij(
         
         // Lower surface contribution (JS=2, VTI_j = -1)
         // UE_M = -VTI_upper * VTI_lower * DIJ = -1 * (-1) * DIJ = +DIJ
-        for j in 0..n_lower {
+        // XFOIL starts from JBL=2 (skips stagnation), so we start from j=1
+        for j in 1..n_lower {
             let panel_j = lower_stations[j].panel_idx;
             if panel_j >= dij.ncols() {
                 continue;
@@ -1566,8 +2233,12 @@ fn compute_new_ue_via_dij(
         upper_new_ue[i] = ue_new.clamp(0.01, 5.0);
     }
     
-    // Compute new Ue for lower surface stations (IS=2)
-    for i in 0..n_lower {
+    // Skip station 0 (stagnation point) - XFOIL starts from ibl=2
+    // Keep original Ue at stagnation point (Ue≈0.001)
+    lower_new_ue[0] = lower_stations[0].u;
+    
+    // Compute new Ue for lower surface stations (IS=2), starting from station 1
+    for i in 1..n_lower {
         let panel_i = lower_stations[i].panel_idx;
         if panel_i >= dij.nrows() {
             lower_new_ue[i] = lower_stations[i].u;
@@ -1579,7 +2250,8 @@ fn compute_new_ue_via_dij(
         
         // Upper surface contribution (JS=1, VTI_j = +1)
         // UE_M = -VTI_lower * VTI_upper * DIJ = -(-1) * 1 * DIJ = +DIJ
-        for j in 0..n_upper {
+        // XFOIL starts from JBL=2 (skips stagnation), so we start from j=1
+        for j in 1..n_upper {
             let panel_j = upper_stations[j].panel_idx;
             if panel_j >= dij.ncols() {
                 continue;
@@ -1594,7 +2266,8 @@ fn compute_new_ue_via_dij(
         
         // Lower surface contribution (JS=2, VTI_j = -1)
         // UE_M = -VTI_lower * VTI_lower * DIJ = -(-1)*(-1) * DIJ = -DIJ
-        for j in 0..n_lower {
+        // XFOIL starts from JBL=2 (skips stagnation), so we start from j=1
+        for j in 1..n_lower {
             let panel_j = lower_stations[j].panel_idx;
             if panel_j >= dij.ncols() {
                 continue;

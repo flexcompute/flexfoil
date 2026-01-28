@@ -36,8 +36,10 @@ pub struct ViscousSolverConfig {
     /// XFOIL typically converges in 10-30 iterations.
     pub max_iterations: usize,
 
-    /// Convergence tolerance on RMS residual.
-    /// Solution is converged when RMS(ΔBL/BL) < tolerance.
+    /// Convergence tolerance for RMSBL (RMS of normalized changes).
+    /// XFOIL uses RMSBL = sqrt(sum(DN1² + DN2² + DN3² + DN4²) / (4*N))
+    /// where DN1-DN4 are normalized changes in ctau/ampl, theta, delta*, Ue.
+    /// Default: 1e-4 (XFOIL's standard tolerance).
     pub tolerance: f64,
 
     /// Under-relaxation factor (0-1).

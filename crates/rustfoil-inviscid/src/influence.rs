@@ -42,6 +42,8 @@ pub struct PsilinResult {
     pub dzdg: Vec<f64>,
     /// ∂ψ/∂σⱼ for each node j (source influence, if computed)
     pub dzdm: Vec<f64>,
+    /// ∂Qtan/∂σⱼ for each node j (tangential velocity derivative w.r.t. source)
+    pub dqdm: Vec<f64>,
 }
 
 /// Intermediate values from a single panel's contribution.
@@ -95,6 +97,317 @@ pub fn psilin_with_sources(
     yi: f64,
 ) -> PsilinResult {
     psilin_internal(geom, i, xi, yi, true)
+}
+
+/// Compute influence coefficients with DQDM (tangential velocity derivatives).
+///
+/// This is XFOIL's PSILIN with SIGLIN=.TRUE., computing:
+/// - dzdm: ∂ψ/∂σⱼ (streamfunction derivatives w.r.t. source strength)
+/// - dqdm: ∂Qtan/∂σⱼ (tangential velocity derivatives w.r.t. source strength)
+///
+/// The DQDM computation uses half-panel decomposition with PSNI/PDNI normal
+/// derivatives, matching XFOIL's QDCALC implementation.
+///
+/// # Arguments
+///
+/// * `geom` - Airfoil geometry
+/// * `i` - Index of the field point (for singularity handling)
+/// * `xi`, `yi` - Field point coordinates
+/// * `nxi`, `nyi` - Field point normal vector (for tangential velocity computation)
+///
+/// # Returns
+///
+/// A `PsilinResult` containing dzdg, dzdm, and dqdm arrays.
+pub fn psilin_with_dqdm(
+    geom: &AirfoilGeometry,
+    i: usize,
+    xi: f64,
+    yi: f64,
+    nxi: f64,
+    nyi: f64,
+) -> PsilinResult {
+    let n = geom.n;
+
+    // Initialize influence coefficient arrays
+    let mut dzdg = vec![0.0; n];
+    let mut dzdm = vec![0.0; n];
+    let mut dqdm = vec![0.0; n];
+
+    // Initialize accumulated values
+    let psi = 0.0;
+    let qtan1 = 0.0;
+    let qtan2 = 0.0;
+
+    // Distance tolerance for TE panel skip
+    let seps = geom.total_arc_length() * 1e-5;
+
+    // TE panel coefficients
+    let (scs, sds) = geom.te_coefficients();
+
+    // Determine if field point is on airfoil (affects SGN)
+    let sgn_surface = if i < n { 1.0 } else { 0.0 };
+
+    // Loop over all panels (JO = 0 to N-1 in 0-based indexing)
+    for jo in 0..n {
+        let jp = (jo + 1) % n; // JP = JO+1, wrapping for TE panel
+
+        // Panel endpoints
+        let x_jo = geom.x[jo];
+        let y_jo = geom.y[jo];
+        let x_jp = geom.x[jp];
+        let y_jp = geom.y[jp];
+
+        // Panel vector and length
+        let dx = x_jp - x_jo;
+        let dy = y_jp - y_jo;
+        let ds_sq = dx * dx + dy * dy;
+
+        // TE panel (jo = n-1) uses special handling after the main loop
+        if jo == n - 1 {
+            continue;
+        }
+
+        // Skip zero-length panels
+        if ds_sq < 1e-24 {
+            continue;
+        }
+
+        let dso = ds_sq.sqrt();
+        let dsio = 1.0 / dso;
+
+        // Unit tangent vector along panel
+        let sx = dx * dsio;
+        let sy = dy * dsio;
+
+        // Vector from panel endpoints to field point
+        let rx1 = xi - x_jo;
+        let ry1 = yi - y_jo;
+        let rx2 = xi - x_jp;
+        let ry2 = yi - y_jp;
+
+        // Transform to panel-local coordinates
+        let x1 = sx * rx1 + sy * ry1;
+        let x2 = sx * rx2 + sy * ry2;
+        let yy = sx * ry1 - sy * rx1;
+
+        // Squared distances to endpoints
+        let rs1 = rx1 * rx1 + ry1 * ry1;
+        let rs2 = rx2 * rx2 + ry2 * ry2;
+
+        // SGN reflection for branch cuts
+        let sgn = if sgn_surface != 0.0 {
+            1.0
+        } else if yy >= 0.0 {
+            1.0
+        } else {
+            -1.0
+        };
+        let pi_offset = (0.5 - 0.5 * sgn) * PI;
+
+        let (g1, t1) = if i != jo && rs1 > 1e-20 {
+            (rs1.ln(), (sgn * x1).atan2(sgn * yy) + pi_offset)
+        } else {
+            (0.0, 0.0)
+        };
+
+        let (g2, t2) = if i != jp && rs2 > 1e-20 {
+            (rs2.ln(), (sgn * x2).atan2(sgn * yy) + pi_offset)
+        } else {
+            (0.0, 0.0)
+        };
+
+        // Panel angle
+        let apan = geom.apanel[jo];
+
+        // Midpoint quantities for half-panel decomposition
+        let x0 = 0.5 * (x1 + x2);
+        let rs0 = x0 * x0 + yy * yy;
+        let g0 = if rs0 > 0.0 { rs0.ln() } else { 0.0 };
+        let t0 = (sgn * x0).atan2(sgn * yy) + pi_offset;
+
+        // Transform normal to panel coordinates (for DQDM)
+        let x1i = sx * nxi + sy * nyi;
+        let x2i = x1i; // Same for both endpoints
+        let yyi = sx * nyi - sy * nxi;
+
+        // Neighboring panel indices for source gradient stencil
+        let jm = if jo == 0 { jo } else { jo - 1 };
+        let jq = if jo == n - 2 { jp } else { jp + 1 };
+
+        // ============ First half-panel (1-0) ============
+        {
+            let dxinv = safe_inv(x1 - x0);
+
+            // Panel integrals for streamfunction (PSUM, PDIF)
+            let psum = x0 * (t0 - apan) - x1 * (t1 - apan) + 0.5 * yy * (g1 - g0);
+            let pdif = ((x1 + x0) * psum
+                + rs1 * (t1 - apan)
+                - rs0 * (t0 - apan)
+                + (x0 - x1) * yy)
+                * dxinv;
+
+            // Source strength derivatives
+            let dsm = ((geom.x[jp] - geom.x[jm]).powi(2) + (geom.y[jp] - geom.y[jm]).powi(2)).sqrt();
+            let dsim = safe_inv(dsm);
+
+            // Accumulate dPsi/dm (DZDM)
+            dzdm[jm] += QOPI * (-psum * dsim + pdif * dsim);
+            dzdm[jo] += QOPI * (-psum * dsio - pdif * dsio);
+            dzdm[jp] += QOPI * (psum * (dsio + dsim) + pdif * (dsio - dsim));
+
+            // Normal derivatives for tangential velocity (PSNI, PDNI)
+            let psx1 = -(t1 - apan);
+            let psx0 = t0 - apan;
+            let psyy = 0.5 * (g1 - g0);
+
+            let pdx1 = ((x1 + x0) * psx1 + psum + 2.0 * x1 * (t1 - apan) - pdif) * dxinv;
+            let pdx0 = ((x1 + x0) * psx0 + psum - 2.0 * x0 * (t0 - apan) + pdif) * dxinv;
+            let pdyy = ((x1 + x0) * psyy + 2.0 * (x0 - x1 + yy * (t1 - t0))) * dxinv;
+
+            let psni = psx1 * x1i + psx0 * (x1i + x2i) * 0.5 + psyy * yyi;
+            let pdni = pdx1 * x1i + pdx0 * (x1i + x2i) * 0.5 + pdyy * yyi;
+
+            // Accumulate dQtan/dm (DQDM)
+            dqdm[jm] += QOPI * (-psni * dsim + pdni * dsim);
+            dqdm[jo] += QOPI * (-psni * dsio - pdni * dsio);
+            dqdm[jp] += QOPI * (psni * (dsio + dsim) + pdni * (dsio - dsim));
+        }
+
+        // ============ Second half-panel (0-2) ============
+        {
+            let dxinv = safe_inv(x0 - x2);
+
+            let psum = x2 * (t2 - apan) - x0 * (t0 - apan) + 0.5 * yy * (g0 - g2);
+            let pdif = ((x0 + x2) * psum
+                + rs0 * (t0 - apan)
+                - rs2 * (t2 - apan)
+                + (x2 - x0) * yy)
+                * dxinv;
+
+            let dsp = ((geom.x[jq] - geom.x[jo]).powi(2) + (geom.y[jq] - geom.y[jo]).powi(2)).sqrt();
+            let dsip = safe_inv(dsp);
+
+            // Accumulate dPsi/dm (DZDM)
+            dzdm[jo] += QOPI * (-psum * (dsip + dsio) - pdif * (dsip - dsio));
+            dzdm[jp] += QOPI * (psum * dsio - pdif * dsio);
+            dzdm[jq] += QOPI * (psum * dsip + pdif * dsip);
+
+            // Normal derivatives for tangential velocity
+            let psx0 = -(t0 - apan);
+            let psx2 = t2 - apan;
+            let psyy = 0.5 * (g0 - g2);
+
+            let pdx0 = ((x0 + x2) * psx0 + psum + 2.0 * x0 * (t0 - apan) - pdif) * dxinv;
+            let pdx2 = ((x0 + x2) * psx2 + psum - 2.0 * x2 * (t2 - apan) + pdif) * dxinv;
+            let pdyy = ((x0 + x2) * psyy + 2.0 * (x2 - x0 + yy * (t0 - t2))) * dxinv;
+
+            let psni = psx0 * (x1i + x2i) * 0.5 + psx2 * x2i + psyy * yyi;
+            let pdni = pdx0 * (x1i + x2i) * 0.5 + pdx2 * x2i + pdyy * yyi;
+
+            // Accumulate dQtan/dm (DQDM)
+            dqdm[jo] += QOPI * (-psni * (dsip + dsio) - pdni * (dsip - dsio));
+            dqdm[jp] += QOPI * (psni * dsio - pdni * dsio);
+            dqdm[jq] += QOPI * (psni * dsip + pdni * dsip);
+        }
+
+        // Compute PSIS and PSID for vortex contribution (same as psilin_internal)
+        let contrib = compute_psis_psid(x1, x2, yy, rs1, rs2, g1, g2, t1, t2);
+        dzdg[jo] += QOPI * (contrib.psis - contrib.psid);
+        dzdg[jp] += QOPI * (contrib.psis + contrib.psid);
+    }
+
+    // TE panel special treatment (XFOIL lines 407-438)
+    if !geom.sharp {
+        let jo = n - 1;
+        let jp = 0;
+
+        let x_jo = geom.x[jo];
+        let y_jo = geom.y[jo];
+        let x_jp = geom.x[jp];
+        let y_jp = geom.y[jp];
+
+        let dx = x_jp - x_jo;
+        let dy = y_jp - y_jo;
+        let ds_sq = dx * dx + dy * dy;
+
+        if ds_sq > seps * seps {
+            let dso = ds_sq.sqrt();
+            let dsio = 1.0 / dso;
+
+            let sx = dx * dsio;
+            let sy = dy * dsio;
+
+            let rx1 = xi - x_jo;
+            let ry1 = yi - y_jo;
+            let rx2 = xi - x_jp;
+            let ry2 = yi - y_jp;
+
+            let x1 = sx * rx1 + sy * ry1;
+            let x2 = sx * rx2 + sy * ry2;
+            let yy = sx * ry1 - sy * rx1;
+
+            let rs1 = rx1 * rx1 + ry1 * ry1;
+            let rs2 = rx2 * rx2 + ry2 * ry2;
+
+            let apan = geom.apanel[jo];
+
+            let sgn = if sgn_surface != 0.0 {
+                1.0
+            } else if yy >= 0.0 {
+                1.0
+            } else {
+                -1.0
+            };
+            let pi_offset = (0.5 - 0.5 * sgn) * PI;
+
+            let (g1, t1_raw) = if i != jo && rs1 > 1e-20 {
+                (rs1.ln(), (sgn * x1).atan2(sgn * yy) + pi_offset)
+            } else {
+                (0.0, 0.0)
+            };
+
+            let (g2, t2_raw) = if i != jp && rs2 > 1e-20 {
+                (rs2.ln(), (sgn * x2).atan2(sgn * yy) + pi_offset)
+            } else {
+                (0.0, 0.0)
+            };
+
+            // PSIG/PGAM formulas for TE panel
+            let psig = 0.5 * yy * (g1 - g2) + x2 * (t2_raw - apan) - x1 * (t1_raw - apan);
+            let pgam = 0.5 * x1 * g1 - 0.5 * x2 * g2 + x2 - x1 + yy * (t1_raw - t2_raw);
+
+            // TE panel dPsi/dGam
+            dzdg[jo] += HOPI * (-psig * scs + pgam * sds) * 0.5;
+            dzdg[jp] += HOPI * (psig * scs - pgam * sds) * 0.5;
+
+            // TE panel DQDM contribution (using PSIG normal derivative)
+            // Transform normal to panel coordinates
+            let x1i = sx * nxi + sy * nyi;
+            let yyi = sx * nyi - sy * nxi;
+
+            // Normal derivatives of PSIG for TE panel
+            // PSIG = 0.5*YY*(G1-G2) + X2*(T2-APAN) - X1*(T1-APAN)
+            // d(PSIG)/d(X1) = -(T1-APAN), d(PSIG)/d(X2) = (T2-APAN), d(PSIG)/d(YY) = 0.5*(G1-G2)
+            let psig_x1 = -(t1_raw - apan);
+            let psig_x2 = t2_raw - apan;
+            let psig_yy = 0.5 * (g1 - g2);
+
+            let psig_ni = psig_x1 * x1i + psig_x2 * x1i + psig_yy * yyi;
+
+            // TE panel uses SCS/SDS weighting
+            dqdm[jo] += HOPI * (-psig_ni * scs) * 0.5;
+            dqdm[jp] += HOPI * (psig_ni * scs) * 0.5;
+        }
+    }
+
+    PsilinResult {
+        psi,
+        qtan1,
+        qtan2,
+        dzdg,
+        dzdm,
+        dqdm,
+    }
 }
 
 fn psilin_internal(
@@ -335,6 +648,7 @@ fn psilin_internal(
         qtan2,
         dzdg,
         dzdm,
+        dqdm: vec![0.0; n], // Empty for legacy functions
     }
 }
 

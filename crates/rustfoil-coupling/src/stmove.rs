@@ -10,6 +10,22 @@
 
 use rustfoil_bl::state::BlStation;
 
+/// Result of stagnation point finding, including derivatives.
+///
+/// XFOIL computes derivatives of the stagnation point arc length
+/// with respect to gamma changes, used for Newton coupling.
+#[derive(Debug, Clone, Copy)]
+pub struct StagnationResult {
+    /// Panel index where stagnation occurs (between ist and ist+1)
+    pub ist: usize,
+    /// Exact arc length of stagnation point
+    pub sst: f64,
+    /// dSST/dGAM(IST) - sensitivity to upstream gamma
+    pub sst_go: f64,
+    /// dSST/dGAM(IST+1) - sensitivity to downstream gamma
+    pub sst_gp: f64,
+}
+
 /// Find stagnation point from circulation (gamma) sign change.
 ///
 /// XFOIL's STFIND algorithm: finds where gamma changes from positive
@@ -25,6 +41,25 @@ use rustfoil_bl::state::BlStation;
 /// # XFOIL Reference
 /// xpanel.f STFIND (lines 1357-1392)
 pub fn find_stagnation_by_gamma(gamma: &[f64], s: &[f64]) -> Option<(usize, f64)> {
+    find_stagnation_with_derivs(gamma, s).map(|r| (r.ist, r.sst))
+}
+
+/// Find stagnation point with derivatives for Newton coupling.
+///
+/// Returns the stagnation location and its derivatives with respect
+/// to gamma changes at adjacent panels. These derivatives (SST_GO, SST_GP)
+/// are used in XFOIL's global Newton system for stagnation point coupling.
+///
+/// # Arguments
+/// * `gamma` - Circulation distribution around airfoil
+/// * `s` - Arc length array
+///
+/// # Returns
+/// `StagnationResult` with ist, sst, sst_go, sst_gp
+///
+/// # XFOIL Reference
+/// xpanel.f STFIND (lines 1357-1445)
+pub fn find_stagnation_with_derivs(gamma: &[f64], s: &[f64]) -> Option<StagnationResult> {
     if gamma.len() < 2 || gamma.len() != s.len() {
         return None;
     }
@@ -52,12 +87,29 @@ pub fn find_stagnation_by_gamma(gamma: &[f64], s: &[f64]) -> Option<(usize, f64)
                 sst
             };
 
-            return Some((i, sst));
+            // Compute derivatives of stagnation arc length wrt gamma (XFOIL lines 1438-1439)
+            // SST_GO = dSST/dGAM(IST) = (SST - S(I+1)) / DGAM
+            // SST_GP = dSST/dGAM(IST+1) = (S(I) - SST) / DGAM
+            let sst_go = (sst - s[i + 1]) / dgam;
+            let sst_gp = (s[i] - sst) / dgam;
+
+            return Some(StagnationResult {
+                ist: i,
+                sst,
+                sst_go,
+                sst_gp,
+            });
         }
     }
 
     // No sign change found - stagnation at midpoint (fallback)
-    Some((gamma.len() / 2, s[gamma.len() / 2]))
+    let mid = gamma.len() / 2;
+    Some(StagnationResult {
+        ist: mid,
+        sst: s[mid],
+        sst_go: 0.0, // No derivatives when using fallback
+        sst_gp: 0.0,
+    })
 }
 
 /// Shift BL stations downstream (increase indices).

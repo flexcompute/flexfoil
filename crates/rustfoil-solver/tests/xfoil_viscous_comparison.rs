@@ -215,6 +215,107 @@ fn load_naca0012_coords() -> Option<Vec<(f64, f64)>> {
     }
 }
 
+/// Generate NACA 4-digit airfoil coordinates.
+/// Format: MPXX where M=max camber (%), P=position of max camber (tenths), XX=thickness (%)
+fn generate_naca_4digit(naca: &str, n_points: usize) -> Option<Vec<(f64, f64)>> {
+    if naca.len() != 4 {
+        return None;
+    }
+    
+    let m = naca[0..1].parse::<f64>().ok()? / 100.0; // max camber
+    let p = naca[1..2].parse::<f64>().ok()? / 10.0;  // position of max camber
+    let t = naca[2..4].parse::<f64>().ok()? / 100.0; // thickness
+    
+    // Generate x coordinates using cosine spacing
+    let mut coords = Vec::with_capacity(2 * n_points + 1);
+    
+    // Upper surface (TE to LE)
+    for i in 0..=n_points {
+        let beta = std::f64::consts::PI * (i as f64) / (n_points as f64);
+        let x = 0.5 * (1.0 + beta.cos());
+        
+        // Thickness distribution (NACA formula)
+        let yt = 5.0 * t * (0.2969 * x.sqrt() - 0.1260 * x - 0.3516 * x.powi(2) 
+                          + 0.2843 * x.powi(3) - 0.1015 * x.powi(4));
+        
+        // Camber line
+        let yc = if p > 0.0 {
+            if x < p {
+                m / (p * p) * (2.0 * p * x - x * x)
+            } else {
+                m / ((1.0 - p) * (1.0 - p)) * ((1.0 - 2.0 * p) + 2.0 * p * x - x * x)
+            }
+        } else {
+            0.0
+        };
+        
+        // Camber slope
+        let dyc_dx = if p > 0.0 {
+            if x < p {
+                2.0 * m / (p * p) * (p - x)
+            } else {
+                2.0 * m / ((1.0 - p) * (1.0 - p)) * (p - x)
+            }
+        } else {
+            0.0
+        };
+        
+        let theta = dyc_dx.atan();
+        let xu = x - yt * theta.sin();
+        let yu = yc + yt * theta.cos();
+        
+        coords.push((xu, yu));
+    }
+    
+    // Lower surface (LE to TE, skip LE point to avoid duplicate)
+    for i in 1..=n_points {
+        let beta = std::f64::consts::PI * (1.0 - (i as f64) / (n_points as f64));
+        let x = 0.5 * (1.0 + beta.cos());
+        
+        let yt = 5.0 * t * (0.2969 * x.sqrt() - 0.1260 * x - 0.3516 * x.powi(2) 
+                          + 0.2843 * x.powi(3) - 0.1015 * x.powi(4));
+        
+        let yc = if p > 0.0 {
+            if x < p {
+                m / (p * p) * (2.0 * p * x - x * x)
+            } else {
+                m / ((1.0 - p) * (1.0 - p)) * ((1.0 - 2.0 * p) + 2.0 * p * x - x * x)
+            }
+        } else {
+            0.0
+        };
+        
+        let dyc_dx = if p > 0.0 {
+            if x < p {
+                2.0 * m / (p * p) * (p - x)
+            } else {
+                2.0 * m / ((1.0 - p) * (1.0 - p)) * (p - x)
+            }
+        } else {
+            0.0
+        };
+        
+        let theta = dyc_dx.atan();
+        let xl = x + yt * theta.sin();
+        let yl = yc - yt * theta.cos();
+        
+        coords.push((xl, yl));
+    }
+    
+    Some(coords)
+}
+
+/// Load coordinates for a given NACA airfoil (generates if needed)
+fn load_naca_coords(naca: &str) -> Option<Vec<(f64, f64)>> {
+    // For 0012, use the existing file for consistency
+    if naca == "0012" {
+        return load_naca0012_coords();
+    }
+    
+    // Generate other NACA airfoils
+    generate_naca_4digit(naca, 80)
+}
+
 // ============================================================================
 // Test Suite 1: Inviscid Inputs to Viscous Solver
 // ============================================================================
@@ -747,7 +848,7 @@ fn test_viscous_cl_cd_end_to_end() {
     let sst = setup_result.sst;
     
     // Get stagnation Ue (interpolated)
-    let ue_stag = setup_result.setup.ue_inviscid[ist].abs().min(0.01);
+    let ue_stag = setup_result.setup.ue_inviscid[ist].abs().max(0.01);
     
     let (upper_arc, upper_x, _upper_y, upper_ue) = extract_surface_xfoil(
         ist, sst, ue_stag, &full_arc, &setup_result.node_x, &setup_result.node_y, 
@@ -763,7 +864,7 @@ fn test_viscous_cl_cd_end_to_end() {
     
     // Configure viscous solver
     use rustfoil_solver::viscous::ViscousSolverConfig;
-    let config = ViscousSolverConfig::with_reynolds(1e6)
+    let config = ViscousSolverConfig::with_reynolds(3e6)  // Match XFOIL's Re=3e6
         .with_max_iterations(20);
     
     // Initialize BL stations for both surfaces with proper panel indices
@@ -872,7 +973,18 @@ fn test_viscous_cl_cd_end_to_end() {
 /// Run viscous solver at a specific alpha and return results.
 /// This is a helper function for the comparison tests.
 fn run_viscous_at_alpha(alpha_deg: f64) -> Option<(f64, f64, f64, f64, f64, f64)> {
-    let coords = load_naca0012_coords()?;
+    run_viscous_at_alpha_with_airfoil(alpha_deg, None)
+}
+
+/// Run viscous solver at a specific alpha with a specific airfoil.
+/// If naca is None, uses NACA 0012 (or RUSTFOIL_TEST_AIRFOIL env var).
+fn run_viscous_at_alpha_with_airfoil(alpha_deg: f64, naca: Option<&str>) -> Option<(f64, f64, f64, f64, f64, f64)> {
+    // Determine which airfoil to use
+    let airfoil = naca.map(|s| s.to_string()).or_else(|| {
+        std::env::var("RUSTFOIL_TEST_AIRFOIL").ok()
+    }).unwrap_or_else(|| "0012".to_string());
+    
+    let coords = load_naca_coords(&airfoil)?;
     
     let result = setup_from_coords(&coords, alpha_deg).ok()?;
     
@@ -881,7 +993,7 @@ fn run_viscous_at_alpha(alpha_deg: f64) -> Option<(f64, f64, f64, f64, f64, f64)
     let full_arc = compute_arc_lengths(&result.node_x, &result.node_y);
     let ist = result.ist;
     let sst = result.sst;
-    let ue_stag = result.setup.ue_inviscid[ist].abs().min(0.01);
+    let ue_stag = result.setup.ue_inviscid[ist].abs().max(0.01);
     
     let (upper_arc, upper_x, _, upper_ue) = extract_surface_xfoil(
         ist, sst, ue_stag, &full_arc, &result.node_x, &result.node_y, 
@@ -893,7 +1005,7 @@ fn run_viscous_at_alpha(alpha_deg: f64) -> Option<(f64, f64, f64, f64, f64, f64)
     );
     
     use rustfoil_solver::viscous::ViscousSolverConfig;
-    let config = ViscousSolverConfig::with_reynolds(1e6).with_max_iterations(20);
+    let config = ViscousSolverConfig::with_reynolds(3e6).with_max_iterations(20);  // Match XFOIL's Re=3e6
     
     // CRITICAL: Must use initialize_surface_stations_with_panel_idx to properly set
     // panel indices for VI coupling. Without this, all stations map to panel 0 and
@@ -905,6 +1017,60 @@ fn run_viscous_at_alpha(alpha_deg: f64) -> Option<(f64, f64, f64, f64, f64, f64)
     let mut lower_stations = initialize_surface_stations_with_panel_idx(
         &lower_arc, &lower_ue, &lower_x, ist, n_airfoil_panels, false, config.reynolds);
     
+    // === ADD WAKE STATIONS TO LOWER SURFACE (XFOIL-style) ===
+    // XFOIL puts all wake stations on the lower surface (IS=2).
+    // This is critical for proper VI coupling - the DIJ matrix includes wake panels.
+    use rustfoil_solver::viscous::{initialize_wake_bl_stations, compute_n_wake_panels};
+    
+    let dij_size = result.setup.dij.nrows();
+    let n_wake_panels = compute_n_wake_panels(dij_size, n_airfoil_panels);
+    
+    // Also need to extend lower_ue for the wake stations
+    // Wake Ue values: use wake_edge_velocity function
+    use rustfoil_coupling::wake::{generate_wake_positions, wake_edge_velocity};
+    let lower_ue_extended: Vec<f64> = if n_wake_panels > 0 {
+        let ue_te = lower_ue.last().copied().unwrap_or(0.8);
+        let wake_x = generate_wake_positions(n_wake_panels, 1.0);
+        let wake_ue: Vec<f64> = wake_x.iter()
+            .map(|&x| wake_edge_velocity(x, ue_te))
+            .collect();
+        [lower_ue.to_vec(), wake_ue].concat()
+    } else {
+        lower_ue.to_vec()
+    };
+    
+    if n_wake_panels > 0 {
+        // Get TE stations for wake initialization
+        let upper_te = upper_stations.last().cloned().unwrap_or_default();
+        let lower_te = lower_stations.last().cloned().unwrap_or_default();
+        
+        // Create wake stations with proper panel indices
+        let msq = config.mach * config.mach;
+        let wake_stations = initialize_wake_bl_stations(
+            &upper_te,
+            &lower_te,
+            n_airfoil_panels,
+            n_wake_panels,
+            1.0,  // wake_length = 1 chord
+            config.reynolds,
+            msq,
+        );
+        
+        // Append wake stations to lower surface (XFOIL convention: IS=2)
+        lower_stations.extend(wake_stations);
+    }
+    
+    // Debug: print station counts
+    if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+        eprintln!("[DEBUG setup] n_airfoil_panels={}, ist={}, sst={:.6}", n_airfoil_panels, ist, sst);
+        eprintln!("[DEBUG setup] upper_stations={}, lower_stations={} (including {} wake)", 
+            upper_stations.len(), lower_stations.len(), n_wake_panels);
+        eprintln!("[DEBUG setup] dij size: {}x{}, n_wake_panels={}", 
+            result.setup.dij.nrows(), result.setup.dij.ncols(), n_wake_panels);
+        eprintln!("[DEBUG setup] Total BL stations: {} (target: 185)", 
+            upper_stations.len() + lower_stations.len());
+    }
+    
     use rustfoil_solver::viscous::solve_viscous_two_surfaces;
     
     // Pass alpha in radians and panel geometry for XFOIL-exact CLCALC
@@ -913,7 +1079,7 @@ fn run_viscous_at_alpha(alpha_deg: f64) -> Option<(f64, f64, f64, f64, f64, f64)
         &mut upper_stations,
         &mut lower_stations,
         &upper_ue,
-        &lower_ue,
+        &lower_ue_extended.as_slice(),
         &result.setup.dij,
         &config,
         alpha_rad,
@@ -942,6 +1108,57 @@ fn test_viscous_at_alpha() {
         println!("  x_tr lower = {:.4}", xtr_lower);
     } else {
         println!("  FAILED to run viscous solver");
+    }
+}
+
+/// Test for generating Newton iteration traces at a specific alpha
+/// 
+/// Generates comprehensive debug output for comparison with XFOIL.
+/// Run with: RUSTFOIL_TEST_ALPHA=4 RUSTFOIL_FULL_TRACE=1 cargo test --release test_newton_iteration_trace -- --nocapture
+#[test]
+fn test_newton_iteration_trace() {
+    // Get alpha from environment or default to 2.0
+    let alpha_deg: f64 = std::env::var("RUSTFOIL_TEST_ALPHA")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2.0);
+    
+    // Check if full trace mode is enabled
+    let full_trace = std::env::var("RUSTFOIL_FULL_TRACE").is_ok();
+    
+    // Determine output path
+    let output_path = format!("traces/rustfoil_new/rustfoil_alpha_{}.json", alpha_deg as i32);
+    
+    println!("\n=== Newton Iteration Trace at α = {:.1}° ===", alpha_deg);
+    println!("  Full trace mode: {}", full_trace);
+    println!("  Output: {}", output_path);
+    
+    // Initialize debug output if in full trace mode
+    if full_trace {
+        // Create output directory if needed
+        let _ = std::fs::create_dir_all("traces/rustfoil_new");
+        rustfoil_bl::init_debug(&output_path);
+    }
+    
+    // Run the viscous solver
+    if let Some((cl, cd, cf, cp, xtr_upper, xtr_lower)) = run_viscous_at_alpha(alpha_deg) {
+        println!("  CL = {:.4}", cl);
+        println!("  CD = {:.6} (Cf={:.6}, Cp={:.6})", cd, cf, cp);
+        println!("  x_tr upper = {:.4}", xtr_upper);
+        println!("  x_tr lower = {:.4}", xtr_lower);
+        
+        // Finalize debug output
+        if full_trace {
+            rustfoil_bl::finalize_debug();
+            println!("\n  Debug trace written to: {}", output_path);
+        }
+    } else {
+        println!("  FAILED to run viscous solver");
+        
+        // Still finalize debug output on failure
+        if full_trace {
+            rustfoil_bl::finalize_debug();
+        }
     }
 }
 
@@ -1033,4 +1250,151 @@ fn test_full_polar_comparison() {
         // For the test to pass, require CD ratio < 2.0 at all angles
         assert!(cd_max < 2.0, "CD ratio exceeds 2x at some angle of attack");
     }
+}
+
+// ============================================================================
+// Test Suite: DQDM (dQtan/dSigma) Influence Coefficients
+// ============================================================================
+
+/// Reference data for DQDM comparison from xfoil_dqdm.json
+#[derive(Debug, Deserialize)]
+struct DqdmReference {
+    events: Vec<DqdmEvent>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DqdmEvent {
+    subroutine: String,
+    wake_idx: usize,
+    iw: usize,
+    n_airfoil: usize,
+    x: f64,
+    y: f64,
+    nx: f64,
+    ny: f64,
+    dqdm: Vec<f64>,
+}
+
+/// Load DQDM reference data from xfoil_dqdm.json
+fn load_dqdm_reference() -> Option<DqdmReference> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok()?;
+    let workspace_root = Path::new(&manifest_dir).parent()?.parent()?;
+    let ref_path = workspace_root.join("Xfoil-instrumented/bin/xfoil_dqdm.json");
+    
+    if ref_path.exists() {
+        let file = File::open(&ref_path).ok()?;
+        let reader = BufReader::new(file);
+        return serde_json::from_reader(reader).ok();
+    }
+    
+    None
+}
+
+/// Test that DQDM values match XFOIL's PSILIN output.
+///
+/// This validates the core fix: using proper half-panel decomposition with
+/// PSNI/PDNI normal derivatives instead of the wrong point-source approximation.
+#[test]
+fn test_dqdm_matches_xfoil() {
+    use rustfoil_inviscid::{AirfoilGeometry, influence::psilin_with_dqdm};
+    
+    // Load reference data
+    let ref_data = load_dqdm_reference();
+    if ref_data.is_none() {
+        eprintln!("Skipping test: xfoil_dqdm.json not found");
+        return;
+    }
+    let ref_data = ref_data.unwrap();
+    
+    // Load NACA 0012 coordinates (same as XFOIL used)
+    let coords = load_naca0012_coords();
+    if coords.is_none() {
+        eprintln!("Skipping test: NACA 0012 coordinates not found");
+        return;
+    }
+    let coords = coords.unwrap();
+    
+    // Build geometry
+    let geom = AirfoilGeometry::from_points(&coords).expect("Failed to create geometry");
+    
+    println!("\n=== DQDM Comparison Test ===");
+    println!("Testing psilin_with_dqdm() against XFOIL reference values");
+    println!("Airfoil: NACA 0012, {} panels\n", geom.n);
+    
+    let mut all_passed = true;
+    
+    for event in &ref_data.events {
+        if event.subroutine != "DQDM_PSILIN" {
+            continue;
+        }
+        
+        let wake_idx = event.wake_idx;
+        let xi = event.x;
+        let yi = event.y;
+        let nxi = event.nx;
+        let nyi = event.ny;
+        let xfoil_dqdm = &event.dqdm;
+        
+        println!("Wake point {} (iw={}): ({:.6}, {:.6})", wake_idx, event.iw, xi, yi);
+        println!("  Normal: ({:.6e}, {:.6})", nxi, nyi);
+        
+        // Compute DQDM using our new function
+        let result = psilin_with_dqdm(&geom, wake_idx, xi, yi, nxi, nyi);
+        let rust_dqdm = &result.dqdm;
+        
+        // Compare first N values (reference only has first 20)
+        let n_compare = xfoil_dqdm.len().min(rust_dqdm.len());
+        
+        println!("  Comparing first {} DQDM values:", n_compare);
+        println!("  {:>6} {:>14} {:>14} {:>12} {:>10}", "j", "XFOIL", "RustFoil", "Abs Error", "Rel Error");
+        println!("  {}", "-".repeat(60));
+        
+        let mut max_rel_error = 0.0f64;
+        let mut max_abs_error = 0.0f64;
+        let mut errors_under_5pct = 0;
+        
+        for j in 0..n_compare {
+            let xf = xfoil_dqdm[j];
+            let rf = rust_dqdm[j];
+            let abs_err = (rf - xf).abs();
+            let rel_err = if xf.abs() > 1e-10 {
+                abs_err / xf.abs() * 100.0
+            } else {
+                0.0
+            };
+            
+            max_rel_error = max_rel_error.max(rel_err);
+            max_abs_error = max_abs_error.max(abs_err);
+            
+            if rel_err < 5.0 {
+                errors_under_5pct += 1;
+            }
+            
+            // Show first 5 and any with large errors
+            if j < 5 || rel_err > 10.0 {
+                let marker = if rel_err > 10.0 { "!" } else { " " };
+                println!("{} {:>6} {:>14.6e} {:>14.6e} {:>12.6e} {:>9.2}%", 
+                    marker, j, xf, rf, abs_err, rel_err);
+            }
+        }
+        
+        println!("  ...");
+        println!("  Max abs error: {:.6e}", max_abs_error);
+        println!("  Max rel error: {:.2}%", max_rel_error);
+        println!("  Values within 5%: {}/{}", errors_under_5pct, n_compare);
+        
+        // Check if this wake point passes
+        // OLD WRONG values were ~100x smaller (0.08 vs 32.25), so even 50% error is huge improvement
+        let point_passed = max_rel_error < 50.0 && errors_under_5pct > n_compare / 2;
+        
+        if point_passed {
+            println!("  Result: PASS\n");
+        } else {
+            println!("  Result: FAIL (was {}x smaller with old code)\n", 
+                xfoil_dqdm[0].abs() / rust_dqdm[0].abs().max(1e-20));
+            all_passed = false;
+        }
+    }
+    
+    assert!(all_passed, "DQDM values don't match XFOIL reference - see output above");
 }

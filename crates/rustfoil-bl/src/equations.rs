@@ -1209,8 +1209,25 @@ fn bldif_with_terms_internal(
 
             // Residual (xblsys.f:1767-1769)
             // REZC = SCC*(CQA - SA*ALD)*DXI - DEA*2.0*SLOG + DEA*2.0*(UQ*DXI - ULOG)*DUXCON
-            res.res_third = -(scc * (cqa - sa * ald) * dxi - dea * 2.0 * slog
-                + dea * 2.0 * (uq * dxi - ulog) * DUXCON);
+            let term1 = scc * (cqa - sa * ald) * dxi;
+            let term2 = -dea * 2.0 * slog;
+            let term3 = dea * 2.0 * (uq * dxi - ulog) * DUXCON;
+            let rezc = term1 + term2 + term3;
+            res.res_third = -rezc;
+            
+            // Debug: print REZC terms when near transition (ctau difference from equilibrium)
+            if std::env::var("RUSTFOIL_REZC_DEBUG").is_ok() {
+                let cq_diff = (cqa - sa).abs();
+                if cq_diff > 0.03 && cq_diff < 0.1 {
+                    eprintln!("[REZC DEBUG] x={:.4}, ctau_diff={:.4}", s2.x, cq_diff);
+                    eprintln!("  SCC={:.6}, CQA={:.6}, SA={:.6}", scc, cqa, sa);
+                    eprintln!("  ALD={:.6}, DXI={:.6e}, DEA={:.6e}", ald, dxi, dea);
+                    eprintln!("  SLOG={:.6}, UQ={:.6}, ULOG={:.6}", slog, uq, ulog);
+                    eprintln!("  S1={:.6}, S2={:.6}, USA={:.6}", s1.ctau, s2.ctau, usa);
+                    eprintln!("  term1={:.6e}, term2={:.6e}, term3={:.6e}", term1, term2, term3);
+                    eprintln!("  REZC={:.6e}, vsrez0={:.6e}", rezc, -rezc);
+                }
+            }
 
             // === Jacobian entries for shear-lag equation (xblsys.f:1781-1839) ===
             // Z coefficients

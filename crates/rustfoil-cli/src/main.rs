@@ -260,6 +260,11 @@ fn main() {
 }
 
 fn run_analyze(file: &PathBuf, alpha: f64, panels: Option<usize>, verbose: bool) -> Result<(), CliError> {
+    // Initialize debug if RUSTFOIL_DEBUG env var is set
+    if let Ok(debug_path) = std::env::var("RUSTFOIL_DEBUG") {
+        rustfoil_bl::init_debug(&debug_path);
+    }
+
     let (name, points) = load_airfoil(file)?;
     
     // If panels specified, repanel with XFOIL-style distribution
@@ -303,6 +308,11 @@ fn run_analyze(file: &PathBuf, alpha: f64, panels: Option<usize>, verbose: bool)
             let x = i as f64 / solution.cp.len() as f64;
             println!("  {:>8.4}  {:>10.4}", x, cp);
         }
+    }
+
+    // Finalize debug if it was enabled
+    if std::env::var("RUSTFOIL_DEBUG").is_ok() {
+        rustfoil_bl::finalize_debug();
     }
 
     Ok(())

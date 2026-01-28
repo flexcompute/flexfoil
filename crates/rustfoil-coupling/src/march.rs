@@ -829,8 +829,10 @@ pub fn newton_solve_station_transition(
     let mut trchek_hold_state: Option<BlStation> = None;
     for iter_idx in 0..max_iter {
         // Build BL residuals and Jacobian
-        // Use full TRDIF with proper chain rule through XT derivatives when available
-        let mut trchek_full = trchek_hold.as_ref();
+        // trchek_full is set within the transition check block below, only on
+        // the iteration when transition is detected. After that iteration,
+        // transition_active=true but trchek_full=None, so we use turbulent bldif.
+        let mut trchek_full: Option<&Trchek2FullResult> = None;
         let mut trchek_state: Option<BlStation> = None;
         if use_trchek && current_laminar {
             trchek_state = Some(station.clone());
@@ -856,20 +858,35 @@ pub fn newton_solve_station_transition(
                 transition_active = true;
                 current_laminar = false;
                 flow_type = FlowType::Turbulent;
+                
+                // XFOIL behavior: When transition is detected mid-iteration,
+                // the station switches to turbulent and the Newton loop CONTINUES
+                // (doesn't restart). The loop will now use turbulent equations.
+                //
+                // Key setup for turbulent:
+                // 1. Set ctau = 0.05 (XFOIL xbl.f line 895)
+                // 2. Call blvar to recompute secondary variables with turbulent closures
+                // 3. Update Hk limit for turbulent flow
+                // 4. The loop continues and solves shear-lag equation until converged
                 station.is_laminar = false;
                 station.is_turbulent = true;
                 station.ampl = tr.ampl2;
-                if station.ctau <= 0.0 {
-                    station.ctau = 0.03;
-                }
-                // Recompute turbulent secondary variables now that flow type flipped.
+                station.ctau = 0.05;  // XFOIL xbl.f line 895
+                
+                // Recompute turbulent secondary variables
                 blvar(&mut station, FlowType::Turbulent, msq, re);
+                
+                // Switch Hk limit for turbulent (XFOIL line 760)
+                htarg = htmax;
             }
             if tr.transition {
                 trchek_hold = Some(tr);
                 if trchek_hold_state.is_none() {
                     trchek_hold_state = trchek_state.clone();
                 }
+                // Only use trdif_full on THIS iteration (when transition is first detected)
+                // On subsequent iterations, trchek_full remains None (set at loop start),
+                // so we use bldif with turbulent equations instead.
                 trchek_full = trchek_hold.as_ref();
             }
         }
@@ -914,9 +931,29 @@ pub fn newton_solve_station_transition(
             }
         }
 
+        // Choose which residual/Jacobian function to use:
+        // - trdif_full: Only on the FIRST iteration when transition is detected
+        //   (to properly interpolate to transition point)
+        // - bldif: All other cases, including subsequent iterations AFTER
+        //   transition is detected (when station is being converged as turbulent)
+        //
+        // XFOIL uses TRDIF only for the transition interval, then switches to BLSYS
+        // for subsequent iterations. The key is that after the first transition
+        // iteration, we should use bldif with turbulent equations.
+        //
+        // NOTE: trchek_full is only set on the iteration when transition is detected.
+        // On subsequent iterations, current_laminar=false so the trchek block is skipped,
+        // and trchek_full becomes None. So we use transition_active to track state.
         let (res, jac) = if let Some(tr) = trchek_full.as_ref() {
+            // This is the iteration where transition was just detected
+            // Use trdif_full to properly interpolate to transition point
             trdif_full(prev, &station, tr, msq, re)
+        } else if transition_active {
+            // Subsequent iterations after transition - use turbulent bldif
+            // (trchek_full is None because current_laminar=false skips trchek block)
+            bldif(prev, &station, FlowType::Turbulent, msq, re)
         } else {
+            // Normal case - use bldif with current flow type
             bldif(prev, &station, flow_type, msq, re)
         };
 
@@ -1385,46 +1422,62 @@ pub fn newton_solve_station_transition(
                 // Need to switch to inverse mode
                 direct = false;
                 // Estimate target Hk based on upstream (XFOIL MRCHUE logic)
+                //
+                // BUG FIX: The gradient term 0.03 * dx / theta can become huge when
+                // theta is very small at the leading edge. This causes htarg to be
+                // unrealistically high (e.g., 5.6 instead of 3.8), and inverse mode
+                // converges to the wrong target.
+                //
+                // Solution: Clamp the gradient contribution to a reasonable range.
+                // The gradient represents Hk change per unit x, and physically
+                // Hk shouldn't change by more than ~1-2 over a typical panel spacing.
+                let dx = x_new - prev.x;
+                let max_hk_gradient = 0.5; // Max Hk change per panel
+                
                 if current_laminar {
                     // Laminar case: slow increase in Hk downstream
-                    htarg = prev.hk + 0.03 * (x_new - prev.x) / prev.theta.max(1e-12);
+                    let gradient = (0.03 * dx / prev.theta.max(1e-12)).min(max_hk_gradient);
+                    htarg = prev.hk + gradient;
                 } else if let Some(tr) = trchek_full.as_ref() {
                     // Transition interval: blend laminar and turbulent targets
-                    htarg = prev.hk
-                        + (0.03 * (tr.xt - prev.x) - 0.15 * (station.x - tr.xt))
-                            / prev.theta.max(1e-12);
+                    let gradient = ((0.03 * (tr.xt - prev.x) - 0.15 * (station.x - tr.xt))
+                        / prev.theta.max(1e-12)).clamp(-max_hk_gradient, max_hk_gradient);
+                    htarg = prev.hk + gradient;
                 } else {
                     // Turbulent case: faster decrease in Hk downstream
-                    htarg = prev.hk - 0.15 * (x_new - prev.x) / prev.theta.max(1e-12);
+                    let gradient = (0.15 * dx / prev.theta.max(1e-12)).min(max_hk_gradient);
+                    htarg = prev.hk - gradient;
                 }
-                // XFOIL does not clamp the inverse-mode target above hmax.
-                htarg = htarg.max(hmax);
+                
+                // Clamp htarg to reasonable bounds:
+                // - Lower bound: hmax (the threshold that triggered inverse mode)
+                // - Upper bound: Allow some growth above hmax for physical separation
+                //
+                // XFOIL allows H to exceed htmax at high alpha (e.g., H=3.0 at TE when stalling).
+                // If we clamp too tightly, we prevent the TE separation that causes stall.
+                // For turbulent flow, allow H up to ~3.5 to capture TE separation.
+                let htarg_max = if current_laminar { hlmax + 1.0 } else { htmax + 1.0 };
+                htarg = htarg.clamp(hmax, htarg_max);
+                
                 continue;  // Restart iteration with inverse mode
             }
         }
         
         // Apply updates with relaxation
+        // XFOIL xbl.f MRCHUE lines 767-770:
+        //   IF(IBL.LT.ITRAN(IS)) AMI = AMI + RLX*VSREZ(1)  -- laminar ampl update (commented out)
+        //   IF(IBL.GE.ITRAN(IS)) CTI = CTI + RLX*VSREZ(1)  -- turbulent ctau update
+        //   THI = THI + RLX*VSREZ(2)
+        //   DSI = DSI + RLX*VSREZ(3)
+        //
+        // XFOIL updates ctau at ALL stations >= ITRAN, including the transition station.
+        // XFOIL also clamps ctau: CTI = MIN(CTI, 0.30), CTI = MAX(CTI, 0.0000001)
         if current_laminar {
             station.ampl = (station.ampl + rlx * vsrez[0]).max(0.0);
         } else {
-            // At transition station, keep ctau at initial value (0.03)
-            // This preserves non-zero shear-lag residual for global Newton.
-            //
-            // XFOIL's order of operations:
-            // 1. MRCHUE initializes ctau=0.03 at transition (xbl.f line 600)
-            // 2. MRCHUE converges theta, delta_star but ctau stays near 0.03
-            // 3. SETBL (global Newton) adjusts ALL ctau values together
-            //
-            // If we update ctau here, the single-station Newton converges ctau
-            // to equilibrium (~0.059), making VSREZ[0] ≈ 0. The global Newton
-            // then has nothing to work with.
-            //
-            // By skipping ctau updates at transition, we get:
-            // - XFOIL-like: VSREZ[0] ≈ -2.6e-3 (non-zero residual)
-            // - Global Newton can properly adjust all ctau values
-            if !transition_active {
-                station.ctau = (station.ctau + rlx * vsrez[0]).clamp(1e-7, 0.3);
-            }
+            // Update ctau at all turbulent stations (including transition)
+            // XFOIL xbl.f line 768: IF(IBL.GE.ITRAN(IS)) CTI = CTI + RLX*VSREZ(1)
+            station.ctau = (station.ctau + rlx * vsrez[0]).clamp(1e-7, 0.3);
         }
         station.theta = (station.theta + rlx * vsrez[1]).max(1e-12);
         station.delta_star = (station.delta_star + rlx * vsrez[2]).max(1e-12);
@@ -1566,6 +1619,18 @@ pub fn march_fixed_ue(
     blvar(&mut prev, FlowType::Laminar, msq, re);
     result.stations.push(prev.clone());
 
+    // Emit BL_INIT event with initial state before marching
+    if rustfoil_bl::is_debug_active() {
+        rustfoil_bl::add_event(rustfoil_bl::DebugEvent::bl_init(
+            0, // side=0 for single-surface march
+            n,
+            x.to_vec(),
+            ue.to_vec(),
+            vec![prev.theta],
+            vec![prev.delta_star],
+        ));
+    }
+
     // Track state
     let mut is_laminar = true;
 
@@ -1686,7 +1751,8 @@ pub fn march_fixed_ue(
                     initial_guess.x = station.x;
                     initial_guess.u = station.u;
                     initial_guess.ampl = station.ampl;
-                    initial_guess.ctau = 0.03;
+                    // XFOIL xbl.f line 895: IF(IBL.EQ.ITRAN(IS)) CTI = 0.05
+                    initial_guess.ctau = 0.05;
 
                     let (turb_station, _turb_converged, _turb_dmax) = newton_solve_station_transition(
                         prev_station,
@@ -1831,6 +1897,19 @@ pub fn march_surface(
 
     result.stations.push(prev.clone());
 
+    // Emit BL_INIT event with initial state before marching
+    // This captures the initial conditions for XFOIL comparison
+    if rustfoil_bl::is_debug_active() {
+        rustfoil_bl::add_event(rustfoil_bl::DebugEvent::bl_init(
+            side,
+            n - start_idx, // Number of stations that will be computed
+            x[start_idx..].to_vec(),
+            ue[start_idx..].iter().map(|u| u.abs()).collect(),
+            vec![prev.theta], // Initial theta at first station
+            vec![prev.delta_star], // Initial delta_star at first station
+        ));
+    }
+
     // Track state
     let mut is_laminar = true;
 
@@ -1936,9 +2015,42 @@ pub fn march_surface(
                 );
             }
 
-            if trchek_result.transition {
-                result.x_transition = trchek_result.xt;
+            // Check for transition:
+            // 1. e^N method (amplification exceeds Ncrit)
+            // 2. Separation-induced transition (Hk exceeds threshold)
+            //
+            // The separation-induced transition handles laminar separation bubbles:
+            // - At high alpha, Hk can spike above 4 in the suction peak region
+            // - This indicates laminar separation, which typically triggers transition
+            // - The threshold should be high enough to not interfere with normal cases
+            //   but low enough to catch severe separation before it causes problems
+            //
+            // We use hlmax (3.8) as the base - if Hk significantly exceeds this despite
+            // inverse mode limiting, we have a separation bubble that should transition.
+            let hk_separation_threshold = config.hlmax + 0.5; // = 4.3
+            let separation_induced_transition = 
+                station.hk > hk_separation_threshold && result.x_transition.is_none();
+            
+            if trchek_result.transition || separation_induced_transition {
+                let transition_x = if trchek_result.transition {
+                    trchek_result.xt
+                } else {
+                    // Separation-induced: interpolate transition location
+                    let hk_prev = prev_station.hk;
+                    let hk_curr = station.hk;
+                    let frac = (hk_separation_threshold - hk_prev) / (hk_curr - hk_prev).max(1e-20);
+                    Some(prev_station.x + frac * (station.x - prev_station.x))
+                };
+                
+                result.x_transition = transition_x;
                 result.transition_index = Some(station_idx);
+                
+                if config.debug_trace && separation_induced_transition {
+                    println!(
+                        "[march_surface] SEPARATION-INDUCED TRANSITION at station {}, x={:.4}, Hk={:.3}",
+                        station_idx, station.x, station.hk
+                    );
+                }
 
                 if station.is_turbulent {
                     is_laminar = false;
@@ -1951,7 +2063,8 @@ pub fn march_surface(
                     initial_guess.x = station.x;
                     initial_guess.u = station.u;
                     initial_guess.ampl = station.ampl;
-                    initial_guess.ctau = 0.03;
+                    // XFOIL xbl.f line 895: IF(IBL.EQ.ITRAN(IS)) CTI = 0.05
+                    initial_guess.ctau = 0.05;
 
                     let (turb_station, _turb_converged, _turb_dmax) = newton_solve_station_transition(
                         prev_station,

@@ -25,7 +25,7 @@
 //! - `xsolve.f`: LUDCMP, BAKSUB
 
 use crate::geometry::AirfoilGeometry;
-use crate::influence::{build_source_influence_matrix, psilin, psilin_with_sources};
+use crate::influence::{build_source_influence_matrix, psilin, psilin_with_dqdm};
 use crate::solution::{FlowConditions, InviscidSolution};
 use crate::{InviscidError, Result};
 use nalgebra::{DMatrix, DVector, LU};
@@ -291,15 +291,32 @@ impl FactorizedSystem {
             let nxi = nx[i_global];
             let nyi = ny[i_global];
             
-            // Tangent direction (perpendicular to normal)
-            let tx = -nyi;
-            let ty = nxi;
-
             // Wake-airfoil: compute source influence on tangential velocity.
             // XFOIL's PSILIN with SIGLIN=.TRUE. computes DQDM (dQtan/dSigma).
-            let dqdm_airfoil = compute_source_tangent_influence(&self.geom, xi, yi, tx, ty);
+            // Uses proper half-panel decomposition with PSNI/PDNI normal derivatives.
+            let psilin_result = psilin_with_dqdm(&self.geom, i_global, xi, yi, nxi, nyi);
+            let dqdm_airfoil = psilin_result.dqdm;
             for j in 0..n {
                 dij[(i_global, j)] = dqdm_airfoil[j];
+            }
+
+            // Debug: dump DQDM values for first 2 wake points (matches XFOIL's DBGDQDM_PSILIN)
+            if i < 2 && is_debug_active() {
+                let dqdm_sample: Vec<f64> = dqdm_airfoil.iter().take(20).copied().collect();
+                add_event(DebugEvent::dqdm_psilin(
+                    i_global,      // wake_idx (global index)
+                    i + 1,         // iw (1-based to match XFOIL)
+                    n,             // n_airfoil
+                    xi, yi, nxi, nyi,
+                    dqdm_sample,
+                ));
+                
+                // On first wake point, also dump panel geometry for comparison
+                if i == 0 {
+                    let panel_x: Vec<f64> = self.geom.x.iter().take(20).copied().collect();
+                    let panel_y: Vec<f64> = self.geom.y.iter().take(20).copied().collect();
+                    add_event(DebugEvent::panel_geometry(n, panel_x, panel_y));
+                }
             }
 
             // Wake-wake: call PSWLIN for wake panels (tangential velocity influence).
@@ -438,30 +455,6 @@ fn setexp(ds1: f64, smax: f64, n_points: usize) -> Vec<f64> {
     s
 }
 
-fn compute_panel_lengths(x: &[f64], y: &[f64]) -> Vec<f64> {
-    let n = x.len();
-    if n < 2 {
-        return vec![1.0; n.max(1)];
-    }
-
-    let mut ds = Vec::with_capacity(n);
-    let dx = x[1] - x[0];
-    let dy = y[1] - y[0];
-    ds.push((dx * dx + dy * dy).sqrt().max(1e-10));
-
-    for i in 1..n - 1 {
-        let dx = x[i + 1] - x[i - 1];
-        let dy = y[i + 1] - y[i - 1];
-        ds.push((dx * dx + dy * dy).sqrt().max(1e-10) / 2.0);
-    }
-
-    let dx = x[n - 1] - x[n - 2];
-    let dy = y[n - 1] - y[n - 2];
-    ds.push((dx * dx + dy * dy).sqrt().max(1e-10));
-
-    ds
-}
-
 /// Compute panel geometry: angles and normals (XFOIL's SETXY).
 ///
 /// Returns (apanel, nx, ny) for all panels including wake.
@@ -527,48 +520,6 @@ fn compute_panel_geometry(x: &[f64], y: &[f64], n_airfoil: usize, sharp: bool) -
     }
 
     (apanel, nx, ny)
-}
-
-/// Compute source influence on tangential velocity for airfoil panels.
-///
-/// For a field point at (xi, yi) with tangent (tx, ty), computes dQtan/dSigma
-/// for each airfoil node where Sigma is the source strength.
-///
-/// This is a simplified version of what PSILIN with SIGLIN=.TRUE. computes.
-fn compute_source_tangent_influence(
-    geom: &AirfoilGeometry,
-    xi: f64,
-    yi: f64,
-    tx: f64,
-    ty: f64,
-) -> Vec<f64> {
-    use std::f64::consts::PI;
-    let n = geom.n;
-    let mut dqdm = vec![0.0; n];
-    let qopi = 0.25 / PI;
-    
-    // Simple point source approximation at each node
-    // For a unit source at (xj, yj), velocity at (xi, yi) is:
-    // u = 1/(2π) * (xi - xj) / r²
-    // v = 1/(2π) * (yi - yj) / r²
-    // qtan = u*tx + v*ty
-    for j in 0..n {
-        let dx = xi - geom.x[j];
-        let dy = yi - geom.y[j];
-        let r2 = dx * dx + dy * dy;
-        if r2 > 1e-14 {
-            // Panel length for proper scaling
-            let ds = if j < n - 1 {
-                ((geom.x[j + 1] - geom.x[j]).powi(2) + (geom.y[j + 1] - geom.y[j]).powi(2)).sqrt()
-            } else {
-                ((geom.x[0] - geom.x[j]).powi(2) + (geom.y[0] - geom.y[j]).powi(2)).sqrt()
-            };
-            
-            let factor = ds / (2.0 * PI * r2);
-            dqdm[j] = factor * (dx * tx + dy * ty);
-        }
-    }
-    dqdm
 }
 
 /// Result from PSWLIN computation
@@ -816,6 +767,32 @@ pub fn build_and_factorize(geom: &AirfoilGeometry) -> Result<FactorizedSystem> {
     a_matrix[(n, n - 1)] = 1.0;
     rhs_0[n] = 0.0;
     rhs_90[n] = 0.0;
+
+    // Debug output: dump AIJ matrix elements BEFORE LU factorization
+    // This allows direct comparison with XFOIL's influence coefficients
+    if is_debug_active() {
+        // Extract first 20 diagonal elements
+        let aij_diagonal: Vec<f64> = (0..20.min(n + 1))
+            .map(|i| a_matrix[(i, i)])
+            .collect();
+
+        // Extract first 20 elements of row 0
+        let aij_row0: Vec<f64> = (0..20.min(n + 1))
+            .map(|j| a_matrix[(0, j)])
+            .collect();
+
+        // Extract first 10 elements of RHS vectors
+        let rhs_0_sample: Vec<f64> = rhs_0.iter().take(10).copied().collect();
+        let rhs_90_sample: Vec<f64> = rhs_90.iter().take(10).copied().collect();
+
+        add_event(DebugEvent::aij_matrix(
+            n + 1, // System size is N+1
+            aij_diagonal,
+            aij_row0,
+            rhs_0_sample,
+            rhs_90_sample,
+        ));
+    }
 
     // LU factorization and solve for both RHS vectors
     let lu = a_matrix.clone().lu();

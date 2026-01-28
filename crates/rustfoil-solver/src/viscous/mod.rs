@@ -34,11 +34,12 @@ pub mod viscal;
 pub use config::ViscousSolverConfig;
 pub use forces::{compute_forces, AeroForces};
 pub use setup::{
-    compute_arc_from_stagnation, compute_arc_lengths, extract_surface, extract_surface_xfoil,
+    compute_arc_from_stagnation, compute_arc_lengths, compute_n_wake_panels,
+    extract_surface, extract_surface_xfoil,
     find_stagnation, find_stagnation_by_sign_change, initialize_bl_stations,
     initialize_surface_stations, initialize_surface_stations_with_coords, 
-    initialize_surface_stations_with_panel_idx, interpolate_stagnation,
-    ViscousSetup,
+    initialize_surface_stations_with_panel_idx, initialize_wake_bl_stations,
+    interpolate_stagnation, ViscousSetup,
     // New integration with rustfoil-inviscid
     setup_from_body, setup_from_coords, SetupError, ViscousSetupResult,
 };

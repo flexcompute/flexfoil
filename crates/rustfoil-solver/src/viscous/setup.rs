@@ -929,6 +929,91 @@ pub fn setup_from_coords(coords: &[(f64, f64)], alpha_deg: f64) -> Result<Viscou
     })
 }
 
+/// Initialize wake BL stations with proper panel indices for DIJ coupling.
+///
+/// XFOIL puts wake stations on the lower surface (IS=2) after the TE.
+/// Wake stations are indexed IBLTE+1, IBLTE+2, ..., NBL(2) where
+/// the panel index for wake station i is N_airfoil + (i - IBLTE - 1).
+///
+/// # Arguments
+/// * `upper_te` - Upper surface trailing edge station (for wake initial condition)
+/// * `lower_te` - Lower surface trailing edge station (for wake initial condition)
+/// * `n_airfoil_panels` - Number of airfoil panels (N)
+/// * `n_wake_panels` - Number of wake panels (from DIJ matrix)
+/// * `wake_length` - Wake length in chord lengths
+/// * `re` - Reynolds number
+/// * `msq` - Mach number squared
+///
+/// # Returns
+/// Vector of wake BlStations with proper panel_idx for DIJ matrix lookup
+///
+/// # XFOIL Reference
+/// - Wake panels: indices N, N+1, N+2, ... (0-indexed)
+/// - Wake is placed on lower surface (IS=2) after IBLTE(2)
+/// - IPAN(IBL,2) = N + (IBL - IBLTE(2) - 1) for wake stations
+pub fn initialize_wake_bl_stations(
+    upper_te: &BlStation,
+    lower_te: &BlStation,
+    n_airfoil_panels: usize,
+    n_wake_panels: usize,
+    wake_length: f64,
+    re: f64,
+    msq: f64,
+) -> Vec<BlStation> {
+    if n_wake_panels == 0 {
+        return Vec::new();
+    }
+    
+    // Combine upper and lower TE for wake initial condition (TESYS)
+    use rustfoil_coupling::wake::{combine_te_for_wake, generate_wake_positions, wake_edge_velocity, march_wake};
+    
+    let wake_initial = combine_te_for_wake(upper_te, lower_te);
+    
+    // Generate wake positions and edge velocities
+    let wake_x = generate_wake_positions(n_wake_panels, wake_length);
+    let wake_ue: Vec<f64> = wake_x.iter()
+        .map(|&x| wake_edge_velocity(x, wake_initial.u))
+        .collect();
+    
+    // March wake downstream
+    let mut wake_stations = march_wake(&wake_initial, &wake_x, &wake_ue, re, msq);
+    
+    // Remove the first station (which is the TE itself, duplicate)
+    if wake_stations.len() > 1 {
+        wake_stations.remove(0);
+    }
+    
+    // Set proper panel indices for DIJ matrix lookup
+    // Wake panel indices are N, N+1, N+2, ... (0-indexed)
+    for (i, station) in wake_stations.iter_mut().enumerate() {
+        station.panel_idx = n_airfoil_panels + i;
+        station.is_wake = true;
+        station.is_turbulent = true;
+        station.is_laminar = false;
+    }
+    
+    if debug::is_debug_active() {
+        eprintln!("[DEBUG wake] Created {} wake stations with panel_idx {} to {}",
+            wake_stations.len(),
+            n_airfoil_panels,
+            n_airfoil_panels + wake_stations.len().saturating_sub(1));
+    }
+    
+    wake_stations
+}
+
+/// Compute the number of wake panels from DIJ matrix dimensions.
+///
+/// # Arguments
+/// * `dij_size` - Size of the DIJ matrix (rows or columns)
+/// * `n_airfoil_panels` - Number of airfoil panels
+///
+/// # Returns
+/// Number of wake panels
+pub fn compute_n_wake_panels(dij_size: usize, n_airfoil_panels: usize) -> usize {
+    dij_size.saturating_sub(n_airfoil_panels)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

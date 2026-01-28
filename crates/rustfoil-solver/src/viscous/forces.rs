@@ -216,8 +216,10 @@ pub fn compute_forces_two_surfaces(
     // - For far wake: Ue ≈ 1, H ≈ 1.0-1.1
     //
     // The far wake θ is typically ~70% of combined TE θ (due to Ue increase)
-    let upper_te = upper_stations.last();
-    let lower_te = lower_stations.last();
+    // 
+    // IMPORTANT: Find the AIRFOIL TE (last non-wake station), not the far wake!
+    let upper_te = upper_stations.iter().rev().find(|s| !s.is_wake);
+    let lower_te = lower_stations.iter().rev().find(|s| !s.is_wake);
     
     let cd_total = match (upper_te, lower_te) {
         (Some(u), Some(l)) => {
@@ -277,14 +279,17 @@ pub fn compute_forces_two_surfaces(
     }
     
     // === CL and CM from coupled edge velocities ===
-    // Extract arc lengths and edge velocities
-    let upper_arc: Vec<f64> = upper_stations.iter().map(|s| s.x).collect();
-    let lower_arc: Vec<f64> = lower_stations.iter().map(|s| s.x).collect();
-    let upper_ue: Vec<f64> = upper_stations.iter().map(|s| s.u).collect();
-    let lower_ue: Vec<f64> = lower_stations.iter().map(|s| s.u).collect();
+    // Extract x-coordinates (for XFOIL-style integration) and edge velocities
+    // CRITICAL: Use x_coord (actual panel x-coordinate), NOT x (arc length)!
+    // Near the curved leading edge, arc length >> x-coordinate, causing CL inflation.
+    // CRITICAL: Exclude wake stations! CL is only from airfoil surface pressure.
+    let upper_x: Vec<f64> = upper_stations.iter().filter(|s| !s.is_wake).map(|s| s.x_coord).collect();
+    let lower_x: Vec<f64> = lower_stations.iter().filter(|s| !s.is_wake).map(|s| s.x_coord).collect();
+    let upper_ue: Vec<f64> = upper_stations.iter().filter(|s| !s.is_wake).map(|s| s.u).collect();
+    let lower_ue: Vec<f64> = lower_stations.iter().filter(|s| !s.is_wake).map(|s| s.u).collect();
     
-    // Use circulation method for CL (simpler and more robust)
-    let cl = compute_cl_from_circulation(&upper_ue, &lower_ue, &upper_arc, &lower_arc);
+    // Use pressure integration method for CL (matches XFOIL's CLCALC)
+    let cl = compute_cl_from_circulation(&upper_ue, &lower_ue, &upper_x, &lower_x);
     
     // For CM, use simple approximation (proper CM requires panel geometry)
     // CM ≈ 0 for symmetric airfoils at small AoA
@@ -403,6 +408,12 @@ pub fn compute_friction_drag(stations: &[BlStation]) -> f64 {
     let cdf: f64 = stations[3..]
         .windows(2)
         .map(|pair| {
+            // Skip wake stations - they have no wall so Cf = 0
+            // XFOIL integrates friction only from IBL=3 to IBLTE
+            if pair[0].is_wake || pair[1].is_wake {
+                return 0.0;
+            }
+            
             // Skip stations with clearly invalid BL values (theta near zero = failed march)
             // This matches XFOIL's implicit handling where failed stations don't contribute
             let theta_min = 1e-10;
@@ -673,70 +684,87 @@ pub fn compute_coupled_cl_cm(
     (cl_wind, cm_wind)
 }
 
-/// Compute CL from edge velocity distribution using Kutta-Joukowski.
+/// Compute CL from edge velocity distribution using pressure integration.
 ///
-/// Alternative CL computation using the circulation theorem:
+/// This matches XFOIL's CLCALC method (xfoil.f line ~1172):
 /// ```text
-/// CL = 2 * Γ / (V∞ * c)
+/// CL = ∮ Cp · dx  (counterclockwise contour integral)
 /// ```
 ///
-/// where Γ is computed from the velocity jump across the wake or
-/// from integration of the edge velocity around the contour.
+/// where Cp = 1 - Ue² (incompressible pressure coefficient).
+///
+/// For two separate surfaces stored LE→TE:
+/// - Upper surface contributes: -∫ Cp dx (negative sign for counterclockwise)
+/// - Lower surface contributes: +∫ Cp dx
 ///
 /// # Arguments
-/// * `upper_ue` - Edge velocities on upper surface
-/// * `lower_ue` - Edge velocities on lower surface
-/// * `upper_arc` - Arc lengths on upper surface
-/// * `lower_arc` - Arc lengths on lower surface
+/// * `upper_ue` - Edge velocities on upper surface (LE to TE)
+/// * `lower_ue` - Edge velocities on lower surface (LE to TE)
+/// * `upper_x` - X-coordinates on upper surface (MUST be actual x, not arc length!)
+/// * `lower_x` - X-coordinates on lower surface (MUST be actual x, not arc length!)
 ///
 /// # Returns
-/// CL from circulation
+/// CL from pressure integration (matches XFOIL's method)
+///
+/// # Note
+/// Using arc length instead of x-coordinates will inflate CL by ~10% due to
+/// the curved leading edge where arc >> x.
 pub fn compute_cl_from_circulation(
     upper_ue: &[f64],
     lower_ue: &[f64],
-    upper_arc: &[f64],
-    lower_arc: &[f64],
+    upper_x: &[f64],
+    lower_x: &[f64],
 ) -> f64 {
     if upper_ue.len() < 2 || lower_ue.len() < 2 {
         return 0.0;
     }
     
-    // Integrate Ue around the contour to get circulation
-    // Γ = ∮ V · ds ≈ ∫_upper Ue ds - ∫_lower Ue ds
+    // XFOIL's CLCALC integrates Cp around the closed contour counterclockwise:
+    //   CL = ∮ Cp · dx
     //
-    // Sign convention:
-    // - Upper surface has higher Ue (suction peak at positive alpha)
-    // - Lower surface has lower Ue
-    // - For positive lift: Γ = ∫_upper - ∫_lower > 0
-    // - CL = 2Γ > 0 for positive alpha
+    // For incompressible flow: Cp = 1 - (Ue/V∞)² = 1 - Ue² (normalized V∞=1)
     //
-    // IMPORTANT: This assumes upper_ue/lower_ue are correctly labeled as
-    // upper/lower surfaces. If using ViscousSetup.upper_surface(), note that
-    // the naming convention there may be inverted (check carefully).
+    // With surfaces stored LE→TE:
+    // - Upper surface (counterclockwise = TE→LE): reverse sign → -∫ Cp dx
+    // - Lower surface (counterclockwise = LE→TE): keep sign → +∫ Cp dx
+    //
+    // Physical interpretation:
+    // - Upper surface suction (Cp < 0) with negative sign → positive lift
+    // - Lower surface pressure (Cp > 0 or less negative) → positive lift
     
-    let mut gamma_upper = 0.0;
-    let mut gamma_lower = 0.0;
+    // Upper surface contribution (negative sign for counterclockwise direction)
+    let cl_upper: f64 = upper_ue
+        .windows(2)
+        .zip(upper_x.windows(2))
+        .map(|(ue_pair, x_pair)| {
+            // Average Cp over panel
+            let cp1 = 1.0 - ue_pair[0] * ue_pair[0];
+            let cp2 = 1.0 - ue_pair[1] * ue_pair[1];
+            let cp_avg = 0.5 * (cp1 + cp2);
+            // Chord-wise step (dx)
+            let dx = x_pair[1] - x_pair[0];
+            // Negative sign: counterclockwise on upper surface is TE→LE
+            -cp_avg * dx
+        })
+        .sum();
     
-    // Upper surface: integrate Ue * ds (stagnation to TE, counterclockwise)
-    // Higher Ue contributes positive to circulation
-    for i in 0..upper_ue.len() - 1 {
-        let ue_avg = 0.5 * (upper_ue[i] + upper_ue[i + 1]);
-        let ds = upper_arc[i + 1] - upper_arc[i];
-        gamma_upper += ue_avg * ds;
-    }
+    // Lower surface contribution (positive sign for counterclockwise direction)
+    let cl_lower: f64 = lower_ue
+        .windows(2)
+        .zip(lower_x.windows(2))
+        .map(|(ue_pair, x_pair)| {
+            // Average Cp over panel
+            let cp1 = 1.0 - ue_pair[0] * ue_pair[0];
+            let cp2 = 1.0 - ue_pair[1] * ue_pair[1];
+            let cp_avg = 0.5 * (cp1 + cp2);
+            // Chord-wise step (dx)
+            let dx = x_pair[1] - x_pair[0];
+            // Positive sign: counterclockwise on lower surface is LE→TE
+            cp_avg * dx
+        })
+        .sum();
     
-    // Lower surface: integrate Ue * ds (stagnation to TE, clockwise = negative)
-    // Lower Ue contributes negative to circulation
-    for i in 0..lower_ue.len() - 1 {
-        let ue_avg = 0.5 * (lower_ue[i] + lower_ue[i + 1]);
-        let ds = lower_arc[i + 1] - lower_arc[i];
-        gamma_lower += ue_avg * ds;
-    }
-    
-    let gamma = gamma_upper - gamma_lower;
-    
-    // CL = 2 * Γ / (V∞ * c) with V∞ = 1, c = 1 (normalized)
-    2.0 * gamma
+    cl_upper + cl_lower
 }
 
 /// Estimate transition drag penalty.
