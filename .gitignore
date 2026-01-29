@@ -34,3 +34,8 @@ coverage/
 
 # Large trace artifacts (no Git LFS)
 crates/rustfoil-solver/**/*.json
+
+# Traces / generated solver artifacts
+traces/**
+**/traces/**
+Xfoil-instrumented/bin/newton_traces/**
