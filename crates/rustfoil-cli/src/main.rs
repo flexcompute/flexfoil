@@ -38,6 +38,35 @@ use std::io::Write;
 use std::path::PathBuf;
 use thiserror::Error;
 
+use serde::Serialize;
+
+/// Boundary layer state data for a single surface
+#[derive(Debug, Clone, Serialize)]
+struct BlSurfaceState {
+    /// x/c coordinates
+    x: Vec<f64>,
+    /// Edge velocity Ue/V∞
+    ue: Vec<f64>,
+    /// Displacement thickness δ*
+    delta_star: Vec<f64>,
+    /// Momentum thickness θ
+    theta: Vec<f64>,
+    /// Shape factor H = δ*/θ
+    h: Vec<f64>,
+    /// Skin friction coefficient Cf
+    cf: Vec<f64>,
+    /// Mass defect (Ue * δ*)
+    mass_defect: Vec<f64>,
+}
+
+/// Full analysis result including BL state
+#[derive(Debug)]
+struct FullViscousResult {
+    result: ViscousResult,
+    upper_bl: Option<BlSurfaceState>,
+    lower_bl: Option<BlSurfaceState>,
+}
+
 #[derive(Debug, Error)]
 enum CliError {
     #[error("Failed to read file: {0}")]
@@ -188,6 +217,10 @@ struct ViscousCmd {
     /// Skip repaneling - use input coordinates directly (for XFOIL buffer comparison)
     #[arg(long)]
     no_repanel: bool,
+
+    /// Dump boundary layer state to JSON (includes x, ue, theta, delta_star, h, cf for both surfaces)
+    #[arg(long)]
+    dump_bl: bool,
 }
 
 /// Viscous polar generation
@@ -592,6 +625,100 @@ fn run_viscous_analysis(
     Ok(result)
 }
 
+/// Run viscous analysis with full BL state output.
+///
+/// Same as `run_viscous_analysis` but also returns the boundary layer state
+/// for both surfaces (for diagnostics and visualization).
+fn run_viscous_analysis_with_bl(
+    body: &Body,
+    alpha: f64,
+    config: &ViscousSolverConfig,
+) -> Result<FullViscousResult, CliError> {
+    // Step 1: Run new inviscid solver via setup_from_body
+    let setup_result = setup_from_body(body, alpha)?;
+    
+    let inv_solution = &setup_result.inviscid;
+    let node_x = &setup_result.node_x;
+    let node_y = &setup_result.node_y;
+    let ist = setup_result.ist;
+    let sst = setup_result.sst;
+
+    let ue_inviscid = inv_solution.gamma.clone();
+
+    let full_arc = &setup_result.setup.arc_lengths;
+    
+    let ue_stag = if ist + 1 < ue_inviscid.len() && full_arc[ist + 1] != full_arc[ist] {
+        let frac = (sst - full_arc[ist]) / (full_arc[ist + 1] - full_arc[ist]);
+        ue_inviscid[ist] + frac * (ue_inviscid[ist + 1] - ue_inviscid[ist])
+    } else {
+        ue_inviscid[ist]
+    };
+
+    let (upper_arc, upper_x, _upper_y, upper_ue) =
+        extract_surface_xfoil(ist, sst, ue_stag, full_arc, node_x, node_y, &ue_inviscid, true);
+    let (lower_arc, lower_x, _lower_y, lower_ue) =
+        extract_surface_xfoil(ist, sst, ue_stag, full_arc, node_x, node_y, &ue_inviscid, false);
+
+    if upper_arc.len() < 2 || lower_arc.len() < 2 {
+        return Err(CliError::Solver(format!(
+            "Surface extraction failed: upper={} lower={} stations (need >= 2 each)",
+            upper_arc.len(),
+            lower_arc.len()
+        )));
+    }
+
+    let n_airfoil_panels = node_x.len();
+    let mut upper_stations = initialize_surface_stations_with_panel_idx(
+        &upper_arc, &upper_ue, &upper_x, ist, n_airfoil_panels, true, config.reynolds);
+    let mut lower_stations = initialize_surface_stations_with_panel_idx(
+        &lower_arc, &lower_ue, &lower_x, ist, n_airfoil_panels, false, config.reynolds);
+
+    let setup = &setup_result.setup;
+
+    let alpha_rad = alpha.to_radians();
+    let mut result = solve_viscous_two_surfaces(
+        &mut upper_stations,
+        &mut lower_stations,
+        &upper_ue,
+        &lower_ue,
+        &setup.dij,
+        config,
+        alpha_rad,
+        node_x,
+        node_y,
+    )
+    .map_err(|e| CliError::Solver(e.to_string()))?;
+
+    result.alpha = alpha;
+
+    // Extract BL state from stations
+    let upper_bl = BlSurfaceState {
+        x: upper_stations.iter().map(|s| s.x).collect(),
+        ue: upper_stations.iter().map(|s| s.u).collect(),
+        delta_star: upper_stations.iter().map(|s| s.delta_star).collect(),
+        theta: upper_stations.iter().map(|s| s.theta).collect(),
+        h: upper_stations.iter().map(|s| s.h).collect(),
+        cf: upper_stations.iter().map(|s| s.cf).collect(),
+        mass_defect: upper_stations.iter().map(|s| s.mass_defect).collect(),
+    };
+
+    let lower_bl = BlSurfaceState {
+        x: lower_stations.iter().map(|s| s.x).collect(),
+        ue: lower_stations.iter().map(|s| s.u).collect(),
+        delta_star: lower_stations.iter().map(|s| s.delta_star).collect(),
+        theta: lower_stations.iter().map(|s| s.theta).collect(),
+        h: lower_stations.iter().map(|s| s.h).collect(),
+        cf: lower_stations.iter().map(|s| s.cf).collect(),
+        mass_defect: lower_stations.iter().map(|s| s.mass_defect).collect(),
+    };
+
+    Ok(FullViscousResult {
+        result,
+        upper_bl: Some(upper_bl),
+        lower_bl: Some(lower_bl),
+    })
+}
+
 /// Run viscous analysis using the OLD inviscid solver (for comparison/fallback).
 ///
 /// This function uses the original rustfoil-solver inviscid implementation.
@@ -716,7 +843,14 @@ fn run_viscous(cmd: ViscousCmd) -> Result<(), CliError> {
         ..Default::default()
     };
 
-    let result = run_viscous_analysis(&body, cmd.alpha, &config)?;
+    // Use the BL-dumping version if requested
+    let (result, upper_bl, lower_bl) = if cmd.dump_bl {
+        let full = run_viscous_analysis_with_bl(&body, cmd.alpha, &config)?;
+        (full.result, full.upper_bl, full.lower_bl)
+    } else {
+        let r = run_viscous_analysis(&body, cmd.alpha, &config)?;
+        (r, None, None)
+    };
 
     // Finalize debug output
     if cmd.debug.is_some() {
@@ -727,7 +861,7 @@ fn run_viscous(cmd: ViscousCmd) -> Result<(), CliError> {
     match cmd.format.as_str() {
         "json" => {
             // Create a JSON-serializable struct
-            let json_output = serde_json::json!({
+            let mut json_output = serde_json::json!({
                 "alpha": result.alpha,
                 "cl": result.cl,
                 "cd": result.cd,
@@ -741,6 +875,15 @@ fn run_viscous(cmd: ViscousCmd) -> Result<(), CliError> {
                 "cd_pressure": result.cd_pressure,
                 "x_separation": result.x_separation
             });
+            
+            // Add BL state if available
+            if let (Some(upper), Some(lower)) = (&upper_bl, &lower_bl) {
+                json_output["bl_state"] = serde_json::json!({
+                    "upper": upper,
+                    "lower": lower
+                });
+            }
+            
             println!("{}", serde_json::to_string_pretty(&json_output).unwrap());
         }
         _ => {

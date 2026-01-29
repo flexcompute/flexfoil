@@ -529,6 +529,7 @@ dependencies = [
  "rustfoil-core",
  "rustfoil-inviscid",
  "rustfoil-solver",
+ "serde",
  "serde_json",
  "thiserror",
 ]

@@ -484,6 +484,99 @@ fn init_stagnation(x: f64, ue: f64, re: f64) -> BlStation {
     station
 }
 
+/// Newton iteration at similarity station (XFOIL BLDIF with ITYP=0)
+///
+/// At the first BL station (IBL=2), XFOIL runs a Newton solve using the similarity
+/// equations where COM1=COM2 (upstream and downstream are the same point).
+/// This refines the Thwaites estimate, typically increasing theta by ~6%.
+///
+/// XFOIL Method (xbl.f lines 667-782):
+/// 1. Calls BLSYS which invokes BLDIF(0) for SIMI=.TRUE.
+/// 2. Solves 4x4 system: VS2 * [dA, dT, dD, dU] = VSREZ, with row 4 being dU=0
+/// 3. For laminar (IBL < ITRAN), only updates THI and DSI (NOT AMI - line 779 is commented!)
+/// 4. Convergence: DMAX = max(|dT/T|, |dD/D|)
+///
+/// # Reference
+/// XFOIL xbl.f lines 667-782, xblsys.f BLDIF with ITYP=0
+fn newton_solve_similarity(
+    station: &BlStation,
+    msq: f64,
+    re: f64,
+    max_iter: usize,
+    tolerance: f64,
+) -> BlStation {
+    use rustfoil_bl::equations::bldif_full_simi;
+    
+    let mut s = station.clone();
+    
+    for _iter in 0..max_iter {
+        // Compute residuals and Jacobian using similarity equations (BLDIF with ITYP=0)
+        // This uses fixed log values: XLOG=1, ULOG=BULE=1, DDLOG=0
+        let (res, jac) = bldif_full_simi(&s, FlowType::Laminar, msq, re);
+        
+        // XFOIL builds a 4x4 system with row 4 being dUe=0 (direct mode)
+        // VS2(4,:) = [0, 0, 0, 1], VSREZ(4) = 0
+        // Then solves using Gaussian elimination (GAUSS)
+        // 
+        // For laminar similarity, the effective system we need to solve is:
+        // [vs2[1][1], vs2[1][2]] [dT]   [-res_mom]
+        // [vs2[2][1], vs2[2][2]] [dD] = [-res_shape]
+        //
+        // XFOIL's first row (ampl) is NOT used to update AMI for laminar (line 779 commented)
+        
+        // 2x2 system for theta and delta_star
+        // XFOIL solves: VS2 * delta = VSREZ (NO negation of residuals!)
+        // The Jacobian VS2 already has the correct sign for direct solution
+        let a11 = jac.vs2[1][1];  // d(res_mom)/d(theta)
+        let a12 = jac.vs2[1][2];  // d(res_mom)/d(dstar)
+        let a21 = jac.vs2[2][1];  // d(res_shape)/d(theta)
+        let a22 = jac.vs2[2][2];  // d(res_shape)/d(dstar)
+        let b1 = res.res_mom;     // NO negation - XFOIL GAUSS solves A*x = b directly
+        let b2 = res.res_shape;   // NO negation
+        
+        // Solve 2x2 system
+        let det = a11 * a22 - a12 * a21;
+        
+        if det.abs() < 1e-20 {
+            // Singular matrix, return current state
+            break;
+        }
+        
+        let d_theta = (b1 * a22 - b2 * a12) / det;
+        let d_dstar = (a11 * b2 - a21 * b1) / det;
+        
+        // XFOIL DMAX calculation (line 753-754):
+        // DMAX = MAX( ABS(VSREZ(2)/THI), ABS(VSREZ(3)/DSI) )
+        let dn2 = (d_theta / s.theta.max(1e-12)).abs();
+        let dn3 = (d_dstar / s.delta_star.max(1e-12)).abs();
+        let dmax = dn2.max(dn3);
+        
+        // XFOIL relaxation (line 758-759):
+        // RLX = 1.0; IF(DMAX.GT.0.3) RLX = 0.3/DMAX
+        let rlx = if dmax > 0.3 { 0.3 / dmax } else { 1.0 };
+        
+        // XFOIL update (lines 781-782):
+        // THI = THI + RLX*VSREZ(2)
+        // DSI = DSI + RLX*VSREZ(3)
+        s.theta += rlx * d_theta;
+        s.delta_star += rlx * d_dstar;
+        
+        // Ensure positive values
+        s.theta = s.theta.max(1e-12);
+        s.delta_star = s.delta_star.max(1e-12);
+        
+        // Recompute secondary variables (XFOIL calls BLPRV/BLKIN at start of next iter)
+        blvar(&mut s, FlowType::Laminar, msq, re);
+        
+        // Check convergence
+        if dmax < tolerance {
+            break;
+        }
+    }
+    
+    s
+}
+
 // ============================================================================
 // Simplified BL Integration (Thwaites-like)
 // ============================================================================
@@ -1422,42 +1515,34 @@ pub fn newton_solve_station_transition(
                 // Need to switch to inverse mode
                 direct = false;
                 // Estimate target Hk based on upstream (XFOIL MRCHUE logic)
+                // XFOIL xbl.f lines 784-813
                 //
-                // BUG FIX: The gradient term 0.03 * dx / theta can become huge when
-                // theta is very small at the leading edge. This causes htarg to be
-                // unrealistically high (e.g., 5.6 instead of 3.8), and inverse mode
-                // converges to the wrong target.
-                //
-                // Solution: Clamp the gradient contribution to a reasonable range.
-                // The gradient represents Hk change per unit x, and physically
-                // Hk shouldn't change by more than ~1-2 over a typical panel spacing.
+                // IMPORTANT: XFOIL does NOT have an upper bound on htarg!
+                // It only clamps: HTARG = MAX(HTARG, HMAX)
+                // This allows shape factor to grow to physical separation values (H > 6)
+                // during laminar separation bubbles.
                 let dx = x_new - prev.x;
-                let max_hk_gradient = 0.5; // Max Hk change per panel
                 
                 if current_laminar {
                     // Laminar case: slow increase in Hk downstream
-                    let gradient = (0.03 * dx / prev.theta.max(1e-12)).min(max_hk_gradient);
-                    htarg = prev.hk + gradient;
+                    // XFOIL: HTARG = HK1 + 0.03*(X2-X1)/T1
+                    htarg = prev.hk + 0.03 * dx / prev.theta.max(1e-12);
                 } else if let Some(tr) = trchek_full.as_ref() {
                     // Transition interval: blend laminar and turbulent targets
-                    let gradient = ((0.03 * (tr.xt - prev.x) - 0.15 * (station.x - tr.xt))
-                        / prev.theta.max(1e-12)).clamp(-max_hk_gradient, max_hk_gradient);
-                    htarg = prev.hk + gradient;
+                    // XFOIL: HTARG = HK1 + (0.03*(XT-X1) - 0.15*(X2-XT))/T1
+                    htarg = prev.hk + (0.03 * (tr.xt - prev.x) - 0.15 * (station.x - tr.xt))
+                        / prev.theta.max(1e-12);
                 } else {
                     // Turbulent case: faster decrease in Hk downstream
-                    let gradient = (0.15 * dx / prev.theta.max(1e-12)).min(max_hk_gradient);
-                    htarg = prev.hk - gradient;
+                    // XFOIL: HTARG = HK1 - 0.15*(X2-X1)/T1
+                    htarg = prev.hk - 0.15 * dx / prev.theta.max(1e-12);
                 }
                 
-                // Clamp htarg to reasonable bounds:
-                // - Lower bound: hmax (the threshold that triggered inverse mode)
-                // - Upper bound: Allow some growth above hmax for physical separation
-                //
-                // XFOIL allows H to exceed htmax at high alpha (e.g., H=3.0 at TE when stalling).
-                // If we clamp too tightly, we prevent the TE separation that causes stall.
-                // For turbulent flow, allow H up to ~3.5 to capture TE separation.
-                let htarg_max = if current_laminar { hlmax + 1.0 } else { htmax + 1.0 };
-                htarg = htarg.clamp(hmax, htarg_max);
+                // XFOIL only applies a LOWER bound on htarg (xbl.f line 813):
+                //   HTARG = MAX(HTARG, HMAX)
+                // No upper bound - this allows H to grow to large values (6-10)
+                // during laminar separation bubbles and near-stall conditions.
+                htarg = htarg.max(hmax);
                 
                 continue;  // Restart iteration with inverse mode
             }
@@ -1859,24 +1944,12 @@ pub fn march_surface(
     prev.u = ue[start_idx].abs();
     blvar(&mut prev, FlowType::Laminar, msq, re);
     
-    // XFOIL runs Newton iteration on the similarity station (IBL=2) using
-    // a point equation formulation (BLDIF with ITYP=0) where COM1=COM2.
-    // Analysis shows this consistently refines theta by factor 1.0634 and
-    // converges Hk to 2.2295 across all foils and Reynolds numbers.
-    // This is a fundamental result from the Falkner-Skan similarity solution
-    // at stagnation (pressure gradient parameter BULE=1).
-    //
-    // Rather than implementing the full similarity station Newton solver,
-    // we apply these universal correction factors directly.
-    const SIMILARITY_THETA_FACTOR: f64 = 1.0634;
-    const SIMILARITY_HK: f64 = 2.2295;
-    
-    prev.theta *= SIMILARITY_THETA_FACTOR;
-    prev.delta_star = prev.theta * SIMILARITY_HK;
-    prev.h = SIMILARITY_HK;
-    prev.hk = SIMILARITY_HK;
-    
-    // Recompute derived quantities with corrected values
+    // === CRITICAL: Run Newton iteration at similarity station (XFOIL BLDIF with ITYP=0) ===
+    // XFOIL refines the Thwaites estimate at station 2 using the similarity equations
+    // where COM1=COM2 (both stations are the same point). This typically increases
+    // theta by ~6% from the raw Thwaites value.
+    // Without this, errors propagate downstream causing ~9% theta error by station 10.
+    prev = newton_solve_similarity(&prev, msq, re, config.max_iter, config.tolerance);
     blvar(&mut prev, FlowType::Laminar, msq, re);
     
     emit_blvar_debug(side, 2, FlowType::Laminar, &prev);
@@ -2015,42 +2088,23 @@ pub fn march_surface(
                 );
             }
 
-            // Check for transition:
-            // 1. e^N method (amplification exceeds Ncrit)
-            // 2. Separation-induced transition (Hk exceeds threshold)
+            // Check for transition via e^N method ONLY
+            // 
+            // IMPORTANT: XFOIL does NOT force transition when Hk exceeds a threshold.
+            // It only uses the e^N method (amplification exceeds Ncrit) for transition.
+            // When Hk exceeds hlmax, XFOIL switches to inverse mode to constrain H,
+            // but keeps the flow laminar unless N exceeds Ncrit.
             //
-            // The separation-induced transition handles laminar separation bubbles:
-            // - At high alpha, Hk can spike above 4 in the suction peak region
-            // - This indicates laminar separation, which typically triggers transition
-            // - The threshold should be high enough to not interfere with normal cases
-            //   but low enough to catch severe separation before it causes problems
-            //
-            // We use hlmax (3.8) as the base - if Hk significantly exceeds this despite
-            // inverse mode limiting, we have a separation bubble that should transition.
-            let hk_separation_threshold = config.hlmax + 0.5; // = 4.3
-            let separation_induced_transition = 
-                station.hk > hk_separation_threshold && result.x_transition.is_none();
+            // Previously, RustFoil had "separation-induced transition" that forced
+            // transition when Hk > 4.3. This was WRONG and caused premature transition,
+            // preventing proper stall prediction. High Hk values (4-10) are normal
+            // during laminar separation bubbles and should be handled by inverse mode,
+            // not by forcing transition.
             
-            if trchek_result.transition || separation_induced_transition {
-                let transition_x = if trchek_result.transition {
-                    trchek_result.xt
-                } else {
-                    // Separation-induced: interpolate transition location
-                    let hk_prev = prev_station.hk;
-                    let hk_curr = station.hk;
-                    let frac = (hk_separation_threshold - hk_prev) / (hk_curr - hk_prev).max(1e-20);
-                    Some(prev_station.x + frac * (station.x - prev_station.x))
-                };
-                
-                result.x_transition = transition_x;
+            if trchek_result.transition {
+                // e^N transition detected
+                result.x_transition = trchek_result.xt;
                 result.transition_index = Some(station_idx);
-                
-                if config.debug_trace && separation_induced_transition {
-                    println!(
-                        "[march_surface] SEPARATION-INDUCED TRANSITION at station {}, x={:.4}, Hk={:.3}",
-                        station_idx, station.x, station.hk
-                    );
-                }
 
                 if station.is_turbulent {
                     is_laminar = false;

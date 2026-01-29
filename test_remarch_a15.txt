@@ -1,0 +1,1016 @@
+warning: unused variable: `le_idx`
+   --> crates/rustfoil-core/src/spline.rs:251:13
+    |
+251 |         let le_idx = s_buffer.iter()
+    |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_le_idx`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `cv1` is never read
+   --> crates/rustfoil-core/src/spline.rs:382:17
+    |
+382 |                 cv1 = cv2;
+    |                 ^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `cvs1` is never read
+   --> crates/rustfoil-core/src/spline.rs:384:17
+    |
+384 |                 cvs1 = cvs2;
+    |                 ^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: `rustfoil-core` (lib) generated 3 warnings (run `cargo fix --lib -p rustfoil-core` to apply 1 suggestion)
+warning: unused import: `amplification_rate`
+  --> crates/rustfoil-bl/src/equations.rs:12:5
+   |
+12 |     amplification_rate, axset_full, cf_laminar, cf_turbulent, density_shape, dissipation_laminar,
+   |     ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `CTCON` and `GBCON`
+    --> crates/rustfoil-bl/src/equations.rs:1790:28
+     |
+1790 |     use crate::constants::{GBCON, CTCON};
+     |                            ^^^^^  ^^^^^
+
+warning: unused variable: `hk2_t2`
+   --> crates/rustfoil-bl/src/closures/transition.rs:971:9
+    |
+971 |     let hk2_t2 = hkin2.hk_h * h2_t2;
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_hk2_t2`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `hk2_d2`
+   --> crates/rustfoil-bl/src/closures/transition.rs:972:9
+    |
+972 |     let hk2_d2 = hkin2.hk_h * h2_d2;
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_hk2_d2`
+
+warning: unused variable: `hk2_ms`
+   --> crates/rustfoil-bl/src/closures/transition.rs:973:9
+    |
+973 |     let hk2_ms = hkin2.hk_msq;
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_hk2_ms`
+
+warning: unused variable: `rt2_t2`
+   --> crates/rustfoil-bl/src/closures/transition.rs:981:9
+    |
+981 |     let rt2_t2 = re * u2;
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_rt2_t2`
+
+warning: unused variable: `rt2_u2`
+   --> crates/rustfoil-bl/src/closures/transition.rs:982:9
+    |
+982 |     let rt2_u2 = re * t2;
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_rt2_u2`
+
+warning: unused variable: `rt2_re`
+   --> crates/rustfoil-bl/src/closures/transition.rs:983:9
+    |
+983 |     let rt2_re = u2 * t2;
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_rt2_re`
+
+warning: unused variable: `rt2_ms`
+   --> crates/rustfoil-bl/src/closures/transition.rs:984:9
+    |
+984 |     let rt2_ms = 0.0;
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_rt2_ms`
+
+warning: unused variable: `hkt_ms`
+    --> crates/rustfoil-bl/src/closures/transition.rs:1062:13
+     |
+1062 |         let hkt_ms = hkt_result.hk_msq;
+     |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_hkt_ms`
+
+warning: unused variable: `rtt_re`
+    --> crates/rustfoil-bl/src/closures/transition.rs:1068:13
+     |
+1068 |         let rtt_re = ut * tt;
+     |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_rtt_re`
+
+warning: unused variable: `rtt_ms`
+    --> crates/rustfoil-bl/src/closures/transition.rs:1069:13
+     |
+1069 |         let rtt_ms = 0.0;
+     |             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_rtt_ms`
+
+warning: unused variable: `ax_at`
+    --> crates/rustfoil-bl/src/closures/transition.rs:1200:9
+     |
+1200 |     let ax_at = ax_result.ax_a2;  // = 0 since amplt = ncrit is constant
+     |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_ax_at`
+
+warning: value assigned to `wf2_a2` is never read
+   --> crates/rustfoil-bl/src/closures/transition.rs:999:22
+    |
+999 |     let mut wf2_a2 = 0.0;
+    |                      ^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `amplt_a2` is never read
+    --> crates/rustfoil-bl/src/closures/transition.rs:1002:24
+     |
+1002 |     let mut amplt_a2 = 1.0;
+     |                        ^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: value assigned to `tt` is never read
+    --> crates/rustfoil-bl/src/closures/transition.rs:1005:18
+     |
+1005 |     let mut tt = t2;
+     |                  ^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: value assigned to `dt` is never read
+    --> crates/rustfoil-bl/src/closures/transition.rs:1006:18
+     |
+1006 |     let mut dt = d2;
+     |                  ^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: value assigned to `ut` is never read
+    --> crates/rustfoil-bl/src/closures/transition.rs:1007:18
+     |
+1007 |     let mut ut = u2;
+     |                  ^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: unused variable: `side`
+    --> crates/rustfoil-bl/src/debug.rs:1258:9
+     |
+1258 |         side: usize,
+     |         ^^^^ help: if this is intentional, prefix it with an underscore: `_side`
+
+warning: unused variable: `ibl`
+    --> crates/rustfoil-bl/src/debug.rs:1259:9
+     |
+1259 |         ibl: usize,
+     |         ^^^ help: if this is intentional, prefix it with an underscore: `_ibl`
+
+warning: unused variable: `side`
+    --> crates/rustfoil-bl/src/debug.rs:1338:9
+     |
+1338 |         side: usize,
+     |         ^^^^ help: if this is intentional, prefix it with an underscore: `_side`
+
+warning: unused variable: `ibl`
+    --> crates/rustfoil-bl/src/debug.rs:1339:9
+     |
+1339 |         ibl: usize,
+     |         ^^^ help: if this is intentional, prefix it with an underscore: `_ibl`
+
+warning: unused variable: `cq_ms_val`
+   --> crates/rustfoil-bl/src/equations.rs:429:9
+    |
+429 |     let cq_ms_val = cq_hs * hs_ms + cq_us * us_ms + cq_hk * hk_ms;
+    |         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cq_ms_val`
+
+warning: unused variable: `cq_re_val`
+   --> crates/rustfoil-bl/src/equations.rs:430:9
+    |
+430 |     let cq_re_val = cq_hs * hs_re + cq_us * us_re + cq_rt * rt_re;
+    |         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cq_re_val`
+
+warning: unused variable: `cf_u`
+   --> crates/rustfoil-bl/src/equations.rs:459:9
+    |
+459 |     let cf_u = cf_hk * hk_u + cf_rt * rt_u + cf_msq * m_u;
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_cf_u`
+
+warning: unused variable: `cf_t`
+   --> crates/rustfoil-bl/src/equations.rs:460:9
+    |
+460 |     let cf_t = cf_hk * hk_t + cf_rt * rt_t;
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_cf_t`
+
+warning: unused variable: `cf_d`
+   --> crates/rustfoil-bl/src/equations.rs:461:9
+    |
+461 |     let cf_d = cf_hk * hk_d;
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_cf_d`
+
+warning: unused variable: `cf_ms`
+   --> crates/rustfoil-bl/src/equations.rs:462:9
+    |
+462 |     let cf_ms = cf_hk * hk_ms + cf_rt * rt_ms + cf_msq * m_ms;
+    |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_cf_ms`
+
+warning: unused variable: `cf_re`
+   --> crates/rustfoil-bl/src/equations.rs:463:9
+    |
+463 |     let cf_re = cf_rt * rt_re;
+    |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_cf_re`
+
+warning: variable `di_ms` is assigned to, but never used
+   --> crates/rustfoil-bl/src/equations.rs:474:58
+    |
+474 |     let (mut di, mut di_s, mut di_u, mut di_t, mut di_d, mut di_ms, mut di_re, di_hk_base, di_rt_base) = match flow_type {
+    |                                                          ^^^^^^^^^
+    |
+    = note: consider using `_di_ms` instead
+
+warning: variable `di_re` is assigned to, but never used
+   --> crates/rustfoil-bl/src/equations.rs:474:69
+    |
+474 |     let (mut di, mut di_s, mut di_u, mut di_t, mut di_d, mut di_ms, mut di_re, di_hk_base, di_rt_base) = match flow_type {
+    |                                                                     ^^^^^^^^^
+    |
+    = note: consider using `_di_re` instead
+
+warning: unused variable: `de_u`
+   --> crates/rustfoil-bl/src/equations.rs:779:9
+    |
+779 |     let de_u = de_hk * hk_u;
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_de_u`
+
+warning: unused variable: `de_ms`
+   --> crates/rustfoil-bl/src/equations.rs:782:9
+    |
+782 |     let de_ms = de_hk * hk_ms;
+    |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_de_ms`
+
+warning: value assigned to `di_ms` is never read
+   --> crates/rustfoil-bl/src/equations.rs:759:13
+    |
+759 |             di_ms = di_total_ms;
+    |             ^^^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: value assigned to `di_re` is never read
+   --> crates/rustfoil-bl/src/equations.rs:760:13
+    |
+760 |             di_re = di_total_re;
+    |             ^^^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: unused variable: `re`
+   --> crates/rustfoil-bl/src/equations.rs:993:5
+    |
+993 |     re: f64,
+    |     ^^ help: if this is intentional, prefix it with an underscore: `_re`
+
+warning: unused variable: `uq_t1`
+    --> crates/rustfoil-bl/src/equations.rs:1304:17
+     |
+1304 |             let uq_t1 = (1.0 - upw) * (uq_cfa * cf1_t + uq_hka * hk1_t) 
+     |                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_uq_t1`
+
+warning: unused variable: `uq_d1`
+    --> crates/rustfoil-bl/src/equations.rs:1310:17
+     |
+1310 |             let uq_d1 = (1.0 - upw) * (uq_cfa * cf1_d + uq_hka * hk1_d)
+     |                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_uq_d1`
+
+warning: unused variable: `uq_u1`
+    --> crates/rustfoil-bl/src/equations.rs:1316:17
+     |
+1316 |             let uq_u1 = (1.0 - upw) * (uq_cfa * cf1_u)
+     |                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_uq_u1`
+
+warning: unused variable: `uq_t2`
+    --> crates/rustfoil-bl/src/equations.rs:1321:17
+     |
+1321 |             let uq_t2 = upw * (uq_cfa * cf2_t + uq_hka * hk2_t)
+     |                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_uq_t2`
+
+warning: unused variable: `uq_d2`
+    --> crates/rustfoil-bl/src/equations.rs:1327:17
+     |
+1327 |             let uq_d2 = upw * (uq_cfa * cf2_d + uq_hka * hk2_d)
+     |                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_uq_d2`
+
+warning: unused variable: `uq_u2`
+    --> crates/rustfoil-bl/src/equations.rs:1333:17
+     |
+1333 |             let uq_u2 = upw * (uq_cfa * cf2_u)
+     |                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_uq_u2`
+
+warning: unused variable: `re`
+    --> crates/rustfoil-bl/src/equations.rs:1788:5
+     |
+1788 |     re: f64,
+     |     ^^ help: if this is intentional, prefix it with an underscore: `_re`
+
+warning: unused variable: `hlog`
+    --> crates/rustfoil-bl/src/equations.rs:1800:9
+     |
+1800 |     let hlog = 0.0;
+     |         ^^^^ help: if this is intentional, prefix it with an underscore: `_hlog`
+
+warning: unused variable: `upw`
+    --> crates/rustfoil-bl/src/equations.rs:1803:9
+     |
+1803 |     let upw = 1.0;
+     |         ^^^ help: if this is intentional, prefix it with an underscore: `_upw`
+
+warning: unused variable: `hk`
+    --> crates/rustfoil-bl/src/equations.rs:1818:9
+     |
+1818 |     let hk = s.hk;
+     |         ^^ help: if this is intentional, prefix it with an underscore: `_hk`
+
+warning: `rustfoil-bl` (lib) generated 46 warnings (run `cargo fix --lib -p rustfoil-bl` to apply 37 suggestions)
+warning: use of deprecated type alias `nalgebra::Dynamic`: use Dyn instead.
+  --> crates/rustfoil-inviscid/src/system.rs:51:38
+   |
+51 |     pub(crate) lu: LU<f64, nalgebra::Dynamic, nalgebra::Dynamic>,
+   |                                      ^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated type alias `nalgebra::Dynamic`: use Dyn instead.
+  --> crates/rustfoil-inviscid/src/system.rs:51:57
+   |
+51 |     pub(crate) lu: LU<f64, nalgebra::Dynamic, nalgebra::Dynamic>,
+   |                                                         ^^^^^^^
+
+warning: variable does not need to be mutable
+   --> crates/rustfoil-inviscid/src/influence.rs:438:9
+    |
+438 |     let mut te_contrib: Option<PanelContribution> = None;
+    |         ----^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `seps`
+   --> crates/rustfoil-inviscid/src/influence.rs:857:9
+    |
+857 |     let seps = geom.total_arc_length() * 1e-5;
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_seps`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling rustfoil-coupling v0.1.0 (/Users/harry/flexfoil-boundary-layer/crates/rustfoil-coupling)
+warning: `rustfoil-inviscid` (lib) generated 4 warnings (run `cargo fix --lib -p rustfoil-inviscid` to apply 2 suggestions)
+warning: unused import: `trdif`
+  --> crates/rustfoil-coupling/src/march.rs:20:37
+   |
+20 |     bldif, bldif_with_terms, blvar, trdif, trdif_full, trdif_turb_terms, FlowType,
+   |                                     ^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `bldif`
+  --> crates/rustfoil-coupling/src/wake.rs:11:30
+   |
+11 | use rustfoil_bl::equations::{bldif, blvar, FlowType};
+   |                              ^^^^^
+
+warning: variable does not need to be mutable
+    --> crates/rustfoil-coupling/src/march.rs:1287:14
+     |
+1287 |         let (mut a, mut b) = build_4x4_system(
+     |              ----^
+     |              |
+     |              help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+    --> crates/rustfoil-coupling/src/march.rs:1287:21
+     |
+1287 |         let (mut a, mut b) = build_4x4_system(
+     |                     ----^
+     |                     |
+     |                     help: remove this `mut`
+
+warning: value assigned to `trchek_hold` is never read
+   --> crates/rustfoil-coupling/src/march.rs:828:54
+    |
+828 |     let mut trchek_hold: Option<Trchek2FullResult> = None;
+    |                                                      ^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `trchek_hold` is never read
+    --> crates/rustfoil-coupling/src/march.rs:1524:13
+     |
+1524 |             trchek_hold = Some(tr_updated);
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: unused variable: `flow_type`
+    --> crates/rustfoil-coupling/src/march.rs:1642:13
+     |
+1642 |         let flow_type = if is_laminar {
+     |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_flow_type`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `ds`
+    --> crates/rustfoil-coupling/src/march.rs:1918:13
+     |
+1918 |         let ds = x[i] - x[i - 1];
+     |             ^^ help: if this is intentional, prefix it with an underscore: `_ds`
+
+warning: unused variable: `due`
+   --> crates/rustfoil-coupling/src/newton.rs:558:13
+    |
+558 |         let due: Vec<f64> = (0..stations.len())
+    |             ^^^ help: if this is intentional, prefix it with an underscore: `_due`
+
+warning: function `estimate_transition_ctau` is never used
+  --> crates/rustfoil-coupling/src/march.rs:53:4
+   |
+53 | fn estimate_transition_ctau(
+   |    ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `gauss_4x4` is never used
+   --> crates/rustfoil-coupling/src/march.rs:594:4
+    |
+594 | fn gauss_4x4(a: &mut [[f64; 4]; 4], b: &mut [f64; 4]) {
+    |    ^^^^^^^^^
+
+warning: method `add_forced_changes` is never used
+   --> crates/rustfoil-coupling/src/newton.rs:736:8
+    |
+ 88 | impl BlNewtonSystem {
+    | ------------------- method in this implementation
+...
+736 |     fn add_forced_changes(&mut self, stations: &[BlStation], due: &[f64]) {
+    |        ^^^^^^^^^^^^^^^^^^
+
+warning: function `is_invertible` is never used
+   --> crates/rustfoil-coupling/src/solve.rs:311:4
+    |
+311 | fn is_invertible(m: &[[f64; 3]; 3]) -> bool {
+    |    ^^^^^^^^^^^^^
+
+   Compiling rustfoil-solver v0.1.0 (/Users/harry/flexfoil-boundary-layer/crates/rustfoil-solver)
+warning: `rustfoil-coupling` (lib) generated 13 warnings (run `cargo fix --lib -p rustfoil-coupling` to apply 7 suggestions)
+warning: unused imports: `find_stagnation_by_gamma` and `find_stagnation_with_derivs`
+  --> crates/rustfoil-solver/src/viscous/viscal.rs:30:33
+   |
+30 | use rustfoil_coupling::stmove::{find_stagnation_by_gamma, find_stagnation_with_derivs};
+   |                                 ^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `config`
+   --> crates/rustfoil-solver/src/viscous/forces.rs:201:5
+    |
+201 |     config: &ViscousSolverConfig,
+    |     ^^^^^^ help: if this is intentional, prefix it with an underscore: `_config`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `panel_y`
+   --> crates/rustfoil-solver/src/viscous/forces.rs:610:5
+    |
+610 |     panel_y: &[f64],
+    |     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_panel_y`
+
+warning: unused variable: `gamma`
+   --> crates/rustfoil-solver/src/viscous/viscal.rs:472:13
+    |
+472 |         let gamma = update_circulation_from_qvis(&qvis);
+    |             ^^^^^ help: if this is intentional, prefix it with an underscore: `_gamma`
+
+warning: unused variable: `update_config`
+   --> crates/rustfoil-solver/src/viscous/viscal.rs:719:9
+    |
+719 |     let update_config = UpdateConfig {
+    |         ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_update_config`
+
+warning: `rustfoil-solver` (lib) generated 5 warnings (run `cargo fix --lib -p rustfoil-solver` to apply 5 suggestions)
+warning: unused variable: `ref_data`
+   --> crates/rustfoil-solver/tests/xfoil_viscous_comparison.rs:454:9
+    |
+454 |     let ref_data = ref_data.unwrap();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ref_data`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `test`, `mach`, `ncrit`, `stagnation_base`, and `bl_setup_base` are never read
+  --> crates/rustfoil-solver/tests/xfoil_viscous_comparison.rs:21:5
+   |
+20 | struct ViscousReference {
+   |        ---------------- fields in this struct
+21 |     test: String,
+   |     ^^^^
+...
+25 |     mach: f64,
+   |     ^^^^
+26 |     ncrit: f64,
+   |     ^^^^^
+...
+29 |     stagnation_base: Option<StagnationRef>,
+   |     ^^^^^^^^^^^^^^^
+30 |     #[serde(default)]
+31 |     bl_setup_base: Option<BlSetupRef>,
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `ViscousReference` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `xst` and `yst` are never read
+  --> crates/rustfoil-solver/tests/xfoil_viscous_comparison.rs:42:9
+   |
+36 | struct StagnationRef {
+   |        ------------- fields in this struct
+...
+42 |     pub xst: f64,
+   |         ^^^
+43 |     #[serde(rename = "yst")]
+44 |     pub yst: f64,
+   |         ^^^
+   |
+   = note: `StagnationRef` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `ist`, `nbl_upper`, `nbl_lower`, `iblte_upper`, and `iblte_lower` are never read
+  --> crates/rustfoil-solver/tests/xfoil_viscous_comparison.rs:50:9
+   |
+48 | struct BlSetupRef {
+   |        ---------- fields in this struct
+49 |     #[serde(rename = "ist", default)]
+50 |     pub ist: usize,
+   |         ^^^
+51 |     #[serde(rename = "nbl_upper", default)]
+52 |     pub nbl_upper: usize,
+   |         ^^^^^^^^^
+53 |     #[serde(rename = "nbl_lower", default)]
+54 |     pub nbl_lower: usize,
+   |         ^^^^^^^^^
+55 |     #[serde(rename = "iblte_upper", default)]
+56 |     pub iblte_upper: usize,
+   |         ^^^^^^^^^^^
+57 |     #[serde(rename = "iblte_lower", default)]
+58 |     pub iblte_lower: usize,
+   |         ^^^^^^^^^^^
+   |
+   = note: `BlSetupRef` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `alpha_rad`, `bl_setup`, and `transitions` are never read
+  --> crates/rustfoil-solver/tests/xfoil_viscous_comparison.rs:64:5
+   |
+62 | struct ViscousCase {
+   |        ----------- fields in this struct
+63 |     alpha_deg: f64,
+64 |     alpha_rad: f64,
+   |     ^^^^^^^^^
+...
+69 |     bl_setup: BlSetupRef,
+   |     ^^^^^^^^
+70 |     transitions: Vec<TransitionRef>,
+   |     ^^^^^^^^^^^
+   |
+   = note: `ViscousCase` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `gam_sample` and `qinv_sample` are never read
+  --> crates/rustfoil-solver/tests/xfoil_viscous_comparison.rs:81:5
+   |
+79 | struct InviscidRef {
+   |        ----------- fields in this struct
+80 |     cl: Option<f64>,
+81 |     gam_sample: Option<Vec<f64>>,
+   |     ^^^^^^^^^^
+82 |     qinv_sample: Option<Vec<f64>>,
+   |     ^^^^^^^^^^^
+   |
+   = note: `InviscidRef` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `side`, `itran`, `x_transition`, and `forced` are never read
+  --> crates/rustfoil-solver/tests/xfoil_viscous_comparison.rs:87:5
+   |
+86 | struct TransitionRef {
+   |        ------------- fields in this struct
+87 |     side: i32,
+   |     ^^^^
+88 |     itran: usize,
+   |     ^^^^^
+89 |     x_transition: f64,
+   |     ^^^^^^^^^^^^
+90 |     forced: bool,
+   |     ^^^^^^
+   |
+   = note: `TransitionRef` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `max_residual` and `cm` are never read
+   --> crates/rustfoil-solver/tests/xfoil_viscous_comparison.rs:97:5
+    |
+ 94 | struct IterationRef {
+    |        ------------ fields in this struct
+...
+ 97 |     max_residual: f64,
+    |     ^^^^^^^^^^^^
+...
+100 |     cm: f64,
+    |     ^^
+    |
+    = note: `IterationRef` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `cd_form`, `cd_friction`, `x_sep_upper`, and `x_sep_lower` are never read
+   --> crates/rustfoil-solver/tests/xfoil_viscous_comparison.rs:112:5
+    |
+104 | struct FinalResultRef {
+    |        -------------- fields in this struct
+...
+112 |     cd_form: f64,
+    |     ^^^^^^^
+113 |     #[serde(default)]
+114 |     cd_friction: f64,
+    |     ^^^^^^^^^^^
+...
+120 |     x_sep_upper: f64,
+    |     ^^^^^^^^^^^
+121 |     #[serde(default)]
+122 |     x_sep_lower: f64,
+    |     ^^^^^^^^^^^
+    |
+    = note: `FinalResultRef` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `delta_star`, `cf`, and `transitional` are never read
+   --> crates/rustfoil-solver/tests/xfoil_viscous_comparison.rs:136:5
+    |
+130 | struct MrchueRef {
+    |        --------- fields in this struct
+...
+136 |     delta_star: f64,
+    |     ^^^^^^^^^^
+137 |     hk: f64,
+138 |     cf: f64,
+    |     ^^
+139 |     transitional: bool,
+    |     ^^^^^^^^^^^^
+    |
+    = note: `MrchueRef` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `n_airfoil` is never read
+    --> crates/rustfoil-solver/tests/xfoil_viscous_comparison.rs:1270:5
+     |
+1266 | struct DqdmEvent {
+     |        --------- field in this struct
+...
+1270 |     n_airfoil: usize,
+     |     ^^^^^^^^^
+     |
+     = note: `DqdmEvent` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `rustfoil-solver` (test "xfoil_viscous_comparison") generated 11 warnings (run `cargo fix --test "xfoil_viscous_comparison" -p rustfoil-solver` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.30s
+     Running tests/xfoil_viscous_comparison.rs (target/debug/deps/xfoil_viscous_comparison-51f1f0510ebb833b)
+
+running 1 test
+
+=== Newton Iteration Trace at α = 15.0° ===
+  Full trace mode: true
+  Output: traces/rustfoil_new/rustfoil_alpha_15.json
+[DEBUG setup] Upper surface: n=100, stagnation_idx=98, n_airfoil=160
+[DEBUG setup]   First 5 panel_idx: [98, 98, 97, 96, 95]
+[DEBUG setup]   Last 5 panel_idx: [4, 3, 2, 1, 0]
+[DEBUG setup] Lower surface: n=62, stagnation_idx=98, n_airfoil=160
+[DEBUG setup]   First 5 panel_idx: [98, 99, 100, 101, 102]
+[DEBUG setup]   Last 5 panel_idx: [155, 156, 157, 158, 159]
+[DEBUG wake] Created 23 wake stations with panel_idx 160 to 182
+[march_surface] i=24 x=0.0840 Hk=2.726 Rθ=267 N=0.260 dN=0.2596
+[march_surface] i=25 x=0.0863 Hk=3.071 Rθ=299 N=0.952 dN=0.6924
+[march_surface] i=26 x=0.0887 Hk=3.800 Rθ=332 N=2.426 dN=1.4745
+[march_surface] i=27 x=0.0912 Hk=4.300 Rθ=360 N=4.542 dN=2.1152
+[march_surface] SEPARATION-INDUCED TRANSITION at station 26, x=0.0912, Hk=4.300
+[DEBUG viscal] Upper march results: 99 stations (input: 100)
+[DEBUG viscal]   [0] theta=5.279642e-5, dstar=1.177096e-4, Hk=2.229, Cf=6.699413e-2
+[DEBUG viscal]   [1] theta=4.605657e-5, dstar=1.015122e-4, Hk=2.204, Cf=3.195601e-2
+[DEBUG viscal]   [2] theta=4.286133e-5, dstar=9.532759e-5, Hk=2.224, Cf=2.036646e-2
+[DEBUG viscal]   [3] theta=3.920217e-5, dstar=8.589869e-5, Hk=2.191, Cf=1.640842e-2
+[DEBUG viscal]   [4] theta=3.614765e-5, dstar=7.961740e-5, Hk=2.203, Cf=1.331878e-2
+[DEBUG viscal]   [last] theta=2.195333e-2, dstar=5.049266e-2, Hk=2.300, Cf=3.048171e-4
+[DEBUG viscal]   x_tr=Some(0.09120956350759937), x_sep=None
+[march_surface] i=54 x=0.8484 Hk=2.537 Rθ=773 N=0.145 dN=0.0888
+[march_surface] i=55 x=0.8649 Hk=2.582 Rθ=790 N=0.253 dN=0.1080
+[march_surface] i=56 x=0.8811 Hk=2.654 Rθ=810 N=0.392 dN=0.1384
+[march_surface] i=57 x=0.8968 Hk=2.787 Rθ=834 N=0.599 dN=0.2074
+[march_surface] i=58 x=0.9115 Hk=3.125 Rθ=868 N=1.005 dN=0.4054
+[march_surface] i=59 x=0.9247 Hk=3.800 Rθ=894 N=1.727 dN=0.7226
+[march_surface] i=60 x=0.9361 Hk=4.300 Rθ=906 N=2.604 dN=0.8771
+[march_surface] SEPARATION-INDUCED TRANSITION at station 59, x=0.9361, Hk=4.300
+[DEBUG viscal] Lower march results: 84 stations (input: 85)
+[DEBUG viscal]   [0] theta=5.279642e-5, dstar=1.177096e-4, Hk=2.229, Cf=1.777325e-1
+[DEBUG viscal]   [1] theta=6.118420e-5, dstar=1.376096e-4, Hk=2.249, Cf=3.434841e-2
+[DEBUG viscal]   [2] theta=6.515058e-5, dstar=1.453883e-4, Hk=2.232, Cf=1.946661e-2
+[DEBUG viscal]   [3] theta=7.080012e-5, dstar=1.606657e-4, Hk=2.269, Cf=1.245326e-2
+[DEBUG viscal]   [4] theta=7.605389e-5, dstar=1.713063e-4, Hk=2.252, Cf=9.586499e-3
+[DEBUG viscal]   [last] theta=2.253131e-3, dstar=3.046895e-3, Hk=1.352, Cf=2.749545e-3
+[DEBUG viscal]   x_tr=Some(0.9361148050858441), x_sep=None
+[DEBUG Newton] Re-marching BL at iteration 0
+[march_surface] i=24 x=0.0840 Hk=2.726 Rθ=267 N=0.260 dN=0.2596
+[march_surface] i=25 x=0.0863 Hk=3.071 Rθ=299 N=0.952 dN=0.6924
+[march_surface] i=26 x=0.0887 Hk=3.800 Rθ=332 N=2.426 dN=1.4745
+[march_surface] i=27 x=0.0912 Hk=4.300 Rθ=360 N=4.542 dN=2.1152
+[march_surface] i=28 x=0.0940 Hk=4.800 Rθ=385 N=7.013 dN=2.4713
+[march_surface] SEPARATION-INDUCED TRANSITION at station 27, x=0.0940, Hk=4.800
+[march_surface] i=54 x=0.8484 Hk=2.537 Rθ=773 N=0.145 dN=0.0888
+[march_surface] i=55 x=0.8649 Hk=2.582 Rθ=790 N=0.253 dN=0.1080
+[march_surface] i=56 x=0.8811 Hk=2.654 Rθ=810 N=0.392 dN=0.1384
+[march_surface] i=57 x=0.8968 Hk=2.787 Rθ=834 N=0.599 dN=0.2074
+[march_surface] i=58 x=0.9115 Hk=3.125 Rθ=868 N=1.005 dN=0.4054
+[march_surface] i=59 x=0.9247 Hk=3.800 Rθ=894 N=1.727 dN=0.7226
+[march_surface] i=60 x=0.9361 Hk=4.300 Rθ=906 N=2.604 dN=0.8771
+[march_surface] i=61 x=0.9445 Hk=4.800 Rθ=913 N=3.360 dN=0.7558
+[march_surface] SEPARATION-INDUCED TRANSITION at station 60, x=0.9445, Hk=4.800
+[DEBUG Newton] iter 0 after re-march: upper[97] Hk=2.4252, H=2.4252, theta=1.066441e-2
+[DEBUG Newton] iter 0 after re-march: upper[TE=99] Hk=2.2387, H=2.2387, theta=2.158253e-2
+[DEBUG Global Newton] iter 0 after blvar:
+[DEBUG Global Newton]   upper[1] theta=5.279642e-5 dstar=1.177096e-4 Hk=2.2295
+[DEBUG Global Newton]   upper[2] theta=4.605657e-5 dstar=1.015122e-4 Hk=2.2041
+[DEBUG Global Newton]   upper[3] theta=4.286133e-5 dstar=9.532759e-5 Hk=2.2241
+[DEBUG compute_new_ue] upper i=20: uinv=3.561586, dui=-2.238961e-1, ue_new=3.337690, current_u=3.561586
+[DEBUG compute_new_ue] upper i=40: uinv=2.172791, dui=-7.525962e-2, ue_new=2.097531, current_u=2.172791
+[DEBUG Ue UPDATE] upper ibl=20: new_u=3.337690, current_u=3.561586, due=-2.238961e-1, delta_mass=-8.343080e-6, rlx=0.083
+[DEBUG Ue UPDATE] upper ibl=20: Ue changed 3.561586 -> 3.543008 (delta=-1.857752e-2)
+[DEBUG Ue UPDATE] upper ibl=40: new_u=2.097531, current_u=2.172791, due=-7.525962e-2, delta_mass=-2.857117e-4, rlx=0.083
+[DEBUG Ue UPDATE] upper ibl=40: Ue changed 2.172791 -> 2.166546 (delta=-6.244580e-3)
+[DEBUG Ue UPDATE] upper ibl=60: new_u=1.416418, current_u=1.459211, due=-4.279330e-2, delta_mass=-8.233095e-4, rlx=0.083
+[DEBUG Ue UPDATE] upper ibl=60: Ue changed 1.459211 -> 1.455660 (delta=-3.550725e-3)
+[DEBUG Ue UPDATE] lower ibl=20: new_u=0.748138, current_u=0.717707, due=3.043115e-2, delta_mass=1.561148e-5, rlx=0.083
+[DEBUG Ue UPDATE] lower ibl=20: Ue changed 0.717707 -> 0.720232 (delta=2.524990e-3)
+[DEBUG Ue UPDATE] lower ibl=40: new_u=0.870234, current_u=0.844360, due=2.587466e-2, delta_mass=1.702181e-5, rlx=0.083
+[DEBUG Ue UPDATE] lower ibl=40: Ue changed 0.844360 -> 0.846507 (delta=2.146920e-3)
+[DEBUG Newton] Re-marching BL at iteration 1
+[march_surface] i=24 x=0.0840 Hk=2.724 Rθ=266 N=0.257 dN=0.2571
+[march_surface] i=25 x=0.0863 Hk=3.065 Rθ=298 N=0.941 dN=0.6843
+[march_surface] i=26 x=0.0887 Hk=3.800 Rθ=331 N=2.410 dN=1.4691
+[march_surface] i=27 x=0.0912 Hk=4.300 Rθ=359 N=4.523 dN=2.1120
+[march_surface] i=28 x=0.0940 Hk=4.800 Rθ=384 N=6.990 dN=2.4673
+[march_surface] SEPARATION-INDUCED TRANSITION at station 27, x=0.0940, Hk=4.800
+[march_surface] i=54 x=0.8484 Hk=2.534 Rθ=774 N=0.137 dN=0.0854
+[march_surface] i=55 x=0.8649 Hk=2.579 Rθ=791 N=0.243 dN=0.1066
+[march_surface] i=56 x=0.8811 Hk=2.650 Rθ=811 N=0.380 dN=0.1363
+[march_surface] i=57 x=0.8968 Hk=2.782 Rθ=835 N=0.584 dN=0.2041
+[march_surface] i=58 x=0.9115 Hk=3.113 Rθ=868 N=0.982 dN=0.3980
+[march_surface] i=59 x=0.9247 Hk=3.774 Rθ=895 N=1.693 dN=0.7116
+[march_surface] i=60 x=0.9361 Hk=4.274 Rθ=907 N=2.561 dN=0.8681
+[march_surface] i=61 x=0.9445 Hk=4.774 Rθ=915 N=3.313 dN=0.7514
+[march_surface] SEPARATION-INDUCED TRANSITION at station 60, x=0.9445, Hk=4.774
+[DEBUG Newton] iter 1 after re-march: upper[97] Hk=2.4826, H=2.4826, theta=1.074002e-2
+[DEBUG Newton] iter 1 after re-march: upper[TE=99] Hk=2.2920, H=2.2920, theta=2.176319e-2
+[DEBUG Global Newton] iter 1 after blvar:
+[DEBUG Global Newton]   upper[1] theta=5.476803e-5 dstar=1.221053e-4 Hk=2.2295
+[DEBUG Global Newton]   upper[2] theta=4.590267e-5 dstar=1.009341e-4 Hk=2.1989
+[DEBUG Global Newton]   upper[3] theta=4.291508e-5 dstar=9.575659e-5 Hk=2.2313
+[DEBUG compute_new_ue] upper i=20: uinv=3.561586, dui=-2.610514e-1, ue_new=3.300534, current_u=3.543008
+[DEBUG compute_new_ue] upper i=40: uinv=2.172791, dui=-8.796735e-2, ue_new=2.084823, current_u=2.166546
+[DEBUG Ue UPDATE] upper ibl=20: new_u=3.300534, current_u=3.543008, due=-2.424739e-1, delta_mass=-9.167019e-6, rlx=0.076
+[DEBUG Ue UPDATE] upper ibl=20: Ue changed 3.543008 -> 3.524524 (delta=-1.848369e-2)
+[DEBUG Ue UPDATE] upper ibl=40: new_u=2.084823, current_u=2.166546, due=-8.172277e-2, delta_mass=-3.050506e-4, rlx=0.076
+[DEBUG Ue UPDATE] upper ibl=40: Ue changed 2.166546 -> 2.160316 (delta=-6.229694e-3)
+[DEBUG Ue UPDATE] upper ibl=60: new_u=1.408544, current_u=1.455660, due=-4.711582e-2, delta_mass=-8.711060e-4, rlx=0.076
+[DEBUG Ue UPDATE] upper ibl=60: Ue changed 1.455660 -> 1.452069 (delta=-3.591620e-3)
+[DEBUG Ue UPDATE] lower ibl=20: new_u=0.754047, current_u=0.720232, due=3.381442e-2, delta_mass=1.731407e-5, rlx=0.076
+[DEBUG Ue UPDATE] lower ibl=20: Ue changed 0.720232 -> 0.722810 (delta=2.577660e-3)
+[DEBUG Ue UPDATE] lower ibl=40: new_u=0.875395, current_u=0.846507, due=2.888832e-2, delta_mass=1.885670e-5, rlx=0.076
+[DEBUG Ue UPDATE] lower ibl=40: Ue changed 0.846507 -> 0.848709 (delta=2.202145e-3)
+[DEBUG Newton] Re-marching BL at iteration 2
+[march_surface] i=24 x=0.0840 Hk=2.721 Rθ=265 N=0.255 dN=0.2546
+[march_surface] i=25 x=0.0863 Hk=3.059 Rθ=297 N=0.931 dN=0.6763
+[march_surface] i=26 x=0.0887 Hk=3.800 Rθ=330 N=2.395 dN=1.4640
+[march_surface] i=27 x=0.0912 Hk=4.300 Rθ=357 N=4.504 dN=2.1090
+[march_surface] i=28 x=0.0940 Hk=4.800 Rθ=383 N=6.967 dN=2.4634
+[march_surface] SEPARATION-INDUCED TRANSITION at station 27, x=0.0940, Hk=4.800
+[march_surface] i=54 x=0.8484 Hk=2.531 Rθ=775 N=0.127 dN=0.0816
+[march_surface] i=55 x=0.8649 Hk=2.575 Rθ=792 N=0.232 dN=0.1051
+[march_surface] i=56 x=0.8811 Hk=2.646 Rθ=812 N=0.366 dN=0.1339
+[march_surface] i=57 x=0.8968 Hk=2.776 Rθ=836 N=0.567 dN=0.2004
+[march_surface] i=58 x=0.9115 Hk=3.101 Rθ=869 N=0.957 dN=0.3906
+[march_surface] i=59 x=0.9247 Hk=3.751 Rθ=896 N=1.659 dN=0.7020
+[march_surface] i=60 x=0.9361 Hk=4.251 Rθ=909 N=2.520 dN=0.8606
+[march_surface] i=61 x=0.9445 Hk=4.751 Rθ=916 N=3.268 dN=0.7478
+[march_surface] SEPARATION-INDUCED TRANSITION at station 60, x=0.9445, Hk=4.751
+[DEBUG Newton] iter 2 after re-march: upper[97] Hk=2.5000, H=2.5000, theta=1.074802e-2
+[DEBUG Newton] iter 2 after re-march: upper[TE=99] Hk=2.3000, H=2.3000, theta=2.175804e-2
+[DEBUG compute_new_ue] upper i=20: uinv=3.561586, dui=-4.229142e-1, ue_new=3.138671, current_u=3.524524
+[DEBUG compute_new_ue] upper i=40: uinv=2.172791, dui=-1.436699e-1, ue_new=2.029121, current_u=2.160316
+[DEBUG Ue UPDATE] upper ibl=20: new_u=3.138671, current_u=3.524524, due=-3.858530e-1, delta_mass=-1.502699e-5, rlx=0.056
+[DEBUG Ue UPDATE] upper ibl=20: Ue changed 3.524524 -> 3.502925 (delta=-2.159916e-2)
+[DEBUG Ue UPDATE] upper ibl=40: new_u=2.029121, current_u=2.160316, due=-1.311957e-1, delta_mass=-4.200708e-4, rlx=0.056
+[DEBUG Ue UPDATE] upper ibl=40: Ue changed 2.160316 -> 2.152972 (delta=-7.344031e-3)
+[DEBUG Ue UPDATE] upper ibl=60: new_u=1.373749, current_u=1.452069, due=-7.831992e-2, delta_mass=-1.191060e-3, rlx=0.056
+[DEBUG Ue UPDATE] upper ibl=60: Ue changed 1.452069 -> 1.447684 (delta=-4.384169e-3)
+[DEBUG Ue UPDATE] lower ibl=20: new_u=0.779387, current_u=0.722810, due=5.657764e-2, delta_mass=2.886599e-5, rlx=0.056
+[DEBUG Ue UPDATE] lower ibl=20: Ue changed 0.722810 -> 0.725977 (delta=3.167086e-3)
+[DEBUG Ue UPDATE] lower ibl=40: new_u=0.897413, current_u=0.848709, due=4.870416e-2, delta_mass=3.139984e-5, rlx=0.056
+[DEBUG Ue UPDATE] lower ibl=40: Ue changed 0.848709 -> 0.851435 (delta=2.726347e-3)
+[DEBUG Newton] Re-marching BL at iteration 3
+[march_surface] i=24 x=0.0840 Hk=2.718 Rθ=263 N=0.251 dN=0.2514
+[march_surface] i=25 x=0.0863 Hk=3.053 Rθ=296 N=0.919 dN=0.6676
+[march_surface] i=26 x=0.0887 Hk=3.800 Rθ=329 N=2.377 dN=1.4584
+[march_surface] i=27 x=0.0912 Hk=4.300 Rθ=356 N=4.483 dN=2.1057
+[march_surface] SEPARATION-INDUCED TRANSITION at station 26, x=0.0912, Hk=4.300
+[march_surface] i=54 x=0.8484 Hk=2.527 Rθ=776 N=0.114 dN=0.0763
+[march_surface] i=55 x=0.8649 Hk=2.570 Rθ=793 N=0.217 dN=0.1031
+[march_surface] i=56 x=0.8811 Hk=2.640 Rθ=813 N=0.347 dN=0.1307
+[march_surface] i=57 x=0.8968 Hk=2.768 Rθ=837 N=0.543 dN=0.1953
+[march_surface] i=58 x=0.9115 Hk=3.089 Rθ=870 N=0.926 dN=0.3828
+[march_surface] i=59 x=0.9247 Hk=3.738 Rθ=898 N=1.621 dN=0.6957
+[march_surface] i=60 x=0.9361 Hk=4.238 Rθ=910 N=2.478 dN=0.8570
+[march_surface] i=61 x=0.9445 Hk=4.738 Rθ=918 N=3.225 dN=0.7464
+[march_surface] SEPARATION-INDUCED TRANSITION at station 60, x=0.9445, Hk=4.738
+[DEBUG compute_new_ue] upper i=20: uinv=3.561586, dui=-1.064263e-1, ue_new=3.455159, current_u=3.502925
+[DEBUG compute_new_ue] upper i=40: uinv=2.172791, dui=-3.544629e-2, ue_new=2.137344, current_u=2.152972
+[DEBUG Ue UPDATE] upper ibl=20: new_u=3.455159, current_u=3.502925, due=-4.776595e-2, delta_mass=-1.406260e-6, rlx=0.157
+[DEBUG Ue UPDATE] upper ibl=20: Ue changed 3.502925 -> 3.495437 (delta=-7.488564e-3)
+[DEBUG Ue UPDATE] upper ibl=40: new_u=2.137344, current_u=2.152972, due=-1.562799e-2, delta_mass=-2.019428e-4, rlx=0.157
+[DEBUG Ue UPDATE] upper ibl=40: Ue changed 2.152972 -> 2.150522 (delta=-2.450097e-3)
+[DEBUG Ue UPDATE] upper ibl=60: new_u=1.441101, current_u=1.447684, due=-6.583218e-3, delta_mass=-5.425758e-4, rlx=0.157
+[DEBUG Ue UPDATE] upper ibl=60: Ue changed 1.447684 -> 1.446652 (delta=-1.032092e-3)
+[DEBUG Ue UPDATE] lower ibl=20: new_u=0.729332, current_u=0.725977, due=3.355017e-3, delta_mass=2.017451e-6, rlx=0.157
+[DEBUG Ue UPDATE] lower ibl=20: Ue changed 0.725977 -> 0.726503 (delta=5.259868e-4)
+[DEBUG Ue UPDATE] lower ibl=40: new_u=0.853567, current_u=0.851435, due=2.132213e-3, delta_mass=2.268602e-6, rlx=0.157
+[DEBUG Ue UPDATE] lower ibl=40: Ue changed 0.851435 -> 0.851769 (delta=3.342802e-4)
+[DEBUG Newton] Re-marching BL at iteration 4
+[march_surface] i=24 x=0.0840 Hk=2.718 Rθ=263 N=0.251 dN=0.2509
+[march_surface] i=25 x=0.0863 Hk=3.050 Rθ=295 N=0.914 dN=0.6630
+[march_surface] i=26 x=0.0887 Hk=3.800 Rθ=328 N=2.369 dN=1.4552
+[march_surface] i=27 x=0.0912 Hk=4.300 Rθ=356 N=4.473 dN=2.1039
+[march_surface] SEPARATION-INDUCED TRANSITION at station 26, x=0.0912, Hk=4.300
+[march_surface] i=54 x=0.8484 Hk=2.528 Rθ=777 N=0.118 dN=0.0781
+[march_surface] i=55 x=0.8649 Hk=2.572 Rθ=794 N=0.222 dN=0.1038
+[march_surface] i=56 x=0.8811 Hk=2.642 Rθ=813 N=0.354 dN=0.1320
+[march_surface] i=57 x=0.8968 Hk=2.770 Rθ=838 N=0.551 dN=0.1969
+[march_surface] i=58 x=0.9115 Hk=3.078 Rθ=870 N=0.928 dN=0.3770
+[march_surface] i=59 x=0.9247 Hk=3.691 Rθ=898 N=1.604 dN=0.6761
+[march_surface] i=60 x=0.9361 Hk=4.191 Rθ=911 N=2.442 dN=0.8378
+[march_surface] i=61 x=0.9445 Hk=4.691 Rθ=918 N=3.178 dN=0.7361
+[march_surface] SEPARATION-INDUCED TRANSITION at station 60, x=0.9445, Hk=4.691
+[DEBUG compute_new_ue] upper i=20: uinv=3.561586, dui=6.764679e-1, ue_new=4.238054, current_u=3.495437
+[DEBUG compute_new_ue] upper i=40: uinv=2.172791, dui=2.342571e-1, ue_new=2.407048, current_u=2.150522
+[DEBUG Ue UPDATE] upper ibl=20: new_u=4.238054, current_u=3.495437, due=7.426169e-1, delta_mass=3.048435e-5, rlx=0.138
+[DEBUG Ue UPDATE] upper ibl=20: Ue changed 3.495437 -> 3.598094 (delta=1.026576e-1)
+[DEBUG Ue UPDATE] upper ibl=40: new_u=2.407048, current_u=2.150522, due=2.565255e-1, delta_mass=3.519401e-4, rlx=0.138
+[DEBUG Ue UPDATE] upper ibl=40: Ue changed 2.150522 -> 2.185984 (delta=3.546148e-2)
+[DEBUG Ue UPDATE] upper ibl=60: new_u=1.610493, current_u=1.446652, due=1.638403e-1, delta_mass=1.027593e-3, rlx=0.138
+[DEBUG Ue UPDATE] upper ibl=60: Ue changed 1.446652 -> 1.469301 (delta=2.264889e-2)
+[DEBUG Ue UPDATE] lower ibl=20: new_u=0.607682, current_u=0.726503, due=-1.188214e-1, delta_mass=-6.028585e-5, rlx=0.138
+[DEBUG Ue UPDATE] lower ibl=20: Ue changed 0.726503 -> 0.710077 (delta=-1.642558e-2)
+[DEBUG Ue UPDATE] lower ibl=40: new_u=0.748186, current_u=0.851769, due=-1.035835e-1, delta_mass=-6.560071e-5, rlx=0.138
+[DEBUG Ue UPDATE] lower ibl=40: Ue changed 0.851769 -> 0.837450 (delta=-1.431914e-2)
+[DEBUG Newton] Re-marching BL at iteration 5
+[march_surface] i=24 x=0.0840 Hk=2.733 Rθ=269 N=0.267 dN=0.2666
+[march_surface] i=25 x=0.0863 Hk=3.060 Rθ=302 N=0.951 dN=0.6843
+[march_surface] i=26 x=0.0887 Hk=3.679 Rθ=334 N=2.335 dN=1.3845
+[march_surface] i=27 x=0.0912 Hk=4.179 Rθ=362 N=4.335 dN=1.9998
+[march_surface] i=28 x=0.0940 Hk=4.679 Rθ=388 N=6.725 dN=2.3896
+[march_surface] SEPARATION-INDUCED TRANSITION at station 27, x=0.0940, Hk=4.679
+[march_surface] i=54 x=0.8484 Hk=2.555 Rθ=771 N=0.190 dN=0.0993
+[march_surface] i=55 x=0.8649 Hk=2.606 Rθ=789 N=0.309 dN=0.1186
+[march_surface] i=56 x=0.8811 Hk=2.687 Rθ=810 N=0.465 dN=0.1563
+[march_surface] i=57 x=0.8968 Hk=2.825 Rθ=834 N=0.699 dN=0.2341
+[march_surface] i=58 x=0.9115 Hk=3.118 Rθ=864 N=1.108 dN=0.4087
+[march_surface] i=59 x=0.9247 Hk=3.633 Rθ=889 N=1.766 dN=0.6582
+[march_surface] i=60 x=0.9361 Hk=4.133 Rθ=903 N=2.571 dN=0.8043
+[march_surface] i=61 x=0.9445 Hk=4.633 Rθ=910 N=3.286 dN=0.7150
+[march_surface] SEPARATION-INDUCED TRANSITION at station 60, x=0.9445, Hk=4.633
+[DEBUG Newton] iter 5 residual before solve: 4.406950e0
+[DEBUG Newton] iter 5 upper[10]: theta=2.382126e-5, dstar=5.163221e-5, Ue=1.329070, ctau=0.030000, mass=6.862281e-5
+[DEBUG Newton] iter 5 lower[10]: theta=1.030362e-4, dstar=2.364718e-4, Ue=0.518998, ctau=0.030000, mass=1.227284e-4
+[DEBUG Newton] iter 5 upper[20]: theta=1.674818e-5, dstar=3.848233e-5, Ue=3.598094, ctau=0.030000, mass=1.384631e-4
+[DEBUG Newton] iter 5 lower[20]: theta=1.519581e-4, dstar=3.557058e-4, Ue=0.710077, ctau=0.030000, mass=2.525786e-4
+[DEBUG Newton] iter 5 upper[30]: theta=7.363606e-5, dstar=1.097220e-4, Ue=3.114375, ctau=0.051832, mass=3.417156e-4
+[DEBUG Newton] iter 5 lower[30]: theta=1.957791e-4, dstar=4.651082e-4, Ue=0.792991, ctau=0.030000, mass=3.688264e-4
+[DEBUG Newton] iter 5 upper[40]: theta=4.330428e-4, dstar=6.714921e-4, Ue=2.185984, ctau=0.044538, mass=1.467871e-3
+[DEBUG Newton] iter 5 lower[40]: theta=2.357583e-4, dstar=5.666286e-4, Ue=0.837450, ctau=0.030000, mass=4.745232e-4
+[DEBUG Newton] iter 5 upper[50]: theta=1.287352e-3, dstar=1.976232e-3, Ue=1.699949, ctau=0.044353, mass=3.359494e-3
+[DEBUG Newton] iter 5 lower[50]: theta=2.764708e-4, dstar=6.805740e-4, Ue=0.860287, ctau=0.030000, mass=5.854888e-4
+[DEBUG Newton] iter 5 max deltas: theta=2.622782e-2, mass=2.747865e-2, ctau=7.391963e-1
+[DEBUG compute_new_ue] upper i=20: uinv=3.561586, dui=-4.059847e-1, ue_new=3.155601, current_u=3.598094
+[DEBUG compute_new_ue] upper i=40: uinv=2.172791, dui=-1.365957e-1, ue_new=2.036195, current_u=2.185984
+[DEBUG Ue UPDATE] upper ibl=20: new_u=3.155601, current_u=3.598094, due=-4.424934e-1, delta_mass=-1.743294e-5, rlx=0.053
+[DEBUG Ue UPDATE] upper ibl=20: Ue changed 3.598094 -> 3.574779 (delta=-2.331496e-2)
+[DEBUG Ue UPDATE] upper ibl=40: new_u=2.036195, current_u=2.185984, due=-1.497887e-1, delta_mass=-4.112268e-4, rlx=0.053
+[DEBUG Ue UPDATE] upper ibl=40: Ue changed 2.185984 -> 2.178091 (delta=-7.892362e-3)
+[DEBUG Ue UPDATE] upper ibl=60: new_u=1.379246, current_u=1.469301, due=-9.005487e-2, delta_mass=-1.183462e-3, rlx=0.053
+[DEBUG Ue UPDATE] upper ibl=60: Ue changed 1.469301 -> 1.464556 (delta=-4.744987e-3)
+[DEBUG Ue UPDATE] lower ibl=20: new_u=0.777830, current_u=0.710077, due=6.775221e-2, delta_mass=3.397069e-5, rlx=0.053
+[DEBUG Ue UPDATE] lower ibl=20: Ue changed 0.710077 -> 0.713647 (delta=3.569860e-3)
+[DEBUG Ue UPDATE] lower ibl=40: new_u=0.896403, current_u=0.837450, due=5.895300e-2, delta_mass=3.714607e-5, rlx=0.053
+[DEBUG Ue UPDATE] lower ibl=40: Ue changed 0.837450 -> 0.840556 (delta=3.106231e-3)
+[DEBUG Newton] iter 5 relaxation used: 5.268995e-2 (requested: 1.000000e0), rms_change: 3.240746e0
+[DEBUG Newton] Re-marching BL at iteration 6
+[march_surface] i=24 x=0.0840 Hk=2.729 Rθ=268 N=0.263 dN=0.2629
+[march_surface] i=25 x=0.0863 Hk=3.054 Rθ=300 N=0.938 dN=0.6755
+[march_surface] i=26 x=0.0887 Hk=3.687 Rθ=333 N=2.323 dN=1.3847
+[march_surface] i=27 x=0.0912 Hk=4.187 Rθ=361 N=4.328 dN=2.0046
+[march_surface] i=28 x=0.0940 Hk=4.687 Rθ=387 N=6.719 dN=2.3911
+[march_surface] SEPARATION-INDUCED TRANSITION at station 27, x=0.0940, Hk=4.687
+[march_surface] i=54 x=0.8484 Hk=2.550 Rθ=773 N=0.178 dN=0.0975
+[march_surface] i=55 x=0.8649 Hk=2.600 Rθ=790 N=0.294 dN=0.1158
+[march_surface] i=56 x=0.8811 Hk=2.679 Rθ=811 N=0.446 dN=0.1520
+[march_surface] i=57 x=0.8968 Hk=2.815 Rθ=835 N=0.673 dN=0.2276
+[march_surface] i=58 x=0.9115 Hk=3.108 Rθ=866 N=1.074 dN=0.4011
+[march_surface] i=59 x=0.9247 Hk=3.627 Rθ=891 N=1.729 dN=0.6548
+[march_surface] i=60 x=0.9361 Hk=4.127 Rθ=905 N=2.533 dN=0.8039
+[march_surface] i=61 x=0.9445 Hk=4.627 Rθ=912 N=3.249 dN=0.7154
+[march_surface] SEPARATION-INDUCED TRANSITION at station 60, x=0.9445, Hk=4.627
+[DEBUG Newton] iter 6 residual before solve: 4.422582e0
+[DEBUG Newton] iter 6 upper[10]: theta=2.386412e-5, dstar=5.174643e-5, Ue=1.314324, ctau=0.030000, mass=6.801158e-5
+[DEBUG Newton] iter 6 lower[10]: theta=1.031505e-4, dstar=2.367975e-4, Ue=0.523617, ctau=0.030000, mass=1.239911e-4
+[DEBUG Newton] iter 6 upper[20]: theta=1.676982e-5, dstar=3.852549e-5, Ue=3.574779, ctau=0.030000, mass=1.377201e-4
+[DEBUG Newton] iter 6 lower[20]: theta=1.520727e-4, dstar=3.560767e-4, Ue=0.713647, ctau=0.030000, mass=2.541132e-4
+[DEBUG Newton] iter 6 upper[30]: theta=7.354680e-5, dstar=1.095603e-4, Ue=3.098837, ctau=0.051802, mass=3.395096e-4
+[DEBUG Newton] iter 6 lower[30]: theta=1.958499e-4, dstar=4.653722e-4, Ue=0.796167, ctau=0.030000, mass=3.705139e-4
+[DEBUG Newton] iter 6 upper[40]: theta=4.315065e-4, dstar=6.687506e-4, Ue=2.178091, ctau=0.044504, mass=1.456600e-3
+[DEBUG Newton] iter 6 lower[40]: theta=2.357020e-4, dstar=5.664743e-4, Ue=0.840556, ctau=0.030000, mass=4.761536e-4
+[DEBUG Newton] iter 6 upper[50]: theta=1.282207e-3, dstar=1.967042e-3, Ue=1.694625, ctau=0.044300, mass=3.333400e-3
+[DEBUG Newton] iter 6 lower[50]: theta=2.760623e-4, dstar=6.790014e-4, Ue=0.863658, ctau=0.030000, mass=5.864248e-4
+[DEBUG Newton] iter 6 max deltas: theta=2.383570e-2, mass=2.400272e-2, ctau=6.238716e-1
+[DEBUG compute_new_ue] upper i=20: uinv=3.561586, dui=-3.764511e-1, ue_new=3.185134, current_u=3.574779
+[DEBUG compute_new_ue] upper i=40: uinv=2.172791, dui=-1.268494e-1, ue_new=2.045941, current_u=2.178091
+[DEBUG Ue UPDATE] upper ibl=20: new_u=3.185134, current_u=3.574779, due=-3.896448e-1, delta_mass=-1.534000e-5, rlx=0.060
+[DEBUG Ue UPDATE] upper ibl=20: Ue changed 3.574779 -> 3.551501 (delta=-2.327839e-2)
+[DEBUG Ue UPDATE] upper ibl=40: new_u=2.045941, current_u=2.178091, due=-1.321501e-1, delta_mass=-3.784328e-4, rlx=0.060
+[DEBUG Ue UPDATE] upper ibl=40: Ue changed 2.178091 -> 2.170196 (delta=-7.894989e-3)
+[DEBUG Ue UPDATE] upper ibl=60: new_u=1.384942, current_u=1.464556, due=-7.961411e-2, delta_mass=-1.078232e-3, rlx=0.060
+[DEBUG Ue UPDATE] upper ibl=60: Ue changed 1.464556 -> 1.459800 (delta=-4.756353e-3)
+[DEBUG Ue UPDATE] lower ibl=20: new_u=0.772788, current_u=0.713647, due=5.914058e-2, delta_mass=2.979403e-5, rlx=0.060
+[DEBUG Ue UPDATE] lower ibl=20: Ue changed 0.713647 -> 0.717180 (delta=3.533212e-3)
+[DEBUG Ue UPDATE] lower ibl=40: new_u=0.891835, current_u=0.840556, due=5.127881e-2, delta_mass=3.257861e-5, rlx=0.060
+[DEBUG Ue UPDATE] lower ibl=40: Ue changed 0.840556 -> 0.843620 (delta=3.063529e-3)
+[DEBUG Newton] iter 6 relaxation used: 5.974259e-2 (requested: 1.000000e0), rms_change: 2.706744e0
+[DEBUG Newton] Re-marching BL at iteration 7
+[march_surface] i=24 x=0.0840 Hk=2.726 Rθ=266 N=0.259 dN=0.2592
+[march_surface] i=25 x=0.0863 Hk=3.048 Rθ=299 N=0.926 dN=0.6666
+[march_surface] i=26 x=0.0887 Hk=3.694 Rθ=331 N=2.311 dN=1.3847
+[march_surface] i=27 x=0.0912 Hk=4.194 Rθ=359 N=4.320 dN=2.0091
+[march_surface] i=28 x=0.0940 Hk=4.694 Rθ=385 N=6.712 dN=2.3923
+[march_surface] SEPARATION-INDUCED TRANSITION at station 27, x=0.0940, Hk=4.694
+[march_surface] i=54 x=0.8484 Hk=2.545 Rθ=774 N=0.168 dN=0.0959
+[march_surface] i=55 x=0.8649 Hk=2.594 Rθ=792 N=0.281 dN=0.1132
+[march_surface] i=56 x=0.8811 Hk=2.672 Rθ=812 N=0.429 dN=0.1478
+[march_surface] i=57 x=0.8968 Hk=2.806 Rθ=837 N=0.651 dN=0.2214
+[march_surface] i=58 x=0.9115 Hk=3.096 Rθ=867 N=1.044 dN=0.3931
+[march_surface] i=59 x=0.9247 Hk=3.620 Rθ=893 N=1.694 dN=0.6502
+[march_surface] i=60 x=0.9361 Hk=4.120 Rθ=906 N=2.496 dN=0.8023
+[march_surface] i=61 x=0.9445 Hk=4.620 Rθ=914 N=3.211 dN=0.7152
+[march_surface] SEPARATION-INDUCED TRANSITION at station 60, x=0.9445, Hk=4.620
+[DEBUG Newton] iter 7 residual before solve: 6.220656e-1
+[DEBUG Newton] iter 7 upper[10]: theta=2.390724e-5, dstar=5.186133e-5, Ue=1.299639, ctau=0.030000, mass=6.740101e-5
+[DEBUG Newton] iter 7 lower[10]: theta=1.032646e-4, dstar=2.371198e-4, Ue=0.528196, ctau=0.030000, mass=1.252457e-4
+[DEBUG Newton] iter 7 upper[20]: theta=1.679171e-5, dstar=3.856933e-5, Ue=3.551501, ctau=0.030000, mass=1.369790e-4
+[DEBUG Newton] iter 7 lower[20]: theta=1.521889e-4, dstar=3.564515e-4, Ue=0.717180, ctau=0.030000, mass=2.556400e-4
+[DEBUG Newton] iter 7 upper[30]: theta=7.346103e-5, dstar=1.094055e-4, Ue=3.083250, ctau=0.051772, mass=3.373245e-4
+[DEBUG Newton] iter 7 lower[30]: theta=1.959242e-4, dstar=4.656452e-4, Ue=0.799305, ctau=0.030000, mass=3.721923e-4
+[DEBUG Newton] iter 7 upper[40]: theta=4.299646e-4, dstar=6.660027e-4, Ue=2.170196, ctau=0.044469, mass=1.445357e-3
+[DEBUG Newton] iter 7 lower[40]: theta=2.356532e-4, dstar=5.663416e-4, Ue=0.843620, ctau=0.030000, mass=4.777770e-4
+[DEBUG Newton] iter 7 upper[50]: theta=1.277069e-3, dstar=1.957887e-3, Ue=1.689296, ctau=0.044248, mass=3.307451e-3
+[DEBUG Newton] iter 7 lower[50]: theta=2.756722e-4, dstar=6.774982e-4, Ue=0.866976, ctau=0.030000, mass=5.873744e-4
+[DEBUG Newton] iter 7 max deltas: theta=5.236696e-1, mass=1.650219e0, ctau=3.713068e1
+[DEBUG compute_new_ue] upper i=20: uinv=3.561586, dui=-2.082493e1, ue_new=-17.263342, current_u=3.551501
+[DEBUG compute_new_ue] upper i=40: uinv=2.172791, dui=-7.122161e0, ue_new=-4.949370, current_u=2.170196
+[DEBUG apply_global_updates] Reduced rlx from 1.000000e-2 to 8.474743e-3 due to delta_star change at upper[1]: dn3=-5.899884e1
+[DEBUG apply_global_updates] Reduced rlx from 8.474743e-3 to 7.400015e-3 due to delta_star change at upper[2]: dn3=-6.756743e1
+[DEBUG apply_global_updates] Reduced rlx from 7.400015e-3 to 3.635429e-3 due to delta_star change at lower[62]: dn3=-1.375353e2
+[DEBUG apply_global_updates] Reduced rlx from 3.635429e-3 to 2.658003e-3 due to delta_star change at lower[63]: dn3=-1.881111e2
+[DEBUG apply_global_updates] Reduced rlx from 2.658003e-3 to 2.485132e-3 due to delta_star change at lower[64]: dn3=-2.011966e2
+[DEBUG apply_global_updates] Reduced rlx from 2.485132e-3 to 2.471316e-3 due to delta_star change at lower[65]: dn3=-2.023214e2
+[DEBUG Ue UPDATE] upper ibl=20: new_u=0.010000, current_u=3.551501, due=-3.541501e0, delta_mass=-8.407028e-4, rlx=0.010
+[DEBUG Ue UPDATE] upper ibl=20: Ue changed 3.551501 -> 3.516086 (delta=-3.541501e-2)
+[DEBUG Ue UPDATE] upper ibl=40: new_u=0.010000, current_u=2.170196, due=-2.160196e0, delta_mass=-1.602428e-2, rlx=0.010
+[DEBUG Ue UPDATE] upper ibl=40: Ue changed 2.170196 -> 2.148594 (delta=-2.160196e-2)
+[DEBUG Ue UPDATE] upper ibl=60: new_u=0.010000, current_u=1.459800, due=-1.449800e0, delta_mass=-4.588399e-2, rlx=0.010
+[DEBUG Ue UPDATE] upper ibl=60: Ue changed 1.459800 -> 1.445302 (delta=-1.449800e-2)
+[DEBUG Ue UPDATE] lower ibl=20: new_u=4.006966, current_u=0.717180, due=3.289785e0, delta_mass=1.654942e-3, rlx=0.010
+[DEBUG Ue UPDATE] lower ibl=20: Ue changed 0.717180 -> 0.750078 (delta=3.289785e-2)
+[DEBUG Ue UPDATE] lower ibl=40: new_u=3.720127, current_u=0.843620, due=2.876507e0, delta_mass=1.794807e-3, rlx=0.010
+[DEBUG Ue UPDATE] lower ibl=40: Ue changed 0.843620 -> 0.872385 (delta=2.876507e-2)
+[DEBUG Newton] iter 7 relaxation used: 1.000000e-2 (requested: 1.000000e0), rms_change: 1.198909e2
+[DEBUG viscal] CL comparison:
+  CLCALC (wind-axis):     1.796884
+  Circulation (arc len):  -1.091305
+  Difference:             2.888189e0
+[DEBUG viscal] CD comparison:
+  TE-based pressure CD:   2.614278e-2 (from compute_forces_two_surfaces)
+  Wake-based total CD:    2.441456e-2 (from far-wake Squire-Young)
+  Wake-based pressure CD: 1.860558e-2 (total - friction)
+  Wake stations: 16 (initial θ=2.4206e-2, final θ=1.2388e-2)
+[DEBUG viscal] Combined forces: CL=1.7969, CD=2.614278e-2 (Cf=5.808981e-3, Cp=2.033380e-2)
+[DEBUG viscal] Upper last: theta=2.195333e-2, H=2.300, Ue=0.741, is_wake=false
+[DEBUG viscal] Lower last: theta=2.253131e-3, H=1.352, Ue=0.975, is_wake=true
+  CL = 1.7969
+  CD = 0.026143 (Cf=0.005809, Cp=0.020334)
+  x_tr upper = 0.0088
+  x_tr lower = 1.0000
+
+  Debug trace written to: traces/rustfoil_new/rustfoil_alpha_15.json
+test test_newton_iteration_trace ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 1.73s
+

@@ -1075,3 +1075,63 @@ fn test_bldif_matches_xfoil() {
     println!("\n  NOTE: BLDIF XFOIL comparison is informational. See internal unit tests for validation.");
     println!("  Internal bldif tests: 9 passing (test_bldif_*)");
 }
+
+#[test]
+fn test_bldif_simi_comparison() {
+    use rustfoil_bl::equations::{bldif_full_simi, blvar, FlowType};
+    use rustfoil_bl::state::BlStation;
+
+    // XFOIL station 2 input state (from debug trace)
+    let mut s = BlStation::new();
+    s.x = 9.0564e-4;
+    s.u = 0.07487826;
+    s.theta = 3.0118308e-5;
+    s.delta_star = 6.6260277e-5;
+    s.h = s.delta_star / s.theta;
+    s.hk = s.h;
+    s.ctau = 0.03;
+    s.ampl = 0.0;
+    s.is_laminar = true;
+    
+    let msq = 0.0;
+    let re = 1e6;
+    blvar(&mut s, FlowType::Laminar, msq, re);
+    
+    println!("\nInput state:");
+    println!("  theta = {:.6e}", s.theta);
+    println!("  dstar = {:.6e}", s.delta_star);
+    println!("  hk = {:.6}", s.hk);
+    println!("  cf = {:.6e}", s.cf);
+    
+    let (res, jac) = bldif_full_simi(&s, FlowType::Laminar, msq, re);
+    
+    println!("\nRustFoil residuals:");
+    println!("  res_third = {:.6e}", res.res_third);
+    println!("  res_mom = {:.6e}", res.res_mom);
+    println!("  res_shape = {:.6e}", res.res_shape);
+    
+    println!("\nRustFoil Jacobian VS2 (2x2 for theta/dstar):");
+    println!("  VS2[1][1] = {:.1}", jac.vs2[1][1]);
+    println!("  VS2[1][2] = {:.1}", jac.vs2[1][2]);
+    println!("  VS2[2][1] = {:.1}", jac.vs2[2][1]);
+    println!("  VS2[2][2] = {:.1}", jac.vs2[2][2]);
+    
+    println!("\nXFOIL reference (pre-SIMI combination):");
+    println!("  VSREZ = [0, 0.776, -0.323]");
+    println!("  VS2[1][1] = -114139 (before: VS2 = VS1 + VS2)");
+    println!("  VS2[1][2] = 126984");
+    println!("  VS2[2][1] = 151456");
+    println!("  VS2[2][2] = -91834");
+    
+    println!("\nExpected (post-SIMI combination, VS2 = VS1 + VS2):");
+    println!("  VS2[1][1] = -228279 (doubled)");
+    println!("  VS2[1][2] = 253967");
+    println!("  VS2[2][1] = 302912");
+    println!("  VS2[2][2] = -183668");
+    
+    // Verify the Jacobian is approximately doubled
+    assert!((jac.vs2[1][1] + 228279.0).abs() < 10.0, "VS2[1][1] mismatch");
+    assert!((jac.vs2[1][2] - 253967.0).abs() < 10.0, "VS2[1][2] mismatch");
+    assert!((jac.vs2[2][1] - 302912.0).abs() < 10.0, "VS2[2][1] mismatch");
+    assert!((jac.vs2[2][2] + 183668.0).abs() < 10.0, "VS2[2][2] mismatch");
+}

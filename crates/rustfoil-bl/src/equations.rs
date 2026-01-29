@@ -971,7 +971,23 @@ pub fn bldif_full_simi(
 ) -> (BlResiduals, BlJacobian) {
     // For similarity, XFOIL uses fixed log values (BLDIF with ITYP=0):
     // XLOG = 1.0, ULOG = BULE = 1.0, TLOG = 0.0, HLOG = 0.0
-    let (res, jac, _) = bldif_with_terms_internal(s, s, flow_type, msq, re, true);
+    let (res, mut jac, _) = bldif_with_terms_internal(s, s, flow_type, msq, re, true);
+    
+    // CRITICAL: XFOIL combines VS1 and VS2 for similarity (xblsys.f lines 654-661):
+    //   IF(SIMI) THEN
+    //     DO K=1, 4
+    //       DO L=1, 5
+    //         VS2(K,L) = VS1(K,L) + VS2(K,L)
+    //         VS1(K,L) = 0.
+    // Since s1=s2, BLDIF computes VS1=VS2, so the combined VS2 is 2x original
+    // Note: Our BlJacobian uses 3x5 arrays (3 equations, 5 variables), not 4x5
+    for k in 0..3 {
+        for l in 0..5 {
+            jac.vs2[k][l] += jac.vs1[k][l];
+            jac.vs1[k][l] = 0.0;
+        }
+    }
+    
     (res, jac)
 }
 

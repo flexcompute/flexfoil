@@ -864,7 +864,12 @@ fn test_viscous_cl_cd_end_to_end() {
     
     // Configure viscous solver
     use rustfoil_solver::viscous::ViscousSolverConfig;
-    let config = ViscousSolverConfig::with_reynolds(3e6)  // Match XFOIL's Re=3e6
+    // Get Reynolds from environment or default to 1e6 (standard comparison value)
+    let reynolds: f64 = std::env::var("RUSTFOIL_RE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1e6);
+    let config = ViscousSolverConfig::with_reynolds(reynolds)
         .with_max_iterations(20);
     
     // Initialize BL stations for both surfaces with proper panel indices
@@ -1005,7 +1010,12 @@ fn run_viscous_at_alpha_with_airfoil(alpha_deg: f64, naca: Option<&str>) -> Opti
     );
     
     use rustfoil_solver::viscous::ViscousSolverConfig;
-    let config = ViscousSolverConfig::with_reynolds(3e6).with_max_iterations(20);  // Match XFOIL's Re=3e6
+    // Get Reynolds from environment or default to 1e6 (standard comparison value)
+    let reynolds: f64 = std::env::var("RUSTFOIL_RE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1e6);
+    let config = ViscousSolverConfig::with_reynolds(reynolds).with_max_iterations(20);
     
     // CRITICAL: Must use initialize_surface_stations_with_panel_idx to properly set
     // panel indices for VI coupling. Without this, all stations map to panel 0 and
