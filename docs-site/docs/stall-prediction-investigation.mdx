@@ -1,0 +1,318 @@
+---
+sidebar_position: 7
+---
+
+# Stall Prediction Investigation (2026-01-28)
+
+This document summarizes the investigation into why RustFoil cannot predict airfoil stall and the critical fixes implemented.
+
+## Problem Statement
+
+RustFoil's viscous solver produces reasonable lift coefficients (CL) in the pre-stall region but fails to predict stall:
+
+- **CL continues increasing linearly** beyond physical stall angle
+- **CD overpredicted by 30-120%** at all angles
+- **No CL peak and decrease** as observed in XFOIL and experiment
+
+## Root Cause: Missing BL Re-March
+
+### The Core Issue
+
+XFOIL re-marches the boundary layer at EVERY global Newton iteration. RustFoil was marching ONCE, then using only Jacobian updates.
+
+**Why Jacobian-only fails**:
+1. The Ue → H relationship is **highly nonlinear** near separation
+2. Jacobian updates assume local linearity
+3. At high α, H needs to grow beyond htmax (2.5 → 3.0+) to model TE separation
+4. Linear extrapolation cannot capture this nonlinear transition
+
+### Evidence
+
+At α=15° (NACA 0012, approaching stall):
+
+| Metric | XFOIL | RustFoil (before fix) | Issue |
+|--------|-------|----------------------|-------|
+| MRCHUE events for TE station | 10-20x | 1x | Not re-marching |
+| H at TE during march | 2.50 | 2.38 | Initial guess |
+| H at TE after convergence | 3.03 | 2.38 | Can't exceed htmax |
+| Separation detected | Yes | No | H too low |
+
+XFOIL's H starts at 2.5 (htmax) during marching but grows to 3.03 through multiple iterations as Ue evolves.
+
+### The Fix
+
+Implemented BL re-march inside Newton loop (`viscal.rs:827-910`):
+
+```rust
+for iter in 0..max_newton_iter {
+    // 1. Extract current Ue from stations
+    let current_upper_ue: Vec<f64> = upper_stations.iter().map(|s| s.u).collect();
+    let current_lower_ue: Vec<f64> = lower_stations.iter().map(|s| s.u).collect();
+    
+    // 2. Re-march boundary layers
+    let upper_result = march_surface(&upper_arc, &current_upper_ue, re, msq, &march_config, 1);
+    let lower_result = march_surface(&lower_arc, &current_lower_ue, re, msq, &march_config, 2);
+    
+    // 3. Copy results back to stations
+    for (i, station) in upper_result.stations.iter().enumerate() {
+        upper_stations[target_idx].theta = station.theta;
+        upper_stations[target_idx].delta_star = station.delta_star;
+        upper_stations[target_idx].hk = station.hk;
+        // ... (all BL variables)
+    }
+    
+    // 4. Then proceed with viscous-inviscid coupling
+    // Build Jacobian, solve, apply updates to Ue
+}
+```
+
+## Secondary Bug Fixes
+
+### 1. Wake Station Coordinate Bug (`wake.rs`)
+
+**Problem**: Wake stations were reporting `x_coord > 1.0` (wake arc length), making them appear as "surface stations past the trailing edge" in analysis.
+
+**Fix**: Clamp wake station `x_coord = 1.0` for reporting while preserving internal arc length for BL equations.
+
+```rust
+// Before:
+station.x_coord = x_new;  // 1.005, 1.012, etc.
+
+// After:
+station.x_coord = 1.0;    // Clamp to TE for analysis
+```
+
+### 2. Ue Capping Typo (test files)
+
+**Problem**: A typo in test setup code capped edge velocity at 0.01 instead of ensuring minimum:
+
+```rust
+// WRONG:
+let ue_stag = ue.abs().min(0.01);  // Caps at 0.01!
+
+// CORRECT:
+let ue_stag = ue.abs().max(0.01);  // Ensures minimum
+```
+
+**Impact**: Since Rθ = θ × Ue × Re, the artificially low Ue caused:
+- 43% delayed transition (0.0117 → 0.0167)
+- 69% CD error at α=10° (0.00793 → 0.01342)
+
+**After fix**:
+- Transition delay: 43% → 14%
+- CD error: 69% → 26%
+
+### 3. Inverse Mode htarg Formula (`march.rs`)
+
+**Problem**: The formula `htarg = prev.hk + 0.03 * dx / theta` produces huge values when θ is tiny:
+
+```
+Example at leading edge:
+  prev.hk = 3.05, dx = 0.003, θ = 3.5e-5
+  htarg = 3.05 + 0.03 × 0.003 / 3.5e-5 = 5.62 (should be ~3.8)
+```
+
+**Fix**: Clamp gradient contribution:
+
+```rust
+let max_hk_gradient = 0.5;  // Max Hk change per panel
+let gradient = (0.03 * dx / prev.theta).min(max_hk_gradient);
+htarg = (prev.hk + gradient).clamp(hmax, htarg_max);
+```
+
+### 4. Separation-Induced Transition (`march.rs`)
+
+**Added**: Force transition when Hk > 4.3 (laminar separation threshold):
+
+```rust
+let hk_separation_threshold = config.hlmax + 0.5;  // = 4.3
+if station.hk > hk_separation_threshold && !transition_occurred {
+    // Force transition - laminar separation bubble
+    station.is_laminar = false;
+    station.is_turbulent = true;
+    // Re-solve with turbulent equations
+}
+```
+
+## Current Status (After Fixes)
+
+### ✅ What Works
+
+| Component | Status |
+|-----------|--------|
+| Geometry & Inviscid | ✓ Matches XFOIL (machine precision) |
+| BL Re-March | ✓ Implemented and verified |
+| Wake Coordinates | ✓ Report correctly at x=1.0 |
+| CL Accuracy (pre-stall) | ✓ Within ±10% of XFOIL |
+
+### ⚠️ Partially Fixed
+
+| Issue | Before | After | Target |
+|-------|--------|-------|--------|
+| Transition delay | +43% | +14% | <2% |
+| CD at low α | +69% | +26% | <10% |
+
+### ❌ Remaining Critical Issues
+
+1. **CD Overprediction (30-120%)**
+   - Lowest at α=0°: +29%
+   - Grows with angle: +122% at α=14°
+   - Indicates turbulent BL or TE separation errors
+
+2. **No Stall Prediction**
+   - CL keeps increasing: 1.79 → 1.92 (α=14-16°)
+   - Should peak ~1.6 and decrease
+   - TE separation not occurring
+
+3. **High-α Newton Instability**
+   - Re-march causes RMS→120 at α=15°
+   - Requires adaptive damping
+   - Errors compound through iterations
+
+## Polar Comparison (Re=20M, NACA 0012)
+
+| α | XFOIL CL | RustFoil CL | Error | XFOIL CD | RustFoil CD | Error |
+|---|----------|-------------|-------|----------|-------------|-------|
+| 0° | 0.000 | -0.005 | - | 0.00505 | 0.00652 | +29% |
+| 4° | 0.457 | 0.485 | +6% | 0.00560 | 0.00897 | +60% |
+| 8° | 0.908 | 0.849 | -7% | 0.00687 | 0.01130 | +65% |
+| 10° | 1.125 | 1.072 | -5% | 0.00793 | 0.01342 | +69% |
+| 12° | 1.341 | 1.269 | -5% | 0.00948 | 0.01573 | +66% |
+| 14° | 1.544 | 1.676 | +9% | 0.01155 | 0.02558 | +122% |
+| 15° | 1.641 | 1.797 | +10% | 0.01267 | 0.02614 | +106% |
+| 16° | 1.731 | 1.919 | +11% | 0.01403 | 0.02665 | +90% |
+
+**Stall behavior**:
+- XFOIL: CL peaks at α≈18° then decreases (stall)
+- RustFoil: CL continues increasing (no stall)
+
+## Analysis: Why Stall Still Fails
+
+### The Chicken-and-Egg Problem
+
+1. **Single-march**: Converges to wrong (but stable) answer
+   - BL thickness too low → Transition late → CD too high
+   - But converges quickly
+
+2. **Re-march**: Exposes underlying errors that compound
+   - Errors in θ/δ* calculation
+   - Errors in turbulent BL growth
+   - Errors amplify through iterations → divergence
+
+3. **Conclusion**: Underlying BL accuracy must be fixed BEFORE re-march can help
+
+### Likely Root Causes
+
+The 30-120% CD errors suggest issues in:
+
+1. **Turbulent BL Integration**
+   - θ growth rate (dθ/ds) may be wrong
+   - Check BLDIF implementation vs XFOIL
+
+2. **Turbulent Closure Relations**
+   - Cf, H formulas may differ
+   - Check BLVAR turbulent case
+
+3. **TE Separation Detection**
+   - Not triggering when Cf → 0
+   - Inverse mode behavior differs from XFOIL
+
+4. **Remaining Transition Delay (14%)**
+   - Early-station θ still too small
+   - N-factor calibration needed
+
+## Next Steps
+
+### Immediate (Before Further Debugging)
+
+1. **Study XFOIL's Turbulent BL**
+   - Read `xblsys.f` DAEROD, BLDIF turbulent case
+   - Verify all formulas match RustFoil implementation
+   - Check for missing terms or sign errors
+
+2. **Test at α=0°**
+   - Eliminate stall complications
+   - Focus on basic turbulent BL accuracy
+   - Should achieve CD < 5% error
+
+3. **Station-by-Station Comparison**
+   - Compare θ, δ*, H from LE to TE
+   - Identify exact divergence location
+   - Fix the earliest error first
+
+### Short Term
+
+4. **Fix Turbulent BL Growth**
+   - Implement any missing XFOIL formulas
+   - Verify integration method
+   - Target: CD < 10% at all angles
+
+5. **Stabilize Newton with Re-March**
+   - Add adaptive damping
+   - Prevent RMS explosion at high α
+   - Monitor residual convergence
+
+6. **Calibrate Transition**
+   - Address remaining 14% delay
+   - May need N-factor tuning
+   - Or initial BL thickness correction
+
+### Long Term
+
+7. **Implement Proper TE Separation**
+   - Detect when Cf → 0 at TE
+   - Allow H > htmax in final iterations
+   - Enable stall prediction
+
+8. **Validate Across Reynolds Numbers**
+   - Test at Re = 1M, 5M, 10M, 20M
+   - Ensure robustness
+   - Match XFOIL polars within 5%
+
+## Key Learnings
+
+### 1. Re-March is Essential
+You MUST re-march the BL at each Newton iteration to capture nonlinear effects near separation. Jacobian-only updates cannot model stall.
+
+### 2. Single-March Masked Errors
+Converging to a wrong (but stable) answer prevented discovery of fundamental BL calculation bugs. Re-march exposed them.
+
+### 3. Numerical Accuracy Matters
+Even 7% errors accumulate and prevent stall prediction. Every detail must match XFOIL for complex phenomena like separation.
+
+### 4. Test Systematically
+- Start simple (α=0°)
+- Compare every variable (θ, δ*, H, Cf) at every station
+- Fix the earliest error first
+- Don't proceed to stall until basics work
+
+### 5. XFOIL is the Standard
+Don't assume your implementation matches XFOIL. Verify every:
+- Geometry point (machine precision)
+- Inviscid Ue value (< 0.1%)
+- Closure relation formula (symbol-by-symbol)
+- BL equation implementation (term-by-term)
+
+## References
+
+### Implementation Files
+- `crates/rustfoil-solver/src/viscous/viscal.rs` - Main viscous solver with re-march
+- `crates/rustfoil-coupling/src/march.rs` - BL marching algorithm
+- `crates/rustfoil-coupling/src/wake.rs` - Wake BL handling
+- Test files - Fixed Ue capping bug
+
+### Documentation
+- `_snippets/2026-01-28_Full_Session_Report.md` - Complete session timeline
+- `_snippets/CRITICAL_STALL_BUG_FINDING.md` - Re-march necessity analysis
+- `docs/debugging/bl_remarch_fix.md` - Implementation details
+- `docs/debugging/shape_factor_error_root_cause.md` - Transition analysis
+
+### Analysis Tools
+- `scripts/compare_shape_factor.py` - H distribution analyzer
+- `scripts/compare_early_theta.py` - Early BL thickness comparison
+
+### XFOIL Source
+- `xbl.f` - BL marching (MRCHUE), Newton coupling (SETBL, UPDATE)
+- `xblsys.f` - BL equations (BLDIF, BLVAR, TRDIF)
+- `xoper.f` - Main viscous iteration loop (VISCAL)
+- `xsolve.f` - Block-tridiagonal solver (BLSOLV)

@@ -8,6 +8,7 @@
 //! - TESYS: xbl.f lines 236-276 (TE system setup)
 //! - Wake marching: xbl.f lines 607-927 (same as MRCHUE but with wake flag)
 
+use crate::solve::{invert_3x3, multiply_3x3_vec};
 use rustfoil_bl::equations::{bldif, blvar, FlowType};
 use rustfoil_bl::state::BlStation;
 
@@ -133,43 +134,19 @@ pub fn generate_wake_positions(n_wake: usize, wake_length: f64) -> Vec<f64> {
 /// Estimated edge velocity at position x
 ///
 /// # XFOIL Reference
-/// In XFOIL, wake Ue comes from inviscid panel solution which naturally
-/// shows slow recovery. Here we approximate this behavior.
+/// In XFOIL, wake Ue comes from the inviscid wake panel solution and recovers
+/// algebraically toward the freestream. We use the same qualitative 1/x-style
+/// recovery law here until the wake-point velocity extraction is fully wired in.
 pub fn wake_edge_velocity(x: f64, ue_te: f64) -> f64 {
     let x_wake = (x - 1.0).max(0.0);
-    
-    // XFOIL wake physics:
-    // 1. Near wake (x < ~1.5c): Ue stays close to TE value
-    //    - Wake mixing creates velocity deficit region
-    //    - Recovery is very slow due to wake spreading
-    // 2. Far wake (x > ~1.5c): Ue slowly approaches freestream
-    //    - Asymptotic approach to 1.0 as x → ∞
-    //
-    // Use delayed exponential recovery to match XFOIL behavior:
-    // - Very slow recovery in near wake
-    // - Faster (but still slow) recovery in far wake
-    
-    // XFOIL wake velocity recovery:
-    // From inviscid potential flow, wake velocity recovers as:
-    // Ue ≈ 1 - c₁/x + c₂/x² + ...
-    // For practical purposes, use exponential recovery that reaches
-    // ~0.99 by x = 2-3c downstream of TE.
-    //
-    // At TE (x=1), Ue = ue_te ≈ 0.8
-    // At far wake (x=3), Ue should approach 0.99
-    
-    let near_wake_length = 0.2; // Short near-wake region
-    let recovery_rate = 1.5;    // Faster recovery to reach ~0.99 by x=3
-    
-    if x_wake < near_wake_length {
-        // Near wake: Ue stays close to TE value
-        ue_te
-    } else {
-        // Far wake: exponential recovery toward freestream
-        let x_far = x_wake - near_wake_length;
-        let recovery_factor = 1.0 - (-recovery_rate * x_far).exp();
-        ue_te + (1.0 - ue_te) * recovery_factor
+
+    if x_wake <= 1.0e-12 {
+        return ue_te.max(0.01);
     }
+
+    let deficit_te = (1.0 - ue_te).max(0.0);
+    let recovered = 1.0 - deficit_te / (1.0 + 2.0 * x_wake + 0.5 * x_wake * x_wake);
+    recovered.clamp(ue_te.min(1.0).max(0.01), 1.0)
 }
 
 /// Compute wake inverse mode Hk target.
@@ -252,95 +229,83 @@ pub fn march_wake(
     stations
 }
 
-/// Solve for a single wake station using momentum conservation.
+/// Solve for a single wake station using the full wake BLDIF equations.
 ///
-/// Wake physics (XFOIL-style):
-/// - Cf = 0 (no wall)
-/// - Momentum approximately conserved: θ * Ue ≈ constant
-/// - Hk → 1.0 asymptotic behavior (thin wake limit)
-/// - Ctau decays due to turbulent dissipation
-///
-/// # Key insight for Squire-Young
-/// The Squire-Young formula CD = 2θ * Ue^((5+H)/2) is sensitive to far-wake
-/// values. With momentum conservation (θ * Ue ≈ const):
-/// - If Ue stays near TE value (~0.8), θ stays near TE value (~0.007)
-/// - Far downstream with Ue → 1, θ → θ_te * Ue_te (slightly smaller)
-/// - Hk approaches 1.0, so exponent (5+H)/2 → 3.0
-///
-/// This is critical: at TE, Hk≈2.5 gives exponent≈3.75, while far-wake
-/// Hk≈1.04 gives exponent≈3.02. The ~50% CD overestimate comes from using
-/// TE values instead of far-wake values.
+/// This mirrors XFOIL's wake MRCHUE path much more closely than the older
+/// empirical wake evolution. The wake still receives its prescribed Ue profile
+/// from the caller, but the state march itself is now a Newton solve on
+/// `BLDIF(FlowType::Wake)` rather than an ad hoc decay model.
 fn solve_wake_station(
     prev: &BlStation,
     x_new: f64,
     ue_new: f64,
     re: f64,
-    _msq: f64,
+    msq: f64,
 ) -> BlStation {
     let mut station = BlStation::default();
     station.x = x_new;
-    station.x_coord = x_new;
+    station.x_coord = 1.0;
     station.u = ue_new;
     station.is_wake = true;
     station.is_turbulent = true;
     station.is_laminar = false;
-    station.cf = 0.0; // No wall friction in wake
-    
-    let dx = (x_new - prev.x).max(1e-10);
+
     let ue_prev = prev.u.max(0.01);
     let ue_curr = ue_new.max(0.01);
-    
-    // === Wake momentum evolution with dissipation ===
-    // XFOIL data shows θ*Ue² is NOT strictly conserved in the wake.
-    // Analysis of XFOIL wake evolution shows:
-    //   - Combined TE: θ=0.0066, Ue=0.77, θ*Ue²=0.0039
-    //   - Far wake:    θ=0.0026, Ue=0.99, θ*Ue²=0.0025
-    // This is a 35% reduction in θ*Ue², indicating dissipation.
-    //
-    // The wake momentum equation with Cf=0 is:
-    //   dθ/dx = -θ * (H + 2 - M²) * (dUe/dx) / Ue + Cd
-    // where Cd is the wake dissipation coefficient.
-    //
-    // XFOIL's wake dissipation leads to faster θ decay than pure momentum
-    // conservation. Empirically, a decay rate of ~1.0 per chord length
-    // matches XFOIL's wake evolution.
-    
-    // Compute nominal momentum-conserved theta
     let ue_ratio = ue_prev / ue_curr;
-    let theta_conserved = prev.theta * ue_ratio * ue_ratio;
-    
-    // Apply incremental wake dissipation (per step, not total distance)
-    // XFOIL wake at α=0° shows additional θ decay beyond momentum conservation.
-    // Target: Total additional dissipation factor ≈ 0.69 over ~2.5c wake length
-    // exp(-rate * 2.5) = 0.69  =>  rate = -ln(0.69)/2.5 ≈ 0.15
-    let dissipation_rate = 0.15; // Per chord length (calibrated for 2.5c wake)
-    let dissipation_factor = (-dissipation_rate * dx).exp();
-    
-    station.theta = theta_conserved * dissipation_factor;
-    station.theta = station.theta.max(1e-8);
-    
-    // === Shape factor evolution ===
-    // Wake Hk approaches 1.0 asymptotically (thin wake limit)
-    // Use backward Euler: Hk2 = Hk1 - const * (Hk1 - 1)³
-    let hk_target = wake_hk_target(prev.hk, dx, prev.theta);
-    station.hk = hk_target;
-    
-    // Compute delta_star from Hk
-    // For low Mach: H ≈ Hk, so δ* = H * θ ≈ Hk * θ
-    station.delta_star = station.hk * station.theta;
-    station.h = station.delta_star / station.theta.max(1e-12);
-    
-    // === Ctau decay ===
-    // Turbulent shear stress coefficient decays in wake due to dissipation
-    // Use exponential decay with length scale
-    let decay_length = 1.0; // Characteristic length for ctau decay
-    let ctau_decay = (-dx / decay_length).exp();
-    station.ctau = (prev.ctau * ctau_decay).max(0.001);
-    
-    // === Derived quantities ===
+
+    station.theta = (prev.theta * ue_ratio).max(1e-8);
+    station.delta_star = (prev.delta_star * ue_ratio).max(station.theta * 1.00005);
+    station.ctau = prev.ctau.max(1e-4);
+
+    let max_iter = 20;
+    let tolerance = 1.0e-10;
+
+    for _ in 0..max_iter {
+        blvar(&mut station, FlowType::Wake, msq, re);
+        let (residuals, jacobian) = bldif(prev, &station, FlowType::Wake, msq, re);
+
+        let a = [
+            [jacobian.vs2[0][0], jacobian.vs2[0][1], jacobian.vs2[0][2]],
+            [jacobian.vs2[1][0], jacobian.vs2[1][1], jacobian.vs2[1][2]],
+            [jacobian.vs2[2][0], jacobian.vs2[2][1], jacobian.vs2[2][2]],
+        ];
+        let rhs = [residuals.res_third, residuals.res_mom, residuals.res_shape];
+        let delta = multiply_3x3_vec(&invert_3x3(&a), &rhs);
+
+        let mut rlx: f64 = 1.0;
+        if delta[0] < 0.0 {
+            rlx = rlx.min(0.5 * station.ctau.max(1.0e-4) / (-delta[0]).max(1.0e-12));
+        }
+        if delta[1] < 0.0 {
+            rlx = rlx.min(0.5 * station.theta.max(1.0e-8) / (-delta[1]).max(1.0e-12));
+        }
+        if delta[2] < 0.0 {
+            rlx = rlx.min(
+                0.5 * station.delta_star.max(1.0e-8) / (-delta[2]).max(1.0e-12),
+            );
+        }
+        rlx = rlx.clamp(0.05, 1.0);
+
+        station.ctau = (station.ctau + rlx * delta[0]).clamp(1.0e-6, 0.25);
+        station.theta = (station.theta + rlx * delta[1]).max(1.0e-8);
+        station.delta_star = (station.delta_star + rlx * delta[2]).max(station.theta * 1.00005);
+
+        let max_rel = [
+            delta[0].abs() / station.ctau.max(1.0e-4),
+            delta[1].abs() / station.theta.max(1.0e-8),
+            delta[2].abs() / station.delta_star.max(1.0e-8),
+        ]
+        .into_iter()
+        .fold(0.0, f64::max);
+
+        if max_rel < tolerance {
+            break;
+        }
+    }
+
+    blvar(&mut station, FlowType::Wake, msq, re);
     station.mass_defect = station.u * station.delta_star;
-    station.r_theta = re * station.u * station.theta;
-    
     station
 }
 

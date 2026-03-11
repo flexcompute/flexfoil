@@ -122,7 +122,42 @@ Core components implemented:
 - [x] Full BLSOLV with row-3 back-substitution
 - [x] `update_xfoil_style()` with mass-first Ue computation
 - [x] Fixed transition ctau initialization (9% → 1.9% error)
-- [ ] **TODO:** ~1.9% ctau error at first turbulent station - should match XFOIL exactly
+- [x] **CRITICAL FIX (2026-01-28):** Added BL re-march at each Newton iteration
+
+### Critical Finding: BL Re-March Requirement (2026-01-28)
+
+**Problem discovered**: RustFoil was marching the boundary layer ONCE before the Newton loop, then using only Jacobian updates for subsequent iterations. XFOIL re-marches the BL at EVERY iteration.
+
+**Why this matters**:
+- The Ue → H relationship is highly **nonlinear** near separation
+- Jacobian updates assume linearity and cannot capture H exceeding htmax
+- At high α, XFOIL's H grows from 2.5 → 3.0+ over iterations (nonlinear)
+- RustFoil's H stayed capped at 2.4 using Jacobian-only approach
+
+**Evidence**:
+- XFOIL: Each station appears in MRCHUE events 10-20 times (re-marched each iteration)
+- RustFoil (before fix): Each station appeared once (single march)
+
+**Fix implemented** (viscal.rs lines 827-910):
+```rust
+for iter in 0..max_newton_iter {
+    // Extract current Ue from stations (updated by previous iteration)
+    let current_upper_ue: Vec<f64> = upper_stations.iter().map(|s| s.u).collect();
+    let current_lower_ue: Vec<f64> = lower_stations.iter().map(|s| s.u).collect();
+    
+    // Re-march boundary layers with current Ue
+    let upper_result = march_surface(&upper_arc, &current_upper_ue, re, msq, &march_config, 1);
+    let lower_result = march_surface(&lower_arc, &current_lower_ue, re, msq, &march_config, 2);
+    
+    // Copy march results back to stations
+    // (theta, delta_star, h, hk, cf, ctau, ampl, flow type, mass_defect)
+    
+    // Then proceed with Jacobian-based VI coupling correction
+    // ...
+}
+```
+
+**Impact**: Enables nonlinear H growth necessary for stall prediction, but exposed that underlying BL accuracy needs improvement (CD errors 30-120%).
 
 #### Transition Handling Fix (2026-01-23)
 

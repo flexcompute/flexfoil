@@ -14,6 +14,7 @@ use rustfoil_bl::state::BlStation;
 use rustfoil_bl::{add_event, is_debug_active, CdBreakdownEvent, ClDetailEvent, DebugEvent};
 
 use super::config::ViscousSolverConfig;
+use super::state::{CanonicalBlRow, XfoilLikeViscousState};
 
 /// Aerodynamic force coefficients computed from viscous solution.
 #[derive(Debug, Clone, Copy, Default)]
@@ -47,6 +48,149 @@ impl AeroForces {
             && self.cd_pressure.is_finite()
             && self.cl.is_finite()
             && self.cm.is_finite()
+    }
+}
+
+/// Compute XFOIL-style force coefficients from the canonical panel gamma array.
+///
+/// This matches the inviscid `CLCALC` integration path and returns both lift and
+/// pitching moment about quarter chord.
+pub fn compute_panel_forces_from_gamma(
+    panel_x: &[f64],
+    panel_y: &[f64],
+    gamma: &[f64],
+    alpha_rad: f64,
+) -> (f64, f64) {
+    let n = panel_x.len();
+    if n < 3 || panel_y.len() != n || gamma.len() != n {
+        return (0.0, 0.0);
+    }
+
+    let cosa = alpha_rad.cos();
+    let sina = alpha_rad.sin();
+
+    let x_min = panel_x.iter().copied().fold(f64::INFINITY, f64::min);
+    let x_max = panel_x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let chord = (x_max - x_min).abs().max(1.0e-12);
+    let x_ref = x_min + 0.25 * chord;
+
+    let mut cl = 0.0;
+    let mut cm = 0.0;
+
+    for i in 0..n {
+        let ip = (i + 1) % n;
+
+        let dx = panel_x[ip] - panel_x[i];
+        let dy = panel_y[ip] - panel_y[i];
+        let dx_wind = dx * cosa + dy * sina;
+        let dy_wind = dy * cosa - dx * sina;
+
+        let cp_i = 1.0 - gamma[i] * gamma[i];
+        let cp_ip = 1.0 - gamma[ip] * gamma[ip];
+        let cp_avg = 0.5 * (cp_i + cp_ip);
+        let dcp = cp_ip - cp_i;
+
+        cl += cp_avg * dx_wind;
+
+        let x_mid = 0.5 * (panel_x[i] + panel_x[ip]);
+        let y_mid = 0.5 * (panel_y[i] + panel_y[ip]);
+        let ax = (x_mid - x_ref) * cosa + y_mid * sina;
+        let ay = y_mid * cosa - (x_mid - x_ref) * sina;
+
+        cm -= cp_avg * (ax * dx_wind / chord + ay * dy_wind / chord);
+        cm -= dcp * dx_wind * dx_wind / (12.0 * chord);
+        cm -= dcp * dy_wind * dy_wind / (12.0 * chord);
+    }
+
+    (cl, cm)
+}
+
+/// Compute aerodynamic forces from the canonical viscous state.
+pub fn compute_forces_from_canonical_state(
+    state: &XfoilLikeViscousState,
+    panel_x: &[f64],
+    panel_y: &[f64],
+    alpha_rad: f64,
+    _config: &ViscousSolverConfig,
+) -> AeroForces {
+    let (cl, cm) = compute_panel_forces_from_gamma(panel_x, panel_y, state.panel_gamma(), alpha_rad);
+
+    let cd_friction_upper = compute_row_friction_drag(&state.upper_rows);
+    let cd_friction_lower = compute_row_friction_drag(&state.lower_rows);
+    let cd_friction = cd_friction_upper + cd_friction_lower;
+
+    let lower_wake: Vec<&CanonicalBlRow> = state.lower_rows.iter().filter(|row| row.is_wake).collect();
+    let te_extrapolated_cd = compute_cd_from_te_rows(&state.upper_rows, &state.lower_rows);
+    let cd_total = if !lower_wake.is_empty() {
+        let cd_wake = compute_cd_from_wake_rows(&lower_wake, cd_friction);
+        let te_floor = te_extrapolated_cd.max(cd_friction).max(1.0e-6);
+        if cd_wake.is_finite() && cd_wake > 0.0 && cd_wake <= 2.0 * te_floor {
+            cd_wake
+        } else {
+            te_floor
+        }
+    } else {
+        te_extrapolated_cd
+    };
+    let cd = cd_total.max(cd_friction);
+    let cd_pressure = cd - cd_friction;
+
+    if is_debug_active() {
+        let upper_te = state.upper_rows.iter().rev().find(|row| !row.is_wake);
+        let lower_te = state.lower_rows.iter().rev().find(|row| !row.is_wake);
+        let (theta_te_upper, h_te_upper, ue_te_upper) = upper_te
+            .map(|row| (row.theta, row.h, row.uedg))
+            .unwrap_or((0.0, 0.0, 0.0));
+        let (theta_te_lower, h_te_lower, ue_te_lower) = lower_te
+            .map(|row| (row.theta, row.h, row.uedg))
+            .unwrap_or((0.0, 0.0, 0.0));
+        let cd_pressure_upper = if ue_te_upper.abs() > 0.01 {
+            squire_young_drag(theta_te_upper, ue_te_upper.abs(), h_te_upper.clamp(1.0, 4.0))
+        } else {
+            0.0
+        };
+        let cd_pressure_lower = if ue_te_lower.abs() > 0.01 {
+            squire_young_drag(theta_te_lower, ue_te_lower.abs(), h_te_lower.clamp(1.0, 4.0))
+        } else {
+            0.0
+        };
+
+        add_event(DebugEvent::cd_breakdown(
+            0,
+            CdBreakdownEvent {
+                cd_friction,
+                cd_pressure,
+                cd_total: cd,
+                cd_friction_upper,
+                cd_friction_lower,
+                cd_pressure_upper,
+                cd_pressure_lower,
+                theta_te_upper,
+                theta_te_lower,
+                h_te_upper,
+                h_te_lower,
+                ue_te_upper,
+                ue_te_lower,
+            },
+        ));
+        add_event(DebugEvent::cl_detail(
+            0,
+            ClDetailEvent {
+                cl,
+                cm,
+                cdp: cd_pressure,
+                alpha_rad,
+                alpha_deg: alpha_rad.to_degrees(),
+            },
+        ));
+    }
+
+    AeroForces {
+        cl,
+        cd,
+        cm,
+        cd_pressure,
+        cd_friction,
     }
 }
 
@@ -198,7 +342,7 @@ pub fn compute_forces(stations: &[BlStation], _config: &ViscousSolverConfig) -> 
 pub fn compute_forces_two_surfaces(
     upper_stations: &[BlStation],
     lower_stations: &[BlStation],
-    config: &ViscousSolverConfig,
+    _config: &ViscousSolverConfig,
 ) -> AeroForces {
     // === Friction Drag ===
     // Integrate friction along both surfaces, but skip problematic stations
@@ -206,41 +350,42 @@ pub fn compute_forces_two_surfaces(
     let cd_friction_lower = compute_friction_drag(lower_stations);
     let cd_friction = cd_friction_upper + cd_friction_lower;
     
-    // === Total Drag (Squire-Young at far wake) ===
-    // XFOIL computes total CD using Squire-Young at the far wake (x≈2c):
-    //   CD = 2 * θ_wake * (Ue_wake)^((5+H)/2)
-    //
-    // Since we don't have a full wake, we extrapolate from TE values:
-    // - In the wake, as Ue → 1 (freestream), momentum is conserved: θ*Ue ≈ const
-    // - So θ_far_wake ≈ θ_TE * Ue_TE / Ue_far_wake
-    // - For far wake: Ue ≈ 1, H ≈ 1.0-1.1
-    //
-    // The far wake θ is typically ~70% of combined TE θ (due to Ue increase)
-    let upper_te = upper_stations.last();
-    let lower_te = lower_stations.last();
-    
-    let cd_total = match (upper_te, lower_te) {
+    // === Total Drag (prefer converged wake, else TE fallback) ===
+    // When the lower surface already carries a converged wake, use that directly
+    // for the Squire-Young total drag path. Fall back to the older TE-based
+    // extrapolation only when no wake stations are available.
+    let upper_te = upper_stations.iter().rev().find(|s| !s.is_wake);
+    let lower_te = lower_stations.iter().rev().find(|s| !s.is_wake);
+    let lower_wake: Vec<BlStation> = lower_stations
+        .iter()
+        .filter(|s| s.is_wake)
+        .cloned()
+        .collect();
+
+    let te_extrapolated_cd = match (upper_te, lower_te) {
         (Some(u), Some(l)) => {
-            // Combined momentum at TE
             let theta_te = u.theta + l.theta;
             let ue_te = 0.5 * (u.u.abs() + l.u.abs()).max(0.1);
-            
-            // Extrapolate to far wake using θ*Ue² ≈ const
-            // This accounts for the wake spreading as Ue recovers to freestream
-            // Derivation: From XFOIL wake data, θ ∝ 1/Ue^1.95 ≈ 1/Ue²
-            let ue_far_wake = 0.99; // Close to freestream
+            let ue_far_wake = 0.99;
             let ue_ratio_sq = (ue_te / ue_far_wake).powi(2);
             let theta_far_wake = theta_te * ue_ratio_sq;
-            
-            // H at far wake approaches 1.0 (thin wake limit)
-            let h_far_wake = 1.04; // Typical value from XFOIL
-            
-            // Squire-Young at far wake
-            squire_young_drag(theta_far_wake, ue_far_wake, h_far_wake)
+            squire_young_drag(theta_far_wake, ue_far_wake, 1.04)
         }
         (Some(u), None) => squire_young_drag(u.theta, 0.99, 1.04),
         (None, Some(l)) => squire_young_drag(l.theta, 0.99, 1.04),
         (None, None) => 0.0,
+    };
+
+    let cd_total = if !lower_wake.is_empty() {
+        let cd_wake = compute_cd_from_wake(&lower_wake, cd_friction);
+        let te_floor = te_extrapolated_cd.max(cd_friction).max(1.0e-6);
+        if cd_wake.is_finite() && cd_wake > 0.0 && cd_wake <= 2.0 * te_floor {
+            cd_wake
+        } else {
+            te_floor
+        }
+    } else {
+        te_extrapolated_cd
     };
     
     // CRITICAL FIX: Ensure cd_total >= cd_friction
@@ -277,14 +422,17 @@ pub fn compute_forces_two_surfaces(
     }
     
     // === CL and CM from coupled edge velocities ===
-    // Extract arc lengths and edge velocities
-    let upper_arc: Vec<f64> = upper_stations.iter().map(|s| s.x).collect();
-    let lower_arc: Vec<f64> = lower_stations.iter().map(|s| s.x).collect();
-    let upper_ue: Vec<f64> = upper_stations.iter().map(|s| s.u).collect();
-    let lower_ue: Vec<f64> = lower_stations.iter().map(|s| s.u).collect();
+    // Extract x-coordinates (for XFOIL-style integration) and edge velocities
+    // CRITICAL: Use x_coord (actual panel x-coordinate), NOT x (arc length)!
+    // Near the curved leading edge, arc length >> x-coordinate, causing CL inflation.
+    // CRITICAL: Exclude wake stations! CL is only from airfoil surface pressure.
+    let upper_x: Vec<f64> = upper_stations.iter().filter(|s| !s.is_wake).map(|s| s.x_coord).collect();
+    let lower_x: Vec<f64> = lower_stations.iter().filter(|s| !s.is_wake).map(|s| s.x_coord).collect();
+    let upper_ue: Vec<f64> = upper_stations.iter().filter(|s| !s.is_wake).map(|s| s.u).collect();
+    let lower_ue: Vec<f64> = lower_stations.iter().filter(|s| !s.is_wake).map(|s| s.u).collect();
     
-    // Use circulation method for CL (simpler and more robust)
-    let cl = compute_cl_from_circulation(&upper_ue, &lower_ue, &upper_arc, &lower_arc);
+    // Use pressure integration method for CL (matches XFOIL's CLCALC)
+    let cl = compute_cl_from_circulation(&upper_ue, &lower_ue, &upper_x, &lower_x);
     
     // For CM, use simple approximation (proper CM requires panel geometry)
     // CM ≈ 0 for symmetric airfoils at small AoA
@@ -403,6 +551,12 @@ pub fn compute_friction_drag(stations: &[BlStation]) -> f64 {
     let cdf: f64 = stations[3..]
         .windows(2)
         .map(|pair| {
+            // Skip wake stations - they have no wall so Cf = 0
+            // XFOIL integrates friction only from IBL=3 to IBLTE
+            if pair[0].is_wake || pair[1].is_wake {
+                return 0.0;
+            }
+            
             // Skip stations with clearly invalid BL values (theta near zero = failed march)
             // This matches XFOIL's implicit handling where failed stations don't contribute
             let theta_min = 1e-10;
@@ -466,6 +620,64 @@ pub fn compute_friction_drag(stations: &[BlStation]) -> f64 {
     cdf
 }
 
+fn compute_row_friction_drag(rows: &[CanonicalBlRow]) -> f64 {
+    if rows.len() < 4 {
+        return 0.0;
+    }
+
+    let max_physical_cf = 0.02;
+    let r_theta_min = 80.0;
+
+    rows[3..]
+        .windows(2)
+        .map(|pair| {
+            if pair[0].is_wake || pair[1].is_wake {
+                return 0.0;
+            }
+            if pair[0].theta < 1.0e-10 || pair[1].theta < 1.0e-10 {
+                return 0.0;
+            }
+            if pair[0].r_theta < r_theta_min || pair[1].r_theta < r_theta_min {
+                return 0.0;
+            }
+
+            let dx = (pair[1].x_coord - pair[0].x_coord).abs();
+            let dx = if dx < 1.0e-12 {
+                (pair[1].x - pair[0].x).abs()
+            } else {
+                dx
+            };
+
+            let cf1 = pair[0].cf.clamp(0.0, max_physical_cf);
+            let cf2 = pair[1].cf.clamp(0.0, max_physical_cf);
+            let cf_avg = 0.5 * (cf1 + cf2);
+            let ue1 = pair[0].uedg.abs().max(0.01);
+            let ue2 = pair[1].uedg.abs().max(0.01);
+            let ue_sq_avg = 0.5 * (ue1 * ue1 + ue2 * ue2);
+
+            ue_sq_avg * cf_avg * dx
+        })
+        .sum()
+}
+
+fn compute_cd_from_te_rows(upper_rows: &[CanonicalBlRow], lower_rows: &[CanonicalBlRow]) -> f64 {
+    let upper_te = upper_rows.iter().rev().find(|row| !row.is_wake);
+    let lower_te = lower_rows.iter().rev().find(|row| !row.is_wake);
+
+    match (upper_te, lower_te) {
+        (Some(u), Some(l)) => {
+            let theta_te = u.theta + l.theta;
+            let ue_te = 0.5 * (u.uedg.abs() + l.uedg.abs()).max(0.1);
+            let ue_far_wake = 0.99;
+            let theta_far_wake = theta_te * (ue_te / ue_far_wake).powi(2);
+            squire_young_drag(theta_far_wake, ue_far_wake, 1.04)
+        }
+        (Some(u), None) => squire_young_drag(u.theta, 0.99, 1.04),
+        (None, Some(l)) => squire_young_drag(l.theta, 0.99, 1.04),
+        (None, None) => 0.0,
+    }
+}
+
 /// Compute pressure drag using Squire-Young formula.
 ///
 /// # Arguments
@@ -524,8 +736,6 @@ pub fn compute_cd_from_wake(wake_stations: &[BlStation], cd_friction: f64) -> f6
         return cd_friction;
     }
     
-    // Find the station furthest downstream with valid values
-    // This is the "far wake" station for Squire-Young
     let far_wake = wake_stations
         .iter()
         .rev()
@@ -534,26 +744,17 @@ pub fn compute_cd_from_wake(wake_stations: &[BlStation], cd_friction: f64) -> f6
     
     let theta_wake = far_wake.theta;
     let ue_wake = far_wake.u.abs().max(0.01);
-    // In far wake, H approaches 1.0 (thin wake limit)
-    // Use computed Hk if reasonable, otherwise use asymptotic value
-    let h_wake = if far_wake.hk > 0.9 && far_wake.hk < 2.0 {
-        far_wake.hk
-    } else if far_wake.h > 0.9 && far_wake.h < 2.0 {
-        far_wake.h
+    // XFOIL CDCALC uses SHWAKE = DSTR/THET directly (not Hk)
+    let h_wake = if far_wake.theta > 1e-12 {
+        let h_raw = far_wake.delta_star / far_wake.theta;
+        if h_raw > 0.5 && h_raw < 5.0 { h_raw } else { 1.04 }
     } else {
-        1.04 // XFOIL-typical far-wake value
+        1.04
     };
     
-    // Squire-Young formula
     let mut cd_total = squire_young_drag(theta_wake, ue_wake, h_wake);
-    
-    // CRITICAL FIX: Ensure cd_total >= cd_friction
-    // Physically, total drag must be at least friction drag (cd_total = cd_friction + cd_pressure)
-    // If Squire-Young gives cd_total < cd_friction, it means theta_wake was too small or the
-    // calculation underestimated the drag. In this case, use cd_friction as a lower bound.
     cd_total = cd_total.max(cd_friction);
     
-    // Debug output
     if std::env::var("RUSTFOIL_DRAG_DEBUG").is_ok() {
         eprintln!("[WAKE_CD_DEBUG] Far wake: x={:.4} θ={:.4e} H={:.3} Ue={:.4}", 
             far_wake.x, theta_wake, h_wake, ue_wake);
@@ -561,6 +762,30 @@ pub fn compute_cd_from_wake(wake_stations: &[BlStation], cd_friction: f64) -> f6
     }
     
     cd_total
+}
+
+fn compute_cd_from_wake_rows(wake_rows: &[&CanonicalBlRow], cd_friction: f64) -> f64 {
+    if wake_rows.is_empty() {
+        return cd_friction;
+    }
+
+    let far_wake = wake_rows
+        .iter()
+        .rev()
+        .copied()
+        .find(|row| row.theta > 1.0e-10 && row.uedg > 0.01 && row.h.is_finite())
+        .unwrap_or_else(|| *wake_rows.last().expect("non-empty wake rows"));
+
+    let theta_wake = far_wake.theta;
+    let ue_wake = far_wake.uedg.abs().max(0.01);
+    let h_wake = if far_wake.theta > 1.0e-12 {
+        let h_raw = far_wake.dstr / far_wake.theta;
+        if h_raw > 0.5 && h_raw < 5.0 { h_raw } else { 1.04 }
+    } else {
+        1.04
+    };
+
+    squire_young_drag(theta_wake, ue_wake, h_wake).max(cd_friction)
 }
 
 /// Compute CL and CM from coupled edge velocities.
@@ -596,7 +821,7 @@ pub fn compute_coupled_cl_cm(
     upper_stations: &[BlStation],
     lower_stations: &[BlStation],
     panel_x: &[f64],
-    panel_y: &[f64],
+    _panel_y: &[f64],
     alpha: f64,
     chord: f64,
 ) -> (f64, f64) {
@@ -673,70 +898,87 @@ pub fn compute_coupled_cl_cm(
     (cl_wind, cm_wind)
 }
 
-/// Compute CL from edge velocity distribution using Kutta-Joukowski.
+/// Compute CL from edge velocity distribution using pressure integration.
 ///
-/// Alternative CL computation using the circulation theorem:
+/// This matches XFOIL's CLCALC method (xfoil.f line ~1172):
 /// ```text
-/// CL = 2 * Γ / (V∞ * c)
+/// CL = ∮ Cp · dx  (counterclockwise contour integral)
 /// ```
 ///
-/// where Γ is computed from the velocity jump across the wake or
-/// from integration of the edge velocity around the contour.
+/// where Cp = 1 - Ue² (incompressible pressure coefficient).
+///
+/// For two separate surfaces stored LE→TE:
+/// - Upper surface contributes: -∫ Cp dx (negative sign for counterclockwise)
+/// - Lower surface contributes: +∫ Cp dx
 ///
 /// # Arguments
-/// * `upper_ue` - Edge velocities on upper surface
-/// * `lower_ue` - Edge velocities on lower surface
-/// * `upper_arc` - Arc lengths on upper surface
-/// * `lower_arc` - Arc lengths on lower surface
+/// * `upper_ue` - Edge velocities on upper surface (LE to TE)
+/// * `lower_ue` - Edge velocities on lower surface (LE to TE)
+/// * `upper_x` - X-coordinates on upper surface (MUST be actual x, not arc length!)
+/// * `lower_x` - X-coordinates on lower surface (MUST be actual x, not arc length!)
 ///
 /// # Returns
-/// CL from circulation
+/// CL from pressure integration (matches XFOIL's method)
+///
+/// # Note
+/// Using arc length instead of x-coordinates will inflate CL by ~10% due to
+/// the curved leading edge where arc >> x.
 pub fn compute_cl_from_circulation(
     upper_ue: &[f64],
     lower_ue: &[f64],
-    upper_arc: &[f64],
-    lower_arc: &[f64],
+    upper_x: &[f64],
+    lower_x: &[f64],
 ) -> f64 {
     if upper_ue.len() < 2 || lower_ue.len() < 2 {
         return 0.0;
     }
     
-    // Integrate Ue around the contour to get circulation
-    // Γ = ∮ V · ds ≈ ∫_upper Ue ds - ∫_lower Ue ds
+    // XFOIL's CLCALC integrates Cp around the closed contour counterclockwise:
+    //   CL = ∮ Cp · dx
     //
-    // Sign convention:
-    // - Upper surface has higher Ue (suction peak at positive alpha)
-    // - Lower surface has lower Ue
-    // - For positive lift: Γ = ∫_upper - ∫_lower > 0
-    // - CL = 2Γ > 0 for positive alpha
+    // For incompressible flow: Cp = 1 - (Ue/V∞)² = 1 - Ue² (normalized V∞=1)
     //
-    // IMPORTANT: This assumes upper_ue/lower_ue are correctly labeled as
-    // upper/lower surfaces. If using ViscousSetup.upper_surface(), note that
-    // the naming convention there may be inverted (check carefully).
+    // With surfaces stored LE→TE:
+    // - Upper surface (counterclockwise = TE→LE): reverse sign → -∫ Cp dx
+    // - Lower surface (counterclockwise = LE→TE): keep sign → +∫ Cp dx
+    //
+    // Physical interpretation:
+    // - Upper surface suction (Cp < 0) with negative sign → positive lift
+    // - Lower surface pressure (Cp > 0 or less negative) → positive lift
     
-    let mut gamma_upper = 0.0;
-    let mut gamma_lower = 0.0;
+    // Upper surface contribution (negative sign for counterclockwise direction)
+    let cl_upper: f64 = upper_ue
+        .windows(2)
+        .zip(upper_x.windows(2))
+        .map(|(ue_pair, x_pair)| {
+            // Average Cp over panel
+            let cp1 = 1.0 - ue_pair[0] * ue_pair[0];
+            let cp2 = 1.0 - ue_pair[1] * ue_pair[1];
+            let cp_avg = 0.5 * (cp1 + cp2);
+            // Chord-wise step (dx)
+            let dx = x_pair[1] - x_pair[0];
+            // Negative sign: counterclockwise on upper surface is TE→LE
+            -cp_avg * dx
+        })
+        .sum();
     
-    // Upper surface: integrate Ue * ds (stagnation to TE, counterclockwise)
-    // Higher Ue contributes positive to circulation
-    for i in 0..upper_ue.len() - 1 {
-        let ue_avg = 0.5 * (upper_ue[i] + upper_ue[i + 1]);
-        let ds = upper_arc[i + 1] - upper_arc[i];
-        gamma_upper += ue_avg * ds;
-    }
+    // Lower surface contribution (positive sign for counterclockwise direction)
+    let cl_lower: f64 = lower_ue
+        .windows(2)
+        .zip(lower_x.windows(2))
+        .map(|(ue_pair, x_pair)| {
+            // Average Cp over panel
+            let cp1 = 1.0 - ue_pair[0] * ue_pair[0];
+            let cp2 = 1.0 - ue_pair[1] * ue_pair[1];
+            let cp_avg = 0.5 * (cp1 + cp2);
+            // Chord-wise step (dx)
+            let dx = x_pair[1] - x_pair[0];
+            // Positive sign: counterclockwise on lower surface is LE→TE
+            cp_avg * dx
+        })
+        .sum();
     
-    // Lower surface: integrate Ue * ds (stagnation to TE, clockwise = negative)
-    // Lower Ue contributes negative to circulation
-    for i in 0..lower_ue.len() - 1 {
-        let ue_avg = 0.5 * (lower_ue[i] + lower_ue[i + 1]);
-        let ds = lower_arc[i + 1] - lower_arc[i];
-        gamma_lower += ue_avg * ds;
-    }
-    
-    let gamma = gamma_upper - gamma_lower;
-    
-    // CL = 2 * Γ / (V∞ * c) with V∞ = 1, c = 1 (normalized)
-    2.0 * gamma
+    cl_upper + cl_lower
 }
 
 /// Estimate transition drag penalty.
@@ -787,6 +1029,7 @@ mod tests {
                 let x = i as f64 / (n - 1) as f64;
                 let mut s = BlStation::new();
                 s.x = x;
+                s.x_coord = x;
                 s.u = 1.0;
                 s.theta = 0.001 * (1.0 + x); // Growing theta
                 s.delta_star = 2.5 * s.theta;
@@ -911,6 +1154,30 @@ mod tests {
         // Should be 2*theta at last station
         let last = wake.last().unwrap();
         assert!((cd - 2.0 * last.theta).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_compute_forces_two_surfaces_prefers_converged_wake() {
+        let upper = create_test_stations(8);
+        let mut lower = create_test_stations(8);
+        for station in lower.iter_mut().skip(6) {
+            station.is_wake = true;
+            station.is_turbulent = true;
+            station.is_laminar = false;
+            station.u = 0.98;
+            station.theta = 0.0025;
+            station.delta_star = 0.0028;
+            station.h = station.delta_star / station.theta;
+            station.cf = 0.0;
+        }
+
+        let config = ViscousSolverConfig::default();
+        let forces = compute_forces_two_surfaces(&upper, &lower, &config);
+        let lower_wake: Vec<BlStation> = lower.iter().filter(|s| s.is_wake).cloned().collect();
+        let expected_cd = compute_cd_from_wake(&lower_wake, forces.cd_friction);
+
+        assert!((forces.cd - expected_cd).abs() < 1e-10);
+        assert!(forces.cd_pressure >= 0.0);
     }
 
     #[test]

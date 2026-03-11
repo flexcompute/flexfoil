@@ -562,6 +562,40 @@ impl AirfoilGeometry {
         }
     }
 
+    /// Return XFOIL's sharp trailing-edge bisector control point and normal.
+    ///
+    /// The control point sits slightly inside the TE corner along the bisector,
+    /// and the returned normal corresponds to the tangential-velocity probe used
+    /// by XFOIL's sharp-TE row in `GGCALC/QDCALC`.
+    pub fn sharp_te_bisector_control(&self) -> Option<(f64, f64, f64, f64)> {
+        if !self.sharp || self.n < 3 {
+            return None;
+        }
+
+        let upper_tx = -self.xp[0];
+        let upper_ty = -self.yp[0];
+        let lower_tx = self.xp[self.n - 1];
+        let lower_ty = self.yp[self.n - 1];
+
+        let bis_x = upper_tx + lower_tx;
+        let bis_y = upper_ty + lower_ty;
+        let bis_norm = (bis_x * bis_x + bis_y * bis_y).sqrt().max(1.0e-12);
+        let cbis = bis_x / bis_norm;
+        let sbis = bis_y / bis_norm;
+
+        let ds1 = ((self.x[0] - self.x[1]).powi(2) + (self.y[0] - self.y[1]).powi(2)).sqrt();
+        let ds2 = ((self.x[self.n - 1] - self.x[self.n - 2]).powi(2)
+            + (self.y[self.n - 1] - self.y[self.n - 2]).powi(2))
+        .sqrt();
+        let dsmin = ds1.min(ds2);
+        let bwt = 0.1;
+
+        let xbis = self.xte - bwt * dsmin * cbis;
+        let ybis = self.yte - bwt * dsmin * sbis;
+
+        Some((xbis, ybis, -sbis, cbis))
+    }
+
     /// Get total arc length.
     pub fn total_arc_length(&self) -> f64 {
         self.s.last().copied().unwrap_or(0.0)

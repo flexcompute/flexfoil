@@ -1868,6 +1868,10 @@ C---- Trigger when HK1 > 4.0 and HK2 < 3.0 (transition signature)
          WRITE(*,*) '=== END XFOIL REZC DEBUG ==='
        ENDIF
 C
+C---- Debug: dump REZC terms at transition station
+       CALL DBGREZC_TERMS(ISDBG, IBLDBG, SCC, CQA, SA, ALD, DXI, DEA,
+     &                    SLOG, UQ, ULOG, REZC, S1, S2, USA)
+C
 c        if(  ! (rt2.gt.1.0e3 .and. rt1.le.1.0e3) .or.
 c     &     (rt2.gt.1.0e4 .and. rt1.le.1.0e4) .or.
 c     &     (rt2.gt.1.0e5 .and. rt1.le.1.0e5)        ) then

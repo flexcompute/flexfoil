@@ -993,6 +993,9 @@ C     in SPECAL or SPECCL for specified alpha or CL.
 C--------------------------------------------------------------
       INCLUDE 'XFOIL.INC'
 C
+C---- Open debug file for inviscid-only runs
+      CALL DBGOPEN('xfoil_inviscid_debug.json')
+C
 C---- distance of internal control point ahead of sharp TE
 C-    (fraction of smaller panel length adjacent to TE)
       BWT = 0.1
@@ -1103,6 +1106,9 @@ C----- -dRes/dVinf
 C
       ENDIF
 C
+C---- Debug output: dump AIJ matrix BEFORE LU factorization
+      CALL DBGAIJMATRIX(N, AIJ, IQX)
+C
 C---- LU-factor coefficient matrix AIJ
       CALL LUDCMP(IQX,N+1,AIJ,AIJPIV)
       LQAIJ = .TRUE.
@@ -1124,6 +1130,9 @@ C---- Debug output: dump GGCALC results
 C
 C---- Debug output: dump FULL AIC base solutions for RustFoil comparison
       CALL DBGFULLAIC(N, GAMU, IQX)
+C
+C---- Debug output: dump panel geometry for RustFoil comparison
+      CALL DBGPANELGEOM()
 C
       RETURN
       END
@@ -1232,6 +1241,12 @@ C
         DO 720 J=1, N
           DIJ(I,J) = DQDM(J)
   720   CONTINUE
+C
+C------ Debug: dump DQDM values from PSILIN for first 2 wake points
+        IF(IW.LE.2) THEN
+          CALL DBGDQDM_PSILIN(I, IW, N, X(I), Y(I), NX(I), NY(I), DQDM,
+     &                        X, Y)
+        ENDIF
 C
 C------ wake contribution
         CALL PSWLIN(I,X(I),Y(I),NX(I),NY(I),PSI,PSI_N)

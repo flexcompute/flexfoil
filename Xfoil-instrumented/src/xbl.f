@@ -34,6 +34,11 @@ C-------------------------------------------------
       REAL ULE1_M(2*IVX), ULE2_M(2*IVX)
       REAL UTE1_M(2*IVX), UTE2_M(2*IVX)
       REAL MA_CLMR, MSQ_CLMR, MDI
+      INTEGER ITYP_DBG
+C---- Debug common block
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
 C
 C---- set the CL used to define Mach, Reynolds numbers
       IF(LALFA) THEN
@@ -216,6 +221,10 @@ C---- "forced" changes due to mismatch between UEDG and USAV=UINV+dij*MASS
       DUE2 = UEDG(IBL,IS) - USAV(IBL,IS)
       DDS2 = D2_U2*DUE2
 C
+C---- Debug: dump DUE values at first few stations
+      CALL DBGDUE(IS, IBL, UEDG(IBL,IS), USAV(IBL,IS), DUE2,
+     &            UINV(IBL,IS))
+C
       CALL BLPRV(XSI,AMI,CTI,THI,DSI,DSWAKI,UEI)
       CALL BLKIN
 C
@@ -273,6 +282,18 @@ C
 C
        CALL BLSYS
 C
+C------ Debug: dump BLSYS output (VS1, VS2, VSREZ)
+        IF(WAKE) THEN
+          ITYP_DBG = 3
+        ELSE IF(TURB) THEN
+          ITYP_DBG = 2
+        ELSE
+          ITYP_DBG = 1
+        ENDIF
+        CALL DBGBLDIFOUT(IBL, IS, VS1, VS2, VSREZ, ITYP_DBG)
+        CALL DBGTRANSITION(IDBGITER, IS, IBL, ITYP_DBG)
+        CALL DBGVSREZ_TRANS(IS, IBL, VSREZ, VS2)
+C
       ENDIF
 C
 C
@@ -324,6 +345,10 @@ C---- set XI sensitivities wrt LE Ue changes
        XI_ULE1 = -SST_GO
        XI_ULE2 =  SST_GP
       ENDIF
+C
+C---- Debug: Dump XI_ULE values at key stations
+      CALL DBGXIULE(IS, IBL, XI_ULE1, XI_ULE2, SST_GO, SST_GP,
+     &              DULE1, DULE2)
 C
 C---- stuff BL system coefficients into main Jacobian matrix
 C
@@ -415,6 +440,13 @@ C
      &   + (VS2(3,4)*DUE2 + VS2(3,3)*DDS2)
      &   + (VS1(3,5) + VS2(3,5) + VSX(3))
      &    *(XI_ULE1*DULE1 + XI_ULE2*DULE2)
+C
+C---- Debug: dump VSREZ base residual and DUE/DDS forced changes
+      CALL DBGVSREZ_DUE(IV, VSREZ(1), VSREZ(2), VSREZ(3),
+     &                  DUE1, DUE2, DDS1, DDS2)
+C---- Debug: dump VM matrix block and VDEL residuals
+      CALL DBGVMBLOCK(IV)
+      CALL DBGVDEL(IV, VDEL(1,1,IV), VDEL(2,1,IV), VDEL(3,1,IV))
 C
 C
       IF(IBL.EQ.IBLTE(IS)+1) THEN
@@ -1603,6 +1635,10 @@ C-------- see if Ue needs underrelaxation
           ENDIF
           IF(RDN4 .GT. DHI) RLX = DHI/DN4
           IF(RDN4 .LT. DLO) RLX = DLO/DN4
+C
+C-------- Debug: dump normalized changes and deltas (every 20th station)
+          CALL DBGUPDATE_NEWTON(IBL, IS, RLX, DN1, DN2, DN3, DN4,
+     &                          DCTAU, DTHET, DDSTR, DUEDG)
 C
    40   CONTINUE
     4 CONTINUE

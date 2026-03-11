@@ -18,11 +18,14 @@ pub mod state;
 
 pub use constants::*;
 pub use debug::{
-    add_event, finalize_debug, init_debug, is_debug_active, BlvarInput, BlvarOutput,
-    BldifStateEvent, BldifTermsEvent, BlsolvSolutionEvent, CdBreakdownEvent, ClDetailEvent,
-    DebugEvent, FullAicEvent, FullInviscidEvent, MrchueIterEvent, MrchueModeEvent, 
-    MrchueSysEvent, SetblSystemEvent, TrdifDerivsEvent, TrdifEvent, UpdateDetailedEvent,
-    UesetEvent, UesetSurfaceData, Vs2BeforeEvent, VsrezAfterEvent,
+    add_event, finalize_debug, init_debug, is_debug_active, BlInitEvent, BlvarInput, BlvarOutput,
+    BldifStateEvent, BldifTermsEvent, BlsolvSolutionEvent, BlStateSummaryEvent, CdBreakdownEvent, 
+    ClDetailEvent, DebugEvent, FullAicEvent, FullBlStateEvent, FullGammaIterEvent, 
+    FullInviscidEvent, FullNfactorEvent, JacobianEvent, MrchueIterEvent, MrchueModeEvent, 
+    MrchueSysEvent, NewtonIterEvent, SampleUpdateData, SetblSystemEvent, SolutionEvent, 
+    StationState, SurfaceBlState, TrdifDerivsEvent, TrdifEvent, UpdateDetailedEvent, 
+    UpdateSummaryEvent, UesetEvent, UesetSurfaceData, VmBlockEvent, Vs2BeforeEvent, 
+    VsrezAfterEvent,
 };
 pub use equations::{
     bldif, bldif_debug, bldif_with_terms, blvar, blvar_debug, trdif_turb_terms, BldifTerms,

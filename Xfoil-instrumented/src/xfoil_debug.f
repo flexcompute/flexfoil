@@ -12,7 +12,8 @@ C---- Block data to initialize debug common block
       BLOCK DATA XDBGINIT
       COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
       COMMON /XDBGCTX/ ISDBG, IBLDBG
-      LOGICAL LDBG
+      COMMON /XDBGLOCK/ LDBGLOCK
+      LOGICAL LDBG, LDBGLOCK
       INTEGER LUDBG, IDBGCALL, IDBGITER
       INTEGER ISDBG, IBLDBG
       DATA LDBG /.TRUE./
@@ -21,6 +22,7 @@ C---- Block data to initialize debug common block
       DATA IDBGITER /0/
       DATA ISDBG /0/
       DATA IBLDBG /0/
+      DATA LDBGLOCK /.FALSE./
       END
 
 C---- Dump TRDIF chain-rule derivatives (XT/WF/TT/DT/UT)
@@ -49,14 +51,6 @@ C---- Dump TRDIF chain-rule derivatives (XT/WF/TT/DT/UT)
       INTEGER LUDBG, IDBGCALL, IDBGITER
 C
       IF(.NOT.LDBG) RETURN
-C---- Limit output to targeted station ranges (including transition ~IBL 38)
-      IF(ISIDE.EQ.1) THEN
-        IF(IBL.LT.36 .OR. IBL.GT.40) RETURN
-      ELSE IF(ISIDE.EQ.2) THEN
-        IF(IBL.LT.65 .OR. IBL.GT.75) RETURN
-      ELSE
-        RETURN
-      ENDIF
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -127,14 +121,6 @@ C---- Dump TRDIF Jacobian and residuals (combined laminar+turbulent)
       INTEGER I, J
 C
       IF(.NOT.LDBG) RETURN
-C---- Limit output to targeted station ranges (including transition ~IBL 38)
-      IF(ISIDE.EQ.1) THEN
-        IF(IBL.LT.36 .OR. IBL.GT.40) RETURN
-      ELSE IF(ISIDE.EQ.2) THEN
-        IF(IBL.LT.65 .OR. IBL.GT.75) RETURN
-      ELSE
-        RETURN
-      ENDIF
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -189,7 +175,7 @@ C
       IF(.NOT.LDBG) RETURN
 C---- Only dump upper surface IBL 30-35 to keep output manageable
       IF(IS.EQ.1) THEN
-        IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+        IF(IBL.LT.24 .OR. IBL.GT.35) RETURN
       ELSE IF(IS.EQ.2) THEN
         IF(IBL.LT.70 .OR. IBL.GT.75) RETURN
       ELSE
@@ -816,14 +802,93 @@ C---- Output first row as sample
       END
 
 
+C---- Dump DQDM values from PSILIN call in QDCALC (wake-airfoil block)
+C     This captures the source influence on tangential velocity at wake points
+C     Note: QDCALC is called before debug file is opened, so write to separate file
+      SUBROUTINE DBGDQDM_PSILIN(IWAKE, IW, N, XI, YI, NXI, NYI, DQDM,
+     &                          XPANEL, YPANEL)
+      INTEGER IWAKE, IW, N
+      REAL XI, YI, NXI, NYI, DQDM(*)
+      REAL XPANEL(*), YPANEL(*)
+      INTEGER J
+      LOGICAL FIRST
+      SAVE FIRST
+      DATA FIRST /.TRUE./
+C
+C---- Open file on first call
+      IF(FIRST) THEN
+        OPEN(UNIT=89, FILE='xfoil_dqdm.json', STATUS='REPLACE')
+        WRITE(89,'(A)') '{"events": ['
+        FIRST = .FALSE.
+C
+C------ Also dump panel geometry on first call
+        OPEN(UNIT=90, FILE='xfoil_panel_geom.json', STATUS='REPLACE')
+        WRITE(90,'(A)') '{'
+        WRITE(90,'(A,I4,A)') '  "n": ', N, ','
+        WRITE(90,'(A)') '  "x": ['
+        DO 5 J=1, MIN(20, N)
+          IF(J.LT.MIN(20, N)) THEN
+            WRITE(90,'(A,E17.10,A)') '    ', XPANEL(J), ','
+          ELSE
+            WRITE(90,'(A,E17.10)') '    ', XPANEL(J)
+          ENDIF
+    5   CONTINUE
+        WRITE(90,'(A)') '  ],'
+        WRITE(90,'(A)') '  "y": ['
+        DO 6 J=1, MIN(20, N)
+          IF(J.LT.MIN(20, N)) THEN
+            WRITE(90,'(A,E17.10,A)') '    ', YPANEL(J), ','
+          ELSE
+            WRITE(90,'(A,E17.10)') '    ', YPANEL(J)
+          ENDIF
+    6   CONTINUE
+        WRITE(90,'(A)') '  ]'
+        WRITE(90,'(A)') '}'
+        CLOSE(90)
+      ELSE
+        WRITE(89,'(A)') ','
+      ENDIF
+C
+      WRITE(89,'(A)') '{'
+      WRITE(89,'(A)') '  "subroutine": "DQDM_PSILIN",'
+      WRITE(89,'(A,I4,A)') '  "wake_idx": ', IWAKE, ','
+      WRITE(89,'(A,I4,A)') '  "iw": ', IW, ','
+      WRITE(89,'(A,I4,A)') '  "n_airfoil": ', N, ','
+      WRITE(89,'(A,E17.10,A)') '  "x": ', XI, ','
+      WRITE(89,'(A,E17.10,A)') '  "y": ', YI, ','
+      WRITE(89,'(A,E17.10,A)') '  "nx": ', NXI, ','
+      WRITE(89,'(A,E17.10,A)') '  "ny": ', NYI, ','
+C---- Output first 20 DQDM values (airfoil panels influence on wake Qtan)
+      WRITE(89,'(A)') '  "dqdm": ['
+      DO 10 J=1, MIN(20, N)
+        IF(J.LT.MIN(20, N)) THEN
+          WRITE(89,'(A,E17.10,A)') '    ', DQDM(J), ','
+        ELSE
+          WRITE(89,'(A,E17.10)') '    ', DQDM(J)
+        ENDIF
+   10 CONTINUE
+      WRITE(89,'(A)') '  ]'
+      WRITE(89,'(A)') '}'
+      RETURN
+C
+      ENTRY DBGDQDM_CLOSE()
+C---- Close the DQDM debug file
+      WRITE(89,'(A)') ']}'
+      CLOSE(89)
+      RETURN
+      END
+
+
 C---- Dump closure function HSL result
       SUBROUTINE DBGHSL(HK, RT, MSQ, HS, HS_HK, HS_RT, HS_MSQ)
       REAL HK, RT, MSQ, HS, HS_HK, HS_RT, HS_MSQ
       COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
-      LOGICAL LDBG
+      COMMON /XDBGLOCK/ LDBGLOCK
+      LOGICAL LDBG, LDBGLOCK
       INTEGER LUDBG, IDBGCALL, IDBGITER
 C
       IF(.NOT.LDBG) RETURN
+      IF(LDBGLOCK) RETURN
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
       WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
@@ -845,10 +910,12 @@ C---- Dump closure function CFL result
       SUBROUTINE DBGCFL(HK, RT, MSQ, CF, CF_HK, CF_RT, CF_MSQ)
       REAL HK, RT, MSQ, CF, CF_HK, CF_RT, CF_MSQ
       COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
-      LOGICAL LDBG
+      COMMON /XDBGLOCK/ LDBGLOCK
+      LOGICAL LDBG, LDBGLOCK
       INTEGER LUDBG, IDBGCALL, IDBGITER
 C
       IF(.NOT.LDBG) RETURN
+      IF(LDBGLOCK) RETURN
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
       WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
@@ -870,10 +937,12 @@ C---- Dump DAMPL amplification rate
       SUBROUTINE DBGDAMPL(HK, TH, RT, AX, AX_HK, AX_TH, AX_RT)
       REAL HK, TH, RT, AX, AX_HK, AX_TH, AX_RT
       COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
-      LOGICAL LDBG
+      COMMON /XDBGLOCK/ LDBGLOCK
+      LOGICAL LDBG, LDBGLOCK
       INTEGER LUDBG, IDBGCALL, IDBGITER
 C
       IF(.NOT.LDBG) RETURN
+      IF(LDBGLOCK) RETURN
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
       WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
@@ -1244,10 +1313,13 @@ C---- Dump HKIN result
       SUBROUTINE DBGHKIN(H, MSQ, HK, HK_H, HK_MSQ)
       REAL H, MSQ, HK, HK_H, HK_MSQ
       COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
-      LOGICAL LDBG
+      COMMON /XDBGLOCK/ LDBGLOCK
+      LOGICAL LDBG, LDBGLOCK
       INTEGER LUDBG, IDBGCALL, IDBGITER
 C
       IF(.NOT.LDBG) RETURN
+C---- Skip if locked (nested call from another debug routine)
+      IF(LDBGLOCK) RETURN
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
       WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
@@ -1781,7 +1853,7 @@ C
       IF(.NOT.LDBG) RETURN
 C---- Limit output to targeted station ranges
       IF(IS.EQ.1) THEN
-        IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+        IF(IBL.LT.24 .OR. IBL.GT.35) RETURN
       ELSE IF(IS.EQ.2) THEN
         IF(IBL.LT.70 .OR. IBL.GT.75) RETURN
       ELSE
@@ -1827,7 +1899,7 @@ C---- Dump MRCHUE mode decision details (direct vs inverse)
 C
       IF(.NOT.LDBG) RETURN
       IF(IS.EQ.1) THEN
-        IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+        IF(IBL.LT.24 .OR. IBL.GT.35) RETURN
       ELSE IF(IS.EQ.2) THEN
         IF(IBL.LT.70 .OR. IBL.GT.75) RETURN
       ELSE
@@ -1875,7 +1947,7 @@ C
       IF(.NOT.LDBG) RETURN
 C---- Limit output to targeted station ranges
       IF(IS.EQ.1) THEN
-        IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+        IF(IBL.LT.24 .OR. IBL.GT.35) RETURN
       ELSE IF(IS.EQ.2) THEN
         IF(IBL.LT.70 .OR. IBL.GT.75) RETURN
       ELSE
@@ -1981,7 +2053,7 @@ C
       IF(.NOT.LDBG) RETURN
 C---- Limit output to targeted station ranges
       IF(IS.EQ.1) THEN
-        IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+        IF(IBL.LT.24 .OR. IBL.GT.35) RETURN
       ELSE IF(IS.EQ.2) THEN
         IF(IBL.LT.70 .OR. IBL.GT.75) RETURN
       ELSE
@@ -2075,7 +2147,7 @@ C
       IF(.NOT.LDBG) RETURN
 C---- Limit output to targeted station ranges
       IF(IS.EQ.1) THEN
-        IF(IBL.LT.30 .OR. IBL.GT.35) RETURN
+        IF(IBL.LT.24 .OR. IBL.GT.35) RETURN
       ELSE IF(IS.EQ.2) THEN
         IF(IBL.LT.70 .OR. IBL.GT.75) RETURN
       ELSE
@@ -2516,6 +2588,294 @@ C---- CL sensitivity to alpha
       END
 
 
+C***********************************************************************
+C    FULL ARRAY DEBUG ROUTINES FOR VISCAL ITERATION COMPARISON
+C    These dump complete arrays per iteration for validating RustFoil
+C***********************************************************************
+
+
+C---- Dump FULL BL state arrays per VISCAL iteration
+C     Outputs theta, delta_star, Ue, Hk, Cf for ALL stations on both surfaces
+      SUBROUTINE DBGFULL_BL_STATE(ITER)
+      INTEGER ITER
+      INCLUDE 'XFOIL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      COMMON /XDBGLOCK/ LDBGLOCK
+      LOGICAL LDBG, LDBGLOCK
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER IS, IBL
+      REAL MSQ, H, HK, HK_H, HK_M
+      REAL HSTINV_L
+C
+      IF(.NOT.LDBG) RETURN
+      IF(.NOT.LBLINI) RETURN
+C
+C---- Set lock to prevent nested debug calls during array writes
+      LDBGLOCK = .TRUE.
+C
+C---- Compute HSTINV for Hk calculation
+      HSTINV_L = GAMM1*(MINF/QINF)**2 / (1.0 + 0.5*GAMM1*MINF**2)
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "FULL_BL_STATE",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', ITER, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "nbl_upper": ', NBL(1), ','
+      WRITE(LUDBG,'(A,I4,A)') '  "nbl_lower": ', NBL(2), ','
+C
+C---- Upper surface (IS=1)
+      WRITE(LUDBG,'(A)') '  "upper_surface": {'
+C---- Theta
+      WRITE(LUDBG,'(A)') '    "theta": ['
+      DO 10 IBL=2, NBL(1)
+        IF(IBL.LT.NBL(1)) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '      ', THET(IBL,1), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '      ', THET(IBL,1)
+        ENDIF
+   10 CONTINUE
+      WRITE(LUDBG,'(A)') '    ],'
+C---- Delta_star
+      WRITE(LUDBG,'(A)') '    "delta_star": ['
+      DO 20 IBL=2, NBL(1)
+        IF(IBL.LT.NBL(1)) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '      ', DSTR(IBL,1), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '      ', DSTR(IBL,1)
+        ENDIF
+   20 CONTINUE
+      WRITE(LUDBG,'(A)') '    ],'
+C---- Ue
+      WRITE(LUDBG,'(A)') '    "Ue": ['
+      DO 30 IBL=2, NBL(1)
+        IF(IBL.LT.NBL(1)) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '      ', UEDG(IBL,1), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '      ', UEDG(IBL,1)
+        ENDIF
+   30 CONTINUE
+      WRITE(LUDBG,'(A)') '    ],'
+C---- Hk (computed)
+      WRITE(LUDBG,'(A)') '    "Hk": ['
+      DO 40 IBL=2, NBL(1)
+        IF(THET(IBL,1).GT.1.0E-12) THEN
+          H = DSTR(IBL,1) / THET(IBL,1)
+        ELSE
+          H = 2.5
+        ENDIF
+        MSQ = UEDG(IBL,1)**2 * HSTINV_L 
+     &      / (GAMM1*(1.0 - 0.5*UEDG(IBL,1)**2*HSTINV_L))
+        IF(MSQ.LT.0.0) MSQ = 0.0
+        CALL HKIN(H, MSQ, HK, HK_H, HK_M)
+        IF(IBL.LT.NBL(1)) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '      ', HK, ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '      ', HK
+        ENDIF
+   40 CONTINUE
+      WRITE(LUDBG,'(A)') '    ],'
+C---- Cf (using stored TAU)
+      WRITE(LUDBG,'(A)') '    "Cf": ['
+      DO 50 IBL=2, NBL(1)
+        IF(IBL.LT.NBL(1)) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '      ', 
+     &      2.0*TAU(IBL,1)/(UEDG(IBL,1)**2+1.0E-20), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '      ', 
+     &      2.0*TAU(IBL,1)/(UEDG(IBL,1)**2+1.0E-20)
+        ENDIF
+   50 CONTINUE
+      WRITE(LUDBG,'(A)') '    ],'
+C---- Ctau/Ampl
+      WRITE(LUDBG,'(A)') '    "ctau": ['
+      DO 55 IBL=2, NBL(1)
+        IF(IBL.LT.NBL(1)) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '      ', CTAU(IBL,1), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '      ', CTAU(IBL,1)
+        ENDIF
+   55 CONTINUE
+      WRITE(LUDBG,'(A)') '    ]'
+      WRITE(LUDBG,'(A)') '  },'
+C
+C---- Lower surface (IS=2)
+      WRITE(LUDBG,'(A)') '  "lower_surface": {'
+C---- Theta
+      WRITE(LUDBG,'(A)') '    "theta": ['
+      DO 110 IBL=2, NBL(2)
+        IF(IBL.LT.NBL(2)) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '      ', THET(IBL,2), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '      ', THET(IBL,2)
+        ENDIF
+  110 CONTINUE
+      WRITE(LUDBG,'(A)') '    ],'
+C---- Delta_star
+      WRITE(LUDBG,'(A)') '    "delta_star": ['
+      DO 120 IBL=2, NBL(2)
+        IF(IBL.LT.NBL(2)) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '      ', DSTR(IBL,2), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '      ', DSTR(IBL,2)
+        ENDIF
+  120 CONTINUE
+      WRITE(LUDBG,'(A)') '    ],'
+C---- Ue
+      WRITE(LUDBG,'(A)') '    "Ue": ['
+      DO 130 IBL=2, NBL(2)
+        IF(IBL.LT.NBL(2)) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '      ', UEDG(IBL,2), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '      ', UEDG(IBL,2)
+        ENDIF
+  130 CONTINUE
+      WRITE(LUDBG,'(A)') '    ],'
+C---- Hk (computed)
+      WRITE(LUDBG,'(A)') '    "Hk": ['
+      DO 140 IBL=2, NBL(2)
+        IF(THET(IBL,2).GT.1.0E-12) THEN
+          H = DSTR(IBL,2) / THET(IBL,2)
+        ELSE
+          H = 2.5
+        ENDIF
+        MSQ = UEDG(IBL,2)**2 * HSTINV_L 
+     &      / (GAMM1*(1.0 - 0.5*UEDG(IBL,2)**2*HSTINV_L))
+        IF(MSQ.LT.0.0) MSQ = 0.0
+        CALL HKIN(H, MSQ, HK, HK_H, HK_M)
+        IF(IBL.LT.NBL(2)) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '      ', HK, ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '      ', HK
+        ENDIF
+  140 CONTINUE
+      WRITE(LUDBG,'(A)') '    ],'
+C---- Cf (using stored TAU)
+      WRITE(LUDBG,'(A)') '    "Cf": ['
+      DO 150 IBL=2, NBL(2)
+        IF(IBL.LT.NBL(2)) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '      ', 
+     &      2.0*TAU(IBL,2)/(UEDG(IBL,2)**2+1.0E-20), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '      ', 
+     &      2.0*TAU(IBL,2)/(UEDG(IBL,2)**2+1.0E-20)
+        ENDIF
+  150 CONTINUE
+      WRITE(LUDBG,'(A)') '    ],'
+C---- Ctau/Ampl
+      WRITE(LUDBG,'(A)') '    "ctau": ['
+      DO 155 IBL=2, NBL(2)
+        IF(IBL.LT.NBL(2)) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '      ', CTAU(IBL,2), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '      ', CTAU(IBL,2)
+        ENDIF
+  155 CONTINUE
+      WRITE(LUDBG,'(A)') '    ]'
+      WRITE(LUDBG,'(A)') '  }'
+C
+      WRITE(LUDBG,'(A)') '}'
+C
+C---- Release lock
+      LDBGLOCK = .FALSE.
+      RETURN
+      END
+
+
+C---- Dump FULL gamma array per VISCAL iteration
+C     Outputs gamma[i] for all panels
+      SUBROUTINE DBGFULL_GAMMA_ITER(ITER)
+      INTEGER ITER
+      INCLUDE 'XFOIL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER I
+C
+      IF(.NOT.LDBG) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "FULL_GAMMA_ITER",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', ITER, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "n_panels": ', N, ','
+C
+C---- Full gamma array
+      WRITE(LUDBG,'(A)') '  "gamma": ['
+      DO 10 I=1, N
+        IF(I.LT.N) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '    ', GAM(I), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '    ', GAM(I)
+        ENDIF
+   10 CONTINUE
+      WRITE(LUDBG,'(A)') '  ]'
+C
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump FULL N-factor (amplification ratio) array per VISCAL iteration
+C     Outputs CTAU[ibl] for laminar stations (which stores log(ampl ratio))
+      SUBROUTINE DBGFULL_NFACTOR(ITER)
+      INTEGER ITER
+      INCLUDE 'XFOIL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER IS, IBL, NLAM
+C
+      IF(.NOT.LDBG) RETURN
+      IF(.NOT.LBLINI) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "FULL_NFACTOR",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', ITER, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "itran_upper": ', ITRAN(1), ','
+      WRITE(LUDBG,'(A,I4,A)') '  "itran_lower": ', ITRAN(2), ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "ncrit_upper": ', ACRIT(1), ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "ncrit_lower": ', ACRIT(2), ','
+C
+C---- Upper surface N-factor (laminar stations only)
+C     CTAU stores log(amplification ratio) for laminar, Ctau for turbulent
+      NLAM = MIN(ITRAN(1)-1, NBL(1))
+      WRITE(LUDBG,'(A)') '  "upper_ampl": ['
+      DO 10 IBL=2, NLAM
+        IF(IBL.LT.NLAM) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '    ', CTAU(IBL,1), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '    ', CTAU(IBL,1)
+        ENDIF
+   10 CONTINUE
+      IF(NLAM.LT.2) WRITE(LUDBG,'(A)') '    0.0'
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Lower surface N-factor (laminar stations only)
+      NLAM = MIN(ITRAN(2)-1, NBL(2))
+      WRITE(LUDBG,'(A)') '  "lower_ampl": ['
+      DO 20 IBL=2, NLAM
+        IF(IBL.LT.NLAM) THEN
+          WRITE(LUDBG,'(A,E17.10,A)') '    ', CTAU(IBL,2), ','
+        ELSE
+          WRITE(LUDBG,'(A,E17.10)') '    ', CTAU(IBL,2)
+        ENDIF
+   20 CONTINUE
+      IF(NLAM.LT.2) WRITE(LUDBG,'(A)') '    0.0'
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Also output transition x locations
+      WRITE(LUDBG,'(A,E17.10,A)') '  "xtr_upper": ', XOCTR(1), ','
+      WRITE(LUDBG,'(A,E17.10)') '  "xtr_lower": ', XOCTR(2)
+C
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
 C---- Dump shear-lag equation Jacobian intermediates (row 1)
 C     Captures terms used in VS2(1,2..4) for comparison with Rust
       SUBROUTINE DBGSHEAR(IS, IBL, ITYP,
@@ -2591,6 +2951,1372 @@ C---- Final VS2 row 1 values
       WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_1_2": ', VS2_12, ','
       WRITE(LUDBG,'(A,E15.8,A)') '  "VS2_1_3": ', VS2_13, ','
       WRITE(LUDBG,'(A,E15.8)') '  "VS2_1_4": ', VS2_14
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+C---- Dump GGCALC (inviscid system) with geometry - alternate version
+C     Captures AIJ matrix elements, RHS vectors, and GAMU solutions
+      SUBROUTINE DBGGGCALC_GEOM(N, X, Y, NX, NY, AIJ, GAMU)
+      INTEGER N
+      REAL X(N), Y(N), NX(N), NY(N)
+      REAL AIJ(600,600), GAMU(600,2)
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER I, J
+C
+      IF(.NOT.LDBG) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      IDBGCALL = IDBGCALL + 1
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "GGCALC",'
+      WRITE(LUDBG,'(A,I4,A)') '  "n_panels": ', N, ','
+C
+C---- Panel geometry (first 10)
+      WRITE(LUDBG,'(A)') '  "panel_x_first10": ['
+      DO I=1,MIN(10,N)
+        IF(I.LT.MIN(10,N)) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') X(I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') X(I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+      WRITE(LUDBG,'(A)') '  "panel_y_first10": ['
+      DO I=1,MIN(10,N)
+        IF(I.LT.MIN(10,N)) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') Y(I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') Y(I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+      WRITE(LUDBG,'(A)') '  "panel_nx_first10": ['
+      DO I=1,MIN(10,N)
+        IF(I.LT.MIN(10,N)) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') NX(I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') NX(I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+      WRITE(LUDBG,'(A)') '  "panel_ny_first10": ['
+      DO I=1,MIN(10,N)
+        IF(I.LT.MIN(10,N)) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') NY(I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') NY(I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- AIJ matrix: first row
+      WRITE(LUDBG,'(A)') '  "aij_row0_first10": ['
+      DO J=1,MIN(10,N)
+        IF(J.LT.MIN(10,N)) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') AIJ(1,J), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') AIJ(1,J)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- AIJ diagonal
+      WRITE(LUDBG,'(A)') '  "aij_diagonal_first10": ['
+      DO I=1,MIN(10,N)
+        IF(I.LT.MIN(10,N)) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') AIJ(I,I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') AIJ(I,I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- RHS (stored in GAMU before solve)
+      WRITE(LUDBG,'(A)') '  "rhs_alpha0_first10": ['
+      DO I=1,MIN(10,N)
+        IF(I.LT.MIN(10,N)) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') GAMU(I,1), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') GAMU(I,1)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+      WRITE(LUDBG,'(A)') '  "rhs_alpha90_first10": ['
+      DO I=1,MIN(10,N)
+        IF(I.LT.MIN(10,N)) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') GAMU(I,2), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') GAMU(I,2)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ]'
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+C---- Dump GGCALC solution (after LU solve)
+      SUBROUTINE DBGGGCALC_SOLN(N, GAMU)
+      INTEGER N
+      REAL GAMU(600,2)
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER I
+C
+      IF(.NOT.LDBG) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      IDBGCALL = IDBGCALL + 1
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "GGCALC_SOLN",'
+      WRITE(LUDBG,'(A,I4,A)') '  "n_panels": ', N, ','
+C
+C---- GAMU(:,1) - gamma for alpha=0
+      WRITE(LUDBG,'(A)') '  "gamu_alpha0_first10": ['
+      DO I=1,MIN(10,N)
+        IF(I.LT.MIN(10,N)) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') GAMU(I,1), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') GAMU(I,1)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+      WRITE(LUDBG,'(A)') '  "gamu_alpha0_last10": ['
+      DO I=MAX(1,N-9),N
+        IF(I.LT.N) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') GAMU(I,1), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') GAMU(I,1)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- GAMU(:,2) - gamma for alpha=90
+      WRITE(LUDBG,'(A)') '  "gamu_alpha90_first10": ['
+      DO I=1,MIN(10,N)
+        IF(I.LT.MIN(10,N)) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') GAMU(I,2), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') GAMU(I,2)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+      WRITE(LUDBG,'(A)') '  "gamu_alpha90_last10": ['
+      DO I=MAX(1,N-9),N
+        IF(I.LT.N) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') GAMU(I,2), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') GAMU(I,2)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Kutta check
+      WRITE(LUDBG,'(A,E18.10,A)') '  "kutta_alpha0": ',
+     &  GAMU(1,1) + GAMU(N,1), ','
+      WRITE(LUDBG,'(A,E18.10)') '  "kutta_alpha90": ',
+     &  GAMU(1,2) + GAMU(N,2)
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+C---- Dump final gamma at specific alpha - alternate version with CL
+      SUBROUTINE DBGSPECAL_CL(N, ALFA, GAM, CL)
+      INTEGER N
+      REAL ALFA, CL
+      REAL GAM(N)
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER I
+C
+      IF(.NOT.LDBG) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      IDBGCALL = IDBGCALL + 1
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "SPECAL",'
+      WRITE(LUDBG,'(A,I4,A)') '  "n_panels": ', N, ','
+      WRITE(LUDBG,'(A,E18.10,A)') '  "alpha_rad": ', ALFA, ','
+      WRITE(LUDBG,'(A,E18.10,A)') '  "alpha_deg": ', ALFA*57.29578, ','
+      WRITE(LUDBG,'(A,E18.10,A)') '  "CL": ', CL, ','
+C
+C---- Gamma first 10
+      WRITE(LUDBG,'(A)') '  "gamma_first10": ['
+      DO I=1,MIN(10,N)
+        IF(I.LT.MIN(10,N)) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') GAM(I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') GAM(I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Gamma near LE (middle)
+      WRITE(LUDBG,'(A)') '  "gamma_mid5": ['
+      DO I=N/2-2, N/2+2
+        IF(I.LT.N/2+2) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') GAM(I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') GAM(I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Gamma last 10
+      WRITE(LUDBG,'(A)') '  "gamma_last10": ['
+      DO I=MAX(1,N-9),N
+        IF(I.LT.N) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') GAM(I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') GAM(I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Kutta check
+      WRITE(LUDBG,'(A,E18.10)') '  "kutta_sum": ', GAM(1) + GAM(N)
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump AIJ influence matrix BEFORE LU decomposition
+C     For comparison with RustFoil's influence coefficient matrix
+      SUBROUTINE DBGAIJMATRIX(N, AIJ, IZX)
+      INTEGER N, IZX
+      REAL AIJ(IZX,IZX)
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER I, J, NOUT, ROW
+C
+      IF(.NOT.LDBG) RETURN
+C
+C---- Limit output to first 20 entries
+      NOUT = MIN(N, 20)
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      IDBGCALL = IDBGCALL + 1
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "AIJ_MATRIX",'
+      WRITE(LUDBG,'(A,I4,A)') '  "n_panels": ', N, ','
+      WRITE(LUDBG,'(A)') '  "note": "AIJ before LU factorization",'
+C
+C---- Diagonal entries (first 20)
+      WRITE(LUDBG,'(A)') '  "aij_diagonal_20": ['
+      DO I=1, NOUT
+        IF(I.LT.NOUT) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') AIJ(I,I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') AIJ(I,I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- First row (first 20 columns)
+      WRITE(LUDBG,'(A)') '  "aij_row1_20cols": ['
+      DO J=1, NOUT
+        IF(J.LT.NOUT) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') AIJ(1,J), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') AIJ(1,J)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Last row (first 20 columns)
+      WRITE(LUDBG,'(A)') '  "aij_rowN_20cols": ['
+      DO J=1, NOUT
+        IF(J.LT.NOUT) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') AIJ(N,J), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') AIJ(N,J)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Row 40 (if exists, first 20 columns)
+      ROW = 40
+      IF(ROW.LE.N) THEN
+        WRITE(LUDBG,'(A)') '  "aij_row40_20cols": ['
+        DO J=1, NOUT
+          IF(J.LT.NOUT) THEN
+            WRITE(LUDBG,'(4X,E18.10,A)') AIJ(ROW,J), ','
+          ELSE
+            WRITE(LUDBG,'(4X,E18.10)') AIJ(ROW,J)
+          ENDIF
+        ENDDO
+        WRITE(LUDBG,'(A)') '  ],'
+      ENDIF
+C
+C---- Row 80 (if exists, first 20 columns)
+      ROW = 80
+      IF(ROW.LE.N) THEN
+        WRITE(LUDBG,'(A)') '  "aij_row80_20cols": ['
+        DO J=1, NOUT
+          IF(J.LT.NOUT) THEN
+            WRITE(LUDBG,'(4X,E18.10,A)') AIJ(ROW,J), ','
+          ELSE
+            WRITE(LUDBG,'(4X,E18.10)') AIJ(ROW,J)
+          ENDIF
+        ENDDO
+        WRITE(LUDBG,'(A)') '  ],'
+      ENDIF
+C
+C---- Row 120 (if exists, first 20 columns)
+      ROW = 120
+      IF(ROW.LE.N) THEN
+        WRITE(LUDBG,'(A)') '  "aij_row120_20cols": ['
+        DO J=1, NOUT
+          IF(J.LT.NOUT) THEN
+            WRITE(LUDBG,'(4X,E18.10,A)') AIJ(ROW,J), ','
+          ELSE
+            WRITE(LUDBG,'(4X,E18.10)') AIJ(ROW,J)
+          ENDIF
+        ENDDO
+        WRITE(LUDBG,'(A)') '  ],'
+      ENDIF
+C
+C---- Kutta condition row (N+1, first 20 columns)
+      WRITE(LUDBG,'(A)') '  "aij_kutta_row_20cols": ['
+      DO J=1, NOUT
+        IF(J.LT.NOUT) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') AIJ(N+1,J), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') AIJ(N+1,J)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Also dump last few columns of row 1 to check boundary treatment
+      WRITE(LUDBG,'(A)') '  "aij_row1_lastcols": ['
+      DO J=MAX(1,N-9), N+1
+        IF(J.LT.N+1) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') AIJ(1,J), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') AIJ(1,J)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Stagnation region (around row 80, cols 75-85) if exists
+      IF(N.GE.85) THEN
+        WRITE(LUDBG,'(A)') '  "aij_stagnation_region": ['
+        DO I=78, 82
+          DO J=78, 82
+            IF(I.NE.82 .OR. J.NE.82) THEN
+              WRITE(LUDBG,'(A,I3,A,I3,A,E18.10,A)')
+     &          '    {"i": ', I, ', "j": ', J, ', "val": ',
+     &          AIJ(I,J), '},'
+            ELSE
+              WRITE(LUDBG,'(A,I3,A,I3,A,E18.10,A)')
+     &          '    {"i": ', I, ', "j": ', J, ', "val": ',
+     &          AIJ(I,J), '}'
+            ENDIF
+          ENDDO
+        ENDDO
+        WRITE(LUDBG,'(A)') '  ],'
+      ENDIF
+C
+C---- Matrix sum for quick sanity check
+      WRITE(LUDBG,'(A,E18.10)') '  "aij_trace_sum": ',
+     &  AIJ(1,1) + AIJ(N/2,N/2) + AIJ(N,N)
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump panel geometry (X, Y, NX, NY, S arrays) for RustFoil comparison
+      SUBROUTINE DBGPANELGEOM()
+      INCLUDE 'XFOIL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER I
+C
+      IF(.NOT.LDBG) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "PANEL_GEOM",'
+      WRITE(LUDBG,'(A,I4,A)') '  "n": ', N, ','
+C
+C---- X coordinates - first 10
+      WRITE(LUDBG,'(A)') '  "x_first10": ['
+      DO I=1,MIN(10,N)
+        IF(I.LT.MIN(10,N)) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') X(I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') X(I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- X coordinates - last 10
+      WRITE(LUDBG,'(A)') '  "x_last10": ['
+      DO I=MAX(1,N-9),N
+        IF(I.LT.N) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') X(I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') X(I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Y coordinates - first 10
+      WRITE(LUDBG,'(A)') '  "y_first10": ['
+      DO I=1,MIN(10,N)
+        IF(I.LT.MIN(10,N)) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') Y(I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') Y(I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Y coordinates - last 10
+      WRITE(LUDBG,'(A)') '  "y_last10": ['
+      DO I=MAX(1,N-9),N
+        IF(I.LT.N) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') Y(I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') Y(I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- NX (normal x-component) - first 10
+      WRITE(LUDBG,'(A)') '  "nx_first10": ['
+      DO I=1,MIN(10,N)
+        IF(I.LT.MIN(10,N)) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') NX(I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') NX(I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- NX (normal x-component) - last 10
+      WRITE(LUDBG,'(A)') '  "nx_last10": ['
+      DO I=MAX(1,N-9),N
+        IF(I.LT.N) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') NX(I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') NX(I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- NY (normal y-component) - first 10
+      WRITE(LUDBG,'(A)') '  "ny_first10": ['
+      DO I=1,MIN(10,N)
+        IF(I.LT.MIN(10,N)) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') NY(I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') NY(I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- NY (normal y-component) - last 10
+      WRITE(LUDBG,'(A)') '  "ny_last10": ['
+      DO I=MAX(1,N-9),N
+        IF(I.LT.N) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') NY(I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') NY(I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- S (arc length) - first 10
+      WRITE(LUDBG,'(A)') '  "s_first10": ['
+      DO I=1,MIN(10,N)
+        IF(I.LT.MIN(10,N)) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') S(I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') S(I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- S (arc length) - last 10
+      WRITE(LUDBG,'(A)') '  "s_last10": ['
+      DO I=MAX(1,N-9),N
+        IF(I.LT.N) THEN
+          WRITE(LUDBG,'(4X,E18.10,A)') S(I), ','
+        ELSE
+          WRITE(LUDBG,'(4X,E18.10)') S(I)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ]'
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C=======================================================================
+C     NEWTON ITERATION DEBUG SUBROUTINES
+C     For detailed comparison with RustFoil Newton solver
+C=======================================================================
+
+C---- DBGNEWTONITER: Dump at start of each Newton iteration
+C     Note: RMSBL, NSYS are in COMMON via XFOIL.INC
+      SUBROUTINE DBGNEWTONITER(ITER)
+      INTEGER ITER
+      INCLUDE 'XFOIL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only log iterations 0-5 and 14-20 where divergence happens
+      IF(ITER.GT.5 .AND. ITER.LT.14) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "NEWTON_ITER_START",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', ITER, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "rmsbl_before": ', RMSBL, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "nsys": ', NSYS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "nbl_top": ', NBL(1), ','
+      WRITE(LUDBG,'(A,I4,A)') '  "nbl_bot": ', NBL(2), ','
+      WRITE(LUDBG,'(A,I4,A)') '  "itran_top": ', ITRAN(1), ','
+      WRITE(LUDBG,'(A,I4,A)') '  "itran_bot": ', ITRAN(2), ','
+      WRITE(LUDBG,'(A,I4,A)') '  "iblte_top": ', IBLTE(1), ','
+      WRITE(LUDBG,'(A,I4)') '  "iblte_bot": ', IBLTE(2)
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- DBGBLSTATE: Dump BL state at key stations
+      SUBROUTINE DBGBLSTATE(ITER, IS, IBL)
+      INTEGER ITER, IS, IBL
+      INCLUDE 'XFOIL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only log iterations 0-5 and 14-20
+      IF(ITER.GT.5 .AND. ITER.LT.14) RETURN
+C---- Only log stations 10, 20, 40, 60, 80
+      IF(MOD(IBL,20).NE.0 .AND. IBL.NE.10) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "BL_STATE",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', ITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "is": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ctau": ', CTAU(IBL,IS), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "thet": ', THET(IBL,IS), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "dstr": ', DSTR(IBL,IS), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "uedg": ', UEDG(IBL,IS), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "mass": ', MASS(IBL,IS), ','
+      WRITE(LUDBG,'(A,E15.8)') '  "xssi": ', XSSI(IBL,IS)
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- DBGBLDIFOUT: Dump after BLSYS returns in SETBL
+      SUBROUTINE DBGBLDIFOUT(IBL, IS, VS1, VS2, VSREZ, ITYP)
+      INTEGER IBL, IS, ITYP
+      REAL VS1(4,5), VS2(4,5), VSREZ(4)
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER I, J
+      CHARACTER*12 FLOWTYPE
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only log every 20th station to keep output manageable
+      IF(MOD(IBL,20).NE.0 .AND. IBL.NE.10) RETURN
+C---- Only log iterations 0-5 and 14-20
+      IF(IDBGITER.GT.5 .AND. IDBGITER.LT.14) RETURN
+C
+C---- Determine flow type string
+      IF(ITYP.EQ.1) THEN
+        FLOWTYPE = 'LAMINAR'
+      ELSE IF(ITYP.EQ.2) THEN
+        FLOWTYPE = 'TURBULENT'
+      ELSE IF(ITYP.EQ.3) THEN
+        FLOWTYPE = 'WAKE'
+      ELSE
+        FLOWTYPE = 'UNKNOWN'
+      ENDIF
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "BLSYS_OUTPUT",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "is": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,A,A)') '  "flow_type": "', TRIM(FLOWTYPE), '",'
+C---- VS1 matrix (3x5 for first 3 equations)
+      WRITE(LUDBG,'(A)') '  "VS1": ['
+      DO 10 I=1,3
+        IF(I.LT.3) THEN
+          WRITE(LUDBG,'(A,5(E14.7,A),A)')
+     &      '    [', (VS1(I,J), ',', J=1,4), VS1(I,5), '],'
+        ELSE
+          WRITE(LUDBG,'(A,5(E14.7,A),A)')
+     &      '    [', (VS1(I,J), ',', J=1,4), VS1(I,5), ']'
+        ENDIF
+   10 CONTINUE
+      WRITE(LUDBG,'(A)') '  ],'
+C---- VS2 matrix (3x5)
+      WRITE(LUDBG,'(A)') '  "VS2": ['
+      DO 20 I=1,3
+        IF(I.LT.3) THEN
+          WRITE(LUDBG,'(A,5(E14.7,A),A)')
+     &      '    [', (VS2(I,J), ',', J=1,4), VS2(I,5), '],'
+        ELSE
+          WRITE(LUDBG,'(A,5(E14.7,A),A)')
+     &      '    [', (VS2(I,J), ',', J=1,4), VS2(I,5), ']'
+        ENDIF
+   20 CONTINUE
+      WRITE(LUDBG,'(A)') '  ],'
+C---- Residuals (first 3)
+      WRITE(LUDBG,'(A,3(E14.7,A),A)')
+     &  '  "VSREZ": [', VSREZ(1), ',', VSREZ(2), ',', VSREZ(3), ']'
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- DBGVMBLOCK: Dump VM near-diagonal entries after assembly
+C     Note: NSYS is in COMMON via XFOIL.INC
+      SUBROUTINE DBGVMBLOCK(IV)
+      INTEGER IV
+      INCLUDE 'XFOIL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER I, J, JMIN, JMAX
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only log every 20th station
+      IF(MOD(IV,20).NE.0 .AND. IV.NE.10) RETURN
+C---- Only log iterations 0-5 and 14-20
+      IF(IDBGITER.GT.5 .AND. IDBGITER.LT.14) RETURN
+C
+      JMIN = MAX(1, IV-3)
+      JMAX = MIN(NSYS, IV+3)
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "VM_BLOCK",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "iv": ', IV, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "nsys": ', NSYS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "jmin": ', JMIN, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "jmax": ', JMAX, ','
+C---- VM row 1 (near diagonal)
+      WRITE(LUDBG,'(A)') '  "VM_row1": ['
+      DO J=JMIN,JMAX
+        IF(J.LT.JMAX) THEN
+          WRITE(LUDBG,'(A,E14.7,A)') '    ', VM(1,J,IV), ','
+        ELSE
+          WRITE(LUDBG,'(A,E14.7)') '    ', VM(1,J,IV)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C---- VM row 2 (near diagonal)
+      WRITE(LUDBG,'(A)') '  "VM_row2": ['
+      DO J=JMIN,JMAX
+        IF(J.LT.JMAX) THEN
+          WRITE(LUDBG,'(A,E14.7,A)') '    ', VM(2,J,IV), ','
+        ELSE
+          WRITE(LUDBG,'(A,E14.7)') '    ', VM(2,J,IV)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ],'
+C---- VM row 3 (near diagonal)
+      WRITE(LUDBG,'(A)') '  "VM_row3": ['
+      DO J=JMIN,JMAX
+        IF(J.LT.JMAX) THEN
+          WRITE(LUDBG,'(A,E14.7,A)') '    ', VM(3,J,IV), ','
+        ELSE
+          WRITE(LUDBG,'(A,E14.7)') '    ', VM(3,J,IV)
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ]'
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- DBGVDEL: Dump VDEL (residual/RHS) after assembly
+      SUBROUTINE DBGVDEL(IV, VDEL1, VDEL2, VDEL3)
+      INTEGER IV
+      REAL VDEL1, VDEL2, VDEL3
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only log every 20th station
+      IF(MOD(IV,20).NE.0 .AND. IV.NE.10) RETURN
+C---- Only log iterations 0-5 and 14-20
+      IF(IDBGITER.GT.5 .AND. IDBGITER.LT.14) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "VDEL_RESIDUAL",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "iv": ', IV, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "vdel1": ', VDEL1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "vdel2": ', VDEL2, ','
+      WRITE(LUDBG,'(A,E15.8)') '  "vdel3": ', VDEL3
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- DBGVSREZ_DUE: Dump VSREZ base residual and DUE/DDS forced changes
+C     This helps identify where the 2x factor discrepancy originates
+      SUBROUTINE DBGVSREZ_DUE(IV, VSREZ1, VSREZ2, VSREZ3,
+     &                        DUE1, DUE2, DDS1, DDS2)
+      INTEGER IV
+      REAL VSREZ1, VSREZ2, VSREZ3, DUE1, DUE2, DDS1, DDS2
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      COMMON /XDBGLOCK/ LDBGLOCK
+      LOGICAL LDBG, LDBGLOCK
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+C
+      IF(.NOT.LDBG) RETURN
+      IF(LDBGLOCK) RETURN
+C---- Only log every 10th station (including station 0)
+      IF(MOD(IV,10).NE.0) RETURN
+C---- Only log iterations 1-5 (where we care about the 2x factor)
+      IF(IDBGITER.LT.1 .OR. IDBGITER.GT.5) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "VSREZ_DUE",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "iv": ', IV, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "vsrez1": ', VSREZ1, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "vsrez2": ', VSREZ2, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "vsrez3": ', VSREZ3, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "due1": ', DUE1, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "due2": ', DUE2, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "dds1": ', DDS1, ','
+      WRITE(LUDBG,'(A,E17.10)') '  "dds2": ', DDS2
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- DBGSOLUTION: Dump solution deltas after BLSOLV
+C     Note: NSYS is in COMMON via XFOIL.INC
+      SUBROUTINE DBGSOLUTION()
+      INCLUDE 'XFOIL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER IV, NOUT
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only log iterations 0-5 and 14-20
+      IF(IDBGITER.GT.5 .AND. IDBGITER.LT.14) RETURN
+C
+      NOUT = MIN(20, NSYS)
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "BLSOLV_SOLUTION",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "nsys": ', NSYS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "nout": ', NOUT, ','
+C---- Solution deltas (first NOUT stations)
+      WRITE(LUDBG,'(A)') '  "vdel_solution": ['
+      DO IV=1,NOUT
+        IF(IV.LT.NOUT) THEN
+          WRITE(LUDBG,'(A,I4,A,E14.7,A,E14.7,A,E14.7,A)')
+     &      '    {"iv": ', IV, ', "d1": ', VDEL(1,1,IV),
+     &      ', "d2": ', VDEL(2,1,IV), ', "d3": ', VDEL(3,1,IV), '},'
+        ELSE
+          WRITE(LUDBG,'(A,I4,A,E14.7,A,E14.7,A,E14.7,A)')
+     &      '    {"iv": ', IV, ', "d1": ', VDEL(1,1,IV),
+     &      ', "d2": ', VDEL(2,1,IV), ', "d3": ', VDEL(3,1,IV), '}'
+        ENDIF
+      ENDDO
+      WRITE(LUDBG,'(A)') '  ]'
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- DBGUPDATE_NEWTON: Dump update info at each station in Newton loop
+      SUBROUTINE DBGUPDATE_NEWTON(IBL, IS, RLX, DN1, DN2, DN3, DN4,
+     &                            DCTAU, DTHET, DDSTR, DUEDG)
+      INTEGER IBL, IS
+      REAL RLX, DN1, DN2, DN3, DN4, DCTAU, DTHET, DDSTR, DUEDG
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only log every 20th station
+      IF(MOD(IBL,20).NE.0) RETURN
+C---- Only log iterations 0-5 and 14-20
+      IF(IDBGITER.GT.5 .AND. IDBGITER.LT.14) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "UPDATE_NEWTON",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "is": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "rlx": ', RLX, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "dn1": ', DN1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "dn2": ', DN2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "dn3": ', DN3, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "dn4": ', DN4, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "dctau": ', DCTAU, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "dthet": ', DTHET, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ddstr": ', DDSTR, ','
+      WRITE(LUDBG,'(A,E15.8)') '  "duedg": ', DUEDG
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- DBGTRANSITION: Dump transition station details
+C     Captures BL state at specific stations for comparison with RustFoil
+      SUBROUTINE DBGTRANSITION(ITER, IS, IBL, ITYP)
+      INTEGER ITER, IS, IBL, ITYP
+      INCLUDE 'XFOIL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER ILAMINAR
+C
+      IF(.NOT.LDBG) RETURN
+C---- Include transition region (stations 54-70 on lower surface)
+      IF(IS.NE.2 .OR. IBL.LT.54 .OR. IBL.GT.70) RETURN
+C---- Only log iterations 0-10
+      IF(ITER.GT.10) RETURN
+C
+      IF(IBL.LT.ITRAN(IS)) THEN
+        ILAMINAR = 1
+      ELSE
+        ILAMINAR = 0
+      ENDIF
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "TRANSITION_DEBUG",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', ITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "is": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "ityp": ', ITYP, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ctau": ', CTAU(IBL,IS), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "thet": ', THET(IBL,IS), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "dstr": ', DSTR(IBL,IS), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "uedg": ', UEDG(IBL,IS), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "mass": ', MASS(IBL,IS), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "xssi": ', XSSI(IBL,IS), ','
+      WRITE(LUDBG,'(A,I4,A)') '  "itran": ', ITRAN(IS), ','
+      WRITE(LUDBG,'(A,I1)') '  "laminar": ', ILAMINAR
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+C---- DBGVSREZ_TRANS: Log VSREZ at transition stations during global Newton
+      SUBROUTINE DBGVSREZ_TRANS(IS, IBL, VSREZ, VS2)
+      INTEGER IS, IBL
+      REAL VSREZ(4), VS2(4,5)
+      INCLUDE 'XFOIL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only log transition stations (ITRAN-2 to ITRAN+5) on lower surface
+      IF(IS.NE.2) RETURN
+      IF(IBL.LT.ITRAN(IS)-2 .OR. IBL.GT.ITRAN(IS)+5) RETURN
+C---- Only log iterations 0-15
+      IF(IDBGITER.GT.15) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "VSREZ_TRANSITION",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "is": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "itran": ', ITRAN(IS), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "vsrez_0": ', VSREZ(1), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "vsrez_1": ', VSREZ(2), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "vsrez_2": ', VSREZ(3), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "vsrez_3": ', VSREZ(4), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ctau": ', CTAU(IBL,IS), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "cq": ', CTQ(IBL,IS), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "vs2_00": ', VS2(1,1), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "vs2_01": ', VS2(1,2), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "vs2_02": ', VS2(1,3), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "vs2_03": ', VS2(1,4), ','
+      WRITE(LUDBG,'(A,E15.8)') '  "vs2_04": ', VS2(1,5)
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- DBGREZC_TERMS: Dump individual REZC terms at transition station
+      SUBROUTINE DBGREZC_TERMS(IS, IBL, SCC, CQA, SA, ALD, DXI, DEA,
+     &                         SLOG, UQ, ULOG, REZC, S1, S2, USA)
+      INTEGER IS, IBL
+      REAL SCC, CQA, SA, ALD, DXI, DEA, SLOG, UQ, ULOG, REZC, S1, S2
+      REAL USA
+      INCLUDE 'XFOIL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      REAL DUXCON
+      PARAMETER (DUXCON = 0.01)
+      REAL TERM1, TERM2, TERM3
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only log transition station (ITRAN) on lower surface
+      IF(IS.NE.2) RETURN
+      IF(IBL.NE.ITRAN(IS)) RETURN
+C---- Only log iterations 0-3
+      IF(IDBGITER.GT.3) RETURN
+C
+C---- Compute terms
+      TERM1 = SCC*(CQA - SA*ALD)*DXI
+      TERM2 = -DEA*2.0*SLOG
+      TERM3 = DEA*2.0*(UQ*DXI - ULOG)*DUXCON
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "REZC_TERMS",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "is": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "itran": ', ITRAN(IS), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "SCC": ', SCC, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "CQA": ', CQA, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "SA": ', SA, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ALD": ', ALD, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DXI": ', DXI, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DEA": ', DEA, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "SLOG": ', SLOG, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "UQ": ', UQ, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "ULOG": ', ULOG, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "S1": ', S1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "S2": ', S2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "USA": ', USA, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "term1": ', TERM1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "term2": ', TERM2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "term3": ', TERM3, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "REZC": ', REZC, ','
+      WRITE(LUDBG,'(A,E15.8)') '  "vsrez0": ', -REZC
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+C---- DBGCONVERGE: Dump convergence info at end of Newton iteration
+C     Note: RMSBL, RLX, LVCONV are in COMMON via XFOIL.INC
+      SUBROUTINE DBGCONVERGE(ITER, LCONV)
+      INTEGER ITER
+      LOGICAL LCONV
+      INCLUDE 'XFOIL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER ICONV
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only log iterations 0-5 and 14-20
+      IF(ITER.GT.5 .AND. ITER.LT.14) RETURN
+C
+      IF(LCONV) THEN
+        ICONV = 1
+      ELSE
+        ICONV = 0
+      ENDIF
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "NEWTON_CONVERGE",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', ITER, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "rmsbl": ', RMSBL, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "rlx": ', RLX, ','
+      WRITE(LUDBG,'(A,I1,A)') '  "converged": ', ICONV, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "rmxbl": ', RMXBL, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "imxbl": ', IMXBL, ','
+      WRITE(LUDBG,'(A,I2)') '  "ismxbl": ', ISMXBL
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+C---- DBGXIULE: Dump stagnation point coupling terms
+      SUBROUTINE DBGXIULE(IS, IBL, XI_ULE1, XI_ULE2, SST_GO, SST_GP,
+     &                    DULE1, DULE2)
+      INTEGER IS, IBL
+      REAL XI_ULE1, XI_ULE2, SST_GO, SST_GP, DULE1, DULE2
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+C
+      IF(.NOT.LDBG) RETURN
+C---- Only log at a few key stations per iteration (every 20th)
+      IF(MOD(IBL, 20).NE.0) RETURN
+C---- Only log first 3 iterations
+      IF(IDBGITER.GT.3) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "XI_ULE",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "is": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "XI_ULE1": ', XI_ULE1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "XI_ULE2": ', XI_ULE2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "SST_GO": ', SST_GO, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "SST_GP": ', SST_GP, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "DULE1": ', DULE1, ','
+      WRITE(LUDBG,'(A,E15.8)') '  "DULE2": ', DULE2
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+C---- DBGDUE: Dump DUE values at first few stations
+      SUBROUTINE DBGDUE(IS, IBL, UEDG_VAL, USAV_VAL, DUE_VAL, 
+     &                   UINV_VAL)
+      INTEGER IS, IBL
+      REAL UEDG_VAL, USAV_VAL, DUE_VAL, UINV_VAL
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      COMMON /XDBGLOCK/ LDBGLOCK
+      LOGICAL LDBG, LDBGLOCK
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      REAL MASS_CONTRIB
+C
+      IF(.NOT.LDBG) RETURN
+      IF(LDBGLOCK) RETURN
+C---- Log every 10th station, aligned with RustFoil (ibl=11,21,31... -> RF ibl=10,20,30)
+      IF(MOD(IBL-1,10).NE.0) RETURN
+C---- Only log iterations 1-5
+      IF(IDBGITER.LT.1 .OR. IDBGITER.GT.5) RETURN
+C
+C---- Compute mass contribution = USAV - UINV
+      MASS_CONTRIB = USAV_VAL - UINV_VAL
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "DUE",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "is": ', IS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "uedg": ', UEDG_VAL, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "usav": ', USAV_VAL, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "uinv": ', UINV_VAL, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "mass_contrib": ', MASS_CONTRIB, ','
+      WRITE(LUDBG,'(A,E15.8)') '  "due": ', DUE_VAL
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C***********************************************************************
+C    DBGFULLITER: Full Newton iteration dump for brute-force comparison
+C    
+C    Dumps comprehensive iteration state for systematic comparison
+C    with RustFoil. Called after BLSOLV solution is computed.
+C    
+C    Includes:
+C    - Global iteration state (RMSBL, transition, system size)
+C    - Full BL state at every 10th station
+C    - Full system matrices (all stations, not sampled)
+C    - Solution deltas for all stations
+C
+C    Note: Uses NSYS, VA, VB, VM, VDEL from XFOIL.INC COMMON blocks
+C***********************************************************************
+      SUBROUTINE DBGFULLITER(ITER)
+      INTEGER ITER
+      INCLUDE 'XFOIL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER IS, IBL, IV, K, J
+      REAL HK_VAL
+C
+      IF(.NOT.LDBG) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "FULL_ITER",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', ITER, ','
+C
+C---- Global state
+      WRITE(LUDBG,'(A,E15.8,A)') '  "rmsbl": ', RMSBL, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "rmxbl": ', RMXBL, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "imxbl": ', IMXBL, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "ismxbl": ', ISMXBL, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "rlx": ', RLX, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "nsys": ', NSYS, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "nbl_upper": ', NBL(1), ','
+      WRITE(LUDBG,'(A,I4,A)') '  "nbl_lower": ', NBL(2), ','
+      WRITE(LUDBG,'(A,I4,A)') '  "iblte_upper": ', IBLTE(1), ','
+      WRITE(LUDBG,'(A,I4,A)') '  "iblte_lower": ', IBLTE(2), ','
+      WRITE(LUDBG,'(A,I4,A)') '  "itran_upper": ', ITRAN(1), ','
+      WRITE(LUDBG,'(A,I4,A)') '  "itran_lower": ', ITRAN(2), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "xtr_upper": ', XOCTR(1), ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "xtr_lower": ', XOCTR(2), ','
+C
+C---- Full BL state for upper surface (every 10th station)
+      WRITE(LUDBG,'(A)') '  "bl_upper": ['
+      DO 100 IBL=2, NBL(1), 10
+        IF(IBL.GT.2) WRITE(LUDBG,'(A)') ','
+        HK_VAL = DSTR(IBL,1) / THET(IBL,1)
+        WRITE(LUDBG,'(A)') '    {'
+        WRITE(LUDBG,'(A,I4,A)') '      "ibl": ', IBL, ','
+        WRITE(LUDBG,'(A,E15.8,A)') '      "x": ', XSSI(IBL,1), ','
+        WRITE(LUDBG,'(A,E15.8,A)') '      "theta": ', THET(IBL,1), ','
+        WRITE(LUDBG,'(A,E15.8,A)') '      "dstar": ', DSTR(IBL,1), ','
+        WRITE(LUDBG,'(A,E15.8,A)') '      "ue": ', UEDG(IBL,1), ','
+        WRITE(LUDBG,'(A,E15.8,A)') '      "mass": ', MASS(IBL,1), ','
+        WRITE(LUDBG,'(A,E15.8,A)') '      "ctau": ', CTAU(IBL,1), ','
+        WRITE(LUDBG,'(A,E15.8,A)') '      "hk": ', HK_VAL, ','
+        WRITE(LUDBG,'(A,E15.8)') '      "cf": ', TAU(IBL,1)
+        WRITE(LUDBG,'(A,$)') '    }'
+  100 CONTINUE
+      WRITE(LUDBG,'(A)') ''
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Full BL state for lower surface (every 10th station)
+      WRITE(LUDBG,'(A)') '  "bl_lower": ['
+      DO 110 IBL=2, NBL(2), 10
+        IF(IBL.GT.2) WRITE(LUDBG,'(A)') ','
+        HK_VAL = DSTR(IBL,2) / THET(IBL,2)
+        WRITE(LUDBG,'(A)') '    {'
+        WRITE(LUDBG,'(A,I4,A)') '      "ibl": ', IBL, ','
+        WRITE(LUDBG,'(A,E15.8,A)') '      "x": ', XSSI(IBL,2), ','
+        WRITE(LUDBG,'(A,E15.8,A)') '      "theta": ', THET(IBL,2), ','
+        WRITE(LUDBG,'(A,E15.8,A)') '      "dstar": ', DSTR(IBL,2), ','
+        WRITE(LUDBG,'(A,E15.8,A)') '      "ue": ', UEDG(IBL,2), ','
+        WRITE(LUDBG,'(A,E15.8,A)') '      "mass": ', MASS(IBL,2), ','
+        WRITE(LUDBG,'(A,E15.8,A)') '      "ctau": ', CTAU(IBL,2), ','
+        WRITE(LUDBG,'(A,E15.8,A)') '      "hk": ', HK_VAL, ','
+        WRITE(LUDBG,'(A,E15.8)') '      "cf": ', TAU(IBL,2)
+        WRITE(LUDBG,'(A,$)') '    }'
+  110 CONTINUE
+      WRITE(LUDBG,'(A)') ''
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Full VA blocks (all stations)
+      WRITE(LUDBG,'(A)') '  "va_full": ['
+      DO 200 IV=1, NSYS
+        IF(IV.GT.1) WRITE(LUDBG,'(A)') ','
+        WRITE(LUDBG,'(A,$)') '    ['
+        DO 210 K=1, 3
+          IF(K.GT.1) WRITE(LUDBG,'(A,$)') ', '
+          WRITE(LUDBG,'(A,E14.7,A,E14.7,A,$)')
+     &      '[', VA(K,1,IV), ', ', VA(K,2,IV), ']'
+  210   CONTINUE
+        WRITE(LUDBG,'(A,$)') ']'
+  200 CONTINUE
+      WRITE(LUDBG,'(A)') ''
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Full VB blocks (all stations)
+      WRITE(LUDBG,'(A)') '  "vb_full": ['
+      DO 300 IV=1, NSYS
+        IF(IV.GT.1) WRITE(LUDBG,'(A)') ','
+        WRITE(LUDBG,'(A,$)') '    ['
+        DO 310 K=1, 3
+          IF(K.GT.1) WRITE(LUDBG,'(A,$)') ', '
+          WRITE(LUDBG,'(A,E14.7,A,E14.7,A,$)')
+     &      '[', VB(K,1,IV), ', ', VB(K,2,IV), ']'
+  310   CONTINUE
+        WRITE(LUDBG,'(A,$)') ']'
+  300 CONTINUE
+      WRITE(LUDBG,'(A)') ''
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Full VDEL (residuals before solve - first column only)
+      WRITE(LUDBG,'(A)') '  "vdel_full": ['
+      DO 400 IV=1, NSYS
+        IF(IV.GT.1) WRITE(LUDBG,'(A)') ','
+        WRITE(LUDBG,'(A,E14.7,A,E14.7,A,E14.7,A,$)')
+     &    '    [', VDEL(1,1,IV), ', ', VDEL(2,1,IV), 
+     &    ', ', VDEL(3,1,IV), ']'
+  400 CONTINUE
+      WRITE(LUDBG,'(A)') ''
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Full solution deltas (all stations)
+      WRITE(LUDBG,'(A)') '  "deltas_full": ['
+      DO 500 IV=1, NSYS
+        IF(IV.GT.1) WRITE(LUDBG,'(A)') ','
+        WRITE(LUDBG,'(A,E14.7,A,E14.7,A,E14.7,A,$)')
+     &    '    [', VDEL(1,1,IV), ', ', VDEL(2,1,IV), 
+     &    ', ', VDEL(3,1,IV), ']'
+  500 CONTINUE
+      WRITE(LUDBG,'(A)') ''
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- VM diagonal entries (mass coupling self-influence)
+      WRITE(LUDBG,'(A)') '  "vm_diag": ['
+      DO 600 IV=1, NSYS
+        IF(IV.GT.1) WRITE(LUDBG,'(A)') ','
+        WRITE(LUDBG,'(A,E14.7,A,E14.7,A,E14.7,A,$)')
+     &    '    [', VM(1,IV,IV), ', ', VM(2,IV,IV), 
+     &    ', ', VM(3,IV,IV), ']'
+  600 CONTINUE
+      WRITE(LUDBG,'(A)') ''
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- Force results
+      WRITE(LUDBG,'(A,E15.8,A)') '  "cl": ', CL, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "cd": ', CD, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "cm": ', CM, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "cdf": ', CDF, ','
+      WRITE(LUDBG,'(A,E15.8)') '  "cdp": ', CD-CDF
+      WRITE(LUDBG,'(A)') '}'
+C
+      RETURN
+      END
+
+
+C***********************************************************************
+C    DBGFULLSYSTEM: Dump complete Newton system (all stations)
+C    
+C    Enhanced version of DBGSETBLSYSTEM without station limits.
+C    Dumps VA, VB, VDEL for ALL NSYS stations.
+C***********************************************************************
+      SUBROUTINE DBGFULLSYSTEM(NSYS, VA, VB, VM, VDEL, IVX, IZX)
+      INTEGER NSYS, IVX, IZX
+      REAL VA(3,2,IVX), VB(3,2,IVX)
+      REAL VM(3,IZX,IVX), VDEL(3,2,IVX)
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER IV, K
+C
+      IF(.NOT.LDBG) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "FULL_SYSTEM",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "nsys": ', NSYS, ','
+C
+C---- VA blocks (all stations)
+      WRITE(LUDBG,'(A)') '  "VA": ['
+      DO 10 IV=1, NSYS
+        IF(IV.GT.1) WRITE(LUDBG,'(A)') ','
+        WRITE(LUDBG,'(A,$)') '    ['
+        DO 15 K=1, 3
+          IF(K.GT.1) WRITE(LUDBG,'(A,$)') ', '
+          WRITE(LUDBG,'(A,E14.7,A,E14.7,A,$)')
+     &      '[', VA(K,1,IV), ', ', VA(K,2,IV), ']'
+   15   CONTINUE
+        WRITE(LUDBG,'(A,$)') ']'
+   10 CONTINUE
+      WRITE(LUDBG,'(A)') ''
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- VB blocks (all stations)
+      WRITE(LUDBG,'(A)') '  "VB": ['
+      DO 20 IV=1, NSYS
+        IF(IV.GT.1) WRITE(LUDBG,'(A)') ','
+        WRITE(LUDBG,'(A,$)') '    ['
+        DO 25 K=1, 3
+          IF(K.GT.1) WRITE(LUDBG,'(A,$)') ', '
+          WRITE(LUDBG,'(A,E14.7,A,E14.7,A,$)')
+     &      '[', VB(K,1,IV), ', ', VB(K,2,IV), ']'
+   25   CONTINUE
+        WRITE(LUDBG,'(A,$)') ']'
+   20 CONTINUE
+      WRITE(LUDBG,'(A)') ''
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- VDEL (all stations)
+      WRITE(LUDBG,'(A)') '  "VDEL": ['
+      DO 30 IV=1, NSYS
+        IF(IV.GT.1) WRITE(LUDBG,'(A)') ','
+        WRITE(LUDBG,'(A,E14.7,A,E14.7,A,E14.7,A,$)')
+     &    '    [', VDEL(1,1,IV), ', ', VDEL(2,1,IV), 
+     &    ', ', VDEL(3,1,IV), ']'
+   30 CONTINUE
+      WRITE(LUDBG,'(A)') ''
+      WRITE(LUDBG,'(A)') '  ]'
+C
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C***********************************************************************
+C    DBGFULLSOLUTION: Dump complete solution vector (all stations)
+C    
+C    Enhanced version of DBGBLSOLVSOLUTION without station limits.
+C***********************************************************************
+      SUBROUTINE DBGFULLSOLUTION(NSYS, VDEL, IVX)
+      INTEGER NSYS, IVX
+      REAL VDEL(3,2,IVX)
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER IV
+C
+      IF(.NOT.LDBG) RETURN
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "FULL_SOLUTION",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "nsys": ', NSYS, ','
+C
+C---- Solution deltas [dCtau, dTheta, dMass] for ALL stations
+      WRITE(LUDBG,'(A)') '  "deltas": ['
+      DO 10 IV=1, NSYS
+        IF(IV.GT.1) WRITE(LUDBG,'(A)') ','
+        WRITE(LUDBG,'(A,E14.7,A,E14.7,A,E14.7,A,$)')
+     &    '    [', VDEL(1,1,IV), ', ', VDEL(2,1,IV), 
+     &    ', ', VDEL(3,1,IV), ']'
+   10 CONTINUE
+      WRITE(LUDBG,'(A)') ''
+      WRITE(LUDBG,'(A)') '  ]'
+C
       WRITE(LUDBG,'(A)') '}'
       RETURN
       END

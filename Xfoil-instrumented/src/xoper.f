@@ -2981,15 +2981,35 @@ C
 C------ Debug iteration start
         CALL DBGSETITER(ITER)
         CALL DBGVISCAL(ITER, ALFA, REINF, MINF, ACRIT(1))
+        CALL DBGNEWTONITER(ITER)
+C
+C------ Dump BL state at key stations before SETBL
+        DO 800 IS=1, 2
+          DO 810 IBL=10, NBL(IS), 10
+            CALL DBGBLSTATE(ITER, IS, IBL)
+  810     CONTINUE
+  800   CONTINUE
 C
 C------ fill Newton system for BL variables
         CALL SETBL
 C
+C------ DEBUG: dump full N-factor array after transition checking
+        CALL DBGFULL_NFACTOR(ITER)
+C
 C------ solve Newton system with custom solver
         CALL BLSOLV
 C
+C------ DEBUG: dump solution deltas after BLSOLV
+        CALL DBGSOLUTION()
+C
+C------ DEBUG: dump full iteration state (comprehensive dump for comparison)
+        CALL DBGFULLITER(ITER)
+C
 C------ update BL variables
         CALL UPDATE
+C
+C------ DEBUG: dump full BL state after update
+        CALL DBGFULL_BL_STATE(ITER)
 C
         IF(LALFA) THEN
 C------- set new freestream Mach, Re from new CL
@@ -3007,6 +3027,9 @@ C
 C------ set GAM distribution from QVIS
         CALL GAMQV
 C
+C------ DEBUG: dump full gamma array after GAMQV
+        CALL DBGFULL_GAMMA_ITER(ITER)
+C
 C------ relocate stagnation point
         CALL STMOVE
 C
@@ -3021,6 +3044,9 @@ C------ Debug force breakdown
 C
 C------ Debug iteration result
         CALL DBGVISCRES(ITER, RMSBL, RMXBL, CL, CD, CM, CD-CDF, CDF)
+C
+C------ Debug convergence state
+        CALL DBGCONVERGE(ITER, RMSBL.LT.EPS1)
 C
 C------ display changes and test for convergence
         IF(RLX.LT.1.0) 

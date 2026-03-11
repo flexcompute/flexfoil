@@ -2,6 +2,8 @@
 //!
 //! XFOIL Reference: xblsys.f HKIN (line 2276)
 
+use crate::debug::{add_event, is_debug_active, DebugEvent};
+
 /// Result of HKIN computation including partial derivatives
 #[derive(Debug, Clone, Copy)]
 pub struct HkinResult {
@@ -33,6 +35,11 @@ pub fn hkin(h: f64, msq: f64) -> HkinResult {
     let hk = (h - 0.29 * msq) / denom;
     let hk_h = 1.0 / denom;
     let hk_msq = (-0.29 - 0.113 * hk) / denom;
+
+    // Debug output matching XFOIL format
+    if is_debug_active() {
+        add_event(DebugEvent::hkin(h, msq, hk, hk_h, hk_msq));
+    }
 
     HkinResult { hk, hk_h, hk_msq }
 }

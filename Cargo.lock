@@ -529,6 +529,8 @@ dependencies = [
  "rustfoil-core",
  "rustfoil-inviscid",
  "rustfoil-solver",
+ "rustfoil-xfoil",
+ "serde",
  "serde_json",
  "thiserror",
 ]
@@ -591,6 +593,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
 ]
 
 [[package]]
@@ -605,6 +608,21 @@ dependencies = [
  "serde-wasm-bindgen",
  "wasm-bindgen",
  "wasm-bindgen-test",
+]
+
+[[package]]
+name = "rustfoil-xfoil"
+version = "0.1.0"
+dependencies = [
+ "nalgebra",
+ "rustfoil-bl",
+ "rustfoil-core",
+ "rustfoil-inviscid",
+ "rustfoil-testkit",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

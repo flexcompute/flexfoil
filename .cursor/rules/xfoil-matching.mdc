@@ -1,0 +1,50 @@
+# XFOIL Matching Rule
+
+## Core Principle
+
+**To match XFOIL numbers, you MUST see what XFOIL is doing internally. Do not guess.**
+
+## Rules
+
+1. **No guessing**: Never assume what XFOIL does. Always read the XFOIL Fortran source code first.
+
+2. **No invented methods**: Do not add any method, cap, clamp, or workaround unless it exists in XFOIL. If RustFoil diverges and XFOIL doesn't, the bug is in RustFoil - find it, don't mask it.
+
+3. **Dump intermediate values**: When debugging discrepancies:
+   - Add instrumentation to XFOIL to dump the relevant intermediate values
+   - Add instrumentation to RustFoil to dump the same values
+   - Compare them directly to find where divergence begins
+
+4. **Match formulas exactly**: Every formula in RustFoil must match XFOIL exactly:
+   - Same coefficients
+   - Same order of operations
+   - Same edge cases and limits
+   - Same variable names where possible (for traceability)
+
+5. **Verify with XFOIL source**: Before implementing or fixing anything, find the corresponding code in:
+   - `/Xfoil-instrumented/src/xbl.f` - boundary layer routines
+   - `/Xfoil-instrumented/src/xoper.f` - viscous operations
+   - `/Xfoil-instrumented/src/xpanel.f` - panel methods
+
+## Debugging Workflow
+
+1. Identify the discrepancy (e.g., "ctau diverges at station 63")
+2. Find the XFOIL code that computes that value
+3. Add debug output to XFOIL at that location
+4. Run XFOIL and capture the intermediate values
+5. Add equivalent debug output to RustFoil
+6. Compare step-by-step until you find the first divergence
+7. Fix RustFoil to match XFOIL exactly
+
+## Anti-Patterns to Avoid
+
+- ❌ "Let me cap this value to prevent divergence"
+- ❌ "Let me add a safeguard for numerical stability"
+- ❌ "XFOIL probably does X, so let me implement that"
+- ❌ "This seems reasonable based on physics"
+
+## Correct Approach
+
+- ✅ "Let me check what XFOIL does in xbl.f line 1568"
+- ✅ "XFOIL uses DN1 = DCTAU / CTAU(IBL,IS), let me verify RustFoil matches"
+- ✅ "I'll add DBGTRANSITION to XFOIL and compare with RustFoil output"

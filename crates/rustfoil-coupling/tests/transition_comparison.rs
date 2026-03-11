@@ -110,6 +110,7 @@ fn test_xfoil_transition_comparison() {
         s37.r_theta, re * u2 * t2_guess,
         s37.ampl,
         ncrit,
+        None,
         msq,
         re,
     );

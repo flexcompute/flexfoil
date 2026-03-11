@@ -65,7 +65,7 @@ fn test_theta_at_transition_matches_xfoil() {
         s1.u, s2.u,
         s1.hk, s2.hk,
         s1.r_theta, s2.r_theta,
-        s1.ampl, ncrit, msq, re,
+        s1.ampl, ncrit, None, msq, re,
     );
     
     assert!(tr.transition, "Expected transition to occur");

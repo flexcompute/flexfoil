@@ -25,10 +25,11 @@ use rustfoil_inviscid::{
     InviscidSolver as NewInviscidSolver
 };
 use rustfoil_solver::inviscid::{FlowConditions, InviscidSolver};
+use rustfoil_xfoil::{solve_body_oper_point, AlphaSpec, XfoilOptions};
 use rustfoil_solver::viscous::{
-    compute_arc_lengths, extract_surface_xfoil, initialize_surface_stations,
-    initialize_surface_stations_with_coords, initialize_surface_stations_with_panel_idx,
-    interpolate_stagnation, solve_viscous_two_surfaces,
+    compute_arc_lengths, extract_surface_xfoil,
+    initialize_surface_stations_with_panel_idx, interpolate_stagnation,
+    solve_viscous_two_surfaces,
     ViscousResult, ViscousSolverConfig, ViscousSetup,
     // New integration with rustfoil-inviscid
     setup_from_body, SetupError,
@@ -37,6 +38,35 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
 use thiserror::Error;
+
+use serde::Serialize;
+
+/// Boundary layer state data for a single surface
+#[derive(Debug, Clone, Serialize)]
+struct BlSurfaceState {
+    /// x/c coordinates
+    x: Vec<f64>,
+    /// Edge velocity Ue/V∞
+    ue: Vec<f64>,
+    /// Displacement thickness δ*
+    delta_star: Vec<f64>,
+    /// Momentum thickness θ
+    theta: Vec<f64>,
+    /// Shape factor H = δ*/θ
+    h: Vec<f64>,
+    /// Skin friction coefficient Cf
+    cf: Vec<f64>,
+    /// Mass defect (Ue * δ*)
+    mass_defect: Vec<f64>,
+}
+
+/// Full analysis result including BL state
+#[derive(Debug)]
+struct FullViscousResult {
+    result: ViscousResult,
+    upper_bl: Option<BlSurfaceState>,
+    lower_bl: Option<BlSurfaceState>,
+}
 
 #[derive(Debug, Error)]
 enum CliError {
@@ -148,6 +178,12 @@ enum Commands {
 
     /// Generate viscous polar (Cl, Cd vs alpha sweep)
     ViscousPolar(ViscousPolarCmd),
+
+    /// Run the standalone faithful XFOIL side path at one operating point
+    FaithfulViscous(FaithfulViscousCmd),
+
+    /// Run a polar on the standalone faithful XFOIL side path
+    FaithfulPolar(FaithfulPolarCmd),
 }
 
 /// Viscous analysis at single angle of attack
@@ -188,6 +224,10 @@ struct ViscousCmd {
     /// Skip repaneling - use input coordinates directly (for XFOIL buffer comparison)
     #[arg(long)]
     no_repanel: bool,
+
+    /// Dump boundary layer state to JSON (includes x, ue, theta, delta_star, h, cf for both surfaces)
+    #[arg(long)]
+    dump_bl: bool,
 }
 
 /// Viscous polar generation
@@ -222,6 +262,66 @@ struct ViscousPolarCmd {
     parallel: bool,
 }
 
+#[derive(Parser)]
+struct FaithfulViscousCmd {
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+
+    #[arg(short, long, default_value = "0.0")]
+    alpha: f64,
+
+    #[arg(long)]
+    target_cl: Option<f64>,
+
+    #[arg(short, long)]
+    re: f64,
+
+    #[arg(short, long, default_value = "0.0")]
+    mach: f64,
+
+    #[arg(short, long, default_value = "9.0")]
+    ncrit: f64,
+
+    #[arg(short = 'p', long, default_value = "160")]
+    panels: usize,
+
+    #[arg(long, default_value = "json")]
+    format: String,
+
+    #[arg(long)]
+    debug: Option<PathBuf>,
+
+    #[arg(long)]
+    no_repanel: bool,
+}
+
+#[derive(Parser)]
+struct FaithfulPolarCmd {
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+
+    #[arg(short, long)]
+    alpha: String,
+
+    #[arg(short, long)]
+    re: f64,
+
+    #[arg(short, long, default_value = "0.0")]
+    mach: f64,
+
+    #[arg(short, long, default_value = "9.0")]
+    ncrit: f64,
+
+    #[arg(short = 'p', long, default_value = "160")]
+    panels: usize,
+
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    #[arg(long)]
+    parallel: bool,
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -251,6 +351,8 @@ fn main() {
         Commands::Info { file } => run_info(&file),
         Commands::Viscous(cmd) => run_viscous(cmd),
         Commands::ViscousPolar(cmd) => run_viscous_polar(cmd),
+        Commands::FaithfulViscous(cmd) => run_faithful_viscous(cmd),
+        Commands::FaithfulPolar(cmd) => run_faithful_polar(cmd),
     };
 
     if let Err(e) = result {
@@ -260,6 +362,11 @@ fn main() {
 }
 
 fn run_analyze(file: &PathBuf, alpha: f64, panels: Option<usize>, verbose: bool) -> Result<(), CliError> {
+    // Initialize debug if RUSTFOIL_DEBUG env var is set
+    if let Ok(debug_path) = std::env::var("RUSTFOIL_DEBUG") {
+        rustfoil_bl::init_debug(&debug_path);
+    }
+
     let (name, points) = load_airfoil(file)?;
     
     // If panels specified, repanel with XFOIL-style distribution
@@ -303,6 +410,11 @@ fn run_analyze(file: &PathBuf, alpha: f64, panels: Option<usize>, verbose: bool)
             let x = i as f64 / solution.cp.len() as f64;
             println!("  {:>8.4}  {:>10.4}", x, cp);
         }
+    }
+
+    // Finalize debug if it was enabled
+    if std::env::var("RUSTFOIL_DEBUG").is_ok() {
+        rustfoil_bl::finalize_debug();
     }
 
     Ok(())
@@ -502,75 +614,31 @@ fn run_viscous_analysis(
     let inv_solution = &setup_result.inviscid;
     let node_x = &setup_result.node_x;
     let node_y = &setup_result.node_y;
-    let ist = setup_result.ist;
-    let sst = setup_result.sst;
 
     // gamma IS the surface velocity in XFOIL's linear vortex panel method
     let ue_inviscid = inv_solution.gamma.clone();
-
-    // (Debug output removed for cleaner output)
-
-    // Step 2: Get full arc lengths from setup
-    let full_arc = &setup_result.setup.arc_lengths;
-    
-    // Interpolate Ue at stagnation
-    let ue_stag = if ist + 1 < ue_inviscid.len() && full_arc[ist + 1] != full_arc[ist] {
-        let frac = (sst - full_arc[ist]) / (full_arc[ist + 1] - full_arc[ist]);
-        ue_inviscid[ist] + frac * (ue_inviscid[ist + 1] - ue_inviscid[ist])
-    } else {
-        ue_inviscid[ist]
-    };
-    
-    // Find geometric LE for reference
-    let le_idx = node_x
-        .iter()
-        .enumerate()
-        .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-        .map(|(i, _)| i)
-        .unwrap_or(0);
-
-    // (Stagnation debug removed)
-    let _ = le_idx; // suppress unused warning
-
-    // Step 3: Extract surfaces with XFOIL-style arc lengths (IBLPAN + XICALC)
-    // Includes virtual stagnation point at arc=0 with Ue≈0 (like XFOIL's IBL=1)
-    let (upper_arc, upper_x, _upper_y, upper_ue) =
-        extract_surface_xfoil(ist, sst, ue_stag, full_arc, node_x, node_y, &ue_inviscid, true);
-    let (lower_arc, lower_x, _lower_y, lower_ue) =
-        extract_surface_xfoil(ist, sst, ue_stag, full_arc, node_x, node_y, &ue_inviscid, false);
-
-    // Step 4: Initialize BL stations for each surface
-    if upper_arc.len() < 2 || lower_arc.len() < 2 {
-        return Err(CliError::Solver(format!(
-            "Surface extraction failed: upper={} lower={} stations (need >= 2 each)",
-            upper_arc.len(),
-            lower_arc.len()
-        )));
-    }
-
-    // Initialize stations with panel indices for VI coupling
-    let n_airfoil_panels = node_x.len();
-    let mut upper_stations = initialize_surface_stations_with_panel_idx(
-        &upper_arc, &upper_ue, &upper_x, ist, n_airfoil_panels, true, config.reynolds);
-    let mut lower_stations = initialize_surface_stations_with_panel_idx(
-        &lower_arc, &lower_ue, &lower_x, ist, n_airfoil_panels, false, config.reynolds);
-
-    // Step 5: Use setup from new solver (DIJ matrix, etc.)
+    let ue_inviscid_alpha = setup_result.operating_sensitivity();
+    let (mut upper_stations, mut lower_stations) =
+        setup_result.derive_station_views(config.reynolds, config.msq());
+    let (upper_ue, lower_ue_extended) =
+        setup_result.derive_uedg_views(config.reynolds, config.msq());
     let setup = &setup_result.setup;
 
-    // Step 6: Solve viscous for both surfaces
+    // Step 2: Solve viscous for both surfaces using canonical-state-derived views.
     // Pass alpha in radians and panel geometry for XFOIL-exact CLCALC
     let alpha_rad = alpha.to_radians();
     let mut result = solve_viscous_two_surfaces(
         &mut upper_stations,
         &mut lower_stations,
         &upper_ue,
-        &lower_ue,
+        &lower_ue_extended,
         &setup.dij,
         config,
         alpha_rad,
         node_x,
         node_y,
+        &ue_inviscid,
+        &ue_inviscid_alpha,
     )
     .map_err(|e| CliError::Solver(e.to_string()))?;
 
@@ -580,6 +648,76 @@ fn run_viscous_analysis(
     // and should NOT be overwritten with inviscid values
 
     Ok(result)
+}
+
+/// Run viscous analysis with full BL state output.
+///
+/// Same as `run_viscous_analysis` but also returns the boundary layer state
+/// for both surfaces (for diagnostics and visualization).
+fn run_viscous_analysis_with_bl(
+    body: &Body,
+    alpha: f64,
+    config: &ViscousSolverConfig,
+) -> Result<FullViscousResult, CliError> {
+    // Step 1: Run new inviscid solver via setup_from_body
+    let setup_result = setup_from_body(body, alpha)?;
+    
+    let inv_solution = &setup_result.inviscid;
+    let node_x = &setup_result.node_x;
+    let node_y = &setup_result.node_y;
+
+    let ue_inviscid = inv_solution.gamma.clone();
+    let ue_inviscid_alpha = setup_result.operating_sensitivity();
+    let (mut upper_stations, mut lower_stations) =
+        setup_result.derive_station_views(config.reynolds, config.msq());
+    let (upper_ue, lower_ue_extended) =
+        setup_result.derive_uedg_views(config.reynolds, config.msq());
+    let setup = &setup_result.setup;
+
+    let alpha_rad = alpha.to_radians();
+    let mut result = solve_viscous_two_surfaces(
+        &mut upper_stations,
+        &mut lower_stations,
+        &upper_ue,
+        &lower_ue_extended,
+        &setup.dij,
+        config,
+        alpha_rad,
+        node_x,
+        node_y,
+        &ue_inviscid,
+        &ue_inviscid_alpha,
+    )
+    .map_err(|e| CliError::Solver(e.to_string()))?;
+
+    result.alpha = alpha;
+
+    // Extract BL state from stations
+    let upper_bl = BlSurfaceState {
+        x: upper_stations.iter().map(|s| s.x).collect(),
+        ue: upper_stations.iter().map(|s| s.u).collect(),
+        delta_star: upper_stations.iter().map(|s| s.delta_star).collect(),
+        theta: upper_stations.iter().map(|s| s.theta).collect(),
+        h: upper_stations.iter().map(|s| s.h).collect(),
+        cf: upper_stations.iter().map(|s| s.cf).collect(),
+        mass_defect: upper_stations.iter().map(|s| s.mass_defect).collect(),
+    };
+
+    let lower_bl = BlSurfaceState {
+        x: lower_stations.iter().map(|s| s.x).collect(),
+        ue: lower_stations.iter().map(|s| s.u).collect(),
+        delta_star: lower_stations.iter().map(|s| s.delta_star).collect(),
+        theta: lower_stations.iter().map(|s| s.theta).collect(),
+        h: lower_stations.iter().map(|s| s.h).collect(),
+        cf: lower_stations.iter().map(|s| s.cf).collect(),
+        mass_defect: lower_stations.iter().map(|s| s.mass_defect).collect(),
+    };
+
+    Ok(FullViscousResult {
+        result,
+        upper_bl: Some(upper_bl),
+        lower_bl: Some(lower_bl),
+    })
 }
 
 /// Run viscous analysis using the OLD inviscid solver (for comparison/fallback).
@@ -616,6 +754,7 @@ fn run_viscous_analysis_old(
     }
 
     let ue_inviscid = inv_solution.gamma.clone();
+    let ue_inviscid_alpha = vec![0.0; ue_inviscid.len()];
 
     eprintln!(
         "Inviscid (old solver): CL={:.4}, CM={:.4}",
@@ -664,6 +803,8 @@ fn run_viscous_analysis_old(
         alpha_rad,
         &node_x,
         &node_y,
+        &ue_inviscid,
+        &ue_inviscid_alpha,
     )
     .map_err(|e| CliError::Solver(e.to_string()))?;
 
@@ -706,7 +847,14 @@ fn run_viscous(cmd: ViscousCmd) -> Result<(), CliError> {
         ..Default::default()
     };
 
-    let result = run_viscous_analysis(&body, cmd.alpha, &config)?;
+    // Use the BL-dumping version if requested
+    let (result, upper_bl, lower_bl) = if cmd.dump_bl {
+        let full = run_viscous_analysis_with_bl(&body, cmd.alpha, &config)?;
+        (full.result, full.upper_bl, full.lower_bl)
+    } else {
+        let r = run_viscous_analysis(&body, cmd.alpha, &config)?;
+        (r, None, None)
+    };
 
     // Finalize debug output
     if cmd.debug.is_some() {
@@ -717,7 +865,7 @@ fn run_viscous(cmd: ViscousCmd) -> Result<(), CliError> {
     match cmd.format.as_str() {
         "json" => {
             // Create a JSON-serializable struct
-            let json_output = serde_json::json!({
+            let mut json_output = serde_json::json!({
                 "alpha": result.alpha,
                 "cl": result.cl,
                 "cd": result.cd,
@@ -731,6 +879,15 @@ fn run_viscous(cmd: ViscousCmd) -> Result<(), CliError> {
                 "cd_pressure": result.cd_pressure,
                 "x_separation": result.x_separation
             });
+            
+            // Add BL state if available
+            if let (Some(upper), Some(lower)) = (&upper_bl, &lower_bl) {
+                json_output["bl_state"] = serde_json::json!({
+                    "upper": upper,
+                    "lower": lower
+                });
+            }
+            
             println!("{}", serde_json::to_string_pretty(&json_output).unwrap());
         }
         _ => {
@@ -844,6 +1001,156 @@ fn run_viscous_polar(cmd: ViscousPolarCmd) -> Result<(), CliError> {
     } else {
         // Print header info
         println!("# Viscous Polar: {}", name);
+        println!("# Re = {:.2e}, M = {:.2}, Ncrit = {:.1}", cmd.re, cmd.mach, cmd.ncrit);
+        println!();
+        for line in &output_lines {
+            println!("{}", line);
+        }
+    }
+
+    Ok(())
+}
+
+fn build_body_for_faithful(
+    file: &PathBuf,
+    panels: usize,
+    no_repanel: bool,
+) -> Result<(String, Body), CliError> {
+    let (name, points) = load_airfoil(file)?;
+    let final_points = if no_repanel {
+        points
+    } else {
+        let spline = CubicSpline::from_points(&points)?;
+        spline.resample_xfoil(panels, &PanelingParams::default())
+    };
+    let body = Body::from_points(&name, &final_points)?;
+    Ok((name, body))
+}
+
+fn run_faithful_viscous(cmd: FaithfulViscousCmd) -> Result<(), CliError> {
+    let (name, body) = build_body_for_faithful(&cmd.file, cmd.panels, cmd.no_repanel)?;
+    if let Some(ref debug_path) = cmd.debug {
+        rustfoil_bl::init_debug(debug_path);
+    }
+
+    let options = XfoilOptions {
+        reynolds: cmd.re,
+        mach: cmd.mach,
+        ncrit: cmd.ncrit,
+        ..Default::default()
+    };
+    let spec = match cmd.target_cl {
+        Some(target_cl) => AlphaSpec::TargetCl(target_cl),
+        None => AlphaSpec::AlphaDeg(cmd.alpha),
+    };
+
+    let result = solve_body_oper_point(&body, spec, &options)
+        .map_err(|e| CliError::Solver(e.to_string()))?;
+
+    if cmd.debug.is_some() {
+        rustfoil_bl::finalize_debug();
+    }
+
+    match cmd.format.as_str() {
+        "table" => {
+            println!("Faithful XFOIL Side Path");
+            println!("========================");
+            println!("Airfoil:   {}", name);
+            println!("Alpha:     {:>8.3}°", result.alpha_deg);
+            println!("CL:        {:>8.4}", result.cl);
+            println!("CD:        {:>8.5}", result.cd);
+            println!("CM:        {:>8.4}", result.cm);
+            println!("x_tr (U):  {:>8.4}", result.x_tr_upper);
+            println!("x_tr (L):  {:>8.4}", result.x_tr_lower);
+            println!("Converged: {}", result.converged);
+            println!("Iters:     {}", result.iterations);
+        }
+        _ => {
+            let json_output = serde_json::json!({
+                "alpha": result.alpha_deg,
+                "cl": result.cl,
+                "cd": result.cd,
+                "cm": result.cm,
+                "x_tr_upper": result.x_tr_upper,
+                "x_tr_lower": result.x_tr_lower,
+                "converged": result.converged,
+                "iterations": result.iterations,
+                "residual": result.residual,
+                "cd_friction": result.cd_friction,
+                "cd_pressure": result.cd_pressure,
+                "x_separation": result.x_separation
+            });
+            println!("{}", serde_json::to_string_pretty(&json_output).unwrap());
+        }
+    }
+
+    Ok(())
+}
+
+fn run_faithful_polar(cmd: FaithfulPolarCmd) -> Result<(), CliError> {
+    let (name, body) = build_body_for_faithful(&cmd.file, cmd.panels, false)?;
+    let options = XfoilOptions {
+        reynolds: cmd.re,
+        mach: cmd.mach,
+        ncrit: cmd.ncrit,
+        ..Default::default()
+    };
+
+    let parts: Vec<f64> = cmd
+        .alpha
+        .split(':')
+        .map(|s| {
+            s.parse().map_err(|_| CliError::Parse {
+                line: 0,
+                message: format!("Invalid alpha range format: {}", cmd.alpha),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if parts.len() != 3 {
+        return Err(CliError::Parse {
+            line: 0,
+            message: format!("Alpha range must be 'start:end:step', got: {}", cmd.alpha),
+        });
+    }
+
+    let (start, end, step) = (parts[0], parts[1], parts[2]);
+    let alphas: Vec<f64> = (0..)
+        .map(|i| start + i as f64 * step)
+        .take_while(|&a| a <= end + 0.001)
+        .collect();
+
+    let results = if cmd.parallel {
+        alphas
+            .par_iter()
+            .map(|&alpha| solve_body_oper_point(&body, AlphaSpec::AlphaDeg(alpha), &options))
+            .collect::<Vec<_>>()
+    } else {
+        alphas
+            .iter()
+            .map(|&alpha| solve_body_oper_point(&body, AlphaSpec::AlphaDeg(alpha), &options))
+            .collect::<Vec<_>>()
+    };
+
+    let header = "alpha,CL,CD,CM,x_tr_u,x_tr_l,converged";
+    let mut output_lines = vec![header.to_string()];
+    for result in results {
+        match result {
+            Ok(r) => output_lines.push(format!(
+                "{:.2},{:.4},{:.5},{:.4},{:.4},{:.4},{}",
+                r.alpha_deg, r.cl, r.cd, r.cm, r.x_tr_upper, r.x_tr_lower, r.converged
+            )),
+            Err(e) => eprintln!("Error: {}", e),
+        }
+    }
+
+    if let Some(output_path) = cmd.output {
+        let mut file = File::create(&output_path)?;
+        for line in &output_lines {
+            writeln!(file, "{}", line)?;
+        }
+        println!("Wrote {} polar points to {:?}", output_lines.len() - 1, output_path);
+    } else {
+        println!("# Faithful Polar: {}", name);
         println!("# Re = {:.2e}, M = {:.2}, Ncrit = {:.1}", cmd.re, cmd.mach, cmd.ncrit);
         println!();
         for line in &output_lines {

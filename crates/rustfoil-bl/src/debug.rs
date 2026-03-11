@@ -126,6 +126,31 @@ pub enum DebugData {
     BlsolvSolution(BlsolvSolutionEvent),
     CdBreakdown(CdBreakdownEvent),
     ClDetail(ClDetailEvent),
+    FullBlState(FullBlStateEvent),
+    FullGammaIter(FullGammaIterEvent),
+    FullNfactor(FullNfactorEvent),
+    BlInit(BlInitEvent),
+    // Closure-level debug events (match XFOIL instrumentation)
+    Hkin(HkinEvent),
+    Hsl(HslEvent),
+    Cfl(CflEvent),
+    Dampl(DamplEvent),
+    // Inviscid influence matrix debug
+    AijMatrix(AijMatrixEvent),
+    // DQDM (source tangent influence) debug
+    DqdmPsilin(DqdmPsilinEvent),
+    // Panel geometry for comparison
+    PanelGeometry(PanelGeometryEvent),
+    // Newton iteration debug events
+    NewtonIter(NewtonIterEvent),
+    BlStateSummary(BlStateSummaryEvent),
+    Jacobian(JacobianEvent),
+    VmBlock(VmBlockEvent),
+    Solution(SolutionEvent),
+    UpdateSummary(UpdateSummaryEvent),
+    ForcedChanges(ForcedChangesEvent),
+    // Full iteration dump (matches XFOIL DBGFULLITER)
+    FullIter(FullIterEvent),
 }
 
 /// VISCAL iteration start event
@@ -689,6 +714,57 @@ pub struct FullDijEvent {
     pub dij_row1_sample: Vec<f64>,
 }
 
+/// Full Newton iteration dump event - comprehensive state for brute-force comparison
+/// Matches XFOIL's DBGFULLITER output format for systematic comparison
+#[derive(Serialize, Clone)]
+#[allow(non_snake_case)]
+pub struct FullIterEvent {
+    /// Global iteration state
+    pub rmsbl: f64,
+    pub rmxbl: f64,
+    pub rlx: f64,
+    pub nsys: usize,
+    /// Surface counts
+    pub nbl_upper: usize,
+    pub nbl_lower: usize,
+    pub iblte_upper: usize,
+    pub iblte_lower: usize,
+    /// Transition
+    pub itran_upper: usize,
+    pub itran_lower: usize,
+    pub xtr_upper: f64,
+    pub xtr_lower: f64,
+    /// BL state at sampled stations (every 10th)
+    pub bl_upper: Vec<FullIterBlStation>,
+    pub bl_lower: Vec<FullIterBlStation>,
+    /// Full Newton system matrices
+    pub va_full: Vec<[[f64; 2]; 3]>,
+    pub vb_full: Vec<[[f64; 2]; 3]>,
+    pub vdel_full: Vec<[f64; 3]>,
+    pub deltas_full: Vec<[f64; 3]>,
+    pub vm_diag: Vec<[f64; 3]>,
+    /// Force results
+    pub cl: f64,
+    pub cd: f64,
+    pub cm: f64,
+    pub cdf: f64,
+    pub cdp: f64,
+}
+
+/// BL station data for FullIterEvent
+#[derive(Serialize, Clone)]
+pub struct FullIterBlStation {
+    pub ibl: usize,
+    pub x: f64,
+    pub theta: f64,
+    pub dstar: f64,
+    pub ue: f64,
+    pub mass: f64,
+    pub ctau: f64,
+    pub hk: f64,
+    pub cf: f64,
+}
+
 /// SETBL system dump event - full Newton system after building
 /// Corresponds to XFOIL's SETBL building VA, VB, VM, VDEL arrays
 #[derive(Serialize, Clone)]
@@ -764,6 +840,340 @@ pub struct ClDetailEvent {
     pub alpha_rad: f64,
     /// Angle of attack in degrees
     pub alpha_deg: f64,
+}
+
+/// Full BL state per iteration - matches XFOIL's FULL_BL_STATE
+/// Contains complete boundary layer state for both surfaces after each VISCAL iteration
+#[derive(Serialize, Clone)]
+pub struct FullBlStateEvent {
+    /// Both surfaces' BL state
+    pub upper: SurfaceBlState,
+    pub lower: SurfaceBlState,
+}
+
+/// Surface boundary layer state - one surface's worth of BL data
+#[derive(Serialize, Clone)]
+pub struct SurfaceBlState {
+    /// Arc length coordinates
+    pub x: Vec<f64>,
+    /// Momentum thickness
+    pub theta: Vec<f64>,
+    /// Displacement thickness  
+    pub delta_star: Vec<f64>,
+    /// Edge velocity
+    pub ue: Vec<f64>,
+    /// Kinematic shape factor
+    pub hk: Vec<f64>,
+    /// Skin friction coefficient
+    pub cf: Vec<f64>,
+    /// Mass defect (delta_star * Ue)
+    pub mass_defect: Vec<f64>,
+}
+
+/// Full gamma (circulation) per iteration - matches XFOIL's FULL_GAMMA_ITER
+/// Contains circulation distribution at all panels after gamma update each iteration
+#[derive(Serialize, Clone)]
+pub struct FullGammaIterEvent {
+    /// Full gamma array at all panels
+    pub gamma: Vec<f64>,
+}
+
+/// Full N-factor array - matches XFOIL's FULL_NFACTOR
+/// Contains amplification factor at all stations after transition checking
+#[derive(Serialize, Clone)]
+pub struct FullNfactorEvent {
+    /// Upper surface N-factors
+    pub upper_ampl: Vec<f64>,
+    /// Lower surface N-factors
+    pub lower_ampl: Vec<f64>,
+    /// Upper surface x locations
+    pub upper_x: Vec<f64>,
+    /// Lower surface x locations
+    pub lower_x: Vec<f64>,
+}
+
+/// BL_INIT event - initial boundary layer state after station initialization
+/// Emitted before first iteration to capture initial conditions
+#[derive(Serialize, Clone)]
+pub struct BlInitEvent {
+    /// Side (1=upper, 2=lower)
+    pub side: usize,
+    /// Number of stations
+    pub n_stations: usize,
+    /// Arc length coordinates
+    pub x: Vec<f64>,
+    /// Edge velocities
+    pub ue: Vec<f64>,
+    /// Initial momentum thickness
+    pub theta: Vec<f64>,
+    /// Initial displacement thickness
+    pub delta_star: Vec<f64>,
+}
+
+// =============================================================================
+// CLOSURE-LEVEL DEBUG EVENTS
+// These match XFOIL's instrumented output format for method-by-method comparison
+// =============================================================================
+
+/// HKIN closure event - kinematic shape factor
+#[derive(Serialize, Clone)]
+#[allow(non_snake_case)]
+pub struct HkinEvent {
+    pub H: f64,
+    pub Msq: f64,
+    pub Hk: f64,
+    pub Hk_H: f64,
+    pub Hk_Msq: f64,
+}
+
+/// HSL closure event - laminar energy shape factor
+#[derive(Serialize, Clone)]
+#[allow(non_snake_case)]
+pub struct HslEvent {
+    pub Hk: f64,
+    pub Rtheta: f64,
+    pub Msq: f64,
+    pub Hs: f64,
+    pub Hs_Hk: f64,
+    pub Hs_Rt: f64,
+    pub Hs_Msq: f64,
+}
+
+/// CFL closure event - laminar skin friction
+#[derive(Serialize, Clone)]
+#[allow(non_snake_case)]
+pub struct CflEvent {
+    pub Hk: f64,
+    pub Rtheta: f64,
+    pub Msq: f64,
+    pub Cf: f64,
+    pub Cf_Hk: f64,
+    pub Cf_Rt: f64,
+    pub Cf_Msq: f64,
+}
+
+/// DAMPL closure event - amplification rate
+#[derive(Serialize, Clone)]
+#[allow(non_snake_case)]
+pub struct DamplEvent {
+    pub Hk: f64,
+    pub theta: f64,
+    pub Rtheta: f64,
+    pub Ax: f64,
+    pub Ax_Hk: f64,
+    pub Ax_Th: f64,
+    pub Ax_Rt: f64,
+}
+
+/// AIJ influence matrix debug event (PSILIN/GGCALC equivalent)
+/// Dumps matrix elements before LU factorization for XFOIL comparison
+#[derive(Serialize, Clone)]
+pub struct AijMatrixEvent {
+    /// System size (N+1 where N is number of nodes)
+    pub n: usize,
+    /// First 20 diagonal elements of the A matrix
+    pub aij_diagonal: Vec<f64>,
+    /// First 20 elements of row 0 of the A matrix
+    pub aij_row0: Vec<f64>,
+    /// First 10 elements of RHS for alpha = 0 degrees
+    pub rhs_0: Vec<f64>,
+    /// First 10 elements of RHS for alpha = 90 degrees
+    pub rhs_90: Vec<f64>,
+}
+
+/// DQDM from PSILIN - source tangent velocity influence coefficients
+/// This captures the wake-airfoil block of the DIJ matrix computation
+/// XFOIL: CALL PSILIN(I,X(I),Y(I),NX(I),NY(I),PSI,PSI_N,.FALSE.,.TRUE.)
+///        DIJ(I,J) = DQDM(J)
+#[derive(Serialize, Clone)]
+pub struct DqdmPsilinEvent {
+    /// Wake point global index (N+IW in XFOIL)
+    pub wake_idx: usize,
+    /// Wake point local index (1-based, IW in XFOIL)
+    pub iw: usize,
+    /// Number of airfoil panels
+    pub n_airfoil: usize,
+    /// Wake point x coordinate
+    pub x: f64,
+    /// Wake point y coordinate
+    pub y: f64,
+    /// Wake point normal x component
+    pub nx: f64,
+    /// Wake point normal y component
+    pub ny: f64,
+    /// First 20 DQDM values (dQtan/dSigma for airfoil panels)
+    pub dqdm: Vec<f64>,
+}
+
+/// Panel geometry for DQDM input comparison
+#[derive(Serialize, Clone)]
+pub struct PanelGeometryEvent {
+    /// Number of airfoil panels
+    pub n: usize,
+    /// First 20 x coordinates
+    pub x: Vec<f64>,
+    /// First 20 y coordinates
+    pub y: Vec<f64>,
+}
+
+// =============================================================================
+// NEWTON ITERATION DEBUG EVENTS
+// These capture detailed state for XFOIL comparison during global Newton iteration
+// =============================================================================
+
+/// Newton iteration state - emitted at start of each iteration
+#[derive(Serialize, Clone)]
+pub struct NewtonIterEvent {
+    /// Iteration number (0-indexed)
+    pub iter: usize,
+    /// Current RMS residual
+    pub residual: f64,
+    /// Previous iteration's residual
+    pub prev_residual: f64,
+    /// Number of upper surface stations
+    pub n_upper: usize,
+    /// Number of lower surface stations
+    pub n_lower: usize,
+}
+
+/// BL state summary at key stations - emitted after blvar recomputation
+#[derive(Serialize, Clone)]
+pub struct BlStateSummaryEvent {
+    /// Iteration number
+    pub iter: usize,
+    /// Surface identifier ("upper" or "lower")
+    pub surface: String,
+    /// Station states (every 10th station for conciseness)
+    pub stations: Vec<StationState>,
+}
+
+/// State of a single BL station
+#[derive(Serialize, Clone)]
+pub struct StationState {
+    /// BL station index
+    pub ibl: usize,
+    /// Arc length coordinate
+    pub x: f64,
+    /// Momentum thickness
+    pub theta: f64,
+    /// Displacement thickness
+    pub delta_star: f64,
+    /// Shear stress coefficient (turbulent) or amplitude (laminar)
+    pub ctau: f64,
+    /// Edge velocity
+    pub ue: f64,
+    /// Mass defect (delta_star * Ue)
+    pub mass: f64,
+}
+
+/// Jacobian debug event - VS1, VS2, VSREZ after BLDIF
+#[derive(Serialize, Clone)]
+#[allow(non_snake_case)]
+pub struct JacobianEvent {
+    /// Iteration number
+    pub iter: usize,
+    /// BL station index
+    pub ibl: usize,
+    /// Surface side (0=upper, 1=lower)
+    pub side: usize,
+    /// VS1 matrix (upstream derivatives) - 3 equations x 5 columns
+    pub VS1: [[f64; 5]; 3],
+    /// VS2 matrix (downstream derivatives) - 3 equations x 5 columns
+    pub VS2: [[f64; 5]; 3],
+    /// VSREZ residuals - 3 equations
+    pub VSREZ: [f64; 3],
+    /// Flow type description
+    pub flow_type: String,
+}
+
+/// VM matrix block event - captures near-diagonal entries
+#[derive(Serialize, Clone)]
+#[allow(non_snake_case)]
+pub struct VmBlockEvent {
+    /// Iteration number
+    pub iter: usize,
+    /// Global system index IV
+    pub iv: usize,
+    /// VM diagonal entry: VM[IV][IV][0..2]
+    pub VM_diagonal: [f64; 3],
+    /// VM near-diagonal entries: (JV, VM[IV][JV][0..2]) for |IV-JV| <= 5
+    pub VM_near: Vec<(usize, [f64; 3])>,
+}
+
+/// Solution event - Newton deltas after solve
+#[derive(Serialize, Clone)]
+pub struct SolutionEvent {
+    /// Iteration number
+    pub iter: usize,
+    /// Solution deltas [dCtau/dAmpl, dTheta, dMass] for first 30 stations
+    pub deltas: Vec<[f64; 3]>,
+}
+
+/// Update event with relaxation details
+#[derive(Serialize, Clone)]
+pub struct UpdateSummaryEvent {
+    /// Iteration number
+    pub iter: usize,
+    /// Computed relaxation factor (before any limiting)
+    pub rlx_computed: f64,
+    /// Actually used relaxation factor
+    pub rlx_used: f64,
+    /// Station index that limited relaxation (if any)
+    pub limiting_station: Option<usize>,
+    /// Reason for relaxation limiting (if any)
+    pub limiting_reason: Option<String>,
+    /// Sample updates (every 10th station)
+    pub sample_updates: Vec<SampleUpdateData>,
+}
+
+/// Sample update data for a single station
+#[derive(Serialize, Clone)]
+pub struct SampleUpdateData {
+    /// BL station index
+    pub ibl: usize,
+    /// Normalized change for ctau/ampl
+    pub dn1: f64,
+    /// Normalized change for theta
+    pub dn2: f64,
+    /// Normalized change for delta_star
+    pub dn3: f64,
+    /// Normalized change for Ue
+    pub dn4: f64,
+    /// Delta for ctau (raw, before relaxation)
+    pub d_ctau: f64,
+    /// Delta for theta (raw, before relaxation)
+    pub d_theta: f64,
+    /// Delta for delta_star (computed from mass delta)
+    pub d_dstar: f64,
+    /// Delta for Ue (from VI coupling)
+    pub d_ue: f64,
+}
+
+/// Forced changes debug event - DUE, DDS from VI coupling
+/// These are the viscous-inviscid coupling terms added to residuals in SETBL.
+/// XFOIL formula: VDEL = VSREZ + VS1*DDS1 + VS2*DDS2 + VS1*DUE1 + VS2*DUE2
+#[derive(Serialize, Clone)]
+pub struct ForcedChangesEvent {
+    /// Newton iteration number
+    pub iter: usize,
+    /// BL station index
+    pub ibl: usize,
+    /// Surface side (0=upper, 1=lower)
+    pub side: usize,
+    /// Ue mismatch at upstream station: DUE1 = Ue_current - Ue_from_mass
+    pub due1: f64,
+    /// Ue mismatch at downstream station: DUE2 = Ue_current - Ue_from_mass
+    pub due2: f64,
+    /// Induced delta_star change at upstream: DDS1 = D1_U1 * DUE1
+    pub dds1: f64,
+    /// Induced delta_star change at downstream: DDS2 = D2_U2 * DUE2
+    pub dds2: f64,
+    /// Ue computed from mass defect (UESET result)
+    pub ue_from_mass: f64,
+    /// Inviscid Ue at this station
+    pub ue_inviscid: f64,
+    /// Current station Ue (before update)
+    pub ue_current: f64,
 }
 
 // Helper functions to create events easily
@@ -1322,6 +1732,56 @@ impl DebugEvent {
         }
     }
 
+    /// Create a DQDM_PSILIN debug event (wake-airfoil source tangent influence)
+    ///
+    /// This captures the DQDM values computed by PSILIN with SIGLIN=.TRUE. in XFOIL,
+    /// which represents the influence of airfoil panel sources on wake tangential velocity.
+    ///
+    /// # Arguments
+    /// * `wake_idx` - Wake point global index
+    /// * `iw` - Wake point local index (1-based)
+    /// * `n_airfoil` - Number of airfoil panels
+    /// * `x, y` - Wake point coordinates
+    /// * `nx, ny` - Wake point normal components
+    /// * `dqdm` - First 20 DQDM values
+    #[allow(clippy::too_many_arguments)]
+    pub fn dqdm_psilin(
+        wake_idx: usize,
+        iw: usize,
+        n_airfoil: usize,
+        x: f64,
+        y: f64,
+        nx: f64,
+        ny: f64,
+        dqdm: Vec<f64>,
+    ) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "DQDM_PSILIN".to_string(),
+            iteration: None,
+            data: DebugData::DqdmPsilin(DqdmPsilinEvent {
+                wake_idx,
+                iw,
+                n_airfoil,
+                x,
+                y,
+                nx,
+                ny,
+                dqdm,
+            }),
+        }
+    }
+
+    /// Create a panel geometry debug event for DQDM input comparison
+    pub fn panel_geometry(n: usize, x: Vec<f64>, y: Vec<f64>) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "PANEL_GEOMETRY".to_string(),
+            iteration: None,
+            data: DebugData::PanelGeometry(PanelGeometryEvent { n, x, y }),
+        }
+    }
+
     /// Create a SETBL system debug event (full Newton system after building)
     ///
     /// # Arguments
@@ -1397,6 +1857,420 @@ impl DebugEvent {
             subroutine: "CL_DETAIL".to_string(),
             iteration: Some(iteration),
             data: DebugData::ClDetail(event),
+        }
+    }
+
+    /// Create a FULL_BL_STATE debug event with complete BL state for both surfaces
+    ///
+    /// # Arguments
+    /// * `iteration` - Viscous iteration number
+    /// * `upper` - Upper surface BL state
+    /// * `lower` - Lower surface BL state
+    pub fn full_bl_state(iteration: usize, upper: SurfaceBlState, lower: SurfaceBlState) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "FULL_BL_STATE".to_string(),
+            iteration: Some(iteration),
+            data: DebugData::FullBlState(FullBlStateEvent { upper, lower }),
+        }
+    }
+
+    /// Create a FULL_ITER debug event with comprehensive Newton iteration state
+    /// Matches XFOIL's DBGFULLITER for systematic brute-force comparison
+    ///
+    /// # Arguments
+    /// * `iteration` - Viscous iteration number
+    /// * `event` - FullIterEvent with all iteration data
+    pub fn full_iter(iteration: usize, event: FullIterEvent) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "FULL_ITER".to_string(),
+            iteration: Some(iteration),
+            data: DebugData::FullIter(event),
+        }
+    }
+
+    /// Create a FULL_GAMMA_ITER debug event with circulation at all panels
+    ///
+    /// # Arguments
+    /// * `iteration` - Viscous iteration number
+    /// * `gamma` - Full gamma array at all panels
+    pub fn full_gamma_iter(iteration: usize, gamma: Vec<f64>) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "FULL_GAMMA_ITER".to_string(),
+            iteration: Some(iteration),
+            data: DebugData::FullGammaIter(FullGammaIterEvent { gamma }),
+        }
+    }
+
+    /// Create a FULL_NFACTOR debug event with N-factors at all stations
+    ///
+    /// # Arguments
+    /// * `iteration` - Viscous iteration number
+    /// * `upper_ampl` - Upper surface N-factors
+    /// * `lower_ampl` - Lower surface N-factors
+    /// * `upper_x` - Upper surface x locations
+    /// * `lower_x` - Lower surface x locations
+    pub fn full_nfactor(
+        iteration: usize,
+        upper_ampl: Vec<f64>,
+        lower_ampl: Vec<f64>,
+        upper_x: Vec<f64>,
+        lower_x: Vec<f64>,
+    ) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "FULL_NFACTOR".to_string(),
+            iteration: Some(iteration),
+            data: DebugData::FullNfactor(FullNfactorEvent {
+                upper_ampl,
+                lower_ampl,
+                upper_x,
+                lower_x,
+            }),
+        }
+    }
+
+    /// Create a BL_INIT debug event with initial BL state after station initialization
+    ///
+    /// # Arguments
+    /// * `side` - Surface side (1=upper, 2=lower)
+    /// * `n_stations` - Number of stations
+    /// * `x` - Arc length coordinates
+    /// * `ue` - Edge velocities
+    /// * `theta` - Initial momentum thickness
+    /// * `delta_star` - Initial displacement thickness
+    pub fn bl_init(
+        side: usize,
+        n_stations: usize,
+        x: Vec<f64>,
+        ue: Vec<f64>,
+        theta: Vec<f64>,
+        delta_star: Vec<f64>,
+    ) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "BL_INIT".to_string(),
+            iteration: None,
+            data: DebugData::BlInit(BlInitEvent {
+                side,
+                n_stations,
+                x,
+                ue,
+                theta,
+                delta_star,
+            }),
+        }
+    }
+
+    // =========================================================================
+    // CLOSURE-LEVEL DEBUG EVENT CONSTRUCTORS
+    // These match XFOIL's instrumented output format exactly
+    // =========================================================================
+
+    /// Create an HKIN debug event (kinematic shape factor)
+    pub fn hkin(h: f64, msq: f64, hk: f64, hk_h: f64, hk_msq: f64) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "HKIN".to_string(),
+            iteration: None,
+            data: DebugData::Hkin(HkinEvent {
+                H: h,
+                Msq: msq,
+                Hk: hk,
+                Hk_H: hk_h,
+                Hk_Msq: hk_msq,
+            }),
+        }
+    }
+
+    /// Create an HSL debug event (laminar energy shape factor)
+    pub fn hsl(hk: f64, rtheta: f64, msq: f64, hs: f64, hs_hk: f64, hs_rt: f64, hs_msq: f64) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "HSL".to_string(),
+            iteration: None,
+            data: DebugData::Hsl(HslEvent {
+                Hk: hk,
+                Rtheta: rtheta,
+                Msq: msq,
+                Hs: hs,
+                Hs_Hk: hs_hk,
+                Hs_Rt: hs_rt,
+                Hs_Msq: hs_msq,
+            }),
+        }
+    }
+
+    /// Create a CFL debug event (laminar skin friction)
+    pub fn cfl(hk: f64, rtheta: f64, msq: f64, cf: f64, cf_hk: f64, cf_rt: f64, cf_msq: f64) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "CFL".to_string(),
+            iteration: None,
+            data: DebugData::Cfl(CflEvent {
+                Hk: hk,
+                Rtheta: rtheta,
+                Msq: msq,
+                Cf: cf,
+                Cf_Hk: cf_hk,
+                Cf_Rt: cf_rt,
+                Cf_Msq: cf_msq,
+            }),
+        }
+    }
+
+    /// Create a DAMPL debug event (amplification rate)
+    pub fn dampl(hk: f64, theta: f64, rtheta: f64, ax: f64, ax_hk: f64, ax_th: f64, ax_rt: f64) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "DAMPL".to_string(),
+            iteration: None,
+            data: DebugData::Dampl(DamplEvent {
+                Hk: hk,
+                theta,
+                Rtheta: rtheta,
+                Ax: ax,
+                Ax_Hk: ax_hk,
+                Ax_Th: ax_th,
+                Ax_Rt: ax_rt,
+            }),
+        }
+    }
+
+    /// Create an AIJ_MATRIX debug event (influence matrix before LU solve)
+    ///
+    /// # Arguments
+    /// * `n` - System size (N+1 where N is number of nodes)
+    /// * `aij_diagonal` - First 20 diagonal elements of the A matrix
+    /// * `aij_row0` - First 20 elements of row 0 of the A matrix
+    /// * `rhs_0` - First 10 elements of RHS for alpha = 0 degrees
+    /// * `rhs_90` - First 10 elements of RHS for alpha = 90 degrees
+    pub fn aij_matrix(
+        n: usize,
+        aij_diagonal: Vec<f64>,
+        aij_row0: Vec<f64>,
+        rhs_0: Vec<f64>,
+        rhs_90: Vec<f64>,
+    ) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "AIJ_MATRIX".to_string(),
+            iteration: None,
+            data: DebugData::AijMatrix(AijMatrixEvent {
+                n,
+                aij_diagonal,
+                aij_row0,
+                rhs_0,
+                rhs_90,
+            }),
+        }
+    }
+
+    // =========================================================================
+    // NEWTON ITERATION DEBUG EVENT CONSTRUCTORS
+    // =========================================================================
+
+    /// Create a NEWTON_ITER debug event capturing iteration state
+    ///
+    /// # Arguments
+    /// * `iter` - Iteration number (0-indexed)
+    /// * `residual` - Current RMS residual
+    /// * `prev_residual` - Previous iteration's residual
+    /// * `n_upper` - Number of upper surface stations
+    /// * `n_lower` - Number of lower surface stations
+    pub fn newton_iter(
+        iter: usize,
+        residual: f64,
+        prev_residual: f64,
+        n_upper: usize,
+        n_lower: usize,
+    ) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "NEWTON_ITER".to_string(),
+            iteration: Some(iter),
+            data: DebugData::NewtonIter(NewtonIterEvent {
+                iter,
+                residual,
+                prev_residual,
+                n_upper,
+                n_lower,
+            }),
+        }
+    }
+
+    /// Create a BL_STATE_SUMMARY debug event with station states
+    ///
+    /// # Arguments
+    /// * `iter` - Iteration number
+    /// * `surface` - Surface identifier ("upper" or "lower")
+    /// * `stations` - Vector of station states (typically every 10th)
+    pub fn bl_state_summary(iter: usize, surface: &str, stations: Vec<StationState>) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "BL_STATE_SUMMARY".to_string(),
+            iteration: Some(iter),
+            data: DebugData::BlStateSummary(BlStateSummaryEvent {
+                iter,
+                surface: surface.to_string(),
+                stations,
+            }),
+        }
+    }
+
+    /// Create a JACOBIAN debug event with VS1, VS2, VSREZ
+    ///
+    /// # Arguments
+    /// * `iter` - Iteration number
+    /// * `ibl` - BL station index
+    /// * `side` - Surface side (0=upper, 1=lower)
+    /// * `vs1` - Upstream Jacobian (3x5)
+    /// * `vs2` - Downstream Jacobian (3x5)
+    /// * `vsrez` - Residuals (3)
+    /// * `flow_type` - Flow type description
+    #[allow(non_snake_case)]
+    pub fn jacobian(
+        iter: usize,
+        ibl: usize,
+        side: usize,
+        VS1: [[f64; 5]; 3],
+        VS2: [[f64; 5]; 3],
+        VSREZ: [f64; 3],
+        flow_type: &str,
+    ) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "JACOBIAN".to_string(),
+            iteration: Some(iter),
+            data: DebugData::Jacobian(JacobianEvent {
+                iter,
+                ibl,
+                side,
+                VS1,
+                VS2,
+                VSREZ,
+                flow_type: flow_type.to_string(),
+            }),
+        }
+    }
+
+    /// Create a VM_BLOCK debug event with near-diagonal VM entries
+    ///
+    /// # Arguments
+    /// * `iter` - Iteration number
+    /// * `iv` - Global system index
+    /// * `vm_diagonal` - VM[IV][IV][0..2]
+    /// * `vm_near` - Near-diagonal entries (JV, VM[IV][JV][0..2])
+    #[allow(non_snake_case)]
+    pub fn vm_block(
+        iter: usize,
+        iv: usize,
+        VM_diagonal: [f64; 3],
+        VM_near: Vec<(usize, [f64; 3])>,
+    ) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "VM_BLOCK".to_string(),
+            iteration: Some(iter),
+            data: DebugData::VmBlock(VmBlockEvent {
+                iter,
+                iv,
+                VM_diagonal,
+                VM_near,
+            }),
+        }
+    }
+
+    /// Create a SOLUTION debug event with Newton deltas
+    ///
+    /// # Arguments
+    /// * `iter` - Iteration number
+    /// * `deltas` - Solution deltas (first 30 stations)
+    pub fn solution(iter: usize, deltas: Vec<[f64; 3]>) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "SOLUTION".to_string(),
+            iteration: Some(iter),
+            data: DebugData::Solution(SolutionEvent { iter, deltas }),
+        }
+    }
+
+    /// Create an UPDATE_SUMMARY debug event with relaxation details
+    ///
+    /// # Arguments
+    /// * `iter` - Iteration number
+    /// * `rlx_computed` - Computed relaxation factor
+    /// * `rlx_used` - Actually used relaxation factor
+    /// * `limiting_station` - Station that limited relaxation (if any)
+    /// * `limiting_reason` - Reason for limiting (if any)
+    /// * `sample_updates` - Sample update data (every 10th station)
+    pub fn update_summary(
+        iter: usize,
+        rlx_computed: f64,
+        rlx_used: f64,
+        limiting_station: Option<usize>,
+        limiting_reason: Option<String>,
+        sample_updates: Vec<SampleUpdateData>,
+    ) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "UPDATE_SUMMARY".to_string(),
+            iteration: Some(iter),
+            data: DebugData::UpdateSummary(UpdateSummaryEvent {
+                iter,
+                rlx_computed,
+                rlx_used,
+                limiting_station,
+                limiting_reason,
+                sample_updates,
+            }),
+        }
+    }
+
+    /// Create a FORCED_CHANGES debug event with VI coupling terms
+    ///
+    /// # Arguments
+    /// * `iter` - Newton iteration number
+    /// * `ibl` - BL station index
+    /// * `side` - Surface side (0=upper, 1=lower)
+    /// * `due1` - Ue mismatch at upstream station
+    /// * `due2` - Ue mismatch at downstream station
+    /// * `dds1` - Induced delta_star change at upstream
+    /// * `dds2` - Induced delta_star change at downstream
+    /// * `ue_from_mass` - Ue computed from mass defect
+    /// * `ue_inviscid` - Inviscid Ue
+    /// * `ue_current` - Current station Ue
+    #[allow(clippy::too_many_arguments)]
+    pub fn forced_changes(
+        iter: usize,
+        ibl: usize,
+        side: usize,
+        due1: f64,
+        due2: f64,
+        dds1: f64,
+        dds2: f64,
+        ue_from_mass: f64,
+        ue_inviscid: f64,
+        ue_current: f64,
+    ) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "FORCED_CHANGES".to_string(),
+            iteration: Some(iter),
+            data: DebugData::ForcedChanges(ForcedChangesEvent {
+                iter,
+                ibl,
+                side,
+                due1,
+                due2,
+                dds1,
+                dds2,
+                ue_from_mass,
+                ue_inviscid,
+                ue_current,
+            }),
         }
     }
 }

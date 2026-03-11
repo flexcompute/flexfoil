@@ -7,6 +7,8 @@
 
 pub mod approx;
 pub mod fortran_runner;
+pub mod paths;
+pub mod timing;
 
 use serde::de::DeserializeOwned;
 use std::fs;
