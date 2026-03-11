@@ -3,14 +3,14 @@ use std::sync::OnceLock;
 
 use nalgebra::DMatrix;
 use rustfoil_testkit::fortran_runner::{
-    compile_driver, run_fortran_json, run_fortran_json_with_args, FortranDriverSpec,
+    compile_driver, run_fortran_json, run_fortran_json_with_args, run_fortran_test, FortranDriverSpec,
     XFOIL_STATE_OBJS, XFOIL_WORKFLOW_OBJS,
 };
 use rustfoil_xfoil::{
     config::{OperatingMode, XfoilOptions},
     oper::{solve_coords_oper_point, AlphaSpec},
     state::XfoilState,
-    state_ops::{compute_arc_lengths, iblpan, qvfue, specal, stfind, uicalc, xicalc},
+    state_ops::{compute_arc_lengths, iblpan, specal, stfind, uicalc, xicalc},
     wake_panel::{qdcalc, qwcalc, xywake},
 };
 use serde::Deserialize;
@@ -130,8 +130,15 @@ pub struct FortranStateTopologyOutput {
 pub struct FortranQdcalcOutput {
     pub wake_x: Vec<f64>,
     pub wake_y: Vec<f64>,
-    pub diag_sample: Vec<f64>,
-    pub row0_sample: Vec<f64>,
+    pub wake_s: Vec<f64>,
+    pub wake_nx: Vec<f64>,
+    pub wake_ny: Vec<f64>,
+    pub wake_apanel: Vec<f64>,
+    pub wake_qinvu_0: Vec<f64>,
+    pub wake_qinvu_90: Vec<f64>,
+    pub wake_qinv: Vec<f64>,
+    pub wake_qinv_a: Vec<f64>,
+    pub dij_flat: Vec<f64>,
     pub matrix_size: usize,
     pub perf: FortranPerfCase,
 }
@@ -175,7 +182,9 @@ pub fn qdcalc_fortran() -> &'static FortranQdcalcOutput {
             object_names: XFOIL_WORKFLOW_OBJS,
         })
         .expect("compile qdcalc driver");
-        run_fortran_json(exe).expect("run qdcalc driver")
+        let stdout = run_fortran_test(exe).expect("run qdcalc driver");
+        let json_start = stdout.find('{').expect("qdcalc driver JSON start");
+        serde_json::from_str(&stdout[json_start..]).expect("parse qdcalc driver JSON")
     })
 }
 
@@ -219,8 +228,13 @@ pub fn build_state_topology_fixture() -> XfoilState {
     state.wake_x = vec![1.05, 1.25];
     state.wake_y = vec![0.0, 0.0];
     state.wake_s = vec![0.0, 0.20];
+    state.wake_nx = vec![0.0, 0.0];
+    state.wake_ny = vec![1.0, 1.0];
+    state.wake_apanel = vec![0.0, 0.0];
     state.wake_qinv = wake_qinv;
     state.wake_qinv_a = wake_qinv_a;
+    state.wake_qinvu_0 = state.wake_qinv.clone();
+    state.wake_qinvu_90 = state.wake_qinv_a.clone();
     state.qvis = state
         .qinv
         .iter()
@@ -255,6 +269,7 @@ pub fn build_qdcalc_state() -> (XfoilState, rustfoil_inviscid::FactorizedSystem)
     let panel_x: Vec<f64> = coords.iter().map(|(x, _)| *x).collect();
     let panel_y: Vec<f64> = coords.iter().map(|(_, y)| *y).collect();
     let panel_s = compute_arc_lengths(&panel_x, &panel_y);
+    let (qinvu_0, qinvu_90) = factorized.surface_qinvu_basis();
     let mut state = XfoilState::new(
         "NACA0012".to_string(),
         alpha_rad,
@@ -262,30 +277,41 @@ pub fn build_qdcalc_state() -> (XfoilState, rustfoil_inviscid::FactorizedSystem)
         panel_x,
         panel_y,
         panel_s,
-        factorized.gamu_0.clone(),
-        factorized.gamu_90.clone(),
+        qinvu_0,
+        qinvu_90,
         factorized
             .build_dij_with_default_wake()
             .expect("default wake dij"),
     );
+    specal(&mut state, alpha_rad);
     xywake(&mut state, &factorized, 1.0);
     qwcalc(&mut state, &factorized);
     specal(&mut state, alpha_rad);
     (state, factorized)
 }
 
-pub fn rust_qdcalc_sample() -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, usize) {
+pub fn rust_qdcalc_output() -> FortranQdcalcOutput {
     let (mut state, factorized) = build_qdcalc_state();
     qdcalc(&mut state, &factorized).expect("qdcalc");
-    let diag_sample: Vec<f64> = (0..20.min(state.dij.nrows())).map(|i| state.dij[(i, i)]).collect();
-    let row0_sample: Vec<f64> = (0..20.min(state.dij.ncols())).map(|j| state.dij[(0, j)]).collect();
-    (
-        state.wake_x.clone(),
-        state.wake_y.clone(),
-        diag_sample,
-        row0_sample,
-        state.dij.nrows(),
-    )
+    FortranQdcalcOutput {
+        wake_x: state.wake_x.clone(),
+        wake_y: state.wake_y.clone(),
+        wake_s: state.wake_s.clone(),
+        wake_nx: state.wake_nx.clone(),
+        wake_ny: state.wake_ny.clone(),
+        wake_apanel: state.wake_apanel.clone(),
+        wake_qinvu_0: state.wake_qinvu_0.clone(),
+        wake_qinvu_90: state.wake_qinvu_90.clone(),
+        wake_qinv: state.wake_qinv.clone(),
+        wake_qinv_a: state.wake_qinv_a.clone(),
+        dij_flat: flatten_matrix_row_major(&state.dij),
+        matrix_size: state.dij.nrows(),
+        perf: FortranPerfCase {
+            inner_loops: 0,
+            samples_seconds: Vec::new(),
+            median_seconds: 0.0,
+        },
+    }
 }
 
 pub fn run_workflow_case(alpha_deg: f64) -> rustfoil_xfoil::result::XfoilViscousResult {
@@ -312,7 +338,7 @@ pub fn naca0012_coords(npanel: usize) -> Vec<(f64, f64)> {
     let pi = std::f64::consts::PI;
     let t = 0.12;
 
-    for i in 0..=nhalf {
+    for i in (0..=nhalf).rev() {
         let beta = pi * i as f64 / nhalf as f64;
         let xx = 0.5 * (1.0 - beta.cos());
         let yt = 5.0
@@ -326,7 +352,7 @@ pub fn naca0012_coords(npanel: usize) -> Vec<(f64, f64)> {
     }
 
     for i in 1..=nhalf {
-        let beta = pi * (nhalf - i) as f64 / nhalf as f64;
+        let beta = pi * i as f64 / nhalf as f64;
         let xx = 0.5 * (1.0 - beta.cos());
         let yt = 5.0
             * t
@@ -389,6 +415,16 @@ fn seed_state_rows(state: &mut XfoilState) {
             row.uedg = row.uinv + 0.03 * ibl;
         }
     }
+}
+
+fn flatten_matrix_row_major(matrix: &DMatrix<f64>) -> Vec<f64> {
+    let mut flat = Vec::with_capacity(matrix.nrows() * matrix.ncols());
+    for i in 0..matrix.nrows() {
+        for j in 0..matrix.ncols() {
+            flat.push(matrix[(i, j)]);
+        }
+    }
+    flat
 }
 
 fn fortran_driver_path(name: &str) -> PathBuf {

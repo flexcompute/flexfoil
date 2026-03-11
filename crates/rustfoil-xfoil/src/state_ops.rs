@@ -21,6 +21,18 @@ pub fn specal(state: &mut XfoilState, alpha_rad: f64) {
         state.qinv[i] = cosa * state.qinvu_0[i] + sina * state.qinvu_90[i];
         state.qinv_a[i] = -sina * state.qinvu_0[i] + cosa * state.qinvu_90[i];
     }
+    state.wake_qinv = state
+        .wake_qinvu_0
+        .iter()
+        .zip(state.wake_qinvu_90.iter())
+        .map(|(&q0, &q90)| cosa * q0 + sina * q90)
+        .collect();
+    state.wake_qinv_a = state
+        .wake_qinvu_0
+        .iter()
+        .zip(state.wake_qinvu_90.iter())
+        .map(|(&q0, &q90)| -sina * q0 + cosa * q90)
+        .collect();
 }
 
 pub fn stfind(state: &mut XfoilState) {

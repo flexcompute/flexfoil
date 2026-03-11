@@ -63,6 +63,7 @@ pub fn solve_coords_oper_point(
     let panel_x: Vec<f64> = coords.iter().map(|(x, _)| *x).collect();
     let panel_y: Vec<f64> = coords.iter().map(|(_, y)| *y).collect();
     let panel_s = compute_arc_lengths(&panel_x, &panel_y);
+    let (qinvu_0, qinvu_90) = factorized.surface_qinvu_basis();
 
     let operating_mode = match spec {
         AlphaSpec::AlphaDeg(_) => OperatingMode::PrescribedAlpha,
@@ -76,8 +77,8 @@ pub fn solve_coords_oper_point(
         panel_x,
         panel_y,
         panel_s,
-        factorized.gamu_0.clone(),
-        factorized.gamu_90.clone(),
+        qinvu_0,
+        qinvu_90,
         factorized.build_dij_with_default_wake()?,
     );
     state.panel_xp = factorized.geometry().xp.clone();
@@ -85,7 +86,6 @@ pub fn solve_coords_oper_point(
     state.sharp = factorized.geometry().sharp;
     state.ante = factorized.geometry().ante;
 
-    xywake(&mut state, &factorized, options.wake_length_chords);
     solve_operating_point_from_state(&mut state, &factorized, options)
 }
 
@@ -95,13 +95,18 @@ pub fn solve_operating_point_from_state(
     options: &XfoilOptions,
 ) -> Result<XfoilViscousResult> {
     specal(state, state.alpha_rad);
+    if !state.lwake || (state.alpha_rad - state.awake).abs() > 1.0e-5 {
+        xywake(state, factorized, options.wake_length_chords);
+    }
     qwcalc(state, factorized);
     stfind(state);
     iblpan(state);
     xicalc(state);
     uicalc(state);
     uedginit(state);
-    qdcalc(state, factorized)?;
+    if !state.lwdij || !state.ladij {
+        qdcalc(state, factorized)?;
+    }
     blpini(state, options.reynolds);
     mrchue(state, options.reynolds);
     mrchdu(state, options.reynolds);
@@ -128,7 +133,6 @@ pub fn solve_operating_point_from_state(
         update(state, &solve);
         if let OperatingMode::PrescribedCl { .. } = state.operating_mode {
             specal(state, state.alpha_rad);
-            qwcalc(state, factorized);
             uicalc(state);
         }
         ueset(state);
