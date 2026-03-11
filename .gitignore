@@ -31,3 +31,6 @@ node_modules/
 *.profraw
 *.profdata
 coverage/
+
+# Large trace artifacts (no Git LFS)
+crates/rustfoil-solver/**/*.json

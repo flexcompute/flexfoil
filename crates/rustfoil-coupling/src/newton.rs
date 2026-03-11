@@ -357,6 +357,7 @@ impl BlNewtonSystem {
                     s2.r_theta,
                     s1.ampl,
                     ncrit,
+                    None,
                     msq,
                     re,
                 );
@@ -568,8 +569,7 @@ impl BlNewtonSystem {
 
         // Step 6: Add forced changes to residuals
         // XFOIL: VDEL(k,1,IV) = VSREZ(k) + VS1*DDS1 + VS2*DDS2 + VS1*DUE1 + VS2*DUE2
-        // TODO: Temporarily disabled while debugging VI coupling instability
-        // self.add_forced_changes(stations, &due);
+        self.add_forced_changes(stations, &due);
     }
 
     /// Compute edge velocities from mass defect using UESET formula

@@ -473,6 +473,8 @@ pub struct Trchek2Result {
 /// XFOIL xblsys.f TRCHEK2 (lines 231-580)
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Trchek2FullResult {
+    /// Critical N-factor used for this transition solve
+    pub ncrit: f64,
     /// Transition x-location
     pub xt: f64,
     /// Final N-factor at station 2
@@ -829,7 +831,7 @@ pub fn trchek2_stations(
         };
     }
     
-    // Initial amplification rate
+    // Initial amplification rate (XFOIL xblsys.f:270-278)
     let ax_init = axset(hk1, t1, rt1, ampl1, hk2, t2, rt2, ampl1, ncrit);
     let mut ampl2 = ampl1 + ax_init.ax * dx;
     
@@ -841,14 +843,23 @@ pub fn trchek2_stations(
     for itam in 0..MAX_ITER {
         iterations = itam + 1;
         
-        // Weighting factors
-        let (wf2, amplt) = if ampl2 <= ncrit {
-            (1.0, ampl2)
+        // Weighting factors (XFOIL xblsys.f:316-321)
+        let (wf2, amplt, amplt_a2) = if ampl2 <= ncrit {
+            (1.0, ampl2, 1.0)
         } else {
-            let sfa = (ncrit - ampl1) / (ampl2 - ampl1).max(1e-20);
-            (sfa, ncrit)
+            let da = (ampl2 - ampl1).max(1e-20);
+            let sfa = (ncrit - ampl1) / da;
+            (sfa, ncrit, 0.0)
         };
         let wf1 = 1.0 - wf2;
+        
+        // dSFA/dA2 for interpolation sensitivities (XFOIL xblsys.f:322-330)
+        let sfa_a2 = if ampl2 > ncrit {
+            let da = (ampl2 - ampl1).max(1e-20);
+            -(ncrit - ampl1) / (da * da)
+        } else {
+            0.0
+        };
         
         // Interpolate to transition point
         xt = x1 * wf1 + x2 * wf2;
@@ -857,13 +868,24 @@ pub fn trchek2_stations(
         let ut = u1 * wf1 + u2 * wf2;
         let rtt = re * ut * tt;
         
-        // Compute Hk at interpolated point using proper H = δ*/θ ratio
-        // This is more accurate than linear interpolation of Hk
-        let ht = if tt > 1e-20 { dt / tt } else { hk1 * wf1 + hk2 * wf2 };
-        let hkt = hkin(ht, msq).hk;
+        // Sensitivities through interpolation (XFOIL xblsys.f:370-390)
+        let tt_a2 = (t2 - t1) * sfa_a2;
+        let dt_a2 = (d2 - d1) * sfa_a2;
+        let ut_a2 = (u2 - u1) * sfa_a2;
+        let rtt_tt = re * ut;
+        let rtt_ut = re * tt;
         
-        // Recompute AX at transition point
-        let ax_result = axset(hk1, t1, rt1, ampl1, hkt, tt, rtt, amplt, ncrit);
+        // Compute Hk at interpolated point
+        let ht = if tt > 1e-20 { dt / tt } else { hk1 * wf1 + hk2 * wf2 };
+        let hk_result = hkin(ht, msq);
+        let hkt = hk_result.hk;
+        let hkt_h = hk_result.hk_h;
+        let hkt_tt = if tt > 1e-20 { hkt_h * (-dt / (tt * tt)) } else { 0.0 };
+        let hkt_dt = if tt > 1e-20 { hkt_h * (1.0 / tt) } else { 0.0 };
+        let hkt_ut = 0.0; // Ue doesn't affect H directly
+        
+        // Recompute AX with full derivatives at transition point
+        let ax_result = axset_full(hk1, t1, rt1, ampl1, hkt, tt, rtt, amplt, ncrit);
         ax = ax_result.ax;
         
         if ax <= 0.0 {
@@ -871,9 +893,21 @@ pub fn trchek2_stations(
             break;
         }
         
-        // Residual and Newton update
+        // Compute AX_A2 through the interpolation chain (XFOIL xblsys.f:396-400)
+        let ax_hkt = ax_result.ax_hk2;
+        let ax_tt = ax_result.ax_t2;
+        let ax_rtt = ax_result.ax_rt2;
+        let ax_at = ax_result.ax_a2;
+        
+        let ax_a2 = (ax_hkt * hkt_tt + ax_tt + ax_rtt * rtt_tt) * tt_a2
+            + (ax_hkt * hkt_dt) * dt_a2
+            + (ax_hkt * hkt_ut + ax_rtt * rtt_ut) * ut_a2
+            + ax_at * amplt_a2;
+        
+        // Residual and proper Newton update (XFOIL xblsys.f:402-406)
         let res = ampl2 - ampl1 - ax * dx;
-        let da2 = -res;
+        let res_a2 = 1.0 - ax_a2 * dx;
+        let da2 = if res_a2.abs() > 1e-20 { -res / res_a2 } else { -res };
         
         if da2.abs() < DAEPS {
             converged = true;
@@ -941,6 +975,7 @@ pub fn trchek2_full(
     rt2: f64,
     ampl1: f64,
     ncrit: f64,
+    x_forced: Option<f64>,
     msq: f64,
     re: f64,
 ) -> Trchek2FullResult {
@@ -972,14 +1007,15 @@ pub fn trchek2_full(
     let hk2_d2 = hkin2.hk_h * h2_d2;
     let hk2_ms = hkin2.hk_msq;
     
-    // Rθ = Re * U * θ, so derivatives:
-    let rt1_t1 = re * u1;
-    let rt1_u1 = re * t1;
+    let reybl = re;
+    // Rθ = RE * U * θ, matching XFOIL's RT2 = RE * U2 * T2.
+    let rt1_t1 = reybl * u1;
+    let rt1_u1 = reybl * t1;
     let rt1_re = u1 * t1;
     let rt1_ms = 0.0;
     
-    let rt2_t2 = re * u2;
-    let rt2_u2 = re * t2;
+    let rt2_t2 = reybl * u2;
+    let rt2_u2 = reybl * t2;
     let rt2_re = u2 * t2;
     let rt2_ms = 0.0;
 
@@ -1016,25 +1052,39 @@ pub fn trchek2_full(
     for itam in 0..MAX_ITER {
         iterations = itam + 1;
         // Define weighting factors WF1, WF2 for interpolation to transition point
-        if ampl2 <= ncrit {
+        let (sfa, sfa_a1, sfa_a2, amplt_local, amplt_a2_local) = if ampl2 <= ncrit {
             // No transition yet, "T" is the same as "2"
-            amplt_a2 = 1.0;
-            let sfa = 1.0;
-            wf2_a1 = 0.0;
-            wf2_a2 = 0.0;
-            wf2 = sfa;
+            (1.0, 0.0, 0.0, ampl2, 1.0)
         } else {
             // Transition in interval, "T" is at Ncrit
-            amplt_a2 = 0.0;
             let sfa = (ncrit - ampl1) / (ampl2 - ampl1).max(1e-20);
-            wf2_a1 = (sfa - 1.0) / (ampl2 - ampl1).max(1e-20);
-            wf2_a2 = -sfa / (ampl2 - ampl1).max(1e-20);
+            let denom = (ampl2 - ampl1).max(1e-20);
+            (sfa, (sfa - 1.0) / denom, -sfa / denom, ncrit, 0.0)
+        };
+
+        amplt_a2 = amplt_a2_local;
+
+        let (sfx, sfx_x1, sfx_x2) = match x_forced {
+            Some(xf) if xf < x2 => {
+                let sfx = (xf - x1) / dx;
+                (sfx, (sfx - 1.0) / dx, -sfx / dx)
+            }
+            _ => (1.0, 0.0, 0.0),
+        };
+
+        if sfa < sfx {
             wf2 = sfa;
+            wf2_a1 = sfa_a1;
+            wf2_a2 = sfa_a2;
+            wf2_x1 = 0.0;
+            wf2_x2 = 0.0;
+        } else {
+            wf2 = sfx;
+            wf2_a1 = 0.0;
+            wf2_a2 = 0.0;
+            wf2_x1 = sfx_x1;
+            wf2_x2 = sfx_x2;
         }
-        
-        // For free transition (no forced)
-        wf2_x1 = 0.0;
-        wf2_x2 = 0.0;
         
         wf1 = 1.0 - wf2;
         
@@ -1062,14 +1112,14 @@ pub fn trchek2_full(
         let hkt_ms = hkt_result.hk_msq;
         
         // Rθ at transition point
-        let rtt = re * ut * tt;
-        let rtt_tt = re * ut;
-        let rtt_ut = re * tt;
+        let rtt = reybl * ut * tt;
+        let rtt_tt = reybl * ut;
+        let rtt_ut = reybl * tt;
         let rtt_re = ut * tt;
         let rtt_ms = 0.0;
         
         // Compute averaged amplification rate with derivatives
-        let amplt = if ampl2 <= ncrit { ampl2 } else { ncrit };
+        let amplt = amplt_local;
         let ax_result = axset_full(hk1, t1, rt1, ampl1, hkt, tt, rtt, amplt, ncrit);
         ax = ax_result.ax;
         
@@ -1115,12 +1165,15 @@ pub fn trchek2_full(
         }
     }
 
-    // Test for transition
-    let transition = ampl2 >= ncrit;
+    // Test for free or forced transition
+    let tr_free = ampl2 >= ncrit;
+    let tr_forced = x_forced.map_or(false, |xf| xf > x1 && xf <= x2);
+    let transition = tr_free || tr_forced;
     
     if !transition {
         // No transition - return minimal result
         return Trchek2FullResult {
+            ncrit,
             xt,
             ampl2,
             ax,
@@ -1133,7 +1186,7 @@ pub fn trchek2_full(
         };
     }
 
-    // === Compute full derivatives for free transition ===
+    // === Compute full derivatives for free or forced transition ===
     // At this point we have converged values and need to compute all sensitivities
     
     // Recompute interpolated variables with final wf1, wf2
@@ -1151,13 +1204,13 @@ pub fn trchek2_full(
     let hkt_ut = 0.0;
     let hkt_ms = hkt_result.hk_msq;
     
-    let rtt = re * ut * tt;
-    let rtt_tt = re * ut;
-    let rtt_ut = re * tt;
+    let rtt = reybl * ut * tt;
+    let rtt_tt = reybl * ut;
+    let rtt_ut = reybl * tt;
     let rtt_ms = 0.0;
     let rtt_re = ut * tt;
     
-    let amplt = ncrit;
+    let amplt = if ampl2 <= ncrit { ampl2 } else { ncrit };
     let ax_result = axset_full(hk1, t1, rt1, ampl1, hkt, tt, rtt, amplt, ncrit);
     
     // === Basic interpolation derivatives ===
@@ -1197,7 +1250,7 @@ pub fn trchek2_full(
     let ax_tt = ax_result.ax_hk2 * hkt_tt + ax_result.ax_t2 + ax_result.ax_rt2 * rtt_tt;
     let ax_dt = ax_result.ax_hk2 * hkt_dt;
     let ax_ut = ax_result.ax_hk2 * hkt_ut + ax_result.ax_rt2 * rtt_ut;
-    let ax_at = ax_result.ax_a2;  // = 0 since amplt = ncrit is constant
+    let ax_at = ax_result.ax_a2;
     
     // AX sensitivities w.r.t. original variables
     // Station 1 direct derivatives
@@ -1213,8 +1266,7 @@ pub fn trchek2_full(
     let ax_t2 = ax_tt * tt_t2_base;
     let ax_d2 = ax_dt * dt_d2_base;
     let ax_u2 = ax_ut * ut_u2_base;
-    // ax_a2 computed earlier for iteration - recalculate with zero for free transition (amplt=ncrit)
-    let ax_a2 = ax_tt * tt_a2 + ax_dt * dt_a2 + ax_ut * ut_a2;
+    let ax_a2 = ax_tt * tt_a2 + ax_dt * dt_a2 + ax_ut * ut_a2 + ax_at * amplt_a2;
     let ax_x2 = ax_tt * tt_x2 + ax_dt * dt_x2 + ax_ut * ut_x2;
     
     // Global parameters
@@ -1332,6 +1384,7 @@ pub fn trchek2_full(
     let ut_re = u1 * wf1_re + u2 * wf2_re;
 
     Trchek2FullResult {
+        ncrit,
         xt,
         ampl2,
         ax,

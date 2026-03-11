@@ -152,6 +152,10 @@ pub struct BlStation {
     /// Mass defect Ue·δ* (used in viscous-inviscid coupling)
     pub mass_defect: f64,
 
+    /// Wake gap thickness DW (XFOIL's DSWAKI from WGAP array).
+    /// For non-wake stations this is 0. BLPRV sets D2 = DSI - DSWAKI, DW2 = DSWAKI.
+    pub dw: f64,
+
     // === Mode Flags ===
     /// True if boundary layer is laminar
     pub is_laminar: bool,
@@ -195,6 +199,7 @@ impl BlStation {
             cq: 0.03,
             de: 0.006,
             mass_defect: 0.002,
+            dw: 0.0,
             is_laminar: true,
             is_wake: false,
             is_turbulent: false,
@@ -216,16 +221,15 @@ impl BlStation {
     /// # Thwaites Formula (XFOIL xbl.f:597)
     /// With BULE = 1.0 (stagnation flow):
     /// - TSQ = 0.45 / (UCON * (5.0*BULE+1.0) * REYBL) * XSI^(1.0-BULE)
-    /// - Where UCON = Ue/x and REYBL = REINF/3 (empirically determined to match XFOIL)
+    /// - Where UCON = Ue/x and REYBL = REINF for incompressible flow
     /// - θ = √(TSQ)
     /// - δ* = 2.2·θ
     /// - H = δ*/θ = 2.2
     ///
     /// # Note on REYBL
     /// XFOIL computes REYBL = REINF * SQRT(HERAT³) * (1+HVRAT)/(HERAT+HVRAT),
-    /// which equals REINF for incompressible flow. However, empirical analysis shows
-    /// that using REYBL = REINF/3 gives theta values matching XFOIL within 0.1%.
-    /// This suggests XFOIL may use a different normalization or there's a hidden factor.
+    /// which reduces to REINF for incompressible flow, so the stagnation seed uses
+    /// the same Reynolds scaling as the marched boundary-layer stations.
     ///
     /// # Example
     /// ```
@@ -245,13 +249,9 @@ impl BlStation {
         // TSQ = 0.45 / (UCON * (5.0*BULE+1.0) * REYBL) * XSI^(1.0-BULE)
         // With BULE=1.0: TSQ = 0.45 / ((Ue/x) * 6 * REYBL) * x^0 = 0.45*x / (6*Ue*REYBL)
         // 
-        // CRITICAL: REYBL must be REINF/3 to match XFOIL's theta values.
-        // Analysis shows: REYBL = REINF gives theta = 2.13e-5 (too low)
-        //                  REYBL = REINF/3 gives theta = 3.69e-5 (matches XFOIL)
         let bule = 1.0;
         let ucon = station.u / station.x.powf(bule);
-        // REYBL = REINF/3 (empirically determined to match XFOIL output)
-        let reybl = re / 3.0;
+        let reybl = re;
         let tsq = 0.45 / (ucon * (5.0 * bule + 1.0) * reybl) * station.x.powf(1.0 - bule);
         
         station.theta = tsq.sqrt().max(1e-12);

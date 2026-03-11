@@ -281,9 +281,10 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
 
     // Compute Reynolds number Rθ = Ue * θ * Re
     // In XFOIL: RT2 = RE * U2 * T2
-    station.r_theta = re * station.u * station.theta;
-    let rt_t = re * station.u; // ∂Rθ/∂θ
-    let rt_u = re * station.theta; // ∂Rθ/∂u
+    let reybl = re;
+    station.r_theta = reybl * station.u * station.theta;
+    let rt_t = reybl * station.u; // ∂Rθ/∂θ
+    let rt_u = reybl * station.theta; // ∂Rθ/∂u
     let rt_re = station.u * station.theta; // ∂Rθ/∂Re
     let rt_ms = 0.0; // No Mach dependence
 
@@ -586,10 +587,23 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
                 let di_re = di_rt * rt_re;
                 (di_lam.di, 0.0, di_u, di_t, di_d, di_ms, di_re, di_hk, di_rt)
             } else {
-                // Turbulent flow: DI depends on Hs, Us, Cf - not directly Hk, Rt
-                // For Jacobian, we'd need DI_HS, DI_US, DI_CF chain rules
-                // TODO: Implement proper turbulent Jacobian derivatives
-                // For now, use laminar approximation for base derivatives
+                // Recover base HK/RT sensitivities from the fully chained primary-variable
+                // derivatives so downstream closures see the turbulent DI Jacobian instead
+                // of the old laminar fallback.
+                let di_hk = if hk_d.abs() > 1.0e-20 {
+                    di_total_d / hk_d
+                } else if hk_t.abs() > 1.0e-20 {
+                    (di_total_t - di_total_re * rt_t / rt_re.max(1.0e-20)) / hk_t
+                } else {
+                    0.0
+                };
+                let di_rt = if rt_re.abs() > 1.0e-20 {
+                    di_total_re / rt_re
+                } else if rt_u.abs() > 1.0e-20 {
+                    (di_total_u - di_hk * hk_u) / rt_u
+                } else {
+                    0.0
+                };
                 (
                     di_total,
                     di_total_s,
@@ -598,8 +612,8 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
                     di_total_d,
                     di_total_ms,
                     di_total_re,
-                    di_lam.di_hk,
-                    di_lam.di_rt,
+                    di_hk,
+                    di_rt,
                 )
             }
         }
@@ -777,13 +791,18 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
     let de_hk = -1.72 / ((hk - 1.0).max(0.01) * (hk - 1.0).max(0.01)) * station.theta;
 
     let de_u = de_hk * hk_u;
-    let de_t_val = de_hk * hk_t + 3.15 + 1.72 / (hk - 1.0).max(0.01);
-    let de_d_val = de_hk * hk_d + 1.0;
-    let de_ms = de_hk * hk_ms;
+    let mut de_t_val = de_hk * hk_t + 3.15 + 1.72 / (hk - 1.0).max(0.01);
+    let mut de_d_val = de_hk * hk_d + 1.0;
+    let mut _de_u_val = de_u;
+    let mut _de_ms_val = de_hk * hk_ms;
 
     // Clamp DE to maximum HDMAX * T
     let hdmax = 12.0;
     let de_final = if de > hdmax * station.theta {
+        de_t_val = hdmax;
+        de_d_val = 0.0;
+        _de_u_val = 0.0;
+        _de_ms_val = 0.0;
         hdmax * station.theta
     } else {
         de
@@ -971,7 +990,23 @@ pub fn bldif_full_simi(
 ) -> (BlResiduals, BlJacobian) {
     // For similarity, XFOIL uses fixed log values (BLDIF with ITYP=0):
     // XLOG = 1.0, ULOG = BULE = 1.0, TLOG = 0.0, HLOG = 0.0
-    let (res, jac, _) = bldif_with_terms_internal(s, s, flow_type, msq, re, true);
+    let (res, mut jac, _) = bldif_with_terms_internal(s, s, flow_type, msq, re, true, 9.0);
+    
+    // CRITICAL: XFOIL combines VS1 and VS2 for similarity (xblsys.f lines 654-661):
+    //   IF(SIMI) THEN
+    //     DO K=1, 4
+    //       DO L=1, 5
+    //         VS2(K,L) = VS1(K,L) + VS2(K,L)
+    //         VS1(K,L) = 0.
+    // Since s1=s2, BLDIF computes VS1=VS2, so the combined VS2 is 2x original
+    // Note: Our BlJacobian uses 3x5 arrays (3 equations, 5 variables), not 4x5
+    for k in 0..3 {
+        for l in 0..5 {
+            jac.vs2[k][l] += jac.vs1[k][l];
+            jac.vs1[k][l] = 0.0;
+        }
+    }
+    
     (res, jac)
 }
 
@@ -982,7 +1017,18 @@ pub fn bldif_with_terms(
     msq: f64,
     re: f64,
 ) -> (BlResiduals, BlJacobian, BldifTerms) {
-    bldif_with_terms_internal(s1, s2, flow_type, msq, re, false)
+    bldif_with_terms_ncrit(s1, s2, flow_type, msq, re, 9.0)
+}
+
+pub fn bldif_with_terms_ncrit(
+    s1: &BlStation,
+    s2: &BlStation,
+    flow_type: FlowType,
+    msq: f64,
+    re: f64,
+    ncrit: f64,
+) -> (BlResiduals, BlJacobian, BldifTerms) {
+    bldif_with_terms_internal(s1, s2, flow_type, msq, re, false, ncrit)
 }
 
 fn bldif_with_terms_internal(
@@ -992,6 +1038,7 @@ fn bldif_with_terms_internal(
     msq: f64,
     re: f64,
     similarity: bool,
+    ncrit: f64,
 ) -> (BlResiduals, BlJacobian, BldifTerms) {
     let mut res = BlResiduals::default();
     let mut jac = BlJacobian::default();
@@ -1079,7 +1126,7 @@ fn bldif_with_terms_internal(
                 s2.theta,
                 s2.r_theta,
                 s2.ampl,
-                9.0,
+                ncrit,
             );
             let ax = ax_result.ax;
             let dx = s2.x - s1.x;
@@ -1209,8 +1256,25 @@ fn bldif_with_terms_internal(
 
             // Residual (xblsys.f:1767-1769)
             // REZC = SCC*(CQA - SA*ALD)*DXI - DEA*2.0*SLOG + DEA*2.0*(UQ*DXI - ULOG)*DUXCON
-            res.res_third = -(scc * (cqa - sa * ald) * dxi - dea * 2.0 * slog
-                + dea * 2.0 * (uq * dxi - ulog) * DUXCON);
+            let term1 = scc * (cqa - sa * ald) * dxi;
+            let term2 = -dea * 2.0 * slog;
+            let term3 = dea * 2.0 * (uq * dxi - ulog) * DUXCON;
+            let rezc = term1 + term2 + term3;
+            res.res_third = -rezc;
+            
+            // Debug: print REZC terms when near transition (ctau difference from equilibrium)
+            if std::env::var("RUSTFOIL_REZC_DEBUG").is_ok() {
+                let cq_diff = (cqa - sa).abs();
+                if cq_diff > 0.03 && cq_diff < 0.1 {
+                    eprintln!("[REZC DEBUG] x={:.4}, ctau_diff={:.4}", s2.x, cq_diff);
+                    eprintln!("  SCC={:.6}, CQA={:.6}, SA={:.6}", scc, cqa, sa);
+                    eprintln!("  ALD={:.6}, DXI={:.6e}, DEA={:.6e}", ald, dxi, dea);
+                    eprintln!("  SLOG={:.6}, UQ={:.6}, ULOG={:.6}", slog, uq, ulog);
+                    eprintln!("  S1={:.6}, S2={:.6}, USA={:.6}", s1.ctau, s2.ctau, usa);
+                    eprintln!("  term1={:.6e}, term2={:.6e}, term3={:.6e}", term1, term2, term3);
+                    eprintln!("  REZC={:.6e}, vsrez0={:.6e}", rezc, -rezc);
+                }
+            }
 
             // === Jacobian entries for shear-lag equation (xblsys.f:1781-1839) ===
             // Z coefficients
@@ -1371,19 +1435,14 @@ fn bldif_with_terms_internal(
     } // End of else block for non-SIMI first equation
 
     // === Momentum equation (xblsys.f:1864-1920) ===
-    // XFOIL reference variables:
-    //   HA = 0.5*(H1 + H2)
-    //   BTMP = HA + 2.0 - MA + HWA (we ignore HWA wake term)
-    //   CFX = 0.50*CFM*XA/TA + 0.25*(CF1*X1/T1 + CF2*X2/T2)
-    //   REZT = TLOG + BTMP*ULOG - XLOG*0.5*CFX
-    //   VSREZ(2) = -REZT
-    //
-    // Jacobian is computed as derivative of REZT (unnegated residual)
     let ha = 0.5 * (s1.h + s2.h);
     terms.ha = ha;
     let ma_avg = 0.5 * msq;
     let xa = 0.5 * (s1.x + s2.x);
     let ta = 0.5 * (s1.theta + s2.theta);
+
+    // HWA: wake displacement height (XFOIL xblsys.f:1962)
+    let hwa = 0.5 * (s1.dw / s1.theta.max(1e-20) + s2.dw / s2.theta.max(1e-20));
 
     // Get midpoint Cf and its derivatives
     let (cfm, cfm_hk1, cfm_hk2, cfm_rt1, cfm_rt2, _) = blmid(s1, s2, flow_type, msq);
@@ -1397,7 +1456,7 @@ fn bldif_with_terms_internal(
     let cfx_cf1 = 0.25 * s1.x / s1.theta;
     let cfx_cf2 = 0.25 * s2.x / s2.theta;
 
-    let btmp = ha + 2.0 - ma_avg;
+    let btmp = ha + 2.0 - ma_avg + hwa;
     terms.btmp_mom = btmp;
 
     // Momentum residual: VSREZ(2) = -REZT = -(TLOG + BTMP*ULOG - XLOG*0.5*CFX)
@@ -1416,6 +1475,7 @@ fn bldif_with_terms_internal(
     //   Z_U2  =  Z_UL/U2
     let z_cfx = -xlog * 0.5;
     let z_ha = ulog;
+    let z_hwa = ulog;
     let z_tl = ddlog;  // Key: DDLOG=0 for SIMI!
     let z_ul = ddlog * btmp;  // Key: DDLOG=0 for SIMI!
     let z_cfm = z_cfx * cfx_cfm;
@@ -1443,8 +1503,9 @@ fn bldif_with_terms_internal(
     terms.cfx_t1 = cfx_t1;
     terms.cfx_t2 = cfx_t2;
     // Key: z_tl multiplied by DDLOG, so these terms vanish for SIMI
-    let z_t1 = -z_tl / s1.theta + z_cfx * cfx_t1;
-    let z_t2 = z_tl / s2.theta + z_cfx * cfx_t2;
+    // HWA theta Jacobian: Z_HWA*0.5*(-DW/T^2) (XFOIL xblsys.f:1992-1993)
+    let z_t1 = -z_tl / s1.theta + z_cfx * cfx_t1 + z_hwa * 0.5 * (-s1.dw / (s1.theta * s1.theta).max(1e-30));
+    let z_t2 = z_tl / s2.theta + z_cfx * cfx_t2 + z_hwa * 0.5 * (-s2.dw / (s2.theta * s2.theta).max(1e-30));
     let z_u1 = -z_ul / s1.u.max(1e-10);
     let z_u2 = z_ul / s2.u.max(1e-10);
 
@@ -1547,9 +1608,8 @@ fn bldif_with_terms_internal(
     terms.cfx_upw = cfx_upw;
     terms.dix_upw = dix_upw;
 
-    // BTMP for shape equation (XFOIL line 1937)
-    // Note: HWA term is for wake, we ignore for now
-    let btmp_shape = 2.0 * hca / hsa + 1.0 - ha;
+    // BTMP for shape equation (XFOIL line 2038: BTMP = 2*HCA/HSA + 1 - HA - HWA)
+    let btmp_shape = 2.0 * hca / hsa + 1.0 - ha - hwa;
     terms.btmp_shape = btmp_shape;
 
     // Shape parameter residual (XFOIL line 1939)
@@ -1568,6 +1628,7 @@ fn bldif_with_terms_internal(
     terms.z_dix_shape = z_dix;
     let z_hca = 2.0 * ulog / hsa;
     let z_ha_shape = -ulog;
+    let z_hwa_shape = -ulog;
     let z_hl = ddlog;  // Key: DDLOG factor!
     let z_ul_shape = ddlog * btmp_shape;  // Key: DDLOG factor!
     let z_xl_shape = ddlog * (0.5 * cfx_shape - dix);  // Key: DDLOG factor!
@@ -1589,8 +1650,11 @@ fn bldif_with_terms_internal(
     let z_di2 = upw * z_dix * xot2;
 
     // Z_T1, Z_T2: direct theta derivatives from CFX and DIX terms (XFOIL lines 1959-1960)
-    let z_t1_shape = (1.0 - upw) * (z_cfx_shape * s1.cf + z_dix * s1.cd) * (-xot1 / s1.theta);
-    let z_t2_shape = upw * (z_cfx_shape * s2.cf + z_dix * s2.cd) * (-xot2 / s2.theta);
+    // Plus Z_HWA*0.5*(-DW/T^2) contribution (XFOIL lines 2067-2068)
+    let z_t1_shape = (1.0 - upw) * (z_cfx_shape * s1.cf + z_dix * s1.cd) * (-xot1 / s1.theta)
+        + z_hwa_shape * 0.5 * (-s1.dw / (s1.theta * s1.theta).max(1e-30));
+    let z_t2_shape = upw * (z_cfx_shape * s2.cf + z_dix * s2.cd) * (-xot2 / s2.theta)
+        + z_hwa_shape * 0.5 * (-s2.dw / (s2.theta * s2.theta).max(1e-30));
 
     // Z_X1, Z_X2: x derivatives (XFOIL lines 1961-1962)
     let z_x1_shape = (1.0 - upw) * (z_cfx_shape * s1.cf + z_dix * s1.cd) / s1.theta - z_xl_shape / s1.x;
@@ -1754,6 +1818,18 @@ pub fn bldif(
     (res, jac)
 }
 
+pub fn bldif_ncrit(
+    s1: &BlStation,
+    s2: &BlStation,
+    flow_type: FlowType,
+    msq: f64,
+    re: f64,
+    ncrit: f64,
+) -> (BlResiduals, BlJacobian) {
+    let (res, jac, _) = bldif_with_terms_ncrit(s1, s2, flow_type, msq, re, ncrit);
+    (res, jac)
+}
+
 /// Compute BL equations for similarity station (XFOIL BLDIF with ITYP=0)
 ///
 /// At the similarity station (first BL interval), XFOIL uses fixed logarithmic
@@ -1877,7 +1953,7 @@ pub fn trdif(
     st_laminar.theta = tt;
     st_laminar.delta_star = dt;
     st_laminar.ctau = 0.0;  // Laminar
-    st_laminar.ampl = 9.0;  // At Ncrit
+    st_laminar.ampl = 9.0;
     st_laminar.is_laminar = true;
     st_laminar.is_turbulent = false;
     
@@ -1895,8 +1971,10 @@ pub fn trdif(
     st_turb_temp.u = ut;
     st_turb_temp.theta = tt;
     st_turb_temp.delta_star = dt;
-    st_turb_temp.ctau = 0.03;  // Temporary value for blvar
-    st_turb_temp.ampl = 0.0;
+    // XFOIL evaluates CQT at the transition point before ST is applied,
+    // using the transition-point laminar state (ctau=0, ampl=Ncrit).
+    st_turb_temp.ctau = 0.0;
+    st_turb_temp.ampl = 9.0;
     st_turb_temp.is_laminar = false;
     st_turb_temp.is_turbulent = true;
     blvar(&mut st_turb_temp, FlowType::Turbulent, msq, re);
@@ -2046,8 +2124,10 @@ pub fn trdif_full(
     st_turb_temp.u = ut;
     st_turb_temp.theta = tt;
     st_turb_temp.delta_star = dt;
-    st_turb_temp.ctau = 0.03;
-    st_turb_temp.ampl = 0.0;
+    // XFOIL evaluates CQT at the transition point before ST is applied,
+    // using the transition-point laminar state (ctau=0, ampl=Ncrit).
+    st_turb_temp.ctau = 0.0;
+    st_turb_temp.ampl = 9.0;
     st_turb_temp.is_laminar = false;
     st_turb_temp.is_turbulent = true;
     blvar(&mut st_turb_temp, FlowType::Turbulent, msq, re);
@@ -2284,8 +2364,10 @@ pub fn trdif_turb_terms(
     st_turb_temp.u = ut;
     st_turb_temp.theta = tt;
     st_turb_temp.delta_star = dt;
-    st_turb_temp.ctau = 0.03;
-    st_turb_temp.ampl = 0.0;
+    // XFOIL evaluates CQT at the transition point before ST is applied,
+    // using the transition-point laminar state (ctau=0, ampl=Ncrit).
+    st_turb_temp.ctau = 0.0;
+    st_turb_temp.ampl = 9.0;
     st_turb_temp.is_laminar = false;
     st_turb_temp.is_turbulent = true;
     blvar(&mut st_turb_temp, FlowType::Turbulent, msq, re);

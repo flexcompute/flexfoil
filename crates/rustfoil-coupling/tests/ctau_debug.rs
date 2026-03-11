@@ -325,7 +325,7 @@ fn test_trchek2_full_derivatives() {
     // Call trchek2_full
     let result = trchek2_full(
         x1, x2, t1, t2, d1, d2, u1, u2,
-        hk1, hk2, rt1, rt2, ampl1, ncrit, msq, re,
+        hk1, hk2, rt1, rt2, ampl1, ncrit, None, msq, re,
     );
     
     println!("\n=== trchek2_full results ===");
@@ -395,7 +395,7 @@ fn test_trdif_full_residuals() {
     let tr = trchek2_full(
         s1.x, s2.x, s1.theta, s2.theta, s1.delta_star, s2.delta_star,
         s1.u, s2.u, s1.hk, s2.hk, s1.r_theta, s2.r_theta,
-        s1.ampl, ncrit, msq, re,
+        s1.ampl, ncrit, None, msq, re,
     );
     
     println!("\n=== trdif_full test ===");

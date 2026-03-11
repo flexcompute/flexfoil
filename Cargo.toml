@@ -8,7 +8,7 @@ members = [
     "crates/rustfoil-testkit",
     "crates/rustfoil-wasm",
     "crates/rustfoil-cli",
-    "crates/rustfoil-inviscid",
+    "crates/rustfoil-inviscid", "crates/rustfoil-xfoil",
 ]
 
 [workspace.package]

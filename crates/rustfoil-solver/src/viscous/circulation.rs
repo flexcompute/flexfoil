@@ -28,6 +28,8 @@
 
 use rustfoil_bl::state::BlStation;
 
+use super::state::XfoilLikeViscousState;
+
 /// Set QVIS from the current edge velocities (Ue).
 ///
 /// This is XFOIL's QVFUE subroutine. QVIS is the panel tangential velocity
@@ -61,12 +63,20 @@ pub fn update_qvis_from_uedg_two_surfaces(
     lower_stations: &[BlStation],
 ) -> (Vec<f64>, Vec<f64>) {
     // Upper surface: VTI = +1 (velocity in same direction as panel tangent)
-    let upper_qvis: Vec<f64> = upper_stations.iter().map(|s| s.u).collect();
+    let upper_qvis: Vec<f64> = upper_stations
+        .iter()
+        .enumerate()
+        .map(|(i, s)| if i == 0 { 0.0 } else { s.u })
+        .collect();
     
     // Lower surface: VTI = -1 (velocity opposite to panel tangent for same sign of lift)
     // However, in our convention, lower surface Ue is already stored with the proper sign
     // based on how we extract it from the inviscid solution.
-    let lower_qvis: Vec<f64> = lower_stations.iter().map(|s| s.u).collect();
+    let lower_qvis: Vec<f64> = lower_stations
+        .iter()
+        .enumerate()
+        .map(|(i, s)| if i == 0 { 0.0 } else { s.u })
+        .collect();
     
     (upper_qvis, lower_qvis)
 }
@@ -92,6 +102,44 @@ pub fn update_circulation_from_qvis(qvis: &[f64]) -> Vec<f64> {
     }
     
     gamma
+}
+
+/// Phase 3 canonical owner path: update `QVIS/GAM/GAM_A` in the canonical
+/// viscous state from its currently owned BL rows.
+pub fn refresh_canonical_panel_arrays(state: &mut XfoilLikeViscousState) {
+    state.refresh_panel_arrays_from_rows();
+}
+
+/// Project split BL stations back onto the closed airfoil panel ordering.
+///
+/// This is the panel-native QVFUE path used by XFOIL: only real BL stations
+/// (`IBL >= 2`) write panel values, and the lower surface carries `VTI = -1`.
+///
+/// Transitional adapter: Phase 3 makes the canonical state the primary owner,
+/// so this helper now builds the result through that state instead of directly
+/// projecting from split station vectors in the main solve path.
+pub fn project_panel_qvis_from_two_surfaces(
+    upper_stations: &[BlStation],
+    lower_stations: &[BlStation],
+    n_panels: usize,
+) -> Vec<f64> {
+    let mut state = XfoilLikeViscousState::from_station_views(upper_stations, lower_stations, n_panels);
+    refresh_canonical_panel_arrays(&mut state);
+    state.panel_qvis().to_vec()
+}
+
+/// Project split BL stations to the authoritative airfoil GAM array.
+///
+/// Transitional adapter: Phase 3 makes the canonical state the primary owner,
+/// so this helper now returns the canonical panel gamma snapshot.
+pub fn project_panel_gamma_from_two_surfaces(
+    upper_stations: &[BlStation],
+    lower_stations: &[BlStation],
+    n_panels: usize,
+) -> Vec<f64> {
+    let mut state = XfoilLikeViscousState::from_station_views(upper_stations, lower_stations, n_panels);
+    refresh_canonical_panel_arrays(&mut state);
+    state.panel_gamma().to_vec()
 }
 
 /// Compute CL from two-surface gamma distribution.
@@ -265,6 +313,26 @@ mod tests {
         
         let cl = compute_cl_from_gamma(&upper_gamma, &lower_gamma, &upper_arc, &lower_arc);
         assert!((cl - 1.0).abs() < 0.1, "Expected CL ≈ 1.0, got {}", cl);
+    }
+
+    #[test]
+    fn test_refresh_canonical_panel_arrays_copies_qinv_a_into_gam_a() {
+        let mut upper = vec![BlStation::new(), BlStation::new()];
+        let mut lower = vec![BlStation::new(), BlStation::new()];
+        upper[1].panel_idx = 2;
+        upper[1].u = 0.9;
+        lower[1].panel_idx = 3;
+        lower[1].u = 0.4;
+
+        let mut state = XfoilLikeViscousState::from_station_views(&upper, &lower, 5);
+        state.set_panel_inviscid_arrays(&[0.0; 5], &[0.1, 0.2, 0.3, 0.4, 0.5]);
+
+        refresh_canonical_panel_arrays(&mut state);
+
+        assert!((state.panel_qvis()[2] - 0.9).abs() < 1.0e-12);
+        assert!((state.panel_qvis()[3] + 0.4).abs() < 1.0e-12);
+        assert_eq!(state.panel_gamma_alpha()[1], 0.2);
+        assert_eq!(state.panel_gamma()[4], 0.0);
     }
     
     #[test]

@@ -1,0 +1,767 @@
+# XFOIL vs RustFoil Formula Comparison Reference
+
+**Purpose**: Term-by-term comparison of XFOIL's turbulent boundary layer formulas with RustFoil's implementation. Use this for offline study to identify CD errors.
+
+---
+
+## File Locations
+
+| Formula | XFOIL File | XFOIL Lines | RustFoil File |
+|---------|------------|-------------|---------------|
+| Constants | `BLPAR.INC` | - | `constants.rs` |
+| BLVAR | `xblsys.f` | 784-1121 | `equations.rs` 248-803 |
+| BLDIF | `xblsys.f` | 1605-2119 | `equations.rs` 948-2200+ |
+| Hkin | `xblsys.f` | 2425-2442 | `closures/hkin.rs` |
+| Hs Laminar | `xblsys.f` | 2483-2514 (HSL) | `closures/hs.rs` 40-81 |
+| Hs Turbulent | `xblsys.f` | 2558-2649 (HST) | `closures/hs.rs` 107-198 |
+| Cf Laminar | `xblsys.f` | 2517-2541 (CFL) | `closures/cf.rs` 41-65 |
+| Cf Turbulent | `xblsys.f` | 2653-2680 (CFT) | `closures/cf.rs` 85-135 |
+| DI Laminar | `xblsys.f` | 2446-2461 (DIL) | `closures/dissipation.rs` 108-127 |
+| DI Turbulent | `xblsys.f` | 2545-2555 (DIT) | `closures/dissipation.rs` 159-176 |
+| DI Wake | `xblsys.f` | 2464-2480 (DILW) | `closures/dissipation.rs` 208-230 |
+| DAMPL | `xblsys.f` | 2123-2244 | `closures/transition.rs` 77-165 |
+| DAMPL2 | `xblsys.f` | 2248-2421 | **NOT IMPLEMENTED** |
+| Hc (density) | `xblsys.f` | 2684-2693 (HCT) | `closures/density.rs` |
+
+---
+
+## 1. Constants (BLPAR.INC vs constants.rs)
+
+### XFOIL (from BLPAR.INC)
+```fortran
+SCCON  = 5.6      ! Shear stress coefficient
+GACON  = 6.70     ! G-beta A constant
+GBCON  = 0.75     ! G-beta B constant
+GCCON  = 18.0     ! G-beta C constant
+DLCON  = 0.9      ! Dissipation length constant
+DUXCON = 1.0      ! Ux constant
+CTCON  = 0.5/(GACON**2 * GBCON)
+CFFAC  = 1.0      ! Cf scaling factor
+```
+
+### RustFoil (constants.rs)
+```rust
+pub const SCCON: f64 = 5.6;
+pub const GACON: f64 = 6.70;
+pub const GBCON: f64 = 0.75;
+pub const GCCON: f64 = 18.0;
+pub const DLCON: f64 = 0.9;
+pub const DUXCON: f64 = 1.0;
+pub const CTCON: f64 = 0.5 / (GACON * GACON * GBCON);  // ≈ 0.01486
+pub const CFFAC: f64 = 1.0;
+```
+
+**✅ MATCH**: All constants are identical.
+
+---
+
+## 2. Kinematic Shape Factor Hk (HKIN)
+
+### XFOIL (lines 2425-2442)
+```fortran
+HK     = (H - 0.29*MSQ) / (1.0 + 0.113*MSQ)
+HK_H   = 1.0 / (1.0 + 0.113*MSQ)
+HK_MSQ = (-.29 - 0.113*HK) / (1.0 + 0.113*MSQ)
+```
+
+### RustFoil (closures/hkin.rs)
+```rust
+let denom = 1.0 + 0.113 * msq;
+let hk = (h - 0.29 * msq) / denom;
+let hk_h = 1.0 / denom;
+let hk_msq = (-0.29 - 0.113 * hk) / denom;
+```
+
+**✅ MATCH**: Whitfield compressibility correction is identical.
+
+---
+
+## 3. Energy Shape Factor Hs
+
+### 3a. Laminar Hs (HSL)
+
+#### XFOIL (lines 2483-2514)
+```fortran
+IF(HK.LT.4.35) THEN
+  TMP = HK - 4.35
+  HS    = 0.0111*TMP**2/(HK+1.0)
+        - 0.0278*TMP**3/(HK+1.0) + 1.528
+        - 0.0002*(TMP*HK)**2
+  HS_HK = 0.0111*(2.0*TMP - TMP**2/(HK+1.0))/(HK+1.0)
+        - 0.0278*(3.0*TMP**2 - TMP**3/(HK+1.0))/(HK+1.0)
+        - 0.0002*2.0*TMP*HK*(TMP + HK)
+ELSE
+  HS2 = 0.015
+  HS    = HS2*(HK-4.35)**2/HK + 1.528
+  HS_HK = HS2*2.0*(HK-4.35)/HK - HS2*(HK-4.35)**2/HK**2
+ENDIF
+HS_RT  = 0.
+HS_MSQ = 0.
+```
+
+#### RustFoil (closures/hs.rs lines 40-81)
+```rust
+let (hs, hs_hk) = if hk < 4.35 {
+    let tmp = hk - 4.35;
+    let tmp2 = tmp * tmp;
+    let tmp3 = tmp2 * tmp;
+    let hk1 = hk + 1.0;
+    let hs = 0.0111 * tmp2 / hk1 - 0.0278 * tmp3 / hk1 + 1.528
+        - 0.0002 * (tmp * hk).powi(2);
+    let hs_hk = 0.0111 * (2.0 * tmp - tmp2 / hk1) / hk1
+        - 0.0278 * (3.0 * tmp2 - tmp3 / hk1) / hk1
+        - 0.0002 * 2.0 * tmp * hk * (tmp + hk);
+    (hs, hs_hk)
+} else {
+    let hs2 = 0.015;
+    let diff = hk - 4.35;
+    let hs = hs2 * diff.powi(2) / hk + 1.528;
+    let hs_hk = hs2 * 2.0 * diff / hk - hs2 * diff.powi(2) / hk.powi(2);
+    (hs, hs_hk)
+};
+```
+
+**✅ MATCH**: Formulas are identical.
+
+---
+
+### 3b. Turbulent Hs (HST)
+
+#### XFOIL (lines 2558-2649)
+```fortran
+DATA HSMIN, DHSINF / 1.500, 0.015 /
+
+! Step 1: Compute HO threshold
+IF(RT.GT.400.0) THEN
+  HO    = 3.0 + 400.0/RT
+  HO_RT =     - 400.0/RT**2
+ELSE
+  HO    = 4.0
+  HO_RT = 0.
+ENDIF
+
+! Step 2: Clip RTZ at minimum 200
+IF(RT.GT.200.0) THEN
+  RTZ    = RT
+  RTZ_RT = 1.
+ELSE
+  RTZ    = 200.0
+  RTZ_RT = 0.
+ENDIF
+
+! Step 3: Attached vs Separated branches
+IF(HK.LT.HO) THEN
+  ! ATTACHED branch (new correlation 29 Nov 91)
+  HR    = (HO - HK)/(HO-1.0)
+  HR_HK =     - 1.0/(HO-1.0)
+  HR_RT = (1.0 - HR)/(HO-1.0) * HO_RT
+  HS    = (2.0-HSMIN-4.0/RTZ)*HR**2 * 1.5/(HK+0.5) + HSMIN + 4.0/RTZ
+  HS_HK = -(2.0-HSMIN-4.0/RTZ)*HR**2 * 1.5/(HK+0.5)**2
+        + (2.0-HSMIN-4.0/RTZ)*HR*2.0 * 1.5/(HK+0.5) * HR_HK
+  HS_RT = (2.0-HSMIN-4.0/RTZ)*HR*2.0 * 1.5/(HK+0.5) * HR_RT
+        + (HR**2 * 1.5/(HK+0.5) - 1.0)*4.0/RTZ**2 * RTZ_RT
+ELSE
+  ! SEPARATED branch
+  GRT = LOG(RTZ)
+  HDIF = HK - HO
+  RTMP = HK - HO + 4.0/GRT
+  HTMP    = 0.007*GRT/RTMP**2 + DHSINF/HK
+  HTMP_HK = -.014*GRT/RTMP**3 - DHSINF/HK**2
+  HTMP_RT = -.014*GRT/RTMP**3 * (-HO_RT - 4.0/GRT**2/RTZ * RTZ_RT)
+          + 0.007/RTMP**2 / RTZ * RTZ_RT
+  HS    = HDIF**2 * HTMP + HSMIN + 4.0/RTZ
+  HS_HK = HDIF*2.0* HTMP + HDIF**2 * HTMP_HK
+  HS_RT = HDIF**2 * HTMP_RT - 4.0/RTZ**2 * RTZ_RT
+        + HDIF*2.0* HTMP * (-HO_RT)
+ENDIF
+
+! Step 4: Whitfield compressibility correction
+FM = 1.0 + 0.014*MSQ
+HS     = (HS + 0.028*MSQ) / FM
+HS_HK  = HS_HK / FM
+HS_RT  = HS_RT / FM
+HS_MSQ = 0.028/FM - 0.014*HS/FM
+```
+
+#### RustFoil (closures/hs.rs lines 107-198)
+```rust
+const HSMIN: f64 = 1.500;
+const DHSINF: f64 = 0.015;
+
+// Step 1: HO threshold
+let (ho, ho_rt) = if rt > 400.0 {
+    (3.0 + 400.0 / rt, -400.0 / (rt * rt))
+} else {
+    (4.0, 0.0)
+};
+
+// Step 2: RTZ clamping
+let (rtz, rtz_rt) = if rt > 200.0 {
+    (rt, 1.0)
+} else {
+    (200.0, 0.0)
+};
+
+// Step 3: Attached/Separated branches
+let (mut hs, mut hs_hk, mut hs_rt) = if hk < ho {
+    // ATTACHED
+    let hr = (ho - hk) / (ho - 1.0);
+    let hr_hk = -1.0 / (ho - 1.0);
+    let hr_rt = (1.0 - hr) / (ho - 1.0) * ho_rt;
+    let coef = 2.0 - HSMIN - 4.0 / rtz;
+    let hr2 = hr * hr;
+    let hk_term = 1.5 / (hk + 0.5);
+    let hs = coef * hr2 * hk_term + HSMIN + 4.0 / rtz;
+    let hs_hk = -coef * hr2 * 1.5 / (hk + 0.5).powi(2)
+        + coef * hr * 2.0 * hk_term * hr_hk;
+    let hs_rt = coef * hr * 2.0 * hk_term * hr_rt
+        + (hr2 * hk_term - 1.0) * 4.0 / (rtz * rtz) * rtz_rt;
+    (hs, hs_hk, hs_rt)
+} else {
+    // SEPARATED
+    let grt = rtz.ln();
+    let hdif = hk - ho;
+    let rtmp = hk - ho + 4.0 / grt;
+    let htmp = 0.007 * grt / (rtmp * rtmp) + DHSINF / hk;
+    let htmp_hk = -0.014 * grt / rtmp.powi(3) - DHSINF / (hk * hk);
+    let htmp_rt = -0.014 * grt / rtmp.powi(3) * (-ho_rt - 4.0 / (grt * grt) / rtz * rtz_rt)
+        + 0.007 / (rtmp * rtmp) / rtz * rtz_rt;
+    let hdif2 = hdif * hdif;
+    let hs = hdif2 * htmp + HSMIN + 4.0 / rtz;
+    let hs_hk = hdif * 2.0 * htmp + hdif2 * htmp_hk;
+    let hs_rt = hdif2 * htmp_rt - 4.0 / (rtz * rtz) * rtz_rt + hdif * 2.0 * htmp * (-ho_rt);
+    (hs, hs_hk, hs_rt)
+};
+
+// Step 4: Whitfield correction
+let fm = 1.0 + 0.014 * msq;
+hs = (hs + 0.028 * msq) / fm;
+hs_hk /= fm;
+hs_rt /= fm;
+let hs_msq = 0.028 / fm - 0.014 * hs / fm;
+```
+
+**✅ MATCH**: Formulas are identical.
+
+---
+
+## 4. Skin Friction Coefficient Cf
+
+### 4a. Laminar Cf (CFL)
+
+#### XFOIL (lines 2517-2541)
+```fortran
+IF(HK.LT.5.5) THEN
+  TMP = (5.5-HK)**3 / (HK+1.0)
+  CF    = (0.0727*TMP - 0.07) / RT
+  CF_HK = (-.0727*TMP*3.0/(5.5-HK) - 0.0727*TMP/(HK+1.0)) / RT
+ELSE
+  TMP = 1.0 - 1.0/(HK-4.5)
+  CF    = (0.015*TMP**2 - 0.07) / RT
+  CF_HK = (0.015*TMP*2.0/(HK-4.5)**2) / RT
+ENDIF
+CF_RT = -CF/RT
+CF_MSQ = 0.0
+```
+
+#### RustFoil (closures/cf.rs lines 41-65)
+```rust
+let (cf, cf_hk) = if hk < 5.5 {
+    let tmp = (5.5 - hk).powi(3) / (hk + 1.0);
+    let cf = (0.0727 * tmp - 0.07) / rt;
+    let cf_hk = (-0.0727 * tmp * 3.0 / (5.5 - hk) - 0.0727 * tmp / (hk + 1.0)) / rt;
+    (cf, cf_hk)
+} else {
+    let tmp = 1.0 - 1.0 / (hk - 4.5);
+    let cf = (0.015 * tmp.powi(2) - 0.07) / rt;
+    let cf_hk = (0.015 * tmp * 2.0 / (hk - 4.5).powi(2)) / rt;
+    (cf, cf_hk)
+};
+let cf_rt = -cf / rt;
+let cf_msq = 0.0;
+```
+
+**✅ MATCH**: Formulas are identical.
+
+---
+
+### 4b. Turbulent Cf (CFT)
+
+#### XFOIL (lines 2653-2680)
+```fortran
+DATA GAM /1.4/
+GM1 = GAM - 1.0
+FC = SQRT(1.0 + 0.5*GM1*MSQ)
+GRT = LOG(RT/FC)
+GRT = MAX(GRT, 3.0)
+
+GEX = -1.74 - 0.31*HK
+
+ARG = -1.33*HK
+ARG = MAX(-20.0, ARG)
+
+THK = TANH(4.0 - HK/0.875)
+
+CFO = CFFAC * 0.3*EXP(ARG) * (GRT/2.3026)**GEX
+CF     = (CFO + 1.1E-4*(THK-1.0)) / FC
+CF_HK  = (-1.33*CFO - 0.31*LOG(GRT/2.3026)*CFO
+         - 1.1E-4*(1.0-THK**2)/0.875) / FC
+CF_RT  = GEX*CFO/(FC*GRT) / RT
+CF_MSQ = GEX*CFO/(FC*GRT) * (-0.25*GM1/FC**2) - 0.25*GM1*CF/FC**2
+```
+
+#### RustFoil (closures/cf.rs lines 85-135)
+```rust
+const GAM: f64 = 1.4;
+const LN10: f64 = 2.302_585_092_994_046;
+
+let gm1 = GAM - 1.0;
+let fc = (1.0 + 0.5 * gm1 * msq).sqrt();
+let grt_raw = (rt / fc).ln();
+let grt = grt_raw.max(3.0);
+
+let gex = -1.74 - 0.31 * hk;
+let arg = (-1.33 * hk).max(-20.0);
+let thk = (4.0 - hk / 0.875).tanh();
+
+let cfo = CFFAC * 0.3 * arg.exp() * (grt / LN10).powf(gex);
+let cf = (cfo + 1.1e-4 * (thk - 1.0)) / fc;
+
+let cf_hk = (-1.33 * cfo - 0.31 * (grt / LN10).ln() * cfo
+    - 1.1e-4 * (1.0 - thk.powi(2)) / 0.875) / fc;
+let cf_rt = gex * cfo / (fc * grt) / rt;
+let cf_msq = gex * cfo / (fc * grt) * (-0.25 * gm1 / fc.powi(2)) 
+    - 0.25 * gm1 * cf / fc.powi(2);
+```
+
+**✅ MATCH**: Formulas are identical.
+
+---
+
+## 5. Dissipation Coefficient DI
+
+### 5a. Laminar DI (DIL)
+
+#### XFOIL (lines 2446-2461)
+```fortran
+IF(HK.LT.4.0) THEN
+  DI    = (0.00205*(4.0-HK)**5.5 + 0.207) / RT
+  DI_HK = (-.00205*5.5*(4.0-HK)**4.5) / RT
+ELSE
+  HKB = HK - 4.0
+  DEN = 1.0 + 0.02*HKB**2
+  DI    = (-.0016*HKB**2/DEN + 0.207) / RT
+  DI_HK = (-.0016*2.0*HKB*(1.0/DEN - 0.02*HKB**2/DEN**2)) / RT
+ENDIF
+DI_RT = -DI/RT
+```
+
+#### RustFoil (closures/dissipation.rs lines 108-127)
+```rust
+let (di, di_hk) = if hk < 4.0 {
+    let di = (0.00205 * (4.0 - hk).powf(5.5) + 0.207) / rt;
+    let di_hk = (-0.00205 * 5.5 * (4.0 - hk).powf(4.5)) / rt;
+    (di, di_hk)
+} else {
+    let hkb = hk - 4.0;
+    let den = 1.0 + 0.02 * hkb.powi(2);
+    let di = (-0.0016 * hkb.powi(2) / den + 0.207) / rt;
+    let di_hk = (-0.0016 * 2.0 * hkb * (1.0 / den - 0.02 * hkb.powi(2) / den.powi(2))) / rt;
+    (di, di_hk)
+};
+let di_rt = -di / rt;
+```
+
+**✅ MATCH**: Formulas are identical.
+
+---
+
+### 5b. Turbulent DI (DIT)
+
+#### XFOIL (lines 2545-2555)
+```fortran
+DI    = (0.5*CF*US + ST*ST*(1.0-US)) * 2.0/HS
+DI_HS = -(0.5*CF*US + ST*ST*(1.0-US)) * 2.0/HS**2
+DI_US = (0.5*CF - ST*ST) * 2.0/HS
+DI_CF = (0.5*US) * 2.0/HS
+DI_ST = (2.0*ST*(1.0-US)) * 2.0/HS
+```
+
+#### RustFoil (closures/dissipation.rs lines 159-176)
+```rust
+let core = 0.5 * cf * us + st * st * (1.0 - us);
+let di = core * 2.0 / hs;
+let di_hs = -core * 2.0 / hs.powi(2);
+let di_us = (0.5 * cf - st * st) * 2.0 / hs;
+let di_cf = (0.5 * us) * 2.0 / hs;
+let di_st = (2.0 * st * (1.0 - us)) * 2.0 / hs;
+```
+
+**✅ MATCH**: Formulas are identical.
+
+---
+
+### 5c. Wake DI (DILW)
+
+#### XFOIL (lines 2464-2480)
+```fortran
+MSQ = 0.
+CALL HSL(HK, RT, MSQ, HS, HS_HK, HS_RT, HS_MSQ)
+
+RCD    = 1.10 * (1.0 - 1.0/HK)**2 / HK
+RCD_HK = -1.10 * (1.0 - 1.0/HK)*2.0 / HK**3 - RCD/HK
+
+DI    = 2.0*RCD / (HS*RT)
+DI_HK = 2.0*RCD_HK/(HS*RT) - (DI/HS)*HS_HK
+DI_RT = -DI/RT - (DI/HS)*HS_RT
+```
+
+#### RustFoil (closures/dissipation.rs lines 208-230)
+```rust
+let (hs, hs_hk) = hsl_simple(hk);
+let hs_rt = 0.0;
+
+let one_minus_inv_hk = 1.0 - 1.0 / hk;
+let rcd = 1.10 * one_minus_inv_hk.powi(2) / hk;
+let rcd_hk = -1.10 * one_minus_inv_hk * 2.0 / hk.powi(3) - rcd / hk;
+
+let di = 2.0 * rcd / (hs * rt);
+let di_hk = 2.0 * rcd_hk / (hs * rt) - (di / hs) * hs_hk;
+let di_rt = -di / rt - (di / hs) * hs_rt;
+```
+
+**✅ MATCH**: Formulas are identical.
+
+---
+
+## 6. Amplification Rate (DAMPL)
+
+### XFOIL (lines 2123-2244)
+```fortran
+DATA DGR / 0.08 /
+
+HMI = 1.0/(HK - 1.0)
+HMI_HK = -HMI**2
+
+! Critical Rtheta correlation
+AA    = 2.492*HMI**0.43
+AA_HK = (AA/HMI)*0.43 * HMI_HK
+
+BB    = TANH(14.0*HMI - 9.24)
+BB_HK = (1.0 - BB*BB) * 14.0 * HMI_HK
+
+GRCRIT = AA + 0.7*(BB + 1.0)
+GRC_HK = AA_HK + 0.7* BB_HK
+
+GR = LOG10(RT)
+GR_RT = 1.0 / (2.3025851*RT)
+
+IF(GR .LT. GRCRIT-DGR) THEN
+  ! Subcritical - no amplification
+  AX = 0.
+  AX_HK = 0.
+  AX_TH = 0.
+  AX_RT = 0.
+ELSE
+  ! Smooth ramp near critical
+  RNORM = (GR - (GRCRIT-DGR)) / (2.0*DGR)
+  RN_HK = -GRC_HK / (2.0*DGR)
+  RN_RT = GR_RT / (2.0*DGR)
+
+  IF(RNORM .GE. 1.0) THEN
+    RFAC = 1.0
+    RFAC_HK = 0.
+    RFAC_RT = 0.
+  ELSE
+    RFAC = 3.0*RNORM**2 - 2.0*RNORM**3
+    RFAC_RN = 6.0*RNORM - 6.0*RNORM**2
+    RFAC_HK = RFAC_RN*RN_HK
+    RFAC_RT = RFAC_RN*RN_RT
+  ENDIF
+
+  ! Amplification envelope slope
+  ARG = 3.87*HMI - 2.52
+  ARG_HK = 3.87*HMI_HK
+
+  EX = EXP(-ARG**2)
+  EX_HK = EX * (-2.0*ARG*ARG_HK)
+
+  DADR = 0.028*(HK-1.0) - 0.0345*EX
+  DADR_HK = 0.028 - 0.0345*EX_HK
+
+  ! m(H) correlation (March 1991)
+  AF = -0.05 + 2.7*HMI - 5.5*HMI**2 + 3.0*HMI**3
+  AF_HMI = 2.7 - 11.0*HMI + 9.0*HMI**2
+  AF_HK = AF_HMI*HMI_HK
+
+  ! Final amplification rate
+  AX    = (AF*DADR/TH) * RFAC
+  AX_HK = (AF_HK*DADR/TH + AF*DADR_HK/TH) * RFAC + (AF*DADR/TH) * RFAC_HK
+  AX_TH = -AX/TH
+  AX_RT = (AF*DADR/TH) * RFAC_RT
+ENDIF
+```
+
+### RustFoil (closures/transition.rs lines 77-165)
+```rust
+const DGR: f64 = 0.08;
+
+let hmi = 1.0 / (hk - 1.0);
+let hmi_hk = -hmi * hmi;
+
+let aa = 2.492 * hmi.powf(0.43);
+let aa_hk = (aa / hmi) * 0.43 * hmi_hk;
+
+let bb_arg = 14.0 * hmi - 9.24;
+let bb = bb_arg.tanh();
+let bb_hk = (1.0 - bb * bb) * 14.0 * hmi_hk;
+
+let grcrit = aa + 0.7 * (bb + 1.0);
+let grc_hk = aa_hk + 0.7 * bb_hk;
+
+let gr = rt.log10();
+let gr_rt = 1.0 / (std::f64::consts::LN_10 * rt);
+
+if gr < grcrit - DGR {
+    return AmplificationResult::default();  // Zero amplification
+}
+
+let rnorm = (gr - (grcrit - DGR)) / (2.0 * DGR);
+let rn_hk = -grc_hk / (2.0 * DGR);
+let rn_rt = gr_rt / (2.0 * DGR);
+
+let (rfac, rfac_hk, rfac_rt) = if rnorm >= 1.0 {
+    (1.0, 0.0, 0.0)
+} else {
+    let rfac = 3.0 * rnorm.powi(2) - 2.0 * rnorm.powi(3);
+    let rfac_rn = 6.0 * rnorm - 6.0 * rnorm.powi(2);
+    (rfac, rfac_rn * rn_hk, rfac_rn * rn_rt)
+};
+
+let arg = 3.87 * hmi - 2.52;
+let arg_hk = 3.87 * hmi_hk;
+
+let ex = (-arg * arg).exp();
+let ex_hk = ex * (-2.0 * arg * arg_hk);
+
+let dadr = 0.028 * (hk - 1.0) - 0.0345 * ex;
+let dadr_hk = 0.028 - 0.0345 * ex_hk;
+
+let af = -0.05 + 2.7 * hmi - 5.5 * hmi.powi(2) + 3.0 * hmi.powi(3);
+let af_hmi = 2.7 - 11.0 * hmi + 9.0 * hmi.powi(2);
+let af_hk = af_hmi * hmi_hk;
+
+let ax_base = af * dadr / th;
+let ax = ax_base * rfac;
+let ax_hk = (af_hk * dadr / th + af * dadr_hk / th) * rfac + ax_base * rfac_hk;
+let ax_th = -ax / th;
+let ax_rt = ax_base * rfac_rt;
+```
+
+**✅ MATCH**: Formulas are identical.
+
+---
+
+## 7. ⚠️ DAMPL2 (Separated Flow Amplification) - NOT IMPLEMENTED
+
+### XFOIL (lines 2248-2421)
+XFOIL has a **second amplification routine** `DAMPL2` that blends in a modified correlation for **separated profiles** (Hk > 3.5):
+
+```fortran
+DATA HK1, HK2 / 3.5, 4.0 /
+
+IF(HK .LT. HK1) RETURN  ! Use DAMPL only
+
+! Blend between DAMPL (AX1) and modified amplification (AX2)
+HNORM = (HK - HK1) / (HK2 - HK1)
+IF(HNORM .GE. 1.0) THEN
+  HFAC = 1.0
+ELSE
+  HFAC = 3.0*HNORM**2 - 2.0*HNORM**3
+ENDIF
+
+! AX1 = normal envelope amplification (from DAMPL)
+AX1 = AX
+
+! AX2 = modified amplification for separated profiles
+GR0 = 0.30 + 0.35 * EXP(-0.15*(HK-5.0))
+TNR = TANH(1.2*(GR - GR0))
+AX2 = (0.086*TNR - 0.25/(HK-1.0)**1.5) / TH
+IF(AX2 .LT. 0.0) AX2 = 0.0
+
+! Blend: AX = HFAC*AX2 + (1-HFAC)*AX1
+AX = HFAC*AX2 + (1.0 - HFAC)*AX1
+```
+
+### RustFoil
+**❌ NOT IMPLEMENTED** - RustFoil only has DAMPL (the basic correlation).
+
+**Impact**: At high Hk (>3.5, i.e., near separation), RustFoil's transition prediction may differ from XFOIL. This could affect transition location prediction in separated regions.
+
+---
+
+## 8. BLDIF (Turbulent Shear-Lag Equation)
+
+This is the **most complex and critical** formula for turbulent BL accuracy.
+
+### XFOIL (lines 1753-1955) - Turbulent Part
+```fortran
+!***** turbulent part -->  set shear lag equation
+SA  = (1.0-UPW)*S1  + UPW*S2
+CQA = (1.0-UPW)*CQ1 + UPW*CQ2
+CFA = (1.0-UPW)*CF1 + UPW*CF2
+HKA = (1.0-UPW)*HK1 + UPW*HK2
+
+USA = 0.5*(US1 + US2)
+RTA = 0.5*(RT1 + RT2)
+DEA = 0.5*(DE1 + DE2)
+DA  = 0.5*(D1  + D2)
+
+IF(ITYP.EQ.3) THEN
+  ALD = DLCON  ! Wake: increased dissipation length
+ELSE
+  ALD = 1.0
+ENDIF
+
+! Equilibrium 1/Ue dUe/dx (NEW 12 Oct 94)
+IF(ITYP.EQ.2) THEN
+  GCC = GCCON
+  HKC = HKA - 1.0 - GCC/RTA
+  IF(HKC .LT. 0.01) HKC = 0.01
+ELSE
+  GCC = 0.0
+  HKC = HKA - 1.0
+ENDIF
+
+HR = HKC / (GACON*ALD*HKA)
+UQ = (0.5*CFA - HR**2) / (GBCON*DA)
+
+SCC = SCCON*1.333/(1.0+USA)
+
+SLOG = LOG(S2/S1)
+DXI = X2 - X1
+
+! SHEAR-LAG RESIDUAL:
+REZC = SCC*(CQA - SA*ALD)*DXI
+     - DEA*2.0*SLOG
+     + DEA*2.0*(UQ*DXI - ULOG)*DUXCON
+```
+
+### RustFoil (equations.rs, turbulent shear-lag section)
+The turbulent shear-lag equation in RustFoil follows the same structure:
+
+```rust
+// Upwind-weighted averages
+let sa = (1.0 - upw) * s1.ctau + upw * s2.ctau;
+let cqa = (1.0 - upw) * s1.cq + upw * s2.cq;
+let cfa = (1.0 - upw) * s1.cf + upw * s2.cf;
+let hka = (1.0 - upw) * s1.hk + upw * s2.hk;
+
+let usa = 0.5 * (s1.us + s2.us);
+let rta = 0.5 * (s1.r_theta + s2.r_theta);
+let dea = 0.5 * (s1.de + s2.de);
+let da = 0.5 * (s1.delta_star + s2.delta_star);
+
+let ald = if flow_type == FlowType::Wake { DLCON } else { 1.0 };
+
+// HKC computation
+let gcc = if flow_type == FlowType::Turbulent { GCCON } else { 0.0 };
+let mut hkc = hka - 1.0 - gcc / rta.max(1.0);
+if flow_type == FlowType::Turbulent && hkc < 0.01 {
+    hkc = 0.01;
+}
+if flow_type != FlowType::Turbulent {
+    hkc = hka - 1.0;
+}
+
+let hr = hkc / (GACON * ald * hka);
+let uq = (0.5 * cfa - hr * hr) / (GBCON * da);
+
+let scc = SCCON * 1.333 / (1.0 + usa);
+
+let slog = (s2.ctau / s1.ctau.max(1e-20)).ln();
+let dxi = s2.x - s1.x;
+
+// Shear-lag residual
+let rezc = scc * (cqa - sa * ald) * dxi
+    - dea * 2.0 * slog
+    + dea * 2.0 * (uq * dxi - ulog) * DUXCON;
+```
+
+**✅ MATCH**: The core shear-lag equation formulas are identical.
+
+---
+
+## 9. Known Implementation Differences
+
+### 9a. DAMPL2 Blending (Not in RustFoil)
+**Impact**: May affect transition prediction for Hk > 3.5 (separated flow)
+
+### 9b. Turbulent DI in BLVAR
+Both use the same base formula, but there's complex logic for:
+- Wall contribution with DFAC correction
+- Outer layer (DD) contribution  
+- Laminar stress (DD2) contribution
+- Comparison with laminar DI
+
+**Recommend**: Compare DI values station-by-station to identify any differences.
+
+### 9c. CFM (Midpoint Cf) in Momentum Equation
+XFOIL uses a special midpoint Cf calculation:
+```fortran
+CFX = 0.50*CFM*XA/TA + 0.25*(CF1*X1/T1 + CF2*X2/T2)
+```
+
+RustFoil has `blmid()` function for this - verify it matches.
+
+---
+
+## 10. Debugging Checklist
+
+When tracing CD errors, compare these values station-by-station:
+
+| Variable | XFOIL Name | RustFoil Field | Units |
+|----------|------------|----------------|-------|
+| Shape factor H | `H2` | `station.h` | - |
+| Kinematic Hk | `HK2` | `station.hk` | - |
+| Energy shape Hs | `HS2` | `station.hs` | - |
+| Skin friction | `CF2` | `station.cf` | - |
+| Dissipation | `DI2` | `station.cd` | - |
+| Edge velocity Us | `US2` | `station.us` | - |
+| Shear stress | `S2` | `station.ctau` | - |
+| Eq. shear coef | `CQ2` | `station.cq` | - |
+| BL thickness | `DE2` | `station.de` | - |
+| Rtheta | `RT2` | `station.r_theta` | - |
+
+### Suggested Workflow
+
+1. Run both XFOIL and RustFoil with identical inputs
+2. Dump BL stations at each marching step
+3. Compare the above variables
+4. First discrepancy indicates the problematic closure
+
+---
+
+## Summary
+
+| Component | Status |
+|-----------|--------|
+| Constants | ✅ Match |
+| Hkin | ✅ Match |
+| Hs Laminar | ✅ Match |
+| Hs Turbulent | ✅ Match |
+| Cf Laminar | ✅ Match |
+| Cf Turbulent | ✅ Match |
+| DI Laminar | ✅ Match |
+| DI Turbulent | ✅ Match |
+| DI Wake | ✅ Match |
+| DAMPL | ✅ Match |
+| DAMPL2 | ❌ **Missing** |
+| Shear-lag | ✅ Match |
+| BLDIF structure | ✅ Match |
+
+**Likely CD Error Sources**:
+1. Missing DAMPL2 blending for separated flow
+2. Jacobian propagation errors (chain rule)
+3. Subtle differences in turbulent DI wall correction (DFAC)
+4. CFM midpoint calculation in momentum equation
