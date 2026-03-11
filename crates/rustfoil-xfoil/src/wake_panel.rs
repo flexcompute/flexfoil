@@ -56,10 +56,15 @@ pub fn xywake(state: &mut XfoilState, factorized: &FactorizedSystem, wake_length
 
     let mut wake_x = Vec::with_capacity(nw);
     let mut wake_y = Vec::with_capacity(nw);
+    let mut wake_nx = vec![0.0; nw];
+    let mut wake_ny = vec![0.0; nw];
+    let mut wake_apanel = vec![0.0; nw];
 
     // Place first point slightly behind TE (Fortran lines 1363-1364)
     wake_x.push(xte - 0.0001 * ny_init);
     wake_y.push(yte + 0.0001 * nx_init);
+    wake_nx[0] = nx_init;
+    wake_ny[0] = ny_init;
 
     // Calculate streamfunction gradient at first point (Fortran lines 1368-1369)
     // CALL PSILIN(I,X(I),Y(I),1.0,0.0,PSI,PSI_X,.FALSE.,.FALSE.)
@@ -70,6 +75,11 @@ pub fn xywake(state: &mut XfoilState, factorized: &FactorizedSystem, wake_length
     // Set unit vector normal to wake at next point (Fortran lines 1372-1373)
     let mut nx_next = -psi_x / grad_mag;
     let mut ny_next = -psi_y / grad_mag;
+    if nw > 1 {
+        wake_nx[1] = nx_next;
+        wake_ny[1] = ny_next;
+    }
+    wake_apanel[0] = psi_y.atan2(psi_x);
 
     // Set rest of wake points (Fortran lines 1379-1399)
     for i in 1..nw {
@@ -95,13 +105,22 @@ pub fn xywake(state: &mut XfoilState, factorized: &FactorizedSystem, wake_length
             let grad_mag = (psi_x * psi_x + psi_y * psi_y).sqrt().max(1e-12);
             nx_next = -psi_x / grad_mag;
             ny_next = -psi_y / grad_mag;
+            wake_nx[i + 1] = nx_next;
+            wake_ny[i + 1] = ny_next;
+            wake_apanel[i] = psi_y.atan2(psi_x);
         }
     }
 
     // Set state wake arrays
     state.wake_x = wake_x;
     state.wake_y = wake_y;
-    state.wake_s = compute_wake_arc_lengths(xte, yte, &state.wake_x, &state.wake_y);
+    state.wake_s = snew;
+    state.wake_nx = wake_nx;
+    state.wake_ny = wake_ny;
+    state.wake_apanel = wake_apanel;
+    state.lwake = true;
+    state.awake = state.alpha_rad;
+    state.lwdij = false;
 }
 
 /// Faithful port of XFOIL's QWCALC (xpanel.f lines 1142-1161).
@@ -122,65 +141,72 @@ pub fn qwcalc(state: &mut XfoilState, factorized: &FactorizedSystem) {
         return;
     }
 
-    // Compute wake normals from geometry (finite-difference approximation).
-    // In the faithful XYWAKE port, these will come from PSILIN streamfunction gradients.
-    let (wake_nx, wake_ny) = compute_wake_normals(&state.wake_x, &state.wake_y);
-
-    let geom = factorized.geometry();
-
     // Allocate per-wake-point QINVU arrays (alpha=0 and alpha=90 decomposition).
-    let mut wake_qinvu_0 = vec![0.0; nw];
-    let mut wake_qinvu_90 = vec![0.0; nw];
+    state.wake_qinvu_0 = vec![0.0; nw];
+    state.wake_qinvu_90 = vec![0.0; nw];
 
-    // First wake point: same as trailing edge (Fortran QWCALC lines 1150-1151).
-    // QINVU(N+1,1) = QINVU(N,1), QINVU(N+1,2) = QINVU(N,2)
-    // In Rust: gamu_0[n-1] and gamu_90[n-1] are the last airfoil node values.
-    wake_qinvu_0[0] = factorized.gamu_0[n - 1];
-    wake_qinvu_90[0] = factorized.gamu_90[n - 1];
-
-    // Rest of wake: call PSILIN at each point (Fortran QWCALC lines 1154-1158).
-    // PSILIN returns QTAN1/QTAN2 = tangential velocity at alpha=0/90.
-    // QTAN1 = sum_j DQDG(j)*GAMU(j,1) + QINF*NYI
-    // QTAN2 = sum_j DQDG(j)*GAMU(j,2) - QINF*NXI
-    for i in 1..nw {
+    // Recover the tangential wake velocity from the streamfunction gradient.
+    // This mirrors QWCALC's PSILIN(NXI,NYI) call while reusing the component
+    // gradient path that already matches Fortran well in XYWAKE.
+    for i in 0..nw {
         let xi = state.wake_x[i];
         let yi = state.wake_y[i];
-        let nxi = wake_nx[i];
-        let nyi = wake_ny[i];
+        let nxi = state.wake_nx[i];
+        let nyi = state.wake_ny[i];
 
-        // Field point index is n + i (global index in combined airfoil+wake space).
-        let psilin_result = psilin_with_dqdm(geom, n + i, xi, yi, nxi, nyi);
+        let (psi_x_0, psi_y_0) = compute_psi_gradient(
+            factorized.geometry(),
+            n + i,
+            xi,
+            yi,
+            &factorized.gamu_0,
+            1.0,
+            0.0,
+        );
+        let (psi_x_90, psi_y_90) = compute_psi_gradient(
+            factorized.geometry(),
+            n + i,
+            xi,
+            yi,
+            &factorized.gamu_90,
+            0.0,
+            1.0,
+        );
 
-        // Compute QTAN1/QTAN2 from DQDG and gamu arrays.
-        // Freestream contribution: QINF = 1.0
-        let mut qtan1: f64 = nyi;   // QINF * NYI
-        let mut qtan2: f64 = -nxi;  // -QINF * NXI
-        for j in 0..n {
-            qtan1 += psilin_result.dqdg[j] * factorized.gamu_0[j];
-            qtan2 += psilin_result.dqdg[j] * factorized.gamu_90[j];
-        }
+        let qtan1 = psi_x_0 * nxi + psi_y_0 * nyi;
+        let qtan2 = psi_x_90 * nxi + psi_y_90 * nyi;
 
-        wake_qinvu_0[i] = qtan1;
-        wake_qinvu_90[i] = qtan2;
+        state.wake_qinvu_0[i] = qtan1;
+        state.wake_qinvu_90[i] = qtan2;
     }
 
     // Combine into wake_qinv/wake_qinv_a at current alpha (XFOIL's QISET for wake).
     let cosa = state.alpha_rad.cos();
     let sina = state.alpha_rad.sin();
-    state.wake_qinv = wake_qinvu_0
+    state.wake_qinv = state
+        .wake_qinvu_0
         .iter()
-        .zip(wake_qinvu_90.iter())
+        .zip(state.wake_qinvu_90.iter())
         .map(|(&q0, &q90)| cosa * q0 + sina * q90)
         .collect();
-    state.wake_qinv_a = wake_qinvu_0
+    state.wake_qinv_a = state
+        .wake_qinvu_0
         .iter()
-        .zip(wake_qinvu_90.iter())
+        .zip(state.wake_qinvu_90.iter())
         .map(|(&q0, &q90)| -sina * q0 + cosa * q90)
         .collect();
 }
 
 pub fn qdcalc(state: &mut XfoilState, factorized: &FactorizedSystem) -> Result<()> {
-    state.dij = factorized.build_dij_with_wake(&state.wake_x, &state.wake_y)?;
+    state.dij = factorized.build_dij_with_wake_state(
+        &state.wake_x,
+        &state.wake_y,
+        &state.wake_nx,
+        &state.wake_ny,
+        &state.wake_apanel,
+    )?;
+    state.ladij = true;
+    state.lwdij = true;
     if is_debug_active() {
         let nsys = state.dij.nrows();
         let diag_sample: Vec<f64> = (0..nsys.min(20)).map(|i| state.dij[(i, i)]).collect();
@@ -194,22 +220,6 @@ pub fn qdcalc(state: &mut XfoilState, factorized: &FactorizedSystem) -> Result<(
         ));
     }
     Ok(())
-}
-
-fn compute_wake_arc_lengths(te_x: f64, te_y: f64, wake_x: &[f64], wake_y: &[f64]) -> Vec<f64> {
-    let mut s = Vec::with_capacity(wake_x.len());
-    let mut prev_x = te_x;
-    let mut prev_y = te_y;
-    let mut accum = 0.0;
-    for (&x, &y) in wake_x.iter().zip(wake_y.iter()) {
-        let dx = x - prev_x;
-        let dy = y - prev_y;
-        accum += (dx * dx + dy * dy).sqrt();
-        s.push(accum);
-        prev_x = x;
-        prev_y = y;
-    }
-    s
 }
 
 /// Compute the streamfunction gradient (∂ψ/∂x, ∂ψ/∂y) at a field point.
@@ -251,42 +261,4 @@ fn compute_psi_gradient(
     }
 
     (psi_x, psi_y)
-}
-
-/// Compute wake panel normals from wake coordinates.
-///
-/// Uses finite-difference approximation of the wake tangent direction.
-/// For a streamline-following wake from faithful XYWAKE, these normals
-/// closely match the PSILIN-derived normals since the wake follows the flow.
-fn compute_wake_normals(wake_x: &[f64], wake_y: &[f64]) -> (Vec<f64>, Vec<f64>) {
-    let nw = wake_x.len();
-    if nw == 0 {
-        return (Vec::new(), Vec::new());
-    }
-
-    let mut nx = vec![0.0; nw];
-    let mut ny = vec![0.0; nw];
-
-    for i in 0..nw {
-        let (tx, ty) = if i < nw - 1 {
-            // Forward difference for interior and first points
-            let dx = wake_x[i + 1] - wake_x[i];
-            let dy = wake_y[i + 1] - wake_y[i];
-            (dx, dy)
-        } else if nw >= 2 {
-            // Backward difference for last point
-            let dx = wake_x[i] - wake_x[i - 1];
-            let dy = wake_y[i] - wake_y[i - 1];
-            (dx, dy)
-        } else {
-            (1.0, 0.0)
-        };
-
-        let ds = (tx * tx + ty * ty).sqrt().max(1e-12);
-        // Normal is perpendicular to tangent: n = (ty/ds, -tx/ds)
-        nx[i] = ty / ds;
-        ny[i] = -tx / ds;
-    }
-
-    (nx, ny)
 }

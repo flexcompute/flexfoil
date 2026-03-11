@@ -104,6 +104,36 @@ impl FactorizedSystem {
         }
     }
 
+    /// Compute the surface inviscid-edge-velocity basis arrays QINVU(:,1:2).
+    ///
+    /// XFOIL stores these separately from the GAMU circulation basis and uses
+    /// them when seeding the wake-edge velocity in QWCALC.
+    pub fn surface_qinvu_basis(&self) -> (Vec<f64>, Vec<f64>) {
+        let n = self.geom.n;
+        let mut qinvu_0 = vec![0.0; n];
+        let mut qinvu_90 = vec![0.0; n];
+
+        for i in 0..n {
+            let xi = self.geom.x[i];
+            let yi = self.geom.y[i];
+            let nxi = self.geom.nx[i];
+            let nyi = self.geom.ny[i];
+            let psilin_result = psilin_with_dqdm(&self.geom, i, xi, yi, nxi, nyi);
+
+            let mut qtan1 = nyi;
+            let mut qtan2 = -nxi;
+            for j in 0..n {
+                qtan1 += psilin_result.dqdg[j] * self.gamu_0[j];
+                qtan2 += psilin_result.dqdg[j] * self.gamu_90[j];
+            }
+
+            qinvu_0[i] = qtan1;
+            qinvu_90[i] = qtan2;
+        }
+
+        (qinvu_0, qinvu_90)
+    }
+
     /// Compute lift and moment coefficients from Cp distribution.
     ///
     /// This matches XFOIL's CLCALC subroutine exactly:
@@ -209,10 +239,46 @@ impl FactorizedSystem {
     /// 3. Wake-airfoil block: Call PSILIN for each wake node  
     /// 4. Wake-wake block: Call PSWLIN for each wake node
     pub fn build_dij_with_wake(&self, wake_x: &[f64], wake_y: &[f64]) -> Result<DMatrix<f64>> {
+        let nw = wake_x.len();
+        let (wake_apanel, wake_nx, wake_ny) = compute_wake_geometry_from_coordinates(wake_x, wake_y);
+        debug_assert_eq!(wake_apanel.len(), nw);
+        debug_assert_eq!(wake_nx.len(), nw);
+        debug_assert_eq!(wake_ny.len(), nw);
+        self.build_dij_with_wake_state(wake_x, wake_y, &wake_nx, &wake_ny, &wake_apanel)
+    }
+
+    /// Build the mass defect influence matrix using explicit wake geometry state.
+    ///
+    /// This matches XFOIL's ownership model where `XYWAKE` defines wake `X/Y/NX/NY/APANEL`
+    /// and `QDCALC` consumes that stored state directly instead of reconstructing it from
+    /// the wake coordinates.
+    pub fn build_dij_with_wake_state(
+        &self,
+        wake_x: &[f64],
+        wake_y: &[f64],
+        wake_nx: &[f64],
+        wake_ny: &[f64],
+        wake_apanel: &[f64],
+    ) -> Result<DMatrix<f64>> {
         assert_eq!(
             wake_x.len(),
             wake_y.len(),
             "wake_x and wake_y must have the same length"
+        );
+        assert_eq!(
+            wake_x.len(),
+            wake_nx.len(),
+            "wake_x and wake_nx must have the same length"
+        );
+        assert_eq!(
+            wake_x.len(),
+            wake_ny.len(),
+            "wake_x and wake_ny must have the same length"
+        );
+        assert_eq!(
+            wake_x.len(),
+            wake_apanel.len(),
+            "wake_x and wake_apanel must have the same length"
         );
 
         let n = self.geom.n;
@@ -240,8 +306,9 @@ impl FactorizedSystem {
         x_all.extend_from_slice(wake_x);
         y_all.extend_from_slice(wake_y);
 
-        // Compute panel angles and normals for all panels (XFOIL's SETXY).
-        let (apanel, nx, ny) = compute_panel_geometry(&x_all, &y_all, n, false);
+        // Use airfoil geometry from SETXY/GGCALC and wake geometry from XYWAKE directly.
+        let (apanel, nx, ny) =
+            combine_geometry_state(&self.geom, wake_nx, wake_ny, wake_apanel);
 
         // Step 2: Airfoil-wake block (QDCALC lines 1187-1216).
         // For each wake panel J, compute dPsi/dm at all airfoil nodes, then back-substitute.
@@ -492,68 +559,64 @@ pub fn setexp(ds1: f64, smax: f64, n_points: usize) -> Vec<f64> {
     s
 }
 
-/// Compute panel geometry: angles and normals (XFOIL's SETXY).
-///
-/// Returns (apanel, nx, ny) for all panels including wake.
-fn compute_panel_geometry(x: &[f64], y: &[f64], n_airfoil: usize, sharp: bool) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-    use std::f64::consts::PI;
-    let n_total = x.len();
+fn combine_geometry_state(
+    geom: &AirfoilGeometry,
+    wake_nx: &[f64],
+    wake_ny: &[f64],
+    wake_apanel: &[f64],
+) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    let n_airfoil = geom.n;
+    let n_total = n_airfoil + wake_nx.len();
     let mut apanel = vec![0.0; n_total];
     let mut nx = vec![0.0; n_total];
     let mut ny = vec![0.0; n_total];
 
-    // Airfoil panels (XFOIL xgeom.f SETXY lines 26-46).
-    for i in 0..n_airfoil - 1 {
-        let sx = x[i + 1] - x[i];
-        let sy = y[i + 1] - y[i];
-        apanel[i] = sy.atan2(-sx); // ATAN2(SX, -SY)
-        
-        // Normal is perpendicular to tangent.
-        let ds = (sx * sx + sy * sy).sqrt().max(1e-12);
-        nx[i] = sy / ds;
-        ny[i] = -sx / ds;
+    apanel[..n_airfoil].copy_from_slice(&geom.apanel);
+    nx[..n_airfoil].copy_from_slice(&geom.nx);
+    ny[..n_airfoil].copy_from_slice(&geom.ny);
+    apanel[n_airfoil..].copy_from_slice(wake_apanel);
+    nx[n_airfoil..].copy_from_slice(wake_nx);
+    ny[n_airfoil..].copy_from_slice(wake_ny);
+
+    (apanel, nx, ny)
+}
+
+/// Compute wake panel geometry from coordinates only.
+///
+/// This is used by generic DIJ builders that do not have access to the explicit `XYWAKE`
+/// state. The faithful `rustfoil-xfoil` path calls `build_dij_with_wake_state()` instead.
+fn compute_wake_geometry_from_coordinates(
+    wake_x: &[f64],
+    wake_y: &[f64],
+) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    use std::f64::consts::PI;
+    let nw = wake_x.len();
+    if nw == 0 {
+        return (Vec::new(), Vec::new(), Vec::new());
     }
 
-    // Last airfoil panel (TE panel).
-    if n_airfoil > 0 {
-        let i = n_airfoil - 1;
-        if sharp {
+    let mut apanel = vec![0.0; nw];
+    let mut nx = vec![0.0; nw];
+    let mut ny = vec![0.0; nw];
+
+    for i in 0..nw {
+        let (tx, ty) = if i < nw - 1 {
+            (wake_x[i + 1] - wake_x[i], wake_y[i + 1] - wake_y[i])
+        } else if nw >= 2 {
+            (wake_x[i] - wake_x[i - 1], wake_y[i] - wake_y[i - 1])
+        } else {
+            (1.0, 0.0)
+        };
+        let ds = (tx * tx + ty * ty).sqrt().max(1.0e-12);
+        nx[i] = ty / ds;
+        ny[i] = -tx / ds;
+        if i < nw - 1 {
+            apanel[i] = ty.atan2(tx);
+        } else if nw == 1 {
             apanel[i] = PI;
         } else {
-            let sx = x[0] - x[i];
-            let sy = y[0] - y[i];
-            apanel[i] = (-sx).atan2(sy) + PI;
+            apanel[i] = apanel[i - 1];
         }
-        // TE normal.
-        let ds = ((x[0] - x[i]).powi(2) + (y[0] - y[i]).powi(2)).sqrt().max(1e-12);
-        nx[i] = (y[0] - y[i]) / ds;
-        ny[i] = -(x[0] - x[i]) / ds;
-    }
-
-    // Wake panels (XFOIL xpanel.f XYWAKE lines 1360-1382).
-    // For wake, the normal is perpendicular to the wake direction.
-    for i in n_airfoil..n_total - 1 {
-        let sx = x[i + 1] - x[i];
-        let sy = y[i + 1] - y[i];
-        let ds = (sx * sx + sy * sy).sqrt().max(1e-12);
-        
-        // Wake panel angle is ATAN2(PSI_Y, PSI_X) where PSI = tangent direction.
-        apanel[i] = sy.atan2(sx);
-        
-        // Normal perpendicular to wake.
-        nx[i] = sy / ds;
-        ny[i] = -sx / ds;
-    }
-
-    // Last wake panel.
-    if n_total > n_airfoil {
-        let i = n_total - 1;
-        let sx = x[i] - x[i - 1];
-        let sy = y[i] - y[i - 1];
-        let ds = (sx * sx + sy * sy).sqrt().max(1e-12);
-        apanel[i] = sy.atan2(sx);
-        nx[i] = sy / ds;
-        ny[i] = -sx / ds;
     }
 
     (apanel, nx, ny)
@@ -801,7 +864,7 @@ pub fn build_and_factorize(geom: &AirfoilGeometry) -> Result<FactorizedSystem> {
         let te_row = n - 1;
         let result = psilin_with_dqdm(geom, n, xbis, ybis, nxbis, nybis);
         for j in 0..n {
-            a_matrix[(te_row, j)] = result.dzdg[j];
+            a_matrix[(te_row, j)] = result.dqdg[j];
         }
         a_matrix[(te_row, n)] = 0.0;
         rhs_0[te_row] = -nybis;
@@ -1058,4 +1121,5 @@ mod tests {
             sol_4.cl
         );
     }
+
 }
