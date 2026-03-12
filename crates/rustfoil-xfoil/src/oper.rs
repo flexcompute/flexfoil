@@ -87,6 +87,11 @@ pub fn solve_coords_oper_point(
     );
     state.panel_xp = factorized.geometry().xp.clone();
     state.panel_yp = factorized.geometry().yp.clone();
+    state.xle = factorized.geometry().xle;
+    state.yle = factorized.geometry().yle;
+    state.xte = factorized.geometry().xte;
+    state.yte = factorized.geometry().yte;
+    state.chord = factorized.geometry().chord;
     state.sharp = factorized.geometry().sharp;
     state.ante = factorized.geometry().ante;
 
@@ -231,35 +236,39 @@ fn transition_x(state: &crate::state::XfoilState, surface: crate::state::XfoilSu
     }
     let surface_limit = iblte.min(rows.len().saturating_sub(1));
     let airfoil_rows = &rows[..=surface_limit];
-    let x = interpolate_surface_x(airfoil_rows, xssitr);
-    let x_min = state.panel_x.iter().copied().fold(f64::INFINITY, f64::min);
-    let x_max = state.panel_x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let chord = (x_max - x_min).abs();
-    if !x.is_finite() || !chord.is_finite() || chord <= 1.0e-12 {
+    let (x, y) = interpolate_surface_point(airfoil_rows, xssitr);
+    let chx = state.xte - state.xle;
+    let chy = state.yte - state.yle;
+    let chsq = chx * chx + chy * chy;
+    if !x.is_finite() || !y.is_finite() || !chsq.is_finite() || chsq <= 1.0e-12 {
         1.0
     } else {
-        ((x - x_min) / chord).clamp(0.0, 1.0)
+        (((x - state.xle) * chx + (y - state.yle) * chy) / chsq).clamp(0.0, 1.0)
     }
 }
 
-fn interpolate_surface_x(rows: &[crate::state::XfoilBlRow], target: f64) -> f64 {
+fn interpolate_surface_point(rows: &[crate::state::XfoilBlRow], target: f64) -> (f64, f64) {
     if rows.is_empty() {
-        return 0.0;
+        return (0.0, 0.0);
     }
     if target <= rows[0].x {
-        return rows[0].x_coord;
+        return (rows[0].x_coord, rows[0].y_coord);
     }
     for i in 1..rows.len() {
         if target <= rows[i].x {
             let ds = (rows[i].x - rows[i - 1].x).abs();
             if ds <= 1.0e-12 {
-                return rows[i].x_coord;
+                return (rows[i].x_coord, rows[i].y_coord);
             }
             let w = (target - rows[i - 1].x) / (rows[i].x - rows[i - 1].x);
-            return rows[i - 1].x_coord + w * (rows[i].x_coord - rows[i - 1].x_coord);
+            return (
+                rows[i - 1].x_coord + w * (rows[i].x_coord - rows[i - 1].x_coord),
+                rows[i - 1].y_coord + w * (rows[i].y_coord - rows[i - 1].y_coord),
+            );
         }
     }
-    rows[rows.len() - 1].x_coord
+    let last = &rows[rows.len() - 1];
+    (last.x_coord, last.y_coord)
 }
 
 fn separation_x(rows: &[crate::state::XfoilBlRow]) -> Option<f64> {

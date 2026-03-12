@@ -1,7 +1,8 @@
-use rustfoil_bl::{blvar, BlStation, FlowType};
+use rustfoil_bl::FlowType;
 use rustfoil_coupling::global_newton::GlobalNewtonSystem;
 
 use crate::{
+    canonical_state::{flow_type_for_row, rows_to_stations},
     config::OperatingMode,
     march::{mrchdu, mrchue},
     state::{XfoilBlRow, XfoilState},
@@ -222,66 +223,10 @@ pub fn setbl(
     AssemblyState { system }
 }
 
-fn rows_to_stations(rows: &[XfoilBlRow], msq: f64, reynolds: f64) -> Vec<BlStation> {
-    rows.iter()
-        .map(|row| {
-            let mut station = BlStation::new();
-            let total_dstr = row.dstr.max(1.0e-12);
-            station.x = row.x;
-            station.x_coord = row.x_coord;
-            station.panel_idx = row.panel_idx;
-            station.u = row.uedg.abs().max(1.0e-9);
-            station.theta = row.theta.max(1.0e-12);
-            station.dw = row.dw.max(0.0);
-            // XFOIL BLPRV splits wake displacement into core D plus separate DW.
-            station.delta_star = if row.is_wake {
-                (total_dstr - station.dw).max(1.0e-12)
-            } else {
-                total_dstr
-            };
-            station.ctau = if row.is_laminar {
-                0.03
-            } else {
-                row.ctau.max(1.0e-7)
-            };
-            station.ampl = if row.is_laminar {
-                row.ampl.max(0.0)
-            } else {
-                row.ampl.max(0.0)
-            };
-            station.mass_defect = row.mass.max(1.0e-12);
-            station.is_laminar = row.is_laminar;
-            station.is_turbulent = row.is_turbulent;
-            station.is_wake = row.is_wake;
-            blvar(
-                &mut station,
-                if row.is_wake {
-                    FlowType::Wake
-                } else if row.is_turbulent {
-                    FlowType::Turbulent
-                } else {
-                    FlowType::Laminar
-                },
-                msq,
-                reynolds,
-            );
-            station
-        })
-        .collect()
-}
-
 fn rows_to_flow_types(rows: &[XfoilBlRow]) -> Vec<FlowType> {
     rows.iter()
         .skip(1)
-        .map(|row| {
-            if row.is_wake {
-                FlowType::Wake
-            } else if row.is_turbulent {
-                FlowType::Turbulent
-            } else {
-                FlowType::Laminar
-            }
-        })
+        .map(flow_type_for_row)
         .collect()
 }
 

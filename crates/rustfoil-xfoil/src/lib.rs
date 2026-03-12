@@ -5,6 +5,7 @@
 //! viscous solver.
 
 pub mod assembly;
+pub(crate) mod canonical_state;
 pub mod config;
 pub mod error;
 pub mod forces;

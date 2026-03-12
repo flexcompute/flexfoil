@@ -1,6 +1,9 @@
 use nalgebra::DMatrix;
 use rustfoil_bl::state::BlStation;
 
+use crate::canonical_state::{
+    recompute_mass_from_state, rebuild_gam_from_qvis, rebuild_qvis_from_rows, sync_state_views_from_rows,
+};
 use crate::state::{XfoilBlRow, XfoilState, XfoilSurface};
 
 pub fn compute_arc_lengths(x: &[f64], y: &[f64]) -> Vec<f64> {
@@ -35,9 +38,6 @@ pub fn specal(state: &mut XfoilState, alpha_rad: f64) {
         .zip(state.wake_qinvu_90.iter())
         .map(|(&q0, &q90)| -sina * q0 + cosa * q90)
         .collect();
-    if let Some(last) = state.gam.last_mut() {
-        *last = 0.0;
-    }
 }
 
 pub fn stfind(state: &mut XfoilState) {
@@ -133,12 +133,26 @@ pub fn xicalc(state: &mut XfoilState) {
 
     for &ipan in state.ipan_upper.iter().skip(1).take(state.iblte_upper) {
         let x = (state.sst - state.panel_s[ipan]).max(xeps);
-        upper_rows.push(seed_row(x, state.panel_x[ipan], ipan, state.qinv[ipan].abs(), false));
+        upper_rows.push(seed_row(
+            x,
+            state.panel_x[ipan],
+            state.panel_y[ipan],
+            ipan,
+            state.qinv[ipan].abs(),
+            false,
+        ));
     }
 
     for &ipan in state.ipan_lower.iter().skip(1).take(state.iblte_lower) {
         let x = (state.panel_s[ipan] - state.sst).max(xeps);
-        lower_rows.push(seed_row(x, state.panel_x[ipan], ipan, (-state.qinv[ipan]).abs(), false));
+        lower_rows.push(seed_row(
+            x,
+            state.panel_x[ipan],
+            state.panel_y[ipan],
+            ipan,
+            (-state.qinv[ipan]).abs(),
+            false,
+        ));
     }
 
     let upper_te_x = upper_rows.last().map(|row| row.x).unwrap_or(0.0);
@@ -160,6 +174,7 @@ pub fn xicalc(state: &mut XfoilState) {
         upper_rows.push(seed_row(
             upper_te_x + arc,
             state.wake_x[iw],
+            state.wake_y[iw],
             state.n_panel_nodes() + iw,
             state.wake_qinv.get(iw).copied().unwrap_or(0.0).abs(),
             true,
@@ -176,6 +191,7 @@ pub fn xicalc(state: &mut XfoilState) {
         lower_rows.push(seed_row(
             lower_te_x + lower_arc,
             state.wake_x[iw],
+            state.wake_y[iw],
             state.n_panel_nodes() + iw,
             state.wake_qinv.get(iw).copied().unwrap_or(0.0).abs(),
             true,
@@ -194,7 +210,7 @@ fn set_stagnation_anchor(rows: &mut [XfoilBlRow], state: &XfoilState, surface: X
         return;
     }
     let next = &rows[1];
-    let mut anchor = seed_row(0.0, next.x_coord, usize::MAX, 0.0, false);
+    let mut anchor = seed_row(0.0, next.x_coord, next.y_coord, usize::MAX, 0.0, false);
     anchor.theta = 0.0;
     anchor.dstr = 0.0;
     anchor.mass = 0.0;
@@ -205,15 +221,17 @@ fn set_stagnation_anchor(rows: &mut [XfoilBlRow], state: &XfoilState, surface: X
     anchor.panel_idx = usize::MAX;
     if surface == XfoilSurface::Lower {
         anchor.x_coord = state.panel_x[(state.ist + 1).min(state.panel_x.len() - 1)];
+        anchor.y_coord = state.panel_y[(state.ist + 1).min(state.panel_y.len() - 1)];
     }
     rows[0] = anchor;
 }
 
-fn seed_row(x: f64, x_coord: f64, panel_idx: usize, ue: f64, is_wake: bool) -> XfoilBlRow {
+fn seed_row(x: f64, x_coord: f64, y_coord: f64, panel_idx: usize, ue: f64, is_wake: bool) -> XfoilBlRow {
     let seed = BlStation::stagnation(x.max(1.0e-6), ue.max(0.01), 1.0e6);
     XfoilBlRow {
         x,
         x_coord,
+        y_coord,
         panel_idx,
         uedg: ue,
         uinv: ue,
@@ -319,35 +337,11 @@ fn signed_q_component_at(
 }
 
 pub fn qvfue(state: &mut XfoilState) {
-    let n_panel_nodes = state.n_panel_nodes();
-    let n_total_nodes = state.n_total_nodes();
-    state.qvis.clear();
-    state.qvis.resize(n_total_nodes, 0.0);
-    for row in state.upper_rows.iter().skip(1).take(state.nbl_upper.saturating_sub(1)) {
-        if !row.is_wake && row.panel_idx < state.qvis.len() {
-            state.qvis[row.panel_idx] = row.uedg;
-        }
-    }
-    for row in state.lower_rows.iter().skip(1).take(state.nbl_lower.saturating_sub(1)) {
-        if !row.is_wake && row.panel_idx < state.qvis.len() {
-            state.qvis[row.panel_idx] = -row.uedg;
-        } else if row.is_wake {
-            let wake_idx = row.panel_idx.saturating_sub(n_panel_nodes);
-            let qvis_idx = n_panel_nodes + wake_idx;
-            if qvis_idx < state.qvis.len() {
-                state.qvis[qvis_idx] = row.uedg.abs();
-            }
-        }
-    }
+    rebuild_qvis_from_rows(state);
 }
 
 pub fn gamqv(state: &mut XfoilState) {
-    state.gam.resize(state.n_panel_nodes(), 0.0);
-    state.gam_a.resize(state.n_panel_nodes(), 0.0);
-    for i in 0..state.n_panel_nodes() {
-        state.gam[i] = state.qvis.get(i).copied().unwrap_or(0.0);
-        state.gam_a[i] = state.qinv_a.get(i).copied().unwrap_or(0.0);
-    }
+    rebuild_gam_from_qvis(state);
 }
 
 pub fn stmove(state: &mut XfoilState) {
@@ -366,6 +360,7 @@ pub fn stmove(state: &mut XfoilState) {
         restore_rows_identity(state, &old_upper, &old_lower);
     }
     recompute_mass_from_state(state);
+    sync_state_views_from_rows(state);
 }
 
 pub fn dsset(state: &mut XfoilState) {
@@ -621,11 +616,3 @@ fn apply_ue_floor(state: &mut XfoilState) {
     }
 }
 
-fn recompute_mass_from_state(state: &mut XfoilState) {
-    for row in state.upper_rows.iter_mut().skip(1).take(state.nbl_upper.saturating_sub(1)) {
-        row.mass = row.dstr * row.uedg;
-    }
-    for row in state.lower_rows.iter_mut().skip(1).take(state.nbl_lower.saturating_sub(1)) {
-        row.mass = row.dstr * row.uedg;
-    }
-}

@@ -121,18 +121,20 @@ impl AirfoilGeometry {
         // Compute trailing edge geometry (TECALC)
         let (xte, yte, dste, ante, aste) = Self::compute_te_geometry(&x, &y, &apanel);
 
-        // Compute chord
-        let chord = Self::compute_chord(&x, &y);
-        
+        // Find leading edge (LEFIND)
+        let (xle, yle, sle) = Self::find_leading_edge(&x, &y, &s, &xp, &yp, xte, yte);
+
+        // XFOIL defines CHORD from the true LE/TE geometry, not the raw
+        // coordinate extents. This matters for paneled files whose minimum x
+        // is slightly ahead of the exact spline-leading-edge location.
+        let chord = Self::compute_chord(xte, yte, xle, yle);
+
         if chord <= 0.0 {
             return Err(InviscidError::InvalidChord(chord));
         }
 
         // Determine if sharp TE
         let sharp = dste < 0.0001 * chord;
-
-        // Find leading edge (LEFIND)
-        let (xle, yle, sle) = Self::find_leading_edge(&x, &y, &s, &xp, &yp, xte, yte);
 
         Ok(Self {
             x,
@@ -368,17 +370,14 @@ impl AirfoilGeometry {
         (xte, yte, dste, ante, aste)
     }
 
-    /// Compute chord length (max x - min x).
-    fn compute_chord(x: &[f64], y: &[f64]) -> f64 {
-        let x_min = x.iter().cloned().fold(f64::INFINITY, f64::min);
-        let x_max = x.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        let y_min = y.iter().cloned().fold(f64::INFINITY, f64::min);
-        let y_max = y.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-
-        // Chord is max of x-extent and y-extent (handles rotated airfoils)
-        let dx = x_max - x_min;
-        let dy = y_max - y_min;
-        dx.max(dy)
+    /// Compute chord length from the true leading/trailing-edge geometry.
+    ///
+    /// XFOIL sets:
+    ///   CHORD = SQRT((XTE-XLE)^2 + (YTE-YLE)^2)
+    fn compute_chord(xte: f64, yte: f64, xle: f64, yle: f64) -> f64 {
+        let dx = xte - xle;
+        let dy = yte - yle;
+        (dx * dx + dy * dy).sqrt()
     }
 
     /// Find leading edge location (XFOIL's LEFIND).
@@ -433,8 +432,9 @@ impl AirfoilGeometry {
 
             let mut ds_le = -res / ress;
 
-            // Limit step size
-            let chord_scale = (x_chord.abs() + y_chord.abs()).max(0.01);
+            // Match XFOIL LEFIND exactly: limit the Newton step using
+            // ABS(XCHORD + YCHORD) without an additional floor term.
+            let chord_scale = (x_chord + y_chord).abs();
             ds_le = ds_le.max(-0.02 * chord_scale).min(0.02 * chord_scale);
             s_le += ds_le;
 
