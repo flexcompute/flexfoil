@@ -2,7 +2,8 @@ use nalgebra::DMatrix;
 use rustfoil_bl::state::BlStation;
 
 use crate::canonical_state::{
-    recompute_mass_from_state, rebuild_gam_from_qvis, rebuild_qvis_from_rows, sync_state_views_from_rows,
+    recompute_mass_from_state, rebuild_gam_from_qvis, rebuild_qvis_from_rows, rows_to_stations,
+    sync_rows_from_stations, sync_state_views_from_rows,
 };
 use crate::state::{XfoilBlRow, XfoilState, XfoilSurface};
 
@@ -350,6 +351,7 @@ pub fn stmove(state: &mut XfoilState) {
     let old_lower = state.lower_rows.clone();
     stfind(state);
     if state.ist != old_ist {
+        adjust_transition_indices(state, old_ist);
         iblpan(state);
         uicalc(state);
         xicalc(state);
@@ -360,6 +362,7 @@ pub fn stmove(state: &mut XfoilState) {
         restore_rows_identity(state, &old_upper, &old_lower);
     }
     recompute_mass_from_state(state);
+    refresh_shifted_row_views(state);
     sync_state_views_from_rows(state);
 }
 
@@ -586,8 +589,39 @@ fn copy_row_values(dst: &mut XfoilBlRow, src: &XfoilBlRow) {
     dst.theta = src.theta;
     dst.dstr = src.dstr;
     dst.uedg = src.uedg;
-    dst.uinv = src.uinv;
-    dst.uinv_a = src.uinv_a;
+}
+
+fn adjust_transition_indices(state: &mut XfoilState, old_ist: usize) {
+    if state.ist > old_ist {
+        let idif = state.ist - old_ist;
+        state.itran_upper = state.itran_upper.saturating_add(idif);
+        state.itran_lower = state.itran_lower.saturating_sub(idif);
+    } else {
+        let idif = old_ist - state.ist;
+        state.itran_upper = state.itran_upper.saturating_sub(idif);
+        state.itran_lower = state.itran_lower.saturating_add(idif);
+    }
+}
+
+fn refresh_shifted_row_views(state: &mut XfoilState) {
+    refresh_surface_row_views(&mut state.upper_rows, state.nbl_upper, state.iblte_upper, state.itran_upper);
+    refresh_surface_row_views(&mut state.lower_rows, state.nbl_lower, state.iblte_lower, state.itran_lower);
+}
+
+fn refresh_surface_row_views(rows: &mut [XfoilBlRow], nbl: usize, iblte: usize, itran: usize) {
+    let len = nbl.min(rows.len());
+    for (ibl, row) in rows.iter_mut().enumerate().take(len).skip(1) {
+        let wake = ibl > iblte;
+        let turbulent = wake || ibl >= itran;
+        row.is_wake = wake;
+        row.is_turbulent = turbulent;
+        row.is_laminar = !turbulent;
+        if row.is_laminar {
+            row.ampl = row.ctau.max(0.0);
+        }
+    }
+    let stations = rows_to_stations(&rows[..len], 0.0, 1.0e6);
+    sync_rows_from_stations(&mut rows[..len], &stations);
 }
 
 fn apply_ue_floor(state: &mut XfoilState) {
