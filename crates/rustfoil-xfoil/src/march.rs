@@ -478,6 +478,8 @@ fn march_ue_side(
             }
         }
 
+        let mut fallback_station_final: Option<BlStation> = None;
+
         // ---- Convergence failure fallback (extrapolate if DMAX > 0.1) ----
         if dmax > 0.1 && ibl > 2 {
             if ibl <= iblte {
@@ -512,13 +514,85 @@ fn march_ue_side(
             if ibl + 1 < nbl {
                 uei = 0.5 * (rows[ibl - 1].uedg + rows[ibl + 1].uedg);
             }
+
+            // Match XFOIL label 109 path: rebuild the extrapolated station,
+            // re-run transition detection, then recompute the station using
+            // the updated laminar/turbulent classification before storing.
+            let mut fallback_station = build_and_fill_station(
+                xsi,
+                uei,
+                thi,
+                (dsi - dswaki).max(1e-12),
+                dswaki,
+                cti,
+                ami,
+                flow_type_for(ibl, itran, wake),
+                msq,
+                re,
+            );
+            if !simi && !turb {
+                let tr = trchek2_full(
+                    station_1.x,
+                    fallback_station.x,
+                    station_1.theta,
+                    fallback_station.theta,
+                    station_1.delta_star,
+                    fallback_station.delta_star,
+                    station_1.u,
+                    fallback_station.u,
+                    station_1.hk,
+                    fallback_station.hk,
+                    station_1.r_theta,
+                    fallback_station.r_theta,
+                    station_1.ampl,
+                    ncrit,
+                    x_forced,
+                    msq,
+                    re,
+                );
+                ami = tr.ampl2;
+                if tr.transition {
+                    itran = ibl;
+                    tran = true;
+                    xt = tr.xt;
+                    tr_result = Some(tr);
+                } else {
+                    itran = ibl + 2;
+                    tran = false;
+                    tr_result = None;
+                }
+                transitions[ibl - 1] = Some(tr);
+                fallback_station = build_and_fill_station(
+                    xsi,
+                    uei,
+                    thi,
+                    (dsi - dswaki).max(1e-12),
+                    dswaki,
+                    cti,
+                    ami,
+                    flow_type_for(ibl, itran, wake),
+                    msq,
+                    re,
+                );
+            }
+            fallback_station_final = Some(fallback_station);
         }
 
         // ---- Store converged state (xbl.f:940-951) ----
-        let ft = flow_type_for(ibl, itran, wake);
-        let station_final = build_and_fill_station(
-            xsi, uei, thi, (dsi - dswaki).max(1e-12), dswaki, cti, ami, ft, msq, re,
-        );
+        let station_final = fallback_station_final.unwrap_or_else(|| {
+            build_and_fill_station(
+                xsi,
+                uei,
+                thi,
+                (dsi - dswaki).max(1e-12),
+                dswaki,
+                cti,
+                ami,
+                flow_type_for(ibl, itran, wake),
+                msq,
+                re,
+            )
+        });
         if std::env::var("RUSTFOIL_WAKE_MARCH_DEBUG").is_ok()
             && ((wake && (iblte + 1..=iblte + 3).contains(&ibl)) || ibl == iblte)
         {
@@ -693,6 +767,32 @@ fn march_du_side(
                     station_1.ampl, ncrit,
                     x_forced, msq, re,
                 );
+                if std::env::var("RUSTFOIL_TRCHEK_DEBUG").is_ok() {
+                    eprintln!(
+                        "[TRCHEK DU] side={} ibl={} itran={} itrold={} x1={:.12e} x2={:.12e} th1={:.12e} th2={:.12e} ds1={:.12e} ds2={:.12e} u1={:.12e} u2={:.12e} hk1={:.12e} hk2={:.12e} rt1={:.12e} rt2={:.12e} ampl1={:.12e} ampl2={:.12e} transition={} xt={:.12e} xforced={:?}",
+                        side,
+                        ibl,
+                        itran,
+                        itrold,
+                        station_1.x,
+                        station_2.x,
+                        station_1.theta,
+                        station_2.theta,
+                        station_1.delta_star,
+                        station_2.delta_star,
+                        station_1.u,
+                        station_2.u,
+                        station_1.hk,
+                        station_2.hk,
+                        station_1.r_theta,
+                        station_2.r_theta,
+                        station_1.ampl,
+                        tr.ampl2,
+                        tr.transition,
+                        tr.xt,
+                        x_forced,
+                    );
+                }
                 ami = tr.ampl2;
                 if tr.transition {
                     itran = ibl;
@@ -905,6 +1005,8 @@ fn march_du_side(
             }
         }
 
+        let mut fallback_station_final: Option<BlStation> = None;
+
         // ---- Convergence failure fallback ----
         if dmax > 0.1 && ibl > 2 {
             if ibl <= iblte {
@@ -939,14 +1041,112 @@ fn march_du_side(
             if ibl > itran {
                 cti = rows[ibl - 1].ctau;
             }
+
+            // Match XFOIL label 109 path after extrapolation: BLPRV/BLKIN,
+            // rerun TRCHEK if still pre-transition, then rebuild the station
+            // with the updated flow classification before storing.
+            let mut fallback_station = build_and_fill_station(
+                xsi,
+                uei,
+                thi,
+                (dsi - dswaki).max(1e-12),
+                dswaki,
+                cti,
+                ami,
+                flow_type_for(ibl, itran, wake),
+                msq,
+                re,
+            );
+            if !simi && !turb {
+                let tr = trchek2_full(
+                    station_1.x,
+                    fallback_station.x,
+                    station_1.theta,
+                    fallback_station.theta,
+                    station_1.delta_star,
+                    fallback_station.delta_star,
+                    station_1.u,
+                    fallback_station.u,
+                    station_1.hk,
+                    fallback_station.hk,
+                    station_1.r_theta,
+                    fallback_station.r_theta,
+                    station_1.ampl,
+                    ncrit,
+                    x_forced,
+                    msq,
+                    re,
+                );
+                if std::env::var("RUSTFOIL_TRCHEK_DEBUG").is_ok() {
+                    eprintln!(
+                        "[TRCHEK DU FALLBACK] side={} ibl={} itran={} itrold={} x1={:.12e} x2={:.12e} th1={:.12e} th2={:.12e} ds1={:.12e} ds2={:.12e} u1={:.12e} u2={:.12e} hk1={:.12e} hk2={:.12e} rt1={:.12e} rt2={:.12e} ampl1={:.12e} ampl2={:.12e} transition={} xt={:.12e} xforced={:?}",
+                        side,
+                        ibl,
+                        itran,
+                        itrold,
+                        station_1.x,
+                        fallback_station.x,
+                        station_1.theta,
+                        fallback_station.theta,
+                        station_1.delta_star,
+                        fallback_station.delta_star,
+                        station_1.u,
+                        fallback_station.u,
+                        station_1.hk,
+                        fallback_station.hk,
+                        station_1.r_theta,
+                        fallback_station.r_theta,
+                        station_1.ampl,
+                        tr.ampl2,
+                        tr.transition,
+                        tr.xt,
+                        x_forced,
+                    );
+                }
+                ami = tr.ampl2;
+                if tr.transition {
+                    itran = ibl;
+                    tran = true;
+                    xt = tr.xt;
+                    tr_result = Some(tr);
+                } else {
+                    itran = ibl + 2;
+                    tran = false;
+                    tr_result = None;
+                }
+                transitions[ibl - 1] = Some(tr);
+                fallback_station = build_and_fill_station(
+                    xsi,
+                    uei,
+                    thi,
+                    (dsi - dswaki).max(1e-12),
+                    dswaki,
+                    cti,
+                    ami,
+                    flow_type_for(ibl, itran, wake),
+                    msq,
+                    re,
+                );
+            }
+            fallback_station_final = Some(fallback_station);
         }
 
         // ---- Store ----
         sens = sennew;
-        let ft = flow_type_for(ibl, itran, wake);
-        let station_final = build_and_fill_station(
-            xsi, uei, thi, (dsi - dswaki).max(1e-12), dswaki, cti, ami, ft, msq, re,
-        );
+        let station_final = fallback_station_final.unwrap_or_else(|| {
+            build_and_fill_station(
+                xsi,
+                uei,
+                thi,
+                (dsi - dswaki).max(1e-12),
+                dswaki,
+                cti,
+                ami,
+                flow_type_for(ibl, itran, wake),
+                msq,
+                re,
+            )
+        });
         if std::env::var("RUSTFOIL_WAKE_MARCH_DEBUG").is_ok()
             && ((wake && (iblte + 1..=iblte + 3).contains(&ibl)) || ibl == iblte)
         {
