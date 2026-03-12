@@ -1,4 +1,7 @@
 use crate::state::XfoilState;
+use rustfoil_solver::viscous::config::ViscousSolverConfig;
+use rustfoil_solver::viscous::forces::compute_forces_from_canonical_state;
+use rustfoil_solver::viscous::state::{CanonicalBlRow, XfoilLikeViscousState};
 
 pub fn compute_panel_forces_from_gamma(
     panel_x: &[f64],
@@ -37,31 +40,67 @@ pub fn compute_panel_forces_from_gamma(
 pub fn update_force_state(state: &mut XfoilState) {
     let (cl, cm) =
         compute_panel_forces_from_gamma(&state.panel_x, &state.panel_y, &state.gam, state.alpha_rad);
-    let cdf_upper = surface_friction_drag(&state.upper_rows);
-    let cdf_lower = surface_friction_drag(&state.lower_rows);
-    let cdf = cdf_upper + cdf_lower;
-    let cdp = wake_pressure_drag(state);
+    let canonical_state = canonical_force_state(state);
+    let drag_forces = compute_forces_from_canonical_state(
+        &canonical_state,
+        &state.panel_x,
+        &state.panel_y,
+        state.alpha_rad,
+        &ViscousSolverConfig::default(),
+    );
 
     state.cl = cl;
     state.cm = cm;
-    state.cdf = cdf;
-    state.cdp = cdp;
-    state.cd = cdf + cdp;
+    state.cdf = drag_forces.cd_friction;
+    state.cdp = drag_forces.cd_pressure;
+    state.cd = drag_forces.cd;
 }
 
-fn surface_friction_drag(rows: &[crate::state::XfoilBlRow]) -> f64 {
-    rows.windows(2)
-        .map(|pair| {
-            let dx = (pair[1].x_coord - pair[0].x_coord).abs().max(1.0e-6);
-            0.5 * (pair[0].cf + pair[1].cf) * dx
-        })
-        .sum::<f64>()
-        .max(1.0e-6)
+fn canonical_force_state(state: &XfoilState) -> XfoilLikeViscousState {
+    let mut canonical = XfoilLikeViscousState::new(state.n_panel_nodes());
+    canonical.gam = state.gam.clone();
+    canonical.gam_a = state.gam_a.clone();
+    canonical.upper_rows = state.upper_rows[..state.nbl_upper.min(state.upper_rows.len())]
+        .iter()
+        .map(canonical_row_from_xfoil)
+        .collect();
+    canonical.lower_rows = state.lower_rows[..state.nbl_lower.min(state.lower_rows.len())]
+        .iter()
+        .map(canonical_row_from_xfoil)
+        .collect();
+    canonical
 }
 
-fn wake_pressure_drag(state: &XfoilState) -> f64 {
-    match (state.upper_rows.last(), state.lower_rows.last()) {
-        (Some(upper), Some(lower)) => (upper.dstr + lower.dstr).abs() * 1.0e-3,
-        _ => 0.0,
+fn canonical_row_from_xfoil(row: &crate::state::XfoilBlRow) -> CanonicalBlRow {
+    CanonicalBlRow {
+        x: row.x,
+        x_coord: row.x_coord,
+        panel_idx: row.panel_idx,
+        uedg: row.uedg,
+        theta: row.theta,
+        dstr: row.dstr,
+        ctau_or_ampl: if row.is_laminar && !row.is_turbulent {
+            row.ampl
+        } else {
+            row.ctau
+        },
+        ctau: row.ctau,
+        ampl: row.ampl,
+        mass: row.mass,
+        h: row.h,
+        hk: row.hk,
+        hs: row.hs,
+        hc: row.hc,
+        r_theta: row.r_theta,
+        cf: row.cf,
+        cd: row.cd,
+        us: row.us,
+        cq: row.cq,
+        de: row.de,
+        dw: row.dw,
+        is_laminar: row.is_laminar,
+        is_turbulent: row.is_turbulent,
+        is_wake: row.is_wake,
+        derivs: row.derivs.clone(),
     }
 }

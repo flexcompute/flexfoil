@@ -109,29 +109,10 @@ impl FactorizedSystem {
     /// XFOIL stores these separately from the GAMU circulation basis and uses
     /// them when seeding the wake-edge velocity in QWCALC.
     pub fn surface_qinvu_basis(&self) -> (Vec<f64>, Vec<f64>) {
-        let n = self.geom.n;
-        let mut qinvu_0 = vec![0.0; n];
-        let mut qinvu_90 = vec![0.0; n];
-
-        for i in 0..n {
-            let xi = self.geom.x[i];
-            let yi = self.geom.y[i];
-            let nxi = self.geom.nx[i];
-            let nyi = self.geom.ny[i];
-            let psilin_result = psilin_with_dqdm(&self.geom, i, xi, yi, nxi, nyi);
-
-            let mut qtan1 = nyi;
-            let mut qtan2 = -nxi;
-            for j in 0..n {
-                qtan1 += psilin_result.dqdg[j] * self.gamu_0[j];
-                qtan2 += psilin_result.dqdg[j] * self.gamu_90[j];
-            }
-
-            qinvu_0[i] = qtan1;
-            qinvu_90[i] = qtan2;
-        }
-
-        (qinvu_0, qinvu_90)
+        // On the airfoil surface, XFOIL's tangential edge velocity matches the
+        // node circulation: QINVU(:,1:2) == GAMU(:,1:2). Wake points are handled
+        // separately by QWCALC.
+        (self.gamu_0.clone(), self.gamu_90.clone())
     }
 
     /// Compute lift and moment coefficients from Cp distribution.

@@ -782,6 +782,13 @@ pub struct SetblSystemEvent {
     pub VM_diagonal: Vec<[f64; 3]>,
     /// VM row 1 sample [JV][eq] - coupling from station 1 to all others
     pub VM_row1: Vec<[f64; 3]>,
+    /// Optional focused VM row samples matching instrumented XFOIL output
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub VM_row24: Option<Vec<[f64; 3]>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub VM_row25: Option<Vec<[f64; 3]>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub VM_row26: Option<Vec<[f64; 3]>>,
 }
 
 /// BLSOLV solution event - Newton deltas after solving
@@ -1801,6 +1808,9 @@ impl DebugEvent {
         VDEL: Vec<[f64; 3]>,
         VM_diagonal: Vec<[f64; 3]>,
         VM_row1: Vec<[f64; 3]>,
+        VM_row24: Option<Vec<[f64; 3]>>,
+        VM_row25: Option<Vec<[f64; 3]>>,
+        VM_row26: Option<Vec<[f64; 3]>>,
     ) -> Self {
         Self {
             call_id: 0,
@@ -1813,6 +1823,9 @@ impl DebugEvent {
                 VDEL,
                 VM_diagonal,
                 VM_row1,
+                VM_row24,
+                VM_row25,
+                VM_row26,
             }),
         }
     }

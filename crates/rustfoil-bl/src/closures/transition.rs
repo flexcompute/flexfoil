@@ -483,6 +483,8 @@ pub struct Trchek2FullResult {
     pub ax: f64,
     /// Whether transition occurred
     pub transition: bool,
+    /// Whether the selected transition is forced rather than free e^N
+    pub forced: bool,
     /// Whether iteration converged
     pub converged: bool,
     /// Number of TRCHEK2 iterations used
@@ -755,8 +757,8 @@ pub fn trchek2(
     }
     
     // Test for free or forced transition
-    let tr_free = ampl2 >= ncrit;
-    let tr_forced = x_forced.map_or(false, |xf| xf > x1 && xf <= x2);
+    let mut tr_free = ampl2 >= ncrit;
+    let mut tr_forced = x_forced.is_some_and(|xf| xf > x1 && xf <= x2);
     let transition = tr_free || tr_forced;
     
     // Resolve if both forced and free transition
@@ -1167,7 +1169,7 @@ pub fn trchek2_full(
 
     // Test for free or forced transition
     let tr_free = ampl2 >= ncrit;
-    let tr_forced = x_forced.map_or(false, |xf| xf > x1 && xf <= x2);
+    let mut tr_forced = x_forced.is_some_and(|xf| xf > x1 && xf <= x2);
     let transition = tr_free || tr_forced;
     
     if !transition {
@@ -1178,6 +1180,7 @@ pub fn trchek2_full(
             ampl2,
             ax,
             transition: false,
+            forced: false,
             converged,
             iterations,
             wf1,
@@ -1186,7 +1189,92 @@ pub fn trchek2_full(
         };
     }
 
-    // === Compute full derivatives for free or forced transition ===
+    // Match XFOIL's forced-transition exit: XT is prescribed, so XT sensitivities
+    // are zero and the interpolated T/D/U terms are rebuilt from the fixed XT.
+    if tr_free && tr_forced {
+        if let Some(xf) = x_forced {
+            tr_forced = xf < xt;
+        }
+    }
+
+    if tr_forced {
+        let xf = x_forced.expect("forced transition requires x_forced");
+        let xt = xf;
+        let wf2 = (xt - x1) / dx;
+        let wf1 = 1.0 - wf2;
+
+        let wf2_x1 = (wf2 - 1.0) / dx;
+        let wf2_x2 = -wf2 / dx;
+        let wf1_x1 = -wf2_x1;
+        let wf1_x2 = -wf2_x2;
+
+        let tt_x1 = t1 * wf1_x1 + t2 * wf2_x1;
+        let tt_x2 = t1 * wf1_x2 + t2 * wf2_x2;
+        let dt_x1 = d1 * wf1_x1 + d2 * wf2_x1;
+        let dt_x2 = d1 * wf1_x2 + d2 * wf2_x2;
+        let ut_x1 = u1 * wf1_x1 + u2 * wf2_x1;
+        let ut_x2 = u1 * wf1_x2 + u2 * wf2_x2;
+
+        return Trchek2FullResult {
+            ncrit,
+            xt,
+            ampl2,
+            ax,
+            transition: true,
+            forced: true,
+            converged,
+            iterations,
+            wf1,
+            wf2,
+            xt_a1: 0.0,
+            xt_x1: 0.0,
+            xt_t1: 0.0,
+            xt_d1: 0.0,
+            xt_u1: 0.0,
+            xt_x2: 0.0,
+            xt_t2: 0.0,
+            xt_d2: 0.0,
+            xt_u2: 0.0,
+            xt_ms: 0.0,
+            xt_re: 0.0,
+            tt_a1: 0.0,
+            tt_x1,
+            tt_x2,
+            tt_t1: wf1,
+            tt_t2: wf2,
+            tt_d1: 0.0,
+            tt_d2: 0.0,
+            tt_u1: 0.0,
+            tt_u2: 0.0,
+            tt_ms: 0.0,
+            tt_re: 0.0,
+            dt_a1: 0.0,
+            dt_x1,
+            dt_x2,
+            dt_t1: 0.0,
+            dt_t2: 0.0,
+            dt_d1: wf1,
+            dt_d2: wf2,
+            dt_u1: 0.0,
+            dt_u2: 0.0,
+            dt_ms: 0.0,
+            dt_re: 0.0,
+            ut_a1: 0.0,
+            ut_x1,
+            ut_x2,
+            ut_t1: 0.0,
+            ut_t2: 0.0,
+            ut_d1: 0.0,
+            ut_d2: 0.0,
+            ut_u1: wf1,
+            ut_u2: wf2,
+            ut_ms: 0.0,
+            ut_re: 0.0,
+            ..Default::default()
+        };
+    }
+
+    // === Compute full derivatives for free transition ===
     // At this point we have converged values and need to compute all sensitivities
     
     // Recompute interpolated variables with final wf1, wf2
@@ -1389,6 +1477,7 @@ pub fn trchek2_full(
         ampl2,
         ax,
         transition: true,
+        forced: false,
         converged,
         iterations,
         wf1,

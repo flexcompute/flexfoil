@@ -1,73 +1,982 @@
-use rustfoil_bl::{add_event, is_debug_active, DebugEvent};
+//! Faithful XFOIL boundary layer marching.
+//!
+//! Implements BLPINI, MRCHUE (xbl.f:584-986), and MRCHDU (xbl.f:990-1312).
+
+use rustfoil_bl::{
+    bldif, blvar,
+    closures::{hkin, trchek2_full, Trchek2FullResult},
+    equations::{bldif_full_simi, trdif_full},
+    BlStation, FlowType,
+};
 
 use crate::state::{XfoilBlRow, XfoilState};
 
-pub fn blpini(state: &mut XfoilState, reynolds: f64) {
-    initialize_surface(state.upper_rows.as_mut_slice(), reynolds, 1);
-    initialize_surface(state.lower_rows.as_mut_slice(), reynolds, 2);
+// Shape parameter limits for direct→inverse mode switching (xbl.f:609-610)
+const HLMAX: f64 = 3.8;
+const HTMAX: f64 = 2.5;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// 4×4 Gaussian elimination with partial pivoting.
+fn gauss_4x4(a: &mut [[f64; 4]; 4], b: &mut [f64; 4]) {
+    for col in 0..4 {
+        // Partial pivoting
+        let mut max_val = a[col][col].abs();
+        let mut max_row = col;
+        for row in (col + 1)..4 {
+            let v = a[row][col].abs();
+            if v > max_val {
+                max_val = v;
+                max_row = row;
+            }
+        }
+        if max_row != col {
+            a.swap(col, max_row);
+            b.swap(col, max_row);
+        }
+        let pivot = a[col][col];
+        if pivot.abs() < 1e-30 {
+            continue;
+        }
+        // Eliminate below
+        for row in (col + 1)..4 {
+            let factor = a[row][col] / pivot;
+            for k in col..4 {
+                a[row][k] -= factor * a[col][k];
+            }
+            b[row] -= factor * b[col];
+        }
+    }
+    // Back-substitute
+    for col in (0..4).rev() {
+        if a[col][col].abs() < 1e-30 {
+            b[col] = 0.0;
+            continue;
+        }
+        for k in (col + 1)..4 {
+            b[col] -= a[col][k] * b[k];
+        }
+        b[col] /= a[col][col];
+    }
 }
 
-pub fn mrchue(state: &mut XfoilState, reynolds: f64) {
-    march_surface(state.upper_rows.as_mut_slice(), reynolds, 1);
-    march_surface(state.lower_rows.as_mut_slice(), reynolds, 2);
+/// DSLIM: limit δ* so that Hk ≥ hklim.  (xbl.f:1771-1781)
+fn dslim(dstr: &mut f64, thet: f64, msq: f64, hklim: f64) {
+    let h = *dstr / thet.max(1e-12);
+    let hk_res = hkin(h, msq);
+    let dh = (hklim - hk_res.hk).max(0.0) / hk_res.hk_h.max(1e-12);
+    *dstr += dh * thet;
 }
 
-pub fn mrchdu(state: &mut XfoilState, reynolds: f64) {
-    march_surface(state.upper_rows.as_mut_slice(), reynolds, 1);
-    march_surface(state.lower_rows.as_mut_slice(), reynolds, 2);
+/// Build a BlStation from marching variables and call blvar.
+fn build_and_fill_station(
+    x: f64,
+    u: f64,
+    theta: f64,
+    delta_star: f64,
+    dw: f64,
+    ctau: f64,
+    ampl: f64,
+    flow_type: FlowType,
+    msq: f64,
+    re: f64,
+) -> BlStation {
+    let mut s = BlStation::new();
+    s.x = x;
+    s.u = u.abs().max(1e-6);
+    s.theta = theta.max(1e-12);
+    s.delta_star = delta_star.max(1e-12);
+    s.dw = dw;
+    s.ctau = ctau;
+    s.ampl = ampl;
+    s.h = s.delta_star / s.theta;
+    s.mass_defect = s.u * s.delta_star;
+    s.is_laminar = matches!(flow_type, FlowType::Laminar);
+    s.is_turbulent = matches!(flow_type, FlowType::Turbulent) || matches!(flow_type, FlowType::Wake);
+    s.is_wake = matches!(flow_type, FlowType::Wake);
+    blvar(&mut s, flow_type, msq, re);
+    s
 }
 
-fn initialize_surface(rows: &mut [XfoilBlRow], reynolds: f64, side: usize) {
-    for row in rows.iter_mut().skip(1) {
-        let x_eff = row.x.max(1.0e-6);
-        let ue_eff = row.uedg.abs().max(0.02);
-        row.theta = (0.45 * x_eff / (6.0 * ue_eff * reynolds)).sqrt().max(1.0e-8);
-        row.dstr = 2.2 * row.theta;
-        row.mass = row.uedg * row.dstr;
-        row.h = 2.2;
-        row.hk = 2.2;
-        row.r_theta = reynolds * row.theta * ue_eff;
-        row.cf = if row.is_wake { 0.0 } else { 0.664 / row.r_theta.sqrt().max(10.0) };
-        row.cd = row.cf * 0.5;
-        row.is_laminar = !row.is_wake;
-        row.is_turbulent = row.is_wake;
+/// Determine flow type for a station.
+fn flow_type_for(ibl: usize, itran: usize, wake: bool) -> FlowType {
+    if wake {
+        FlowType::Wake
+    } else if ibl >= itran {
+        FlowType::Turbulent
+    } else {
+        FlowType::Laminar
+    }
+}
+
+/// Store converged station variables back to a row.
+fn store_to_row(
+    station: &BlStation,
+    row: &mut XfoilBlRow,
+    dsi: f64,
+    uei: f64,
+    cti: f64,
+    ami: f64,
+    ibl: usize,
+    itran: usize,
+    wake: bool,
+) {
+    let is_turb = ibl >= itran || wake;
+    // Primary
+    row.theta = station.theta;
+    row.dstr = dsi;
+    row.uedg = uei;
+    row.mass = dsi * uei;
+    // CTAU stores AMI for laminar, CTI for turbulent (matching Fortran convention)
+    row.ctau = if is_turb { cti } else { ami };
+    row.ampl = ami;
+    // Secondary from blvar
+    row.hk = station.hk;
+    row.h = station.h;
+    row.hs = station.hs;
+    row.hc = station.hc;
+    row.r_theta = station.r_theta;
+    row.cf = station.cf;
+    row.cd = station.cd;
+    row.us = station.us;
+    row.cq = station.cq;
+    row.de = station.de;
+    row.derivs = station.derivs.clone();
+    // Flags
+    row.is_laminar = !is_turb && !wake;
+    row.is_turbulent = is_turb;
+    row.is_wake = wake;
+}
+
+/// Compute HTARG for inverse mode (xbl.f:785-813).
+fn compute_htarg(
+    hk1: f64,
+    x1: f64,
+    x2: f64,
+    t1: f64,
+    xt: f64,
+    ibl: usize,
+    itran: usize,
+    wake: bool,
+    hmax: f64,
+) -> f64 {
+    let dx = (x2 - x1).max(1e-12);
+    let htarg = if ibl < itran {
+        // Laminar: slow increase
+        hk1 + 0.03 * dx / t1.max(1e-12)
+    } else if ibl == itran {
+        // Transition interval: weighted
+        hk1 + (0.03 * (xt - x1) - 0.15 * (x2 - xt)) / t1.max(1e-12)
+    } else if wake {
+        // Wake: asymptotic with 3 Newton iterations
+        let cnst = 0.03 * dx / t1.max(1e-12);
+        let mut hk2 = hk1;
+        for _ in 0..3 {
+            let hkm1 = hk2 - 1.0;
+            hk2 -= (hk2 + cnst * hkm1 * hkm1 * hkm1 - hk1)
+                / (1.0 + 3.0 * cnst * hkm1 * hkm1);
+        }
+        hk2
+    } else {
+        // Turbulent: fast decrease
+        hk1 - 0.15 * dx / t1.max(1e-12)
+    };
+    if wake {
+        htarg.max(1.01)
+    } else {
+        htarg.max(hmax)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BLPINI
+// ---------------------------------------------------------------------------
+
+/// BLPINI: Initialize BL closure constants.
+///
+/// In XFOIL this sets SCCON, GACON, etc. (xbl.f:1785-1804).
+/// These constants are already compiled into `rustfoil-bl/src/constants.rs`.
+pub fn blpini(state: &mut XfoilState, _reynolds: f64) {
+    let _ = state;
+}
+
+// ---------------------------------------------------------------------------
+// MRCHUE
+// ---------------------------------------------------------------------------
+
+/// MRCHUE: Direct-mode BL march with transition checking (xbl.f:584-986).
+pub fn mrchue(state: &mut XfoilState, reynolds: f64, ncrit: f64) {
+    let msq = 0.0_f64;
+
+    // Upper surface (IS=1): other side = lower (stale values)
+    let other_te = te_values(&state.lower_rows, state.iblte_lower);
+    let (itran_u, xssitr_u, transitions_u) = march_ue_side(
+        1,
+        &mut state.upper_rows, state.nbl_upper, state.iblte_upper,
+        other_te, state.ante, reynolds, ncrit, msq,
+    );
+    state.itran_upper = itran_u;
+    state.xssitr_upper = xssitr_u;
+    state.upper_transitions = transitions_u;
+
+    // Lower surface (IS=2): other side = upper (fresh values)
+    let other_te = te_values(&state.upper_rows, state.iblte_upper);
+    let (itran_l, xssitr_l, transitions_l) = march_ue_side(
+        2,
+        &mut state.lower_rows, state.nbl_lower, state.iblte_lower,
+        other_te, state.ante, reynolds, ncrit, msq,
+    );
+    state.itran_lower = itran_l;
+    state.xssitr_lower = xssitr_l;
+    state.lower_transitions = transitions_l;
+
+    state.lblini = true;
+}
+
+/// TE values needed for merging.
+struct TeValues {
+    theta: f64,
+    dstr: f64,
+    ctau: f64,
+}
+
+fn te_values(rows: &[XfoilBlRow], iblte: usize) -> TeValues {
+    rows.get(iblte).map_or(
+        TeValues { theta: 0.0, dstr: 0.0, ctau: 0.03 },
+        |r| TeValues { theta: r.theta, dstr: r.dstr, ctau: r.ctau },
+    )
+}
+
+/// Per-side MRCHUE march.  Returns (itran, xssitr, transition intervals).
+fn march_ue_side(
+    _side: usize,
+    rows: &mut [XfoilBlRow],
+    nbl: usize,
+    iblte: usize,
+    other_te: TeValues,
+    ante: f64,
+    re: f64,
+    ncrit: f64,
+    msq: f64,
+) -> (usize, f64, Vec<Option<Trchek2FullResult>>) {
+    if nbl < 2 {
+        return (iblte, 0.0, Vec::new());
     }
 
-    if is_debug_active() {
-        add_event(DebugEvent::bl_init(
-            side,
-            rows.len(),
-            rows.iter().map(|row| row.x).collect(),
-            rows.iter().map(|row| row.uedg).collect(),
-            rows.iter().map(|row| row.theta).collect(),
-            rows.iter().map(|row| row.dstr).collect(),
-        ));
-    }
-}
+    let mut itran = iblte;
+    let mut xssitr = 0.0;
+    let mut turb = false;
+    let mut transitions = vec![None; nbl - 1];
+    let x_forced = rows.get(iblte).map(|row| row.x);
 
-fn march_surface(rows: &mut [XfoilBlRow], reynolds: f64, side: usize) {
-    for i in 2..rows.len() {
-        let prev = rows[i - 1].clone();
-        let row = &mut rows[i];
-        let dx = (row.x - prev.x).abs().max(1.0e-6);
-        let ue = row.uedg.abs().max(0.02);
-        row.theta = (prev.theta + 0.036 * dx / (reynolds * ue).sqrt()).max(prev.theta);
-        row.dstr = (2.2 + 0.08 * i as f64) * row.theta;
-        row.mass = row.uedg * row.dstr;
-        row.h = row.dstr / row.theta.max(1.0e-12);
-        row.hk = row.h;
-        row.r_theta = reynolds * row.theta * ue;
-        row.cf = if row.is_wake { 0.0 } else { 0.664 / row.r_theta.sqrt().max(10.0) };
-        row.cd = row.cf * 0.5;
-        if !row.is_wake && row.h > 2.8 {
-            row.is_laminar = false;
-            row.is_turbulent = true;
-            row.ampl = 9.0;
-            row.ctau = 0.03;
+    // ---- Similarity station init (IBL=2 = index 1) ----
+    let xsi0 = rows[1].x.max(1e-12);
+    let uei0 = rows[1].uedg.abs().max(1e-6);
+    let tsq = 0.45 * xsi0 / (6.0 * uei0 * re);
+    let mut thi = tsq.max(0.0).sqrt().max(1e-12);
+    let mut dsi = 2.2 * thi;
+    let mut ami = 0.0_f64;
+    let mut cti = 0.03_f64;
+
+    // Station_1 for the similarity station: will be set properly after IBL=2 converges.
+    // For the similarity station itself, station_1 = station_2 (SIMI flag).
+    let mut station_1 = build_and_fill_station(
+        xsi0, uei0, thi, dsi, 0.0, cti, ami, FlowType::Laminar, msq, re,
+    );
+
+    // ---- March downstream ----
+    for ibl in 1..nbl {
+        let simi = ibl == 1;
+        let wake = ibl > iblte;
+        let xsi = rows[ibl].x;
+        let mut uei = rows[ibl].uedg;
+        let dswaki = if wake { rows[ibl].dw } else { 0.0 };
+
+        let mut direct = true;
+        let mut htarg = 0.0_f64;
+        let mut dmax = 0.0_f64;
+        let mut tran = false;
+        let mut xt = 0.0_f64;
+        let mut tr_result: Option<Trchek2FullResult> = None;
+
+        // ---- Newton loop (up to 25 iterations) ----
+        for _itbl in 0..25 {
+            // Determine flow type (may change if transition detected within loop)
+            let ft = flow_type_for(ibl, itran, wake);
+
+            // Build station_2 with full secondary variables
+            let mut station_2 = build_and_fill_station(
+                xsi, uei, thi, (dsi - dswaki).max(1e-12), dswaki, cti, ami, ft, msq, re,
+            );
+
+            // ---- Transition check (laminar, not similarity) ----
+            if !simi && !turb {
+                let tr = trchek2_full(
+                    station_1.x, station_2.x,
+                    station_1.theta, station_2.theta,
+                    station_1.delta_star, station_2.delta_star,
+                    station_1.u, station_2.u,
+                    station_1.hk, station_2.hk,
+                    station_1.r_theta, station_2.r_theta,
+                    station_1.ampl, ncrit,
+                    x_forced, msq, re,
+                );
+                ami = tr.ampl2;
+                if tr.transition {
+                    itran = ibl;
+                    tran = true;
+                    xt = tr.xt;
+                    if cti <= 0.0 {
+                        cti = 0.03;
+                    }
+                    tr_result = Some(tr);
+                } else {
+                    itran = ibl + 2;
+                    tran = false;
+                    tr_result = None;
+                }
+                transitions[ibl - 1] = Some(tr);
+
+                // Rebuild station_2 if flow type changed
+                let ft_new = flow_type_for(ibl, itran, wake);
+                if ft != ft_new {
+                    station_2 = build_and_fill_station(
+                        xsi, uei, thi, (dsi - dswaki).max(1e-12), dswaki, cti, ami,
+                        ft_new, msq, re,
+                    );
+                }
+            }
+
+            let ft = flow_type_for(ibl, itran, wake);
+
+            // ---- Build 3×4 BL system ----
+            let mut sys = [[0.0_f64; 4]; 4];
+            let mut rhs = [0.0_f64; 4];
+
+            if ibl == iblte + 1 {
+                // TESYS: TE dummy system (xblsys.f:682-716)
+                let my_te_theta = rows[iblte].theta;
+                let my_te_dstr = rows[iblte].dstr;
+                let my_te_ctau = rows[iblte].ctau;
+                let tte = my_te_theta + other_te.theta;
+                let dte = my_te_dstr + other_te.dstr + ante;
+                let cte = if tte > 0.0 {
+                    (my_te_ctau * my_te_theta + other_te.ctau * other_te.theta) / tte
+                } else {
+                    0.03
+                };
+                // Rebuild station_2 as wake for TESYS
+                station_2 = build_and_fill_station(
+                    xsi, uei, thi, (dsi - dswaki).max(1e-12), dswaki, cti, ami,
+                    FlowType::Wake, msq, re,
+                );
+                // Identity equations
+                sys[0] = [1.0, 0.0, 0.0, 0.0];
+                rhs[0] = cte - station_2.ctau;
+                sys[1] = [0.0, 1.0, 0.0, 0.0];
+                rhs[1] = tte - station_2.theta;
+                sys[2] = [0.0, 0.0, 1.0, 0.0];
+                rhs[2] = dte - station_2.delta_star - station_2.dw;
+            } else {
+                let (res, jac) = if simi {
+                    bldif_full_simi(&station_2, FlowType::Laminar, msq, re)
+                } else if tran && tr_result.is_some() {
+                    trdif_full(&station_1, &station_2, tr_result.as_ref().unwrap(), msq, re)
+                } else {
+                    bldif(&station_1, &station_2, ft, msq, re)
+                };
+                for eq in 0..3 {
+                    for var in 0..4 {
+                        sys[eq][var] = jac.vs2[eq][var];
+                    }
+                }
+                rhs[0] = res.res_third;
+                rhs[1] = res.res_mom;
+                rhs[2] = res.res_shape;
+            }
+
+            // ---- 4th equation + solve ----
+            if direct {
+                // Direct mode: Ue prescribed
+                sys[3] = [0.0, 0.0, 0.0, 1.0];
+                rhs[3] = 0.0;
+                gauss_4x4(&mut sys, &mut rhs);
+
+                // Compute DMAX and RLX
+                dmax = (rhs[1] / thi.max(1e-12)).abs().max((rhs[2] / dsi.max(1e-12)).abs());
+                if ibl < itran {
+                    dmax = dmax.max((rhs[0] / 10.0).abs());
+                }
+                if ibl >= itran {
+                    dmax = dmax.max((rhs[0] / cti.max(1e-12)).abs());
+                }
+                let rlx = if dmax > 0.3 { 0.3 / dmax } else { 1.0 };
+
+                // Check Hk for direct→inverse switch (skip TE+1)
+                if ibl != iblte + 1 {
+                    let htest = (dsi + rlx * rhs[2]) / (thi + rlx * rhs[1]).max(1e-12);
+                    let hktest = hkin(htest, msq).hk;
+                    let hmax = if ibl < itran { HLMAX } else { HTMAX };
+                    if hktest >= hmax {
+                        direct = false;
+                        htarg = compute_htarg(
+                            station_1.hk, station_1.x, xsi, station_1.theta,
+                            xt, ibl, itran, wake, hmax,
+                        );
+                        continue; // Redo iteration in inverse mode
+                    }
+                }
+
+                // Apply direct updates (AMI not updated in MRCHUE — commented out in Fortran)
+                if ibl >= itran {
+                    cti += rlx * rhs[0];
+                }
+                thi += rlx * rhs[1];
+                dsi += rlx * rhs[2];
+            } else {
+                // Inverse mode: Hk prescribed
+                let hk2_t2 = station_2.derivs.hk_h * station_2.derivs.h_theta;
+                let hk2_d2 = station_2.derivs.hk_h * station_2.derivs.h_delta_star;
+                sys[3] = [0.0, hk2_t2, hk2_d2, 0.0];
+                rhs[3] = htarg - station_2.hk;
+                gauss_4x4(&mut sys, &mut rhs);
+
+                // Compute DMAX (inverse includes Ue)
+                dmax = (rhs[1] / thi.max(1e-12))
+                    .abs()
+                    .max((rhs[2] / dsi.max(1e-12)).abs())
+                    .max((rhs[3] / uei.abs().max(1e-6)).abs());
+                if ibl >= itran {
+                    dmax = dmax.max((rhs[0] / cti.max(1e-12)).abs());
+                }
+                let rlx = if dmax > 0.3 { 0.3 / dmax } else { 1.0 };
+
+                // Apply inverse updates
+                if ibl >= itran {
+                    cti += rlx * rhs[0];
+                }
+                thi += rlx * rhs[1];
+                dsi += rlx * rhs[2];
+                uei += rlx * rhs[3];
+            }
+
+            // ---- Clamp CTI ----
+            if ibl >= itran {
+                cti = cti.clamp(1e-7, 0.30);
+            }
+
+            // ---- DSLIM ----
+            let hklim = if ibl <= iblte { 1.02 } else { 1.00005 };
+            let mut dsw = dsi - dswaki;
+            dslim(&mut dsw, thi, msq, hklim);
+            dsi = dsw + dswaki;
+
+            if dmax <= 1e-5 {
+                break;
+            }
+        }
+
+        // ---- Convergence failure fallback (extrapolate if DMAX > 0.1) ----
+        if dmax > 0.1 && ibl > 2 {
+            if ibl <= iblte {
+                let prev_x = rows[ibl - 1].x.max(1e-12);
+                let ratio = (xsi / prev_x).sqrt();
+                thi = rows[ibl - 1].theta * ratio;
+                dsi = rows[ibl - 1].dstr * ratio;
+            } else if ibl == iblte + 1 {
+                let my_te_theta = rows[iblte].theta;
+                let my_te_dstr = rows[iblte].dstr;
+                cti = if (my_te_theta + other_te.theta) > 0.0 {
+                    (rows[iblte].ctau * my_te_theta + other_te.ctau * other_te.theta)
+                        / (my_te_theta + other_te.theta)
+                } else {
+                    0.03
+                };
+                thi = my_te_theta + other_te.theta;
+                dsi = my_te_dstr + other_te.dstr + ante;
+            } else {
+                thi = rows[ibl - 1].theta;
+                let ratlen =
+                    (xsi - rows[ibl - 1].x) / (10.0 * rows[ibl - 1].dstr.max(1e-12));
+                dsi = (rows[ibl - 1].dstr + thi * ratlen) / (1.0 + ratlen);
+            }
+            if ibl == itran {
+                cti = 0.05;
+            }
+            if ibl > itran {
+                cti = rows[ibl - 1].ctau;
+            }
+            uei = rows[ibl].uedg;
+            if ibl + 1 < nbl {
+                uei = 0.5 * (rows[ibl - 1].uedg + rows[ibl + 1].uedg);
+            }
+        }
+
+        // ---- Store converged state (xbl.f:940-951) ----
+        let ft = flow_type_for(ibl, itran, wake);
+        let station_final = build_and_fill_station(
+            xsi, uei, thi, (dsi - dswaki).max(1e-12), dswaki, cti, ami, ft, msq, re,
+        );
+        if std::env::var("RUSTFOIL_WAKE_MARCH_DEBUG").is_ok()
+            && ((wake && (iblte + 1..=iblte + 3).contains(&ibl)) || ibl == iblte)
+        {
+            eprintln!(
+                "[WAKE MARCH] ibl={} x={:.8e} u={:.8e} theta={:.8e} dsi_total={:.8e} delta_star={:.8e} dw={:.8e} ctau={:.8e} ampl={:.8e} wake={}",
+                ibl,
+                xsi,
+                uei,
+                thi,
+                dsi,
+                station_final.delta_star,
+                dswaki,
+                cti,
+                ami,
+                wake
+            );
+        }
+        store_to_row(&station_final, &mut rows[ibl], dsi, uei, cti, ami, ibl, itran, wake);
+
+        // ---- Set station_1 for next station (xbl.f:953-965) ----
+        station_1 = station_final;
+
+        // ---- Transition / TE bookkeeping (xbl.f:968-981) ----
+        if tran {
+            xssitr = xt;
+        }
+        if tran || ibl == iblte {
+            turb = true;
+        }
+
+        // TE merge: set THI, DSI for wake entry (xbl.f:978-981)
+        if ibl == iblte {
+            thi = rows[iblte].theta + other_te.theta;
+            dsi = rows[iblte].dstr + other_te.dstr + ante;
         }
     }
 
-    if is_debug_active() {
-        let _ = side;
+    (itran, xssitr, transitions)
+}
+
+// ---------------------------------------------------------------------------
+// MRCHDU
+// ---------------------------------------------------------------------------
+
+/// MRCHDU: Mixed Ue-Hk march with transition checking (xbl.f:990-1312).
+pub fn mrchdu(state: &mut XfoilState, reynolds: f64, ncrit: f64) {
+    let msq = 0.0_f64;
+
+    // Upper surface
+    let other_te = te_values(&state.lower_rows, state.iblte_lower);
+    let itrold_u = state.itran_upper;
+    let (itran_u, xssitr_u, transitions_u) = march_du_side(
+        1,
+        &mut state.upper_rows, state.nbl_upper, state.iblte_upper,
+        other_te, state.ante, itrold_u, reynolds, ncrit, msq,
+    );
+    state.itran_upper = itran_u;
+    state.xssitr_upper = xssitr_u;
+    state.upper_transitions = transitions_u;
+
+    // Lower surface (uses freshly updated upper TE)
+    let other_te = te_values(&state.upper_rows, state.iblte_upper);
+    let itrold_l = state.itran_lower;
+    let (itran_l, xssitr_l, transitions_l) = march_du_side(
+        2,
+        &mut state.lower_rows, state.nbl_lower, state.iblte_lower,
+        other_te, state.ante, itrold_l, reynolds, ncrit, msq,
+    );
+    state.itran_lower = itran_l;
+    state.xssitr_lower = xssitr_l;
+    state.lower_transitions = transitions_l;
+}
+
+/// Per-side MRCHDU march.  Returns (itran, xssitr, transition intervals).
+#[allow(clippy::too_many_arguments)]
+fn march_du_side(
+    side: usize,
+    rows: &mut [XfoilBlRow],
+    nbl: usize,
+    iblte: usize,
+    other_te: TeValues,
+    ante: f64,
+    itrold: usize,
+    re: f64,
+    ncrit: f64,
+    msq: f64,
+) -> (usize, f64, Vec<Option<Trchek2FullResult>>) {
+    if nbl < 2 {
+        return (iblte, 0.0, Vec::new());
     }
+
+    const DEPS: f64 = 5.0e-6;
+    const SENSWT: f64 = 1000.0;
+
+    let mut itran = iblte;
+    let mut xssitr = 0.0;
+    let mut turb = false;
+    let mut sens = 0.0_f64;
+    let mut ami = rows[1].ctau;
+    let mut transitions = vec![None; nbl - 1];
+    let x_forced = rows.get(iblte).map(|row| row.x);
+
+    // Build station_1 from stored similarity station (index 1)
+    let ft0 = flow_type_for(1, itrold, false);
+    let dswaki0 = rows[1].dw;
+    let mut station_1 = build_and_fill_station(
+        rows[1].x,
+        rows[1].uedg,
+        rows[1].theta,
+        (rows[1].dstr - dswaki0).max(1e-12),
+        dswaki0,
+        rows[1].ctau,
+        rows[1].ampl,
+        ft0,
+        msq,
+        re,
+    );
+
+    for ibl in 1..nbl {
+        let simi = ibl == 1;
+        let wake = ibl > iblte;
+        let xsi = rows[ibl].x;
+        let mut uei = rows[ibl].uedg;
+        let mut thi = rows[ibl].theta;
+        let mut dsi = rows[ibl].dstr;
+        let dswaki = if wake { rows[ibl].dw } else { 0.0 };
+
+        // Initialize AMI/CTI from stored CTAU based on ITROLD (xbl.f:1050-1056)
+        let mut cti;
+        if ibl < itrold {
+            ami = rows[ibl].ctau;
+            cti = 0.03;
+        } else {
+            cti = rows[ibl].ctau;
+            if cti <= 0.0 {
+                cti = 0.03;
+            }
+        }
+
+        // Clamp initial DSI (xbl.f:1067-1068)
+        if ibl <= iblte {
+            dsi = (dsi - dswaki).max(1.02 * thi) + dswaki;
+        } else {
+            dsi = (dsi - dswaki).max(1.00005 * thi) + dswaki;
+        }
+
+        let mut dmax = 0.0_f64;
+        let mut tran = false;
+        let mut xt = 0.0_f64;
+        let mut tr_result: Option<Trchek2FullResult> = None;
+        let mut ueref = 0.0_f64;
+        let mut hkref = 0.0_f64;
+        let mut sennew = 0.0_f64;
+
+        // ---- Newton iteration loop ----
+        for itbl in 0..25 {
+            let ft = flow_type_for(ibl, itran, wake);
+
+            let mut station_2 = build_and_fill_station(
+                xsi, uei, thi, (dsi - dswaki).max(1e-12), dswaki, cti, ami, ft, msq, re,
+            );
+
+            // Transition check
+            if !simi && !turb {
+                let tr = trchek2_full(
+                    station_1.x, station_2.x,
+                    station_1.theta, station_2.theta,
+                    station_1.delta_star, station_2.delta_star,
+                    station_1.u, station_2.u,
+                    station_1.hk, station_2.hk,
+                    station_1.r_theta, station_2.r_theta,
+                    station_1.ampl, ncrit,
+                    x_forced, msq, re,
+                );
+                ami = tr.ampl2;
+                if tr.transition {
+                    itran = ibl;
+                    tran = true;
+                    xt = tr.xt;
+                    tr_result = Some(tr);
+                } else {
+                    itran = ibl + 2;
+                    tran = false;
+                    tr_result = None;
+                }
+                transitions[ibl - 1] = Some(tr);
+                let ft_new = flow_type_for(ibl, itran, wake);
+                station_2 = build_and_fill_station(
+                    xsi, uei, thi, (dsi - dswaki).max(1e-12), dswaki, cti, ami,
+                    ft_new, msq, re,
+                );
+            }
+
+            let ft = flow_type_for(ibl, itran, wake);
+
+            // ---- Build 3×4 system ----
+            let mut sys = [[0.0_f64; 4]; 4];
+            let mut rhs = [0.0_f64; 4];
+
+            if ibl == iblte + 1 {
+                // TESYS
+                let my_te_theta = rows[iblte].theta;
+                let my_te_dstr = rows[iblte].dstr;
+                let my_te_ctau = rows[iblte].ctau;
+                let tte = my_te_theta + other_te.theta;
+                let dte = my_te_dstr + other_te.dstr + ante;
+                let cte = if tte > 0.0 {
+                    (my_te_ctau * my_te_theta + other_te.ctau * other_te.theta) / tte
+                } else {
+                    0.03
+                };
+                station_2 = build_and_fill_station(
+                    xsi, uei, thi, (dsi - dswaki).max(1e-12), dswaki, cti, ami,
+                    FlowType::Wake, msq, re,
+                );
+                sys[0] = [1.0, 0.0, 0.0, 0.0];
+                rhs[0] = cte - station_2.ctau;
+                sys[1] = [0.0, 1.0, 0.0, 0.0];
+                rhs[1] = tte - station_2.theta;
+                sys[2] = [0.0, 0.0, 1.0, 0.0];
+                rhs[2] = dte - station_2.delta_star - station_2.dw;
+            } else {
+                let (res, jac) = if tran && tr_result.is_some() {
+                    trdif_full(&station_1, &station_2, tr_result.as_ref().unwrap(), msq, re)
+                } else if simi {
+                    bldif_full_simi(&station_2, FlowType::Laminar, msq, re)
+                } else {
+                    bldif(&station_1, &station_2, ft, msq, re)
+                };
+                for eq in 0..3 {
+                    for var in 0..4 {
+                        sys[eq][var] = jac.vs2[eq][var];
+                    }
+                }
+                rhs[0] = res.res_third;
+                rhs[1] = res.res_mom;
+                rhs[2] = res.res_shape;
+            }
+
+            // ---- First iteration: set baselines (xbl.f:1101-1128) ----
+            if itbl == 0 {
+                ueref = station_2.u;
+                hkref = station_2.hk;
+
+                // Transition reversal (xbl.f:1108-1115)
+                if ibl < itran && ibl >= itrold {
+                    if ibl > 1 {
+                        let prev = &rows[ibl - 1];
+                        let hm = prev.dstr / prev.theta.max(1e-12);
+                        hkref = hkin(hm, msq).hk;
+                    }
+                }
+
+                // Reinitialize CTI for newly turbulent stations (xbl.f:1118-1126)
+                if ibl < itrold {
+                    if tran {
+                        cti = 0.03;
+                    }
+                    if turb {
+                        cti = rows.get(ibl.wrapping_sub(1)).map_or(0.03, |r| r.ctau);
+                    }
+                    if tran || turb {
+                        station_2.ctau = cti;
+                    }
+                }
+            }
+
+            // ---- 4th equation for MRCHDU ----
+            if simi || ibl == iblte + 1 {
+                // Prescribe Ue (xbl.f:1131-1138)
+                // U2_UEI = 1.0 for incompressible
+                sys[3] = [0.0, 0.0, 0.0, 1.0];
+                rhs[3] = ueref - station_2.u;
+            } else {
+                // Ue-Hk characteristic slope (xbl.f:1142-1176)
+                let hk2_t2 = station_2.derivs.hk_h * station_2.derivs.h_theta;
+                let hk2_d2 = station_2.derivs.hk_h * station_2.derivs.h_delta_star;
+                let hk2_u2 = 0.0_f64; // incompressible
+
+                // Solve auxiliary system for dUe/dHk (xbl.f:1144-1162)
+                let mut vtmp = sys;
+                let mut vztmp = rhs;
+                vtmp[3] = [0.0, hk2_t2, hk2_d2, hk2_u2 + 1.0]; // U2_UEI=1 for incomp
+                vztmp[3] = 1.0;
+                gauss_4x4(&mut vtmp, &mut vztmp);
+
+                sennew = SENSWT * vztmp[3] * hkref / ueref.abs().max(1e-6);
+
+                // Smooth SENS (xbl.f:1163-1167)
+                if itbl < 5 {
+                    sens = sennew;
+                } else if itbl < 15 {
+                    sens = 0.5 * (sens + sennew);
+                }
+
+                // Set quasi-normal constraint (xbl.f:1170-1175)
+                let ueref_safe = ueref.abs().max(1e-6);
+                sys[3] = [
+                    0.0,
+                    hk2_t2 * hkref,
+                    hk2_d2 * hkref,
+                    (hk2_u2 * hkref + sens / ueref_safe) * 1.0, // U2_UEI=1
+                ];
+                rhs[3] = -(hkref * hkref) * (station_2.hk / hkref - 1.0)
+                    - sens * (station_2.u / ueref_safe - 1.0);
+            }
+
+            // ---- Solve ----
+            gauss_4x4(&mut sys, &mut rhs);
+
+            // ---- DMAX and RLX (xbl.f:1184-1190) ----
+            dmax = (rhs[1] / thi.max(1e-12))
+                .abs()
+                .max((rhs[2] / dsi.max(1e-12)).abs())
+                .max((rhs[3] / uei.abs().max(1e-6)).abs());
+            if ibl >= itran {
+                dmax = dmax.max((rhs[0] / (10.0 * cti.max(1e-12))).abs());
+            }
+            let rlx = if dmax > 0.3 { 0.3 / dmax } else { 1.0 };
+
+            if std::env::var("RUSTFOIL_WAKE_ITER_DEBUG").is_ok() && wake && ibl == iblte + 2 {
+                eprintln!(
+                    "[WAKE ITER] ibl={} it={} theta={:.8e} dsi_total={:.8e} ctau={:.8e} ue={:.8e} dmax={:.8e} rlx={:.8e} rhs=[{:.8e}, {:.8e}, {:.8e}, {:.8e}]",
+                    ibl,
+                    itbl + 1,
+                    thi,
+                    dsi,
+                    cti,
+                    uei,
+                    dmax,
+                    rlx,
+                    rhs[0],
+                    rhs[1],
+                    rhs[2],
+                    rhs[3]
+                );
+            }
+            if std::env::var("RUSTFOIL_TAIL_ITER_DEBUG").is_ok()
+                && (iblte.saturating_sub(2)..=iblte).contains(&ibl)
+            {
+                eprintln!(
+                    "[TAIL ITER DU] side={} ibl={} it={} theta={:.12e} dsi_total={:.12e} ctau={:.12e} ue={:.12e} ampl={:.12e} dmax={:.12e} rlx={:.12e} rhs=[{:.12e}, {:.12e}, {:.12e}, {:.12e}]",
+                    side,
+                    ibl,
+                    itbl + 1,
+                    thi,
+                    dsi,
+                    cti,
+                    uei,
+                    ami,
+                    dmax,
+                    rlx,
+                    rhs[0],
+                    rhs[1],
+                    rhs[2],
+                    rhs[3]
+                );
+            }
+
+            // ---- Updates (xbl.f:1193-1197) ----
+            if ibl < itran {
+                ami += rlx * rhs[0];
+            }
+            if ibl >= itran {
+                cti += rlx * rhs[0];
+            }
+            thi += rlx * rhs[1];
+            dsi += rlx * rhs[2];
+            uei += rlx * rhs[3];
+
+            // ---- Clamp CTI ----
+            if ibl >= itran {
+                cti = cti.clamp(1e-7, 0.30);
+            }
+
+            // ---- DSLIM ----
+            let hklim = if ibl <= iblte { 1.02 } else { 1.00005 };
+            let mut dsw = dsi - dswaki;
+            dslim(&mut dsw, thi, msq, hklim);
+            dsi = dsw + dswaki;
+
+            if dmax <= DEPS {
+                break;
+            }
+        }
+
+        // ---- Convergence failure fallback ----
+        if dmax > 0.1 && ibl > 2 {
+            if ibl <= iblte {
+                let prev_x = rows[ibl - 1].x.max(1e-12);
+                let ratio = (xsi / prev_x).sqrt();
+                thi = rows[ibl - 1].theta * ratio;
+                dsi = rows[ibl - 1].dstr * ratio;
+                uei = rows[ibl - 1].uedg;
+            } else if ibl == iblte + 1 {
+                let my_te = &rows[iblte];
+                let tte = my_te.theta + other_te.theta;
+                let dte = my_te.dstr + other_te.dstr + ante;
+                let cte = if tte > 0.0 {
+                    (my_te.ctau * my_te.theta + other_te.ctau * other_te.theta) / tte
+                } else {
+                    0.03
+                };
+                cti = cte;
+                thi = tte;
+                dsi = dte;
+                uei = rows[ibl - 1].uedg;
+            } else {
+                thi = rows[ibl - 1].theta;
+                let ratlen =
+                    (xsi - rows[ibl - 1].x) / (10.0 * rows[ibl - 1].dstr.max(1e-12));
+                dsi = (rows[ibl - 1].dstr + thi * ratlen) / (1.0 + ratlen);
+                uei = rows[ibl - 1].uedg;
+            }
+            if ibl == itran {
+                cti = 0.05;
+            }
+            if ibl > itran {
+                cti = rows[ibl - 1].ctau;
+            }
+        }
+
+        // ---- Store ----
+        sens = sennew;
+        let ft = flow_type_for(ibl, itran, wake);
+        let station_final = build_and_fill_station(
+            xsi, uei, thi, (dsi - dswaki).max(1e-12), dswaki, cti, ami, ft, msq, re,
+        );
+        if std::env::var("RUSTFOIL_WAKE_MARCH_DEBUG").is_ok()
+            && ((wake && (iblte + 1..=iblte + 3).contains(&ibl)) || ibl == iblte)
+        {
+            eprintln!(
+                "[WAKE MARCH UE] ibl={} x={:.8e} u={:.8e} theta={:.8e} dsi_total={:.8e} delta_star={:.8e} dw={:.8e} ctau={:.8e} ampl={:.8e} wake={}",
+                ibl,
+                xsi,
+                uei,
+                thi,
+                dsi,
+                station_final.delta_star,
+                dswaki,
+                cti,
+                ami,
+                wake
+            );
+        }
+        store_to_row(&station_final, &mut rows[ibl], dsi, uei, cti, ami, ibl, itran, wake);
+
+        // Set station_1 for next station
+        station_1 = station_final;
+
+        // Transition / TE bookkeeping
+        if tran {
+            xssitr = xt;
+        }
+        if tran || ibl == iblte {
+            turb = true;
+        }
+    }
+
+    (itran, xssitr, transitions)
 }

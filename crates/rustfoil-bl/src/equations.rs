@@ -151,6 +151,8 @@ pub struct BlJacobian {
     pub vs1: [[f64; 5]; 3],
     /// Jacobian w.r.t. downstream station variables [3 equations × 5 variables]
     pub vs2: [[f64; 5]; 3],
+    /// Sensitivity to forced transition position XF / auxiliary xi term
+    pub vsx: [f64; 3],
     /// Sensitivity to Mach number (via M² derivatives)
     pub vsm: [f64; 3],
     /// Sensitivity to Reynolds number
@@ -162,6 +164,7 @@ impl Default for BlJacobian {
         Self {
             vs1: [[0.0; 5]; 3],
             vs2: [[0.0; 5]; 3],
+            vsx: [0.0; 3],
             vsm: [0.0; 3],
             vsr: [0.0; 3],
         }
@@ -813,8 +816,13 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
     station.derivs.de_t = de_t_val;
     station.derivs.de_d = de_d_val;
 
-    // Store mass defect
-    station.mass_defect = station.u * station.delta_star;
+    // XFOIL's wake mass defect uses total displacement DSI = D + DW.
+    let total_delta_star = if station.is_wake {
+        station.delta_star + station.dw
+    } else {
+        station.delta_star
+    };
+    station.mass_defect = station.u * total_delta_star;
 
     // Store H derivative (for compatibility)
     station.derivs.h_theta = h_t;
@@ -1566,9 +1574,10 @@ fn bldif_with_terms_internal(
     let cf1_u = s1.derivs.cf_rt * rt1_u;
     let cf2_u = s2.derivs.cf_rt * rt2_u;
     
-    // CFM_U = 0.5 * CFM_RTA * RT_U
-    let cfm_u1 = 0.5 * cfm_rt1 * rt1_u;
-    let cfm_u2 = 0.5 * cfm_rt2 * rt2_u;
+    // CFM_U = CFM_RT * RT_U, where the midpoint 0.5 factor is already
+    // embedded in `cfm_rt1` / `cfm_rt2` by `blmid()`.
+    let cfm_u1 = cfm_rt1 * rt1_u;
+    let cfm_u2 = cfm_rt2 * rt2_u;
     
     // Z_MA term: -ULOG * 0.5 * M_U, but M_U ≈ 0 for incompressible, skip
     // Full Jacobians including CF contributions
@@ -2330,6 +2339,34 @@ pub fn trdif_full(
         jac.vs2[1][l] = bl2[1][l] + bt2[1][l];
         jac.vs1[2][l] = bl1[2][l] + bt1[2][l];
         jac.vs2[2][l] = bl2[2][l] + bt2[2][l];
+    }
+
+    if tr.forced {
+        let dx_inv = 1.0 / dx;
+        let tt_xf = (s2.theta - s1.theta) * dx_inv;
+        let dt_xf = (s2.delta_star - s1.delta_star) * dx_inv;
+        let ut_xf = (s2.u - s1.u) * dx_inv;
+        let xt_xf = 1.0;
+        let st_xf = st_tt * tt_xf + st_dt * dt_xf + st_ut * ut_xf;
+
+        let mut blx = [0.0; 3];
+        let mut btx = [0.0; 3];
+        for k in 1..3 {
+            blx[k] = jac_lam.vs2[k][1] * tt_xf
+                + jac_lam.vs2[k][2] * dt_xf
+                + jac_lam.vs2[k][3] * ut_xf
+                + jac_lam.vs2[k][4] * xt_xf;
+        }
+        for k in 0..3 {
+            btx[k] = jac_turb.vs1[k][0] * st_xf
+                + jac_turb.vs1[k][1] * tt_xf
+                + jac_turb.vs1[k][2] * dt_xf
+                + jac_turb.vs1[k][3] * ut_xf
+                + jac_turb.vs1[k][4] * xt_xf;
+        }
+        jac.vsx[0] = btx[0];
+        jac.vsx[1] = blx[1] + btx[1];
+        jac.vsx[2] = blx[2] + btx[2];
     }
     
     (res, jac)

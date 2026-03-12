@@ -145,10 +145,14 @@ pub fn qwcalc(state: &mut XfoilState, factorized: &FactorizedSystem) {
     state.wake_qinvu_0 = vec![0.0; nw];
     state.wake_qinvu_90 = vec![0.0; nw];
 
-    // Recover the tangential wake velocity from the streamfunction gradient.
-    // This mirrors QWCALC's PSILIN(NXI,NYI) call while reusing the component
-    // gradient path that already matches Fortran well in XYWAKE.
-    for i in 0..nw {
+    // XFOIL copies the TE inviscid velocity to the first wake point.
+    // The remaining wake points are computed from PSILIN.
+    state.wake_qinvu_0[0] = state.qinvu_0[n - 1];
+    state.wake_qinvu_90[0] = state.qinvu_90[n - 1];
+
+    // Recover the tangential wake velocity from the streamfunction gradient
+    // for the remaining wake points.
+    for i in 1..nw {
         let xi = state.wake_x[i];
         let yi = state.wake_y[i];
         let nxi = state.wake_nx[i];

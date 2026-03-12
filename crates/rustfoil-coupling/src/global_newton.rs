@@ -241,8 +241,8 @@ impl GlobalNewtonSystem {
     /// # XFOIL Reference
     /// xpanel.f STFIND (lines 1438-1439)
     pub fn set_stagnation_derivs(&mut self, sst_go: f64, sst_gp: f64) {
-        self.sst_go = sst_go;
-        self.sst_gp = sst_gp;
+        self.sst_go = if sst_go.is_finite() { sst_go } else { 0.0 };
+        self.sst_gp = if sst_gp.is_finite() { sst_gp } else { 0.0 };
     }
 
     /// Build the global Newton system from BL stations
@@ -263,6 +263,8 @@ impl GlobalNewtonSystem {
     /// * `dij` - Global DIJ matrix for mass defect coupling
     /// * `ue_inviscid_upper` - Inviscid edge velocities (upper)
     /// * `ue_inviscid_lower` - Inviscid edge velocities (lower)
+    /// * `ue_from_mass_upper` - Canonical UESET result for upper stations
+    /// * `ue_from_mass_lower` - Canonical UESET result for lower stations
     /// * `msq` - Mach number squared
     /// * `re` - Reynolds number
     /// * `iteration` - Newton iteration number (for debug output)
@@ -281,6 +283,8 @@ impl GlobalNewtonSystem {
         dij: &DMatrix<f64>,
         ue_inviscid_upper: &[f64],
         ue_inviscid_lower: &[f64],
+        ue_from_mass_upper: &[f64],
+        ue_from_mass_lower: &[f64],
         ue_operating_upper: &[f64],
         ue_operating_lower: &[f64],
         ncrit: f64,
@@ -326,10 +330,28 @@ impl GlobalNewtonSystem {
 
         // === Step 2: Compute Ue from mass defect (UESET) ===
         // IMPORTANT: Sum over BOTH surfaces to get proper mass coupling
-        let ue_from_mass_upper =
-            self.compute_ue_from_mass_both(upper_stations, lower_stations, ue_inviscid_upper, dij, 0);
-        let ue_from_mass_lower =
-            self.compute_ue_from_mass_both(upper_stations, lower_stations, ue_inviscid_lower, dij, 1);
+        let ue_from_mass_upper = if ue_from_mass_upper.len() == upper_stations.len() {
+            ue_from_mass_upper.to_vec()
+        } else {
+            self.compute_ue_from_mass_both(
+                upper_stations,
+                lower_stations,
+                ue_inviscid_upper,
+                dij,
+                0,
+            )
+        };
+        let ue_from_mass_lower = if ue_from_mass_lower.len() == lower_stations.len() {
+            ue_from_mass_lower.to_vec()
+        } else {
+            self.compute_ue_from_mass_both(
+                upper_stations,
+                lower_stations,
+                ue_inviscid_lower,
+                dij,
+                1,
+            )
+        };
 
         // === Step 3: Build equations for upper surface ===
         self.build_surface_equations(
@@ -441,7 +463,7 @@ impl GlobalNewtonSystem {
             return;
         }
 
-        let nout = self.nsys.min(20);
+        let nout = self.nsys.min(30);
 
         // Extract VA blocks (3 equations x 2 variables)
         // XFOIL VA is (3,2,IVX) - we have (3,3) but only use first 2 columns
@@ -472,6 +494,18 @@ impl GlobalNewtonSystem {
             vdel_rhs.push(self.vdel[iv]);
         }
 
+        if std::env::var("RUSTFOIL_SETBL_VDEL_DEBUG").is_ok() {
+            for iv in [27usize, 28, 29, 30, 159, 160, 161, 162, 163] {
+                if iv <= self.nsys {
+                    let vals = self.vdel[iv];
+                    eprintln!(
+                        "[RUST SETBL VDEL] iv={} vals=[{:.12e}, {:.12e}, {:.12e}]",
+                        iv, vals[0], vals[1], vals[2]
+                    );
+                }
+            }
+        }
+
         // Extract VM diagonal
         let mut vm_diag: Vec<[f64; 3]> = Vec::with_capacity(nout);
         for iv in 1..=nout {
@@ -484,6 +518,39 @@ impl GlobalNewtonSystem {
             vm_row1.push(self.vm[1][jv]);
         }
 
+        let focused_vm_row = |row: usize| -> Option<Vec<[f64; 3]>> {
+            if row > self.nsys {
+                None
+            } else {
+                let mut out = Vec::with_capacity(nout);
+                for jv in 1..=nout {
+                    out.push(self.vm[row][jv]);
+                }
+                Some(out)
+            }
+        };
+        let vm_row24 = focused_vm_row(24);
+        let vm_row25 = focused_vm_row(25);
+        let vm_row26 = focused_vm_row(26);
+
+        if std::env::var("RUSTFOIL_VM_FOCUS_DEBUG").is_ok() {
+            for focus_iv in [24usize, 25, 26] {
+                if focus_iv <= self.nsys {
+                    let end = nout.min(self.nsys);
+                    eprintln!("[VM FOCUS] row={focus_iv}");
+                    for jv in 1..=end {
+                        let entry = self.vm[focus_iv][jv];
+                        if entry[0].abs() > 1.0e-6 || entry[1].abs() > 1.0e-6 || entry[2].abs() > 1.0e-6 {
+                            eprintln!(
+                                "[VM FOCUS ENTRY] row={} col={} vals=[{:.8e}, {:.8e}, {:.8e}]",
+                                focus_iv, jv, entry[0], entry[1], entry[2]
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         rustfoil_bl::add_event(rustfoil_bl::DebugEvent::setbl_system(
             iteration,
             self.nsys,
@@ -492,6 +559,9 @@ impl GlobalNewtonSystem {
             vdel_rhs,
             vm_diag,
             vm_row1,
+            vm_row24,
+            vm_row25,
+            vm_row26,
         ));
     }
 
@@ -621,6 +691,41 @@ impl GlobalNewtonSystem {
                 }
             }
 
+            if std::env::var("RUSTFOIL_UESET_FIRST_DEBUG").is_ok() && surface == 0 && i == 1 {
+                let ue_inv_i = ue_inviscid.get(i).copied().unwrap_or(0.0);
+                eprintln!(
+                    "[UESET FIRST] panel_i={} ue_inv={:.8e} dui_upper={:.8e} dui_lower={:.8e} ue_after={:.8e} mass={:.8e}",
+                    panel_i,
+                    ue_inv_i,
+                    dui_upper,
+                    dui_lower,
+                    ue_inv_i + dui,
+                    upper_stations.get(i).map(|s| s.mass_defect).unwrap_or(0.0)
+                );
+                for jj in 1..6.min(upper_stations.len()) {
+                    let panel_jj = upper_stations[jj].panel_idx;
+                    if panel_i < dij.nrows() && panel_jj < dij.ncols() {
+                        let dij_val = dij[(panel_i, panel_jj)];
+                        let contrib = -dij_val * upper_stations[jj].mass_defect;
+                        eprintln!(
+                            "[UESET FIRST] upper j={} panel={} dij={:.8e} mass={:.8e} contrib={:.8e}",
+                            jj, panel_jj, dij_val, upper_stations[jj].mass_defect, contrib
+                        );
+                    }
+                }
+                for jj in 1..6.min(lower_stations.len()) {
+                    let panel_jj = lower_stations[jj].panel_idx;
+                    if panel_i < dij.nrows() && panel_jj < dij.ncols() {
+                        let dij_val = dij[(panel_i, panel_jj)];
+                        let contrib = dij_val * lower_stations[jj].mass_defect;
+                        eprintln!(
+                            "[UESET FIRST] lower j={} panel={} dij={:.8e} mass={:.8e} contrib={:.8e}",
+                            jj, panel_jj, dij_val, lower_stations[jj].mass_defect, contrib
+                        );
+                    }
+                }
+            }
+
             ue[i] = if i < ue_inviscid.len() {
                 ue_inviscid[i] + dui
             } else {
@@ -665,6 +770,30 @@ impl GlobalNewtonSystem {
             // - TRDIF on the transition interval
             // - regular BLDIF everywhere else
             let transition = transitions.get(i - 1).and_then(|tr| tr.as_ref());
+            if std::env::var("RUSTFOIL_TRANSITION_BRANCH_DEBUG").is_ok()
+                && ((surface == 0 && (30..=31).contains(&i))
+                    || (surface == 1 && (61..=62).contains(&i)))
+            {
+                eprintln!(
+                    "[TRANSITION BRANCH] {}[{i}] flow={flow_type:?} has_transition={} transition_flag={} xt={:.8e} ampl2={:.8e}",
+                    if surface == 0 { "upper" } else { "lower" },
+                    transition.is_some(),
+                    transition.map(|tr| tr.transition).unwrap_or(false),
+                    transition.map(|tr| tr.xt).unwrap_or(0.0),
+                    transition.map(|tr| tr.ampl2).unwrap_or(0.0),
+                );
+                if let Some(tr) = transition {
+                    eprintln!(
+                        "[TRANSITION DERIVS] {}[{i}] xt_x1={:.12e} xt_x2={:.12e} tt_x2={:.12e} dt_x2={:.12e} ut_x2={:.12e}",
+                        if surface == 0 { "upper" } else { "lower" },
+                        tr.xt_x1,
+                        tr.xt_x2,
+                        tr.tt_x2,
+                        tr.dt_x2,
+                        tr.ut_x2,
+                    );
+                }
+            }
             let (residuals, jacobian) = if i == 1 {
                 bldif_full_simi(s2, flow_type, msq, re)
             } else if let Some(tr) = transition {
@@ -676,6 +805,67 @@ impl GlobalNewtonSystem {
             } else {
                 bldif_ncrit(&stations[i - 1], s2, flow_type, msq, re, ncrit)
             };
+            if std::env::var("RUSTFOIL_TRANSITION_BLOCK_DEBUG").is_ok()
+                && ((surface == 0 && (i == 30 || i == 31))
+                    || (surface == 1 && (i == 61 || i == 62)))
+            {
+                eprintln!(
+                    "[RUST TRANSITION REGION BLOCK] {}[{i}] residuals=[{:.12e}, {:.12e}, {:.12e}] vs1_row1=[{:.12e}, {:.12e}, {:.12e}, {:.12e}, {:.12e}] vs1_row2=[{:.12e}, {:.12e}, {:.12e}, {:.12e}, {:.12e}] vs1_row3=[{:.12e}, {:.12e}, {:.12e}, {:.12e}, {:.12e}] vs2_row1=[{:.12e}, {:.12e}, {:.12e}, {:.12e}, {:.12e}] vs2_row2=[{:.12e}, {:.12e}, {:.12e}, {:.12e}, {:.12e}] vs2_row3=[{:.12e}, {:.12e}, {:.12e}, {:.12e}, {:.12e}]",
+                    if surface == 0 { "upper" } else { "lower" },
+                    residuals.res_third,
+                    residuals.res_mom,
+                    residuals.res_shape,
+                    jacobian.vs1[0][0], jacobian.vs1[0][1], jacobian.vs1[0][2], jacobian.vs1[0][3], jacobian.vs1[0][4],
+                    jacobian.vs1[1][0], jacobian.vs1[1][1], jacobian.vs1[1][2], jacobian.vs1[1][3], jacobian.vs1[1][4],
+                    jacobian.vs1[2][0], jacobian.vs1[2][1], jacobian.vs1[2][2], jacobian.vs1[2][3], jacobian.vs1[2][4],
+                    jacobian.vs2[0][0], jacobian.vs2[0][1], jacobian.vs2[0][2], jacobian.vs2[0][3], jacobian.vs2[0][4],
+                    jacobian.vs2[1][0], jacobian.vs2[1][1], jacobian.vs2[1][2], jacobian.vs2[1][3], jacobian.vs2[1][4],
+                    jacobian.vs2[2][0], jacobian.vs2[2][1], jacobian.vs2[2][2], jacobian.vs2[2][3], jacobian.vs2[2][4],
+                );
+            }
+
+        if std::env::var("RUSTFOIL_BLDIF_DEBUG").is_ok()
+            && ((surface == 0 && (i <= 2 || (20..=35).contains(&i)))
+                || (surface == 1 && (60..=63).contains(&i)))
+        {
+            eprintln!(
+                "[BLDIF DEBUG] {}[{i}] flow={flow_type:?} x1={:.6e} x2={:.6e} ampl1={:.6e} ampl2={:.6e} ctau1={:.6e} ctau2={:.6e} vrez=[{:.6e}, {:.6e}, {:.6e}] vs2_row1=[{:.6e}, {:.6e}, {:.6e}, {:.6e}, {:.6e}]",
+                if surface == 0 { "upper" } else { "lower" },
+                stations[i - 1].x,
+                s2.x,
+                stations[i - 1].ampl,
+                s2.ampl,
+                stations[i - 1].ctau,
+                s2.ctau,
+                residuals.res_third,
+                residuals.res_mom,
+                residuals.res_shape,
+                jacobian.vs2[0][0],
+                jacobian.vs2[0][1],
+                jacobian.vs2[0][2],
+                jacobian.vs2[0][3],
+                jacobian.vs2[0][4],
+            );
+                            if (24..=29).contains(&i) || (surface == 1 && (60..=63).contains(&i)) {
+                for eq in 0..3 {
+                    eprintln!(
+                                        "[BLDIF DEBUG FULL] {}[{i}] row{} vs1=[{:.6e}, {:.6e}, {:.6e}, {:.6e}, {:.6e}] vs2=[{:.6e}, {:.6e}, {:.6e}, {:.6e}, {:.6e}]",
+                                        if surface == 0 { "upper" } else { "lower" },
+                        eq + 1,
+                        jacobian.vs1[eq][0],
+                        jacobian.vs1[eq][1],
+                        jacobian.vs1[eq][2],
+                        jacobian.vs1[eq][3],
+                        jacobian.vs1[eq][4],
+                        jacobian.vs2[eq][0],
+                        jacobian.vs2[eq][1],
+                        jacobian.vs2[eq][2],
+                        jacobian.vs2[eq][3],
+                        jacobian.vs2[eq][4],
+                    );
+                }
+            }
+        }
 
 
             // Store residuals
@@ -770,52 +960,51 @@ impl GlobalNewtonSystem {
             // For similarity station (i==1), XFOIL combines: VS2 = VS1 + VS2, VS1 = 0
             // This DOUBLES the jacobian because at SIMI, VS1 and VS2 are identical
             // for columns 1-4 (theta, dstr, ue, x). Column 0 (ampl) is special.
+            let finite_or_zero = |value: f64| if value.is_finite() { value } else { 0.0 };
+
             if i == 1 {
-                // Similarity station: XFOIL combines VS2 = VS1 + VS2, VS1 = 0
-                // This effectively doubles the jacobian for columns 1-4.
-                // The combining is done in XFOIL's BLDIF after computing both VS matrices.
-                //
-                // CRITICAL FIX: We MUST add vs1+vs2 to match XFOIL's combined jacobian.
-                // This is NOT a 2x error - XFOIL intentionally doubles the sensitivity
-                // at the SIMI station because both "upstream" and "downstream" affect
-                // the same physical location.
+                // `bldif_full_simi()` already applies XFOIL's SIMI combine
+                // (VS2 = VS1 + VS2, VS1 = 0), so store the returned blocks
+                // directly without combining them a second time here.
                 for eq in 0..3 {
                     // Only columns 0,1 go in VA (ampl/ctau and theta)
-                    // For SIMI, add vs1+vs2 to match XFOIL's combining
-                    self.va[iv][eq][0] = jacobian.vs1[eq][0] + jacobian.vs2[eq][0];
-                    self.va[iv][eq][1] = jacobian.vs1[eq][1] + jacobian.vs2[eq][1];
+                    self.va[iv][eq][0] = finite_or_zero(jacobian.vs2[eq][0]);
+                    self.va[iv][eq][1] = finite_or_zero(jacobian.vs2[eq][1]);
                     self.va[iv][eq][2] = 0.0; // Not used - mass goes in VM
                     self.vb[iv][eq][0] = 0.0;
                     self.vb[iv][eq][1] = 0.0;
                     self.vb[iv][eq][2] = 0.0;
                     
-                    // Store delta_star and Ue columns for VM construction
-                    // These also need combining: vs2_combined = vs1 + vs2
+                    // Store the already-combined delta_star and Ue columns for VM construction.
                     self.vs1_delta[iv][eq] = 0.0;
                     self.vs1_ue[iv][eq] = 0.0;
-                    self.vs2_delta[iv][eq] = jacobian.vs1[eq][2] + jacobian.vs2[eq][2];
-                    self.vs2_ue[iv][eq] = jacobian.vs1[eq][3] + jacobian.vs2[eq][3];
+                    self.vs2_delta[iv][eq] = finite_or_zero(jacobian.vs2[eq][2]);
+                    self.vs2_ue[iv][eq] = finite_or_zero(jacobian.vs2[eq][3]);
+                    self.vs1_x[iv][eq] = 0.0;
+                    self.vs2_x[iv][eq] =
+                        finite_or_zero(jacobian.vs2[eq][4] + jacobian.vsx[eq]);
                 }
             } else {
                 for eq in 0..3 {
                     // Only columns 0,1 go in VA and VB (ampl/ctau and theta)
-                    self.va[iv][eq][0] = jacobian.vs2[eq][0];
-                    self.va[iv][eq][1] = jacobian.vs2[eq][1];
+                    self.va[iv][eq][0] = finite_or_zero(jacobian.vs2[eq][0]);
+                    self.va[iv][eq][1] = finite_or_zero(jacobian.vs2[eq][1]);
                     self.va[iv][eq][2] = 0.0; // Not used - mass goes in VM
-                    self.vb[iv][eq][0] = jacobian.vs1[eq][0];
-                    self.vb[iv][eq][1] = jacobian.vs1[eq][1];
+                    self.vb[iv][eq][0] = finite_or_zero(jacobian.vs1[eq][0]);
+                    self.vb[iv][eq][1] = finite_or_zero(jacobian.vs1[eq][1]);
                     self.vb[iv][eq][2] = 0.0; // Not used - mass goes in VM
                     
                     // Store delta_star and Ue columns for VM construction
-                    self.vs1_delta[iv][eq] = jacobian.vs1[eq][2];
-                    self.vs1_ue[iv][eq] = jacobian.vs1[eq][3];
-                    self.vs2_delta[iv][eq] = jacobian.vs2[eq][2];
-                    self.vs2_ue[iv][eq] = jacobian.vs2[eq][3];
+                    self.vs1_delta[iv][eq] = finite_or_zero(jacobian.vs1[eq][2]);
+                    self.vs1_ue[iv][eq] = finite_or_zero(jacobian.vs1[eq][3]);
+                    self.vs2_delta[iv][eq] = finite_or_zero(jacobian.vs2[eq][2]);
+                    self.vs2_ue[iv][eq] = finite_or_zero(jacobian.vs2[eq][3]);
                     
                     // Store X derivatives (column 4, 0-indexed) for stagnation coupling
                     // XFOIL: VS1(k,5), VS2(k,5) - derivatives w.r.t. arc length
-                    self.vs1_x[iv][eq] = jacobian.vs1[eq][4];
-                    self.vs2_x[iv][eq] = jacobian.vs2[eq][4];
+                    self.vs1_x[iv][eq] = finite_or_zero(jacobian.vs1[eq][4]);
+                    self.vs2_x[iv][eq] =
+                        finite_or_zero(jacobian.vs2[eq][4] + jacobian.vsx[eq]);
                 }
             }
             
@@ -1178,9 +1367,41 @@ impl GlobalNewtonSystem {
             };
 
             let dds2 = d2_u2 * due_upper.get(ibl).copied().unwrap_or(0.0);
-            let dds1 = d1_u1 * due_upper.get(ibl - 1).copied().unwrap_or(0.0);
             let due2 = due_upper.get(ibl).copied().unwrap_or(0.0);
-            let due1 = due_upper.get(ibl - 1).copied().unwrap_or(0.0);
+            let (dds1, due1) = if ibl == 1 {
+                (0.0, 0.0)
+            } else {
+                (
+                    d1_u1 * due_upper.get(ibl - 1).copied().unwrap_or(0.0),
+                    due_upper.get(ibl - 1).copied().unwrap_or(0.0),
+                )
+            };
+
+            if std::env::var("RUSTFOIL_FORCED_DEBUG").is_ok() && (20..=35).contains(&ibl) {
+                let fc0 = self.vs1_delta[iv][0] * dds1
+                    + self.vs2_delta[iv][0] * dds2
+                    + self.vs1_ue[iv][0] * due1
+                    + self.vs2_ue[iv][0] * due2;
+                let fc1 = self.vs1_delta[iv][1] * dds1
+                    + self.vs2_delta[iv][1] * dds2
+                    + self.vs1_ue[iv][1] * due1
+                    + self.vs2_ue[iv][1] * due2;
+                let fc2 = self.vs1_delta[iv][2] * dds1
+                    + self.vs2_delta[iv][2] * dds2
+                    + self.vs1_ue[iv][2] * due1
+                    + self.vs2_ue[iv][2] * due2;
+                eprintln!(
+                    "[FORCED DEBUG] upper[{ibl}] due1={:.12e} due2={:.12e} dds1={:.12e} dds2={:.12e} fc=[{:.12e}, {:.12e}, {:.12e}]",
+                    due1, due2, dds1, dds2, fc0, fc1, fc2
+                );
+                eprintln!(
+                    "[FORCED DEBUG UE] upper[{ibl}] ue_prev={:.12e} ue_prev_mass={:.12e} ue_curr={:.12e} ue_curr_mass={:.12e}",
+                    ue_current_upper.get(ibl - 1).copied().unwrap_or(0.0),
+                    ue_from_mass_upper.get(ibl - 1).copied().unwrap_or(0.0),
+                    ue_current_upper.get(ibl).copied().unwrap_or(0.0),
+                    ue_from_mass_upper.get(ibl).copied().unwrap_or(0.0),
+                );
+            }
 
             // Emit forced changes debug event at key stations (every 10th)
             if rustfoil_bl::is_debug_active() && ibl % 10 == 0 {
@@ -1203,8 +1424,8 @@ impl GlobalNewtonSystem {
             }
 
             // Debug: print forced change contributions at station 2 (first iteration only)
-            if std::env::var("RUSTFOIL_FC_DEBUG").is_ok() && ibl == 2 {
-                eprintln!("[FC DEBUG] upper[2]: due1={:.6e}, due2={:.6e}, dds1={:.6e}, dds2={:.6e}",
+            if std::env::var("RUSTFOIL_FC_DEBUG").is_ok() && ibl <= 2 {
+                eprintln!("[FC DEBUG] upper[{ibl}]: due1={:.6e}, due2={:.6e}, dds1={:.6e}, dds2={:.6e}",
                     due1, due2, dds1, dds2);
                 eprintln!("[FC DEBUG]   vs1_ue=[{:.6e}, {:.6e}, {:.6e}]",
                     self.vs1_ue[iv][0], self.vs1_ue[iv][1], self.vs1_ue[iv][2]);
@@ -1298,6 +1519,42 @@ impl GlobalNewtonSystem {
                     ue_inviscid_i,
                     ue_current_i,
                 ));
+            }
+
+            if std::env::var("RUSTFOIL_FORCED_DEBUG").is_ok() && (60..=63).contains(&ibl) {
+                let fc0 = self.vs1_delta[iv][0] * dds1
+                    + self.vs2_delta[iv][0] * dds2
+                    + self.vs1_ue[iv][0] * due1
+                    + self.vs2_ue[iv][0] * due2;
+                let fc1 = self.vs1_delta[iv][1] * dds1
+                    + self.vs2_delta[iv][1] * dds2
+                    + self.vs1_ue[iv][1] * due1
+                    + self.vs2_ue[iv][1] * due2;
+                let fc2 = self.vs1_delta[iv][2] * dds1
+                    + self.vs2_delta[iv][2] * dds2
+                    + self.vs1_ue[iv][2] * due1
+                    + self.vs2_ue[iv][2] * due2;
+                eprintln!(
+                    "[FORCED DEBUG LOWER] lower[{ibl}] due1={:.12e} due2={:.12e} dds1={:.12e} dds2={:.12e} fc=[{:.12e}, {:.12e}, {:.12e}]",
+                    due1, due2, dds1, dds2, fc0, fc1, fc2
+                );
+                eprintln!(
+                    "[FORCED DEBUG LOWER UE] lower[{ibl}] ue_prev={:.12e} ue_prev_mass={:.12e} ue_curr={:.12e} ue_curr_mass={:.12e}",
+                    ue_current_lower.get(ibl - 1).copied().unwrap_or(0.0),
+                    ue_from_mass_lower.get(ibl - 1).copied().unwrap_or(0.0),
+                    ue_current_lower.get(ibl).copied().unwrap_or(0.0),
+                    ue_from_mass_lower.get(ibl).copied().unwrap_or(0.0),
+                );
+                let xi_ule1 = -self.sst_go;
+                let xi_ule2 = self.sst_gp;
+                let xi_term = xi_ule1 * self.dule1 + xi_ule2 * self.dule2;
+                eprintln!(
+                    "[FORCED DEBUG LOWER XI] lower[{ibl}] vs_x=[{:.12e}, {:.12e}, {:.12e}] xi_term={:.12e}",
+                    self.vs1_x[iv][0] + self.vs2_x[iv][0],
+                    self.vs1_x[iv][1] + self.vs2_x[iv][1],
+                    self.vs1_x[iv][2] + self.vs2_x[iv][2],
+                    xi_term,
+                );
             }
 
             for k in 0..3 {
@@ -1462,7 +1719,7 @@ impl GlobalNewtonSystem {
         self.vdel[iv] = [
             te.cte - wake_station.ctau,
             te.tte - wake_station.theta,
-            te.dte - wake_station.delta_star,
+            te.dte - (wake_station.delta_star + wake_station.dw),
         ];
 
         self.va[iv] = [[0.0; 3]; 3];
@@ -1702,12 +1959,60 @@ pub fn solve_global_system(system: &mut GlobalNewtonSystem) -> GlobalSolveResult
                 vdel_operating[kv][2] -= vtmp3 * vdel_operating[iv][2];
             }
         }
+
+        if std::env::var("RUSTFOIL_BLSOLV_STEP_DEBUG").is_ok()
+            && ((20..=26).contains(&iv) || (94..=100).contains(&iv) || (156..=160).contains(&iv))
+        {
+            eprintln!("[RUST BLSOLV STEP] iv={iv}");
+            for row in [24usize, 25, 26, 98, 99, 159, 160] {
+                if row <= nsys {
+                    eprintln!(
+                        "[RUST BLSOLV ROW] row={} vals=[{:.8e}, {:.8e}, {:.8e}]",
+                        row, vdel[row][0], vdel[row][1], vdel[row][2]
+                    );
+                }
+            }
+        }
     }
 
     // === Back Substitution ===
     // Eliminate upper VM columns using row 3 (mass) solution
     for iv in (2..=nsys).rev() {
         let vtmp = vdel[iv][2];
+
+        if std::env::var("RUSTFOIL_BLSOLV_STEP_DEBUG").is_ok() && iv > 26 {
+            eprintln!(
+                "[RUST BLSOLV BACK MASS] iv={} coef={:.8e} mass={:.8e} contrib={:.8e}",
+                iv,
+                vm_mod[26][iv][2],
+                vtmp,
+                -vm_mod[26][iv][2] * vtmp
+            );
+            eprintln!(
+                "[RUST BLSOLV BACK COEF26] iv={} vals=[{:.8e}, {:.8e}, {:.8e}]",
+                iv,
+                vm_mod[26][iv][0],
+                vm_mod[26][iv][1],
+                vm_mod[26][iv][2],
+            );
+        }
+
+        if std::env::var("RUSTFOIL_BLSOLV_STEP_DEBUG").is_ok() && iv == 26 {
+            eprintln!(
+                "[RUST BLSOLV BACK COEF] row=24 col=26 vals=[{:.8e}, {:.8e}, {:.8e}] mass={:.8e}",
+                vm_mod[24][26][0],
+                vm_mod[24][26][1],
+                vm_mod[24][26][2],
+                vtmp
+            );
+            eprintln!(
+                "[RUST BLSOLV BACK COEF] row=25 col=26 vals=[{:.8e}, {:.8e}, {:.8e}] mass={:.8e}",
+                vm_mod[25][26][0],
+                vm_mod[25][26][1],
+                vm_mod[25][26][2],
+                vtmp
+            );
+        }
 
         for kv in (1..iv).rev() {
             vdel[kv][0] -= vm_mod[kv][iv][0] * vtmp;
@@ -1716,6 +2021,30 @@ pub fn solve_global_system(system: &mut GlobalNewtonSystem) -> GlobalSolveResult
             vdel_operating[kv][0] -= vm_mod[kv][iv][0] * vdel_operating[iv][2];
             vdel_operating[kv][1] -= vm_mod[kv][iv][1] * vdel_operating[iv][2];
             vdel_operating[kv][2] -= vm_mod[kv][iv][2] * vdel_operating[iv][2];
+        }
+
+        if std::env::var("RUSTFOIL_BLSOLV_STEP_DEBUG").is_ok()
+            && ((20..=26).contains(&iv) || (94..=100).contains(&iv) || (156..=160).contains(&iv))
+        {
+            eprintln!("[RUST BLSOLV BACK] iv={iv}");
+            for row in [24usize, 25, 26, 98, 99, 159, 160] {
+                if row <= nsys {
+                    eprintln!(
+                        "[RUST BLSOLV BACK ROW] row={} vals=[{:.8e}, {:.8e}, {:.8e}]",
+                        row, vdel[row][0], vdel[row][1], vdel[row][2]
+                    );
+                }
+            }
+        }
+    }
+
+    if std::env::var("RUSTFOIL_FINAL_DELTA_DEBUG").is_ok() {
+        let start = 156.min(nsys);
+        for iv in start..=nsys {
+            eprintln!(
+                "[RUST FINAL DELTA] iv={} vals=[{:.12e}, {:.12e}, {:.12e}]",
+                iv, vdel[iv][0], vdel[iv][1], vdel[iv][2]
+            );
         }
     }
 
@@ -2331,8 +2660,8 @@ fn compute_new_ue_via_dij(
         let ue_new = uinv_i + dui;
         
         // Debug: trace dui computation at sample stations
-        if (rustfoil_bl::is_debug_active() && (i == 20 || i == 40))
-            || (std::env::var("RUSTFOIL_LE_UPDATE_DEBUG").is_ok() && i <= 3)
+        if std::env::var("RUSTFOIL_LE_UPDATE_DEBUG").is_ok()
+            && (i <= 3 || i == 20 || i == 40)
         {
             eprintln!("[DEBUG compute_new_ue] upper i={}: uinv={:.6}, dui={:.6e}, ue_new={:.6}, current_u={:.6}",
                 i, uinv_i, dui, ue_new, upper_stations[i].u);
