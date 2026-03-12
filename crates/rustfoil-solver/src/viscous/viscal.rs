@@ -1248,6 +1248,8 @@ pub fn solve_viscous_two_surfaces(
                 dij,
                 &upper_ue_inv,
                 &lower_ue_inv,
+                &[],
+                &[],
                 &upper_ue_operating,
                 &lower_ue_operating,
                 config.ncrit,
@@ -1310,6 +1312,9 @@ pub fn solve_viscous_two_surfaces(
                     vdel_vec,
                     vm_diag,
                     vm_row1,
+                    None,
+                    None,
+                    None,
                 ));
             }
 

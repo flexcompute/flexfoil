@@ -470,6 +470,26 @@ C
 C
    60   CONTINUE
 C
+        IF((IV.GE.20 .AND. IV.LE.26) .OR.
+     &     (IV.GE.94 .AND. IV.LE.100) .OR.
+     &     (IV.GE.156 .AND. IV.LE.160)) THEN
+          WRITE(*,*) '[XFOIL BLSOLV STEP] iv=', IV
+          WRITE(*,*) '[XFOIL BLSOLV ROW] row=24 vals=',
+     &      VDEL(1,1,24), VDEL(2,1,24), VDEL(3,1,24)
+          WRITE(*,*) '[XFOIL BLSOLV ROW] row=25 vals=',
+     &      VDEL(1,1,25), VDEL(2,1,25), VDEL(3,1,25)
+          WRITE(*,*) '[XFOIL BLSOLV ROW] row=26 vals=',
+     &      VDEL(1,1,26), VDEL(2,1,26), VDEL(3,1,26)
+          WRITE(*,*) '[XFOIL BLSOLV ROW] row=98 vals=',
+     &      VDEL(1,1,98), VDEL(2,1,98), VDEL(3,1,98)
+          WRITE(*,*) '[XFOIL BLSOLV ROW] row=99 vals=',
+     &      VDEL(1,1,99), VDEL(2,1,99), VDEL(3,1,99)
+          WRITE(*,*) '[XFOIL BLSOLV ROW] row=159 vals=',
+     &      VDEL(1,1,159), VDEL(2,1,159), VDEL(3,1,159)
+          WRITE(*,*) '[XFOIL BLSOLV ROW] row=160 vals=',
+     &      VDEL(1,1,160), VDEL(2,1,160), VDEL(3,1,160)
+        ENDIF
+C
  1000 CONTINUE
 C
 C
@@ -478,6 +498,19 @@ C
 C
 C------ eliminate upper VM columns
         VTMP = VDEL(3,1,IV)
+        IF(IV.EQ.26) THEN
+          WRITE(*,*) '[XFOIL BLSOLV BACK COEF] row=24 col=26 vals=',
+     &      VM(1,26,24), VM(2,26,24), VM(3,26,24), ' mass=', VTMP
+          WRITE(*,*) '[XFOIL BLSOLV BACK COEF] row=25 col=26 vals=',
+     &      VM(1,26,25), VM(2,26,25), VM(3,26,25), ' mass=', VTMP
+        ENDIF
+        IF(IV.GT.26) THEN
+          WRITE(*,*) '[XFOIL BLSOLV BACK MASS] iv=', IV,
+     &      ' coef=', VM(3,IV,26), ' mass=', VTMP,
+     &      ' contrib=', -VM(3,IV,26)*VTMP
+          WRITE(*,*) '[XFOIL BLSOLV BACK COEF26] iv=', IV,
+     &      ' vals=', VM(1,IV,26), VM(2,IV,26), VM(3,IV,26)
+        ENDIF
         DO 81 KV=IV-1, 1, -1
           VDEL(1,1,KV) = VDEL(1,1,KV) - VM(1,IV,KV)*VTMP
           VDEL(2,1,KV) = VDEL(2,1,KV) - VM(2,IV,KV)*VTMP
@@ -491,12 +524,33 @@ C
           VDEL(3,2,KV) = VDEL(3,2,KV) - VM(3,IV,KV)*VTMP
    82   CONTINUE
 C
+        IF((IV.GE.20 .AND. IV.LE.26) .OR.
+     &     (IV.GE.94 .AND. IV.LE.100) .OR.
+     &     (IV.GE.156 .AND. IV.LE.160)) THEN
+          WRITE(*,*) '[XFOIL BLSOLV BACK] iv=', IV
+          WRITE(*,*) '[XFOIL BLSOLV BACK ROW] row=24 vals=',
+     &      VDEL(1,1,24), VDEL(2,1,24), VDEL(3,1,24)
+          WRITE(*,*) '[XFOIL BLSOLV BACK ROW] row=25 vals=',
+     &      VDEL(1,1,25), VDEL(2,1,25), VDEL(3,1,25)
+          WRITE(*,*) '[XFOIL BLSOLV BACK ROW] row=26 vals=',
+     &      VDEL(1,1,26), VDEL(2,1,26), VDEL(3,1,26)
+          WRITE(*,*) '[XFOIL BLSOLV BACK ROW] row=98 vals=',
+     &      VDEL(1,1,98), VDEL(2,1,98), VDEL(3,1,98)
+          WRITE(*,*) '[XFOIL BLSOLV BACK ROW] row=99 vals=',
+     &      VDEL(1,1,99), VDEL(2,1,99), VDEL(3,1,99)
+          WRITE(*,*) '[XFOIL BLSOLV BACK ROW] row=159 vals=',
+     &      VDEL(1,1,159), VDEL(2,1,159), VDEL(3,1,159)
+          WRITE(*,*) '[XFOIL BLSOLV BACK ROW] row=160 vals=',
+     &      VDEL(1,1,160), VDEL(2,1,160), VDEL(3,1,160)
+        ENDIF
+C
  2000 CONTINUE
 C
 C---- Debug output
       CALL DBGBLSOLV(NSYS)
 C---- Debug: dump full solution deltas after solving
       CALL DBGBLSOLVSOLUTION(NSYS, VDEL, IZX)
+      CALL DBGFULLSOLUTION(NSYS, VDEL, IZX)
 C
       RETURN
       END

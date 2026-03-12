@@ -645,9 +645,11 @@ C---- After state
 C---- Dump UESET edge velocity update via DIJ matrix
 C     Called before and after UESET to capture the edge velocity changes
 C     resulting from mass defect influence
-      SUBROUTINE DBGUESET(NBL1, NBL2, UINV, MASS, UEDG_B, UEDG_A, IVX)
+      SUBROUTINE DBGUESET(NBL1, NBL2, UINV, MASS, UEDG_B, UEDG_A,
+     &                    DUI_UPPER1, DUI_LOWER1, DUI_LOWERWAKE1, IVX)
       INTEGER NBL1, NBL2, IVX
       REAL UINV(IVX,2), MASS(IVX,2), UEDG_B(IVX,2), UEDG_A(IVX,2)
+      REAL DUI_UPPER1, DUI_LOWER1, DUI_LOWERWAKE1
       COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
       LOGICAL LDBG
       INTEGER LUDBG, IDBGCALL, IDBGITER
@@ -665,6 +667,12 @@ C
       WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
       WRITE(LUDBG,'(A,I4,A)') '  "nbl_upper": ', NBL1, ','
       WRITE(LUDBG,'(A,I4,A)') '  "nbl_lower": ', NBL2, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "upper_station1_dui_upper": ',
+     &                           DUI_UPPER1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "upper_station1_dui_lower": ',
+     &                           DUI_LOWER1, ','
+      WRITE(LUDBG,'(A,E15.8,A)') '  "upper_station1_dui_lower_wake": ',
+     &                           DUI_LOWERWAKE1, ','
 C
 C---- Upper surface (IS=1)
       WRITE(LUDBG,'(A)') '  "upper_surface": {'
@@ -1173,8 +1181,8 @@ C     VDEL(3,2,*) - RHS (col 1) and alpha sensitivity (col 2)
 C
       IF(.NOT.LDBG) RETURN
 C
-C---- Limit output to first 20 stations for large systems
-      NOUT = MIN(NSYS, 20)
+C---- Limit output to first 30 stations for large systems
+      NOUT = MIN(NSYS, 30)
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -1262,6 +1270,41 @@ C---- VM first row sample (coupling from station 1 to all others)
      &      '    [', (VM(K,J,1), ', ', K=1,2), VM(3,J,1), ']'
         ENDIF
    50 CONTINUE
+      WRITE(LUDBG,'(A)') '  ],'
+C
+C---- VM focused upper rows around solver mismatch
+      WRITE(LUDBG,'(A)') '  "VM_row24": ['
+      DO 60 J=1, NOUT
+        IF(J.LT.NOUT) THEN
+          WRITE(LUDBG,'(A,3(E14.7,A),A)')
+     &      '    [', (VM(K,J,24), ', ', K=1,2), VM(3,J,24), '],'
+        ELSE
+          WRITE(LUDBG,'(A,3(E14.7,A),A)')
+     &      '    [', (VM(K,J,24), ', ', K=1,2), VM(3,J,24), ']'
+        ENDIF
+   60 CONTINUE
+      WRITE(LUDBG,'(A)') '  ],'
+      WRITE(LUDBG,'(A)') '  "VM_row25": ['
+      DO 70 J=1, NOUT
+        IF(J.LT.NOUT) THEN
+          WRITE(LUDBG,'(A,3(E14.7,A),A)')
+     &      '    [', (VM(K,J,25), ', ', K=1,2), VM(3,J,25), '],'
+        ELSE
+          WRITE(LUDBG,'(A,3(E14.7,A),A)')
+     &      '    [', (VM(K,J,25), ', ', K=1,2), VM(3,J,25), ']'
+        ENDIF
+   70 CONTINUE
+      WRITE(LUDBG,'(A)') '  ],'
+      WRITE(LUDBG,'(A)') '  "VM_row26": ['
+      DO 80 J=1, NOUT
+        IF(J.LT.NOUT) THEN
+          WRITE(LUDBG,'(A,3(E14.7,A),A)')
+     &      '    [', (VM(K,J,26), ', ', K=1,2), VM(3,J,26), '],'
+        ELSE
+          WRITE(LUDBG,'(A,3(E14.7,A),A)')
+     &      '    [', (VM(K,J,26), ', ', K=1,2), VM(3,J,26), ']'
+        ENDIF
+   80 CONTINUE
       WRITE(LUDBG,'(A)') '  ]'
 C
       WRITE(LUDBG,'(A)') '}'

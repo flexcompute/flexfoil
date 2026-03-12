@@ -1829,6 +1829,9 @@ C---- Debug common block
       INTEGER LUDBG, IDBGCALL, IDBGITER
 C---- Local arrays to store before state for debug
       REAL UEDG_BEFORE(IVX,2)
+      REAL DUI_UPPER1, DUI_LOWER1, DUI_LOWERWAKE1, DUI_CONTRIB
+      REAL DUI_UPPER30, DUI_LOWER30, DUI_LOWERWAKE30
+      REAL DUI_UPPER31, DUI_LOWER31, DUI_LOWERWAKE31
 C
 C---- Save UEDG before modification for debug output
       IF(LDBG) THEN
@@ -1839,6 +1842,15 @@ C---- Save UEDG before modification for debug output
     2   CONTINUE
       ENDIF
 C
+      DUI_UPPER1 = 0.
+      DUI_LOWER1 = 0.
+      DUI_LOWERWAKE1 = 0.
+      DUI_UPPER30 = 0.
+      DUI_LOWER30 = 0.
+      DUI_LOWERWAKE30 = 0.
+      DUI_UPPER31 = 0.
+      DUI_LOWER31 = 0.
+      DUI_LOWERWAKE31 = 0.
       DO 1 IS=1, 2
         DO 10 IBL=2, NBL(IS)
           I = IPAN(IBL,IS)
@@ -1848,17 +1860,74 @@ C
             DO 1000 JBL=2, NBL(JS)
               J  = IPAN(JBL,JS)
               UE_M = -VTI(IBL,IS)*VTI(JBL,JS)*DIJ(I,J)
-              DUI = DUI + UE_M*MASS(JBL,JS)
+              DUI_CONTRIB = UE_M*MASS(JBL,JS)
+              DUI = DUI + DUI_CONTRIB
+              IF(IS.EQ.1 .AND. IBL.EQ.2) THEN
+                IF(JS.EQ.1) THEN
+                  DUI_UPPER1 = DUI_UPPER1 + DUI_CONTRIB
+                ELSE IF(JBL.LE.IBLTE(2)) THEN
+                  DUI_LOWER1 = DUI_LOWER1 + DUI_CONTRIB
+                ELSE
+                  DUI_LOWERWAKE1 = DUI_LOWERWAKE1 + DUI_CONTRIB
+                ENDIF
+              ENDIF
+              IF(IS.EQ.1 .AND. IBL.EQ.30) THEN
+                IF(JS.EQ.1) THEN
+                  DUI_UPPER30 = DUI_UPPER30 + DUI_CONTRIB
+                  IF(ABS(DUI_CONTRIB).GT.1.0E-5) THEN
+                    WRITE(*,*) '[XFOIL UESET DETAIL UPPER] ibl=', IBL,
+     &                ' jbl=', JBL, ' panel=', J,
+     &                ' mass=', MASS(JBL,JS),
+     &                ' contrib=', DUI_CONTRIB
+                  ENDIF
+                ELSE IF(JBL.LE.IBLTE(2)) THEN
+                  DUI_LOWER30 = DUI_LOWER30 + DUI_CONTRIB
+                ELSE
+                  DUI_LOWERWAKE30 = DUI_LOWERWAKE30 + DUI_CONTRIB
+                ENDIF
+              ENDIF
+              IF(IS.EQ.1 .AND. IBL.EQ.31) THEN
+                IF(JS.EQ.1) THEN
+                  DUI_UPPER31 = DUI_UPPER31 + DUI_CONTRIB
+                  IF(ABS(DUI_CONTRIB).GT.1.0E-5) THEN
+                    WRITE(*,*) '[XFOIL UESET DETAIL UPPER] ibl=', IBL,
+     &                ' jbl=', JBL, ' panel=', J,
+     &                ' mass=', MASS(JBL,JS),
+     &                ' contrib=', DUI_CONTRIB
+                  ENDIF
+                ELSE IF(JBL.LE.IBLTE(2)) THEN
+                  DUI_LOWER31 = DUI_LOWER31 + DUI_CONTRIB
+                ELSE
+                  DUI_LOWERWAKE31 = DUI_LOWERWAKE31 + DUI_CONTRIB
+                ENDIF
+              ENDIF
  1000       CONTINUE
   100     CONTINUE
 C
           UEDG(IBL,IS) = UINV(IBL,IS) + DUI
+          IF(IS.EQ.1 .AND. IBL.EQ.30) THEN
+            WRITE(*,*) '[XFOIL UESET SPLIT] ibl=', IBL,
+     &        ' uinv=', UINV(IBL,IS),
+     &        ' upper=', DUI_UPPER30,
+     &        ' lower=', DUI_LOWER30,
+     &        ' wake=', DUI_LOWERWAKE30,
+     &        ' uedg=', UEDG(IBL,IS)
+          ENDIF
+          IF(IS.EQ.1 .AND. IBL.EQ.31) THEN
+            WRITE(*,*) '[XFOIL UESET SPLIT] ibl=', IBL,
+     &        ' uinv=', UINV(IBL,IS),
+     &        ' upper=', DUI_UPPER31,
+     &        ' lower=', DUI_LOWER31,
+     &        ' wake=', DUI_LOWERWAKE31,
+     &        ' uedg=', UEDG(IBL,IS)
+          ENDIF
 C
    10   CONTINUE
     1 CONTINUE
 C
 C---- Debug output: dump before/after state
-      CALL DBGUESET(NBL(1), NBL(2), UINV, MASS, UEDG_BEFORE, UEDG, IVX)
+      CALL DBGUESET(NBL(1), NBL(2), UINV, MASS, UEDG_BEFORE, UEDG,
+     &              DUI_UPPER1, DUI_LOWER1, DUI_LOWERWAKE1, IVX)
 C
       RETURN
       END

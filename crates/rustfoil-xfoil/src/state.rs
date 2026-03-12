@@ -1,7 +1,12 @@
 use nalgebra::DMatrix;
+use rustfoil_bl::closures::Trchek2FullResult;
 use rustfoil_bl::state::BlDerivatives;
 
 use crate::config::OperatingMode;
+
+pub type VBlock = [[f64; 2]; 3];
+pub type VDelBlock = [[f64; 2]; 3];
+pub type VmRow = [f64; 3];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum XfoilSurface {
@@ -69,6 +74,8 @@ pub struct XfoilState {
     pub ante: f64,
     pub qinvu_0: Vec<f64>,
     pub qinvu_90: Vec<f64>,
+    pub gamu_0: Vec<f64>,
+    pub gamu_90: Vec<f64>,
     pub qinv: Vec<f64>,
     pub qinv_a: Vec<f64>,
     pub qvis: Vec<f64>,
@@ -98,16 +105,58 @@ pub struct XfoilState {
     pub nbl_lower: usize,
     pub iblte_upper: usize,
     pub iblte_lower: usize,
+    pub itran_upper: usize,
+    pub itran_lower: usize,
+    pub xssitr_upper: f64,
+    pub xssitr_lower: f64,
+    pub upper_transitions: Vec<Option<Trchek2FullResult>>,
+    pub lower_transitions: Vec<Option<Trchek2FullResult>>,
+    pub lblini: bool,
     pub ipan_upper: Vec<usize>,
     pub ipan_lower: Vec<usize>,
     pub isys_upper: Vec<Option<usize>>,
     pub isys_lower: Vec<Option<usize>>,
     pub upper_rows: Vec<XfoilBlRow>,
     pub lower_rows: Vec<XfoilBlRow>,
+    pub nsys: usize,
+    pub va: Vec<VBlock>,
+    pub vb: Vec<VBlock>,
+    pub vm: Vec<Vec<VmRow>>,
+    pub vz: [[f64; 2]; 3],
+    pub vdel: Vec<VDelBlock>,
+    pub usav_upper: Vec<f64>,
+    pub usav_lower: Vec<f64>,
+    pub u1_m: Vec<f64>,
+    pub u2_m: Vec<f64>,
+    pub d1_m: Vec<f64>,
+    pub d2_m: Vec<f64>,
+    pub ule1_m: Vec<f64>,
+    pub ule2_m: Vec<f64>,
+    pub ute1_m: Vec<f64>,
+    pub ute2_m: Vec<f64>,
+    pub u1_a: f64,
+    pub u2_a: f64,
+    pub d1_a: f64,
+    pub d2_a: f64,
+    pub due1: f64,
+    pub due2: f64,
+    pub dds1: f64,
+    pub dds2: f64,
     pub u_new: Vec<f64>,
     pub u_ac: Vec<f64>,
+    pub q_new: Vec<f64>,
+    pub q_ac: Vec<f64>,
     pub dac: f64,
     pub rlx: f64,
+    pub cl_new: f64,
+    pub cl_a: f64,
+    pub cl_ac: f64,
+    pub cl_ms: f64,
+    pub rmsbl: f64,
+    pub rmxbl: f64,
+    pub vmxbl: char,
+    pub imxbl: usize,
+    pub ismxbl: usize,
     pub cl: f64,
     pub cd: f64,
     pub cm: f64,
@@ -129,6 +178,8 @@ impl XfoilState {
         panel_s: Vec<f64>,
         qinvu_0: Vec<f64>,
         qinvu_90: Vec<f64>,
+        gamu_0: Vec<f64>,
+        gamu_90: Vec<f64>,
         dij: DMatrix<f64>,
     ) -> Self {
         let n = panel_x.len();
@@ -145,6 +196,8 @@ impl XfoilState {
             ante: 0.0,
             qinvu_0,
             qinvu_90,
+            gamu_0,
+            gamu_90,
             qinv: vec![0.0; n],
             qinv_a: vec![0.0; n],
             qvis: vec![0.0; n],
@@ -174,16 +227,58 @@ impl XfoilState {
             nbl_lower: 0,
             iblte_upper: 0,
             iblte_lower: 0,
+            itran_upper: 0,
+            itran_lower: 0,
+            xssitr_upper: 0.0,
+            xssitr_lower: 0.0,
+            upper_transitions: Vec::new(),
+            lower_transitions: Vec::new(),
+            lblini: false,
             ipan_upper: Vec::new(),
             ipan_lower: Vec::new(),
             isys_upper: Vec::new(),
             isys_lower: Vec::new(),
             upper_rows: Vec::new(),
             lower_rows: Vec::new(),
+            nsys: 0,
+            va: Vec::new(),
+            vb: Vec::new(),
+            vm: Vec::new(),
+            vz: [[0.0; 2]; 3],
+            vdel: Vec::new(),
+            usav_upper: Vec::new(),
+            usav_lower: Vec::new(),
+            u1_m: Vec::new(),
+            u2_m: Vec::new(),
+            d1_m: Vec::new(),
+            d2_m: Vec::new(),
+            ule1_m: Vec::new(),
+            ule2_m: Vec::new(),
+            ute1_m: Vec::new(),
+            ute2_m: Vec::new(),
+            u1_a: 0.0,
+            u2_a: 0.0,
+            d1_a: 0.0,
+            d2_a: 0.0,
+            due1: 0.0,
+            due2: 0.0,
+            dds1: 0.0,
+            dds2: 0.0,
             u_new: Vec::new(),
             u_ac: Vec::new(),
+            q_new: vec![0.0; n],
+            q_ac: vec![0.0; n],
             dac: 0.0,
             rlx: 1.0,
+            cl_new: 0.0,
+            cl_a: 0.0,
+            cl_ac: 0.0,
+            cl_ms: 0.0,
+            rmsbl: 0.0,
+            rmxbl: 0.0,
+            vmxbl: ' ',
+            imxbl: 0,
+            ismxbl: 0,
             cl: 0.0,
             cd: 0.0,
             cm: 0.0,
@@ -215,5 +310,33 @@ impl XfoilState {
             XfoilSurface::Upper => &mut self.upper_rows,
             XfoilSurface::Lower => &mut self.lower_rows,
         }
+    }
+
+    pub fn allocate_newton_state(&mut self) {
+        self.nsys = self.nbl_upper.saturating_sub(1) + self.nbl_lower.saturating_sub(1);
+        self.va = vec![[[0.0; 2]; 3]; self.nsys + 1];
+        self.vb = vec![[[0.0; 2]; 3]; self.nsys + 1];
+        self.vm = vec![vec![[0.0; 3]; self.nsys + 1]; self.nsys + 1];
+        self.vz = [[0.0; 2]; 3];
+        self.vdel = vec![[[0.0; 2]; 3]; self.nsys + 1];
+
+        let system_len = self.nsys + 1;
+        self.u1_m = vec![0.0; system_len];
+        self.u2_m = vec![0.0; system_len];
+        self.d1_m = vec![0.0; system_len];
+        self.d2_m = vec![0.0; system_len];
+        self.ule1_m = vec![0.0; system_len];
+        self.ule2_m = vec![0.0; system_len];
+        self.ute1_m = vec![0.0; system_len];
+        self.ute2_m = vec![0.0; system_len];
+
+        self.usav_upper = vec![0.0; self.upper_rows.len()];
+        self.usav_lower = vec![0.0; self.lower_rows.len()];
+        self.u_new = vec![0.0; system_len];
+        self.u_ac = vec![0.0; system_len];
+
+        let q_len = self.n_total_nodes();
+        self.q_new = vec![0.0; q_len];
+        self.q_ac = vec![0.0; q_len];
     }
 }

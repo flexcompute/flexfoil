@@ -194,8 +194,19 @@ pub fn compile_and_run(source_files: &[&str], executable: &str) -> Result<String
 
 pub fn run_xfoil_instrumented(commands: &str, working_directory: &Path) -> Result<String, FortranError> {
     let executable = xfoil_instrumented_bin().join("xfoil_instrumented");
+    let debug_path = working_directory.join("xfoil_debug.json");
+    let fallback_debug_path = std::env::current_dir()
+        .ok()
+        .map(|cwd| cwd.join("xfoil_debug.json"));
+    let _ = std::fs::remove_file(&debug_path);
+    if let Some(path) = &fallback_debug_path {
+        if path != &debug_path {
+            let _ = std::fs::remove_file(path);
+        }
+    }
     let output = Command::new(executable)
         .current_dir(working_directory)
+        .env("XFOIL_DEBUG_JSON", &debug_path)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -212,6 +223,16 @@ pub fn run_xfoil_instrumented(commands: &str, working_directory: &Path) -> Resul
             stderr: format_output(&output),
             code: output.status.code(),
         });
+    }
+    if !debug_path.exists() {
+        if let Some(path) = fallback_debug_path {
+            if path.exists() {
+                let _ = std::fs::rename(&path, &debug_path);
+                if !debug_path.exists() {
+                    let _ = std::fs::copy(&path, &debug_path);
+                }
+            }
+        }
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }

@@ -89,6 +89,26 @@ C----- initialize BL by marching with Ue (fudge at separation)
        WRITE(*,*)
        WRITE(*,*) 'Initializing BL ...'
        CALL MRCHUE
+       DO 94 IBL=MAX(2,IBLTE(1)-1), IBLTE(1)+1
+         WRITE(*,*) '[XFOIL AFTER MRCHUE] ibl=', IBL,
+     &     ' panel=', IPAN(IBL,1),
+     &     ' x=', XSSI(IBL,1),
+     &     ' ue=', UEDG(IBL,1),
+     &     ' theta=', THET(IBL,1),
+     &     ' dstr=', DSTR(IBL,1),
+     &     ' mass=', MASS(IBL,1),
+     &     ' ctau=', CTAU(IBL,1)
+   94  CONTINUE
+       DO 95 IBL=MAX(2,IBLTE(2)-1), MIN(NBL(2),IBLTE(2)+3)
+         WRITE(*,*) '[XFOIL LOWER AFTER MRCHUE] ibl=', IBL,
+     &     ' panel=', IPAN(IBL,2),
+     &     ' x=', XSSI(IBL,2),
+     &     ' ue=', UEDG(IBL,2),
+     &     ' theta=', THET(IBL,2),
+     &     ' dstr=', DSTR(IBL,2),
+     &     ' mass=', MASS(IBL,2),
+     &     ' ctau=', CTAU(IBL,2)
+   95  CONTINUE
        LBLINI = .TRUE.
       ENDIF
 C
@@ -96,6 +116,35 @@ C
 C
 C---- march BL with current Ue and Ds to establish transition
       CALL MRCHDU
+      DO 96 IBL=2, MIN(6,NBL(1))
+        WRITE(*,*) '[XFOIL SETBL UPPER] ibl=', IBL,
+     &    ' x=', XSSI(IBL,1),
+     &    ' ue=', UEDG(IBL,1),
+     &    ' theta=', THET(IBL,1),
+     &    ' dstr=', DSTR(IBL,1),
+     &    ' mass=', MASS(IBL,1),
+     &    ' ctau=', CTAU(IBL,1)
+   96 CONTINUE
+      DO 97 IBL=MAX(2,IBLTE(1)-4), IBLTE(1)
+        WRITE(*,*) '[XFOIL SETBL UPPER TAIL] ibl=', IBL,
+     &    ' panel=', IPAN(IBL,1),
+     &    ' x=', XSSI(IBL,1),
+     &    ' ue=', UEDG(IBL,1),
+     &    ' theta=', THET(IBL,1),
+     &    ' dstr=', DSTR(IBL,1),
+     &    ' mass=', MASS(IBL,1),
+     &    ' ctau=', CTAU(IBL,1)
+   97 CONTINUE
+      DO 98 IBL=MAX(2,IBLTE(2)-1), MIN(NBL(2),IBLTE(2)+3)
+        WRITE(*,*) '[XFOIL SETBL LOWER TAIL] ibl=', IBL,
+     &    ' panel=', IPAN(IBL,2),
+     &    ' x=', XSSI(IBL,2),
+     &    ' ue=', UEDG(IBL,2),
+     &    ' theta=', THET(IBL,2),
+     &    ' dstr=', DSTR(IBL,2),
+     &    ' mass=', MASS(IBL,2),
+     &    ' ctau=', CTAU(IBL,2)
+   98 CONTINUE
 C
       DO 5 IS=1, 2
         DO 6 IBL=2, NBL(IS)
@@ -220,6 +269,11 @@ C
 C---- "forced" changes due to mismatch between UEDG and USAV=UINV+dij*MASS
       DUE2 = UEDG(IBL,IS) - USAV(IBL,IS)
       DDS2 = D2_U2*DUE2
+      IF(IS.EQ.1 .AND. IBL.GE.29 .AND. IBL.LE.30) THEN
+        WRITE(*,*) '[XFOIL DUE UE] ibl=', IBL,
+     &    ' ue=', UEDG(IBL,IS), ' usav=', USAV(IBL,IS),
+     &    ' prev_ue=', UEDG(IBL-1,IS), ' prev_usav=', USAV(IBL-1,IS)
+      ENDIF
 C
 C---- Debug: dump DUE values at first few stations
       CALL DBGDUE(IS, IBL, UEDG(IBL,IS), USAV(IBL,IS), DUE2,
@@ -293,6 +347,36 @@ C------ Debug: dump BLSYS output (VS1, VS2, VSREZ)
         CALL DBGBLDIFOUT(IBL, IS, VS1, VS2, VSREZ, ITYP_DBG)
         CALL DBGTRANSITION(IDBGITER, IS, IBL, ITYP_DBG)
         CALL DBGVSREZ_TRANS(IS, IBL, VSREZ, VS2)
+        IF(IS.EQ.2) THEN
+          IF(IBL.GE.61 .AND. IBL.LE.64) THEN
+            WRITE(*,*) '[XFOIL SETBL LOCAL BLOCK] lower[', IBL-1,
+     &        '] residuals=', VSREZ(1), VSREZ(2), VSREZ(3)
+            WRITE(*,*) '[XFOIL SETBL LOCAL VS1R1] lower[', IBL-1,
+     &        '] vals=', VS1(1,1), VS1(1,2), VS1(1,3)
+            WRITE(*,*) '[XFOIL SETBL LOCAL VS1R1B] lower[', IBL-1,
+     &        '] vals=', VS1(1,4), VS1(1,5)
+            WRITE(*,*) '[XFOIL SETBL LOCAL VS1R2] lower[', IBL-1,
+     &        '] vals=', VS1(2,1), VS1(2,2), VS1(2,3)
+            WRITE(*,*) '[XFOIL SETBL LOCAL VS1R2B] lower[', IBL-1,
+     &        '] vals=', VS1(2,4), VS1(2,5)
+            WRITE(*,*) '[XFOIL SETBL LOCAL VS1R3] lower[', IBL-1,
+     &        '] vals=', VS1(3,1), VS1(3,2), VS1(3,3)
+            WRITE(*,*) '[XFOIL SETBL LOCAL VS1R3B] lower[', IBL-1,
+     &        '] vals=', VS1(3,4), VS1(3,5)
+            WRITE(*,*) '[XFOIL SETBL LOCAL VS2R1] lower[', IBL-1,
+     &        '] vals=', VS2(1,1), VS2(1,2), VS2(1,3)
+            WRITE(*,*) '[XFOIL SETBL LOCAL VS2R1B] lower[', IBL-1,
+     &        '] vals=', VS2(1,4), VS2(1,5)
+            WRITE(*,*) '[XFOIL SETBL LOCAL VS2R2] lower[', IBL-1,
+     &        '] vals=', VS2(2,1), VS2(2,2), VS2(2,3)
+            WRITE(*,*) '[XFOIL SETBL LOCAL VS2R2B] lower[', IBL-1,
+     &        '] vals=', VS2(2,4), VS2(2,5)
+            WRITE(*,*) '[XFOIL SETBL LOCAL VS2R3] lower[', IBL-1,
+     &        '] vals=', VS2(3,1), VS2(3,2), VS2(3,3)
+            WRITE(*,*) '[XFOIL SETBL LOCAL VS2R3B] lower[', IBL-1,
+     &        '] vals=', VS2(3,4), VS2(3,5)
+          ENDIF
+        ENDIF
 C
       ENDIF
 C
@@ -444,9 +528,24 @@ C
 C---- Debug: dump VSREZ base residual and DUE/DDS forced changes
       CALL DBGVSREZ_DUE(IV, VSREZ(1), VSREZ(2), VSREZ(3),
      &                  DUE1, DUE2, DDS1, DDS2)
+      IF(IV.EQ.162) THEN
+        WRITE(*,*) '[XFOIL VSREZ_DUE] iv=', IV, ' base=',
+     &    VSREZ(1), VSREZ(2), VSREZ(3), ' due=', DUE1, DUE2,
+     &    ' dds=', DDS1, DDS2
+        WRITE(*,*) '[XFOIL VSREZ_DUE XI] iv=', IV, ' vsx=',
+     &    VS1(1,5)+VS2(1,5)+VSX(1),
+     &    VS1(2,5)+VS2(2,5)+VSX(2),
+     &    VS1(3,5)+VS2(3,5)+VSX(3),
+     &    ' xiterm=', XI_ULE1*DULE1 + XI_ULE2*DULE2
+      ENDIF
 C---- Debug: dump VM matrix block and VDEL residuals
       CALL DBGVMBLOCK(IV)
       CALL DBGVDEL(IV, VDEL(1,1,IV), VDEL(2,1,IV), VDEL(3,1,IV))
+      IF((IV.GE.27 .AND. IV.LE.30) .OR.
+     &   (IV.GE.159 .AND. IV.LE.163)) THEN
+        WRITE(*,*) '[XFOIL SETBL VDEL] iv=', IV, ' vals=',
+     &    VDEL(1,1,IV), VDEL(2,1,IV), VDEL(3,1,IV)
+      ENDIF
 C
 C
       IF(IBL.EQ.IBLTE(IS)+1) THEN
@@ -1001,6 +1100,7 @@ C----------------------------------------------------
       INCLUDE 'XBL.INC'
       REAL VTMP(4,5), VZTMP(4)
       REAL MSQ
+      LOGICAL CONV
 ccc   REAL MDI
 C
       DATA DEPS / 5.0E-6 /
@@ -1069,6 +1169,12 @@ C
 C
 C------ Newton iteration loop for current station
         DO 100 ITBL=1, 25
+C
+C-------- save input state for debug output
+          THI_IN = THI
+          DSI_IN = DSI
+          CTI_IN = CTI
+          AMI_IN = AMI
 C
 C-------- assemble 10x3 linearized system for dCtau, dTh, dDs, dUe, dXi
 C         at the previous "1" station and the current "2" station
@@ -1189,6 +1295,21 @@ C
           RLX = 1.0
           IF(DMAX.GT.0.3) RLX = 0.3/DMAX
 C
+          IF(IS.EQ.1) THEN
+            IF(IBL.GE.IBLTE(IS)-2 .AND. IBL.LE.IBLTE(IS)) THEN
+              WRITE(*,*) '[XFOIL TAIL ITER DU] ibl=', IBL,
+     &          ' it=', ITBL,
+     &          ' theta=', THI,
+     &          ' dsi_total=', DSI,
+     &          ' ctau=', CTI,
+     &          ' ue=', UEI,
+     &          ' ampl=', AMI,
+     &          ' dmax=', DMAX,
+     &          ' rlx=', RLX,
+     &          ' rhs=', VSREZ(1), VSREZ(2), VSREZ(3), VSREZ(4)
+            ENDIF
+          ENDIF
+C
 C-------- update as usual
           IF(IBL.LT.ITRAN(IS)) AMI = AMI + RLX*VSREZ(1)
           IF(IBL.GE.ITRAN(IS)) CTI = CTI + RLX*VSREZ(1)
@@ -1211,6 +1332,15 @@ C
           DSW = DSI - DSWAKI
           CALL DSLIM(DSW,THI,UEI,MSQ,HKLIM)
           DSI = DSW + DSWAKI
+C
+          IF(IS.EQ.2 .AND. IBL.EQ.62) THEN
+            CONV = DMAX.LE.DEPS
+            CALL DBGMRCHUE_ITER(IS, IBL, ITBL, XSI, UEI, DSWAKI,
+     &                          THI_IN, DSI_IN, CTI_IN, AMI_IN,
+     &                          THI, DSI, CTI, AMI,
+     &                          VS2, VSREZ, DMAX, RLX, CONV,
+     &                          HSTINV, GM1BL, REYBL)
+          ENDIF
 C
           IF(DMAX.LE.DEPS) GO TO 110
 C
