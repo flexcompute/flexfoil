@@ -133,6 +133,11 @@ pub struct FortranStateTopologyOutput {
 
 #[derive(Debug, Deserialize)]
 pub struct FortranQdcalcOutput {
+    pub xle: f64,
+    pub yle: f64,
+    pub xte: f64,
+    pub yte: f64,
+    pub chord: f64,
     pub wake_x: Vec<f64>,
     pub wake_y: Vec<f64>,
     pub wake_s: Vec<f64>,
@@ -291,7 +296,7 @@ pub fn xfoil_iteration_debug(alpha_deg: f64) -> serde_json::Value {
     let source_coords_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
-        .join("naca0012_buffer_real.dat");
+        .join("naca0012_xfoil_paneled.dat");
     let workdir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
@@ -304,7 +309,7 @@ pub fn xfoil_iteration_debug(alpha_deg: f64) -> serde_json::Value {
     std::fs::copy(&source_coords_path, &local_coords_path)
         .expect("copy xfoil buffer geometry into stage debug workdir");
     let commands = format!(
-        "LOAD {}\n\nPANE\n\nOPER\nVISC 1000000\nMACH 0\nITER 1\nALFA {alpha_deg:.1}\n\nQUIT\n",
+        "LOAD {}\n\nOPER\nVISC 1000000\nMACH 0\nITER 1\nALFA {alpha_deg:.1}\n\nQUIT\n",
         local_coords_path
             .file_name()
             .expect("local buffer airfoil filename")
@@ -470,7 +475,13 @@ pub fn build_qdcalc_state() -> (XfoilState, rustfoil_inviscid::FactorizedSystem)
 pub fn rust_qdcalc_output() -> FortranQdcalcOutput {
     let (mut state, factorized) = build_qdcalc_state();
     qdcalc(&mut state, &factorized).expect("qdcalc");
+    let geom = factorized.geometry();
     FortranQdcalcOutput {
+        xle: geom.xle,
+        yle: geom.yle,
+        xte: geom.xte,
+        yte: geom.yte,
+        chord: geom.chord,
         wake_x: state.wake_x.clone(),
         wake_y: state.wake_y.clone(),
         wake_s: state.wake_s.clone(),
@@ -515,22 +526,11 @@ pub fn run_workflow_case(alpha_deg: f64) -> rustfoil_xfoil::result::XfoilViscous
 }
 
 pub fn build_march_state(alpha_deg: f64) -> (XfoilState, rustfoil_inviscid::FactorizedSystem) {
-    let buffer_coords_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let paneled_coords_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
-        .join("naca0012_buffer_real.dat");
-    let buffer_coords = load_dat_coords(&buffer_coords_path);
-    let buffer_points: Vec<rustfoil_core::Point> = buffer_coords
-        .into_iter()
-        .map(|(x, y)| rustfoil_core::Point::new(x, y))
-        .collect();
-    let spline = rustfoil_core::CubicSpline::from_points(&buffer_points)
-        .expect("create spline from xfoil buffer");
-    let coords: Vec<(f64, f64)> = spline
-        .resample_xfoil(160, &rustfoil_core::PanelingParams::default())
-        .into_iter()
-        .map(|point| (point.x, point.y))
-        .collect();
+        .join("naca0012_xfoil_paneled.dat");
+    let coords = load_dat_coords(&paneled_coords_path);
     let solver = rustfoil_inviscid::InviscidSolver::new();
     let factorized = solver.factorize(&coords).expect("factorize march fixture");
     let alpha_rad = alpha_deg.to_radians();

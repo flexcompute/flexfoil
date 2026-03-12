@@ -17,6 +17,11 @@ program qdcalc_driver
   call qdcalc
 
   write(*,'(A)') '{'
+  write(*,'(A,ES24.16E3,A)') '  "xle": ', xle, ','
+  write(*,'(A,ES24.16E3,A)') '  "yle": ', yle, ','
+  write(*,'(A,ES24.16E3,A)') '  "xte": ', xte, ','
+  write(*,'(A,ES24.16E3,A)') '  "yte": ', yte, ','
+  write(*,'(A,ES24.16E3,A)') '  "chord": ', chord, ','
   call emit_real_array('wake_x', x(n+1:n+nw), nw, .true., 2)
   call emit_real_array('wake_y', y(n+1:n+nw), nw, .true., 2)
   call emit_wake_state(.true.)

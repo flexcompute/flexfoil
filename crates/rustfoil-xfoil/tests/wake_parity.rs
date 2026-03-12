@@ -108,6 +108,43 @@ fn specal_recombines_wake_basis_without_rebuilding_wake() {
 }
 
 #[test]
+#[ignore = "diagnostic for wake fixture geometry"]
+fn dump_qdcalc_geometry_comparison() {
+    let reference = qdcalc_fortran();
+    let actual = rust_qdcalc_output();
+    println!(
+        "xle rust={:.12e} fortran={:.12e} diff={:.12e}",
+        actual.xle,
+        reference.xle,
+        actual.xle - reference.xle
+    );
+    println!(
+        "yle rust={:.12e} fortran={:.12e} diff={:.12e}",
+        actual.yle,
+        reference.yle,
+        actual.yle - reference.yle
+    );
+    println!(
+        "xte rust={:.12e} fortran={:.12e} diff={:.12e}",
+        actual.xte,
+        reference.xte,
+        actual.xte - reference.xte
+    );
+    println!(
+        "yte rust={:.12e} fortran={:.12e} diff={:.12e}",
+        actual.yte,
+        reference.yte,
+        actual.yte - reference.yte
+    );
+    println!(
+        "chord rust={:.12e} fortran={:.12e} diff={:.12e}",
+        actual.chord,
+        reference.chord,
+        actual.chord - reference.chord
+    );
+}
+
+#[test]
 #[ignore = "release-mode wake microbenchmark gate"]
 fn perf_qdcalc_vs_fortran() {
     assert!(

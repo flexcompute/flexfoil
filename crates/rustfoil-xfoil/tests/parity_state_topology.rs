@@ -228,3 +228,20 @@ fn stmove_matches_fortran_where_applicable() {
     );
     assert_close_slice("stmove.lower_mass", &lower_mass, &reference.lower_mass, 1.0e-12);
 }
+
+#[test]
+fn stmove_keeps_projected_views_in_sync() {
+    let mut state = shifted_stmove_state();
+    stmove(&mut state);
+
+    let qvis_after = state.qvis.clone();
+    let gam_after = state.gam.clone();
+    let gam_a_after = state.gam_a.clone();
+
+    qvfue(&mut state);
+    gamqv(&mut state);
+
+    assert_close_slice("stmove.qvis_sync", &qvis_after, &state.qvis, 1.0e-12);
+    assert_close_slice("stmove.gam_sync", &gam_after, &state.gam, 1.0e-12);
+    assert_close_slice("stmove.gam_a_sync", &gam_a_after, &state.gam_a, 1.0e-12);
+}

@@ -3,6 +3,7 @@ use rustfoil_coupling::global_newton::{apply_global_updates, preview_global_upda
 
 use crate::{
     assembly::AssemblyState,
+    canonical_state::{rows_to_stations, sync_rows_from_stations, sync_state_views_from_rows},
     config::OperatingMode,
     forces::compute_panel_forces_from_gamma,
     solve::SolveState,
@@ -19,8 +20,8 @@ pub fn update(
     let msq = mach * mach;
     let upper_len = state.nbl_upper.min(state.upper_rows.len());
     let lower_len = state.nbl_lower.min(state.lower_rows.len());
-    let mut upper_stations = rows_to_stations(&state.upper_rows[..upper_len]);
-    let mut lower_stations = rows_to_stations(&state.lower_rows[..lower_len]);
+    let mut upper_stations = rows_to_stations(&state.upper_rows[..upper_len], msq, reynolds);
+    let mut lower_stations = rows_to_stations(&state.lower_rows[..lower_len], msq, reynolds);
     let upper_before = upper_stations.clone();
     let lower_before = lower_stations.clone();
     let upper_ue_inv: Vec<f64> = state.upper_rows[..upper_len].iter().map(|row| row.uinv.abs()).collect();
@@ -93,7 +94,7 @@ pub fn update(
     );
     sync_rows_from_stations(&mut state.upper_rows[..upper_len], &upper_stations);
     sync_rows_from_stations(&mut state.lower_rows[..lower_len], &lower_stations);
-    mirror_upper_wake_from_lower(state);
+    sync_state_views_from_rows(state);
     if std::env::var("RUSTFOIL_UPDATE_DEBUG").is_ok() {
         eprintln!(
             "[UPDATE DEBUG] cl_new={:.6e} cl_a={:.6e} cl_ac={:.6e} dac={:.6e} rlx={:.6e}",
@@ -140,117 +141,20 @@ pub fn update(
     );
 }
 
-fn rows_to_stations(rows: &[crate::state::XfoilBlRow]) -> Vec<BlStation> {
-    rows.iter()
-        .map(|row| {
-            let total_dstr = row.dstr.max(1.0e-12);
-            let dw = row.dw.max(0.0);
-            BlStation {
-                x: row.x,
-                x_coord: row.x_coord,
-                panel_idx: row.panel_idx,
-                u: row.uedg.abs().max(1.0e-9),
-                theta: row.theta.max(1.0e-12),
-                delta_star: if row.is_wake {
-                    (total_dstr - dw).max(1.0e-12)
-                } else {
-                    total_dstr
-                },
-                ctau: if row.is_laminar {
-                    0.03
-                } else {
-                    row.ctau.max(1.0e-7)
-                },
-                ampl: if row.is_laminar {
-                    row.ampl.max(0.0)
-                } else {
-                    row.ampl.max(0.0)
-                },
-                h: row.h,
-                hk: row.hk,
-                hs: row.hs,
-                hc: row.hc,
-                r_theta: row.r_theta,
-                cf: row.cf,
-                cd: row.cd,
-                us: row.us,
-                cq: row.cq,
-                de: row.de,
-                mass_defect: row.mass.max(1.0e-12),
-                dw,
-                is_laminar: row.is_laminar,
-                is_wake: row.is_wake,
-                is_turbulent: row.is_turbulent,
-                derivs: row.derivs.clone(),
-            }
-        })
-        .collect()
-}
-
 fn refresh_secondary_vars(stations: &mut [BlStation], msq: f64, reynolds: f64) {
     for station in stations.iter_mut().skip(1) {
         blvar(
             station,
-            flow_type_for_station(station),
+            if station.is_wake {
+                FlowType::Wake
+            } else if station.is_turbulent {
+                FlowType::Turbulent
+            } else {
+                FlowType::Laminar
+            },
             msq,
             reynolds,
         );
-    }
-}
-
-fn flow_type_for_station(station: &BlStation) -> FlowType {
-    if station.is_wake {
-        FlowType::Wake
-    } else if station.is_turbulent {
-        FlowType::Turbulent
-    } else {
-        FlowType::Laminar
-    }
-}
-
-fn sync_rows_from_stations(rows: &mut [crate::state::XfoilBlRow], stations: &[BlStation]) {
-    for (row, station) in rows.iter_mut().zip(stations.iter()) {
-        row.uedg = station.u;
-        row.theta = station.theta;
-        row.dstr = station.delta_star;
-        row.mass = station.mass_defect;
-        row.ampl = station.ampl;
-        row.ctau = if station.is_laminar { station.ampl } else { station.ctau };
-        row.h = station.h;
-        row.hk = station.hk;
-        row.hs = station.hs;
-        row.hc = station.hc;
-        row.r_theta = station.r_theta;
-        row.cf = station.cf;
-        row.cd = station.cd;
-        row.us = station.us;
-        row.cq = station.cq;
-        row.de = station.de;
-        row.is_laminar = station.is_laminar;
-        row.is_turbulent = station.is_turbulent;
-        row.is_wake = station.is_wake;
-        row.derivs = station.derivs.clone();
-    }
-}
-
-fn mirror_upper_wake_from_lower(state: &mut XfoilState) {
-    let upper_wake_start = state.nbl_upper;
-    let lower_wake_start = state.iblte_lower + 1;
-    for iw in 0..state.wake_x.len() {
-        let upper_idx = upper_wake_start + iw;
-        let lower_idx = lower_wake_start + iw;
-        if upper_idx >= state.upper_rows.len() || lower_idx >= state.lower_rows.len() {
-            break;
-        }
-        let source = state.lower_rows[lower_idx].clone();
-        let panel_idx = state.upper_rows[upper_idx].panel_idx;
-        let x_coord = state.upper_rows[upper_idx].x_coord;
-        state.upper_rows[upper_idx] = source;
-        state.upper_rows[upper_idx].panel_idx = panel_idx;
-        state.upper_rows[upper_idx].x_coord = x_coord;
-        state.upper_rows[upper_idx].is_wake = true;
-        state.upper_rows[upper_idx].is_turbulent = true;
-        state.upper_rows[upper_idx].is_laminar = false;
     }
 }
 

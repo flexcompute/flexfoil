@@ -66,7 +66,16 @@ fn load_naca2412_coords() -> Vec<(f64, f64)> {
 }
 
 fn alpha_trace_name(alpha_deg: i32) -> String {
-    format!("xfoil_2412_alpha{alpha_deg}.json")
+    format!("alpha_{:+06.1}.json", alpha_deg as f64)
+}
+
+fn xfoil_trace_path(alpha_deg: i32) -> PathBuf {
+    workspace_root()
+        .join("traces")
+        .join("xfoil")
+        .join("naca2412")
+        .join("re3e06")
+        .join(alpha_trace_name(alpha_deg))
 }
 
 fn find_matching_brace(content: &str, start_idx: usize) -> Option<usize> {
@@ -225,10 +234,7 @@ fn reconstruct_airfoil_gamma(
 }
 
 fn load_xfoil_markers(alpha_deg: i32) -> StructuralMarkers {
-    let path = workspace_root()
-        .join("Xfoil-instrumented")
-        .join("traces")
-        .join(alpha_trace_name(alpha_deg));
+    let path = xfoil_trace_path(alpha_deg);
     let content = fs::read_to_string(&path).unwrap_or_else(|_| panic!("failed to read {:?}", path));
     let stfind_events: Vec<Value> = extract_event_blocks(&content, "\"subroutine\": \"STFIND\"")
         .into_iter()
@@ -243,6 +249,10 @@ fn load_xfoil_markers(alpha_deg: i32) -> StructuralMarkers {
             .into_iter()
             .map(parse_event)
             .collect();
+    let ueset_events: Vec<Value> = extract_event_blocks(&content, "\"subroutine\": \"UESET\"")
+        .into_iter()
+        .map(parse_event)
+        .collect();
     let blvar_events: Vec<Value> = extract_event_blocks(&content, "\"subroutine\": \"BLVAR\"")
         .into_iter()
         .map(parse_event)
@@ -252,6 +262,8 @@ fn load_xfoil_markers(alpha_deg: i32) -> StructuralMarkers {
     let last_stfind = stfind_events.last().expect("last STFIND");
     let last_viscal = viscal_events.last().expect("last VISCAL_RESULT");
     let full_bl_lengths = extract_full_bl_lengths(&content);
+    let first_ueset = ueset_events.first();
+    let last_ueset = ueset_events.last();
     let (initial_upper_len, initial_lower_len, final_upper_len, final_lower_len) =
         if let (Some(first_iblpan), Some(last_iblpan)) = (iblpan_events.first(), iblpan_events.last()) {
             (
@@ -259,6 +271,13 @@ fn load_xfoil_markers(alpha_deg: i32) -> StructuralMarkers {
                 event_usize(first_iblpan, "NBL_lower"),
                 event_usize(last_iblpan, "NBL_upper"),
                 event_usize(last_iblpan, "NBL_lower"),
+            )
+        } else if let (Some(first_ueset), Some(last_ueset)) = (first_ueset, last_ueset) {
+            (
+                event_usize(first_ueset, "nbl_upper"),
+                event_usize(first_ueset, "nbl_lower"),
+                event_usize(last_ueset, "nbl_upper"),
+                event_usize(last_ueset, "nbl_lower"),
             )
         } else {
             let first = *full_bl_lengths.first().expect("first FULL_BL_STATE lengths");
@@ -423,10 +442,7 @@ struct DivergenceReport {
 }
 
 fn load_xfoil_iteration_snapshots(alpha_deg: i32) -> Vec<IterationSnapshot> {
-    let path = workspace_root()
-        .join("Xfoil-instrumented")
-        .join("traces")
-        .join(alpha_trace_name(alpha_deg));
+    let path = xfoil_trace_path(alpha_deg);
     let content = fs::read_to_string(&path).unwrap_or_else(|_| panic!("failed to read {:?}", path));
 
     let viscal_events: Vec<Value> =
@@ -461,10 +477,7 @@ fn load_xfoil_iteration_snapshots(alpha_deg: i32) -> Vec<IterationSnapshot> {
 }
 
 fn xfoil_transition_locations(alpha_deg: i32) -> (f64, f64) {
-    let path = workspace_root()
-        .join("Xfoil-instrumented")
-        .join("traces")
-        .join(alpha_trace_name(alpha_deg));
+    let path = xfoil_trace_path(alpha_deg);
     let content = fs::read_to_string(&path).unwrap_or_else(|_| panic!("failed to read {:?}", path));
 
     let tr_events: Vec<Value> =

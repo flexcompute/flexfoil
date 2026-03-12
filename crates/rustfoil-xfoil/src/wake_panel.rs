@@ -37,15 +37,22 @@ pub fn xywake(state: &mut XfoilState, factorized: &FactorizedSystem, wake_length
     let xte = 0.5 * (geom.x[0] + geom.x[n - 1]);
     let yte = 0.5 * (geom.y[0] + geom.y[n - 1]);
 
-    // Compute GAM at current alpha for PSILIN streamfunction gradient.
-    // In Fortran XYWAKE, GAM is already set from SPECAL before XYWAKE is called.
-    // Here we compute it from the decomposed gamu_0/gamu_90 to avoid depending
-    // on prior specal call order.
     let cosa = state.alpha_rad.cos();
     let sina = state.alpha_rad.sin();
-    let gam: Vec<f64> = (0..n)
-        .map(|j| cosa * factorized.gamu_0[j] + sina * factorized.gamu_90[j])
-        .collect();
+    // XFOIL's XYWAKE uses the current GAM array prepared by SPECAL, including
+    // the trailing-edge endpoint handling. Reuse that state here so the wake
+    // streamline follows the same circulation field seen elsewhere.
+    let gam: Vec<f64> = if state.gam.len() >= n {
+        state.gam[..n].to_vec()
+    } else {
+        let mut gam: Vec<f64> = (0..n)
+            .map(|j| cosa * factorized.gamu_0[j] + sina * factorized.gamu_90[j])
+            .collect();
+        if let Some(last) = gam.last_mut() {
+            *last = 0.0;
+        }
+        gam
+    };
 
     // First wake point: initial normal from TE tangents (Fortran lines 1358-1364)
     let sx = 0.5 * (geom.yp[n - 1] - geom.yp[0]);
