@@ -347,23 +347,25 @@ pub fn gamqv(state: &mut XfoilState) {
 
 pub fn stmove(state: &mut XfoilState) {
     let old_ist = state.ist;
-    let old_upper = state.upper_rows.clone();
-    let old_lower = state.lower_rows.clone();
     stfind(state);
     if state.ist != old_ist {
+        let old_upper = state.upper_rows.clone();
+        let old_lower = state.lower_rows.clone();
         adjust_transition_indices(state, old_ist);
         iblpan(state);
         uicalc(state);
         xicalc(state);
         shift_stagnation_state(state, old_ist, &old_upper, &old_lower);
         apply_ue_floor(state);
+        recompute_mass_from_state(state);
+        refresh_shifted_row_views(state);
+        sync_state_views_from_rows(state);
     } else {
         xicalc(state);
-        restore_rows_identity(state, &old_upper, &old_lower);
+        apply_ue_floor(state);
+        recompute_mass_from_state(state);
+        sync_state_views_from_rows(state);
     }
-    recompute_mass_from_state(state);
-    refresh_shifted_row_views(state);
-    sync_state_views_from_rows(state);
 }
 
 pub fn dsset(state: &mut XfoilState) {
@@ -533,13 +535,6 @@ fn update_wgap(state: &mut XfoilState) {
     }
 }
 
-fn restore_rows_identity(state: &mut XfoilState, old_upper: &[XfoilBlRow], old_lower: &[XfoilBlRow]) {
-    let upper_len = state.upper_rows.len().min(old_upper.len());
-    let lower_len = state.lower_rows.len().min(old_lower.len());
-    copy_row_window(&mut state.upper_rows, old_upper, upper_len);
-    copy_row_window(&mut state.lower_rows, old_lower, lower_len);
-}
-
 fn shift_stagnation_state(state: &mut XfoilState, old_ist: usize, old_upper: &[XfoilBlRow], old_lower: &[XfoilBlRow]) {
     if state.ist > old_ist {
         let idif = state.ist - old_ist;
@@ -575,12 +570,6 @@ fn shift_stagnation_state(state: &mut XfoilState, old_ist: usize, old_upper: &[X
         for ibl in 2..=state.nbl_upper {
             copy_row_values(&mut state.upper_rows[ibl - 1], &old_upper[ibl + idif - 1]);
         }
-    }
-}
-
-fn copy_row_window(dst: &mut [XfoilBlRow], src: &[XfoilBlRow], len: usize) {
-    for idx in 1..len {
-        copy_row_values(&mut dst[idx], &src[idx]);
     }
 }
 

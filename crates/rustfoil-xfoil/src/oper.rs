@@ -1,11 +1,12 @@
 use rustfoil_bl::{
-    add_event, is_debug_active, DebugEvent, SurfaceBlState,
+    add_event, is_debug_active, BlStation, DebugEvent, SurfaceBlState,
 };
 use rustfoil_core::Body;
 use rustfoil_inviscid::InviscidSolver;
 
 use crate::{
     assembly::setbl,
+    canonical_state::rows_to_stations,
     config::{OperatingMode, XfoilOptions},
     error::{Result, XfoilError},
     forces::{compute_panel_forces_from_gamma, update_force_state},
@@ -138,7 +139,7 @@ pub fn solve_operating_point_from_state(
             options.mach,
             options.ncrit,
         ));
-        emit_full_state(state, 0);
+        emit_full_state(state, 0, options.mach, options.reynolds);
         add_event(DebugEvent::full_gamma_iter(0, state.gam.clone()));
     }
 
@@ -157,13 +158,13 @@ pub fn solve_operating_point_from_state(
             qvfue(state);
             gamqv(state);
         }
-        update_force_state(state);
+        update_force_state(state, options.mach, options.reynolds);
         state.iterations = iter;
         state.residual = solve.rms;
         state.converged = solve.rms <= options.tolerance;
 
         if is_debug_active() {
-            emit_full_state(state, iter);
+            emit_full_state(state, iter, options.mach, options.reynolds);
             add_event(DebugEvent::full_gamma_iter(iter, state.gam.clone()));
             add_event(DebugEvent::viscal_result(
                 iter,
@@ -192,27 +193,47 @@ pub fn solve_operating_point_from_state(
         residual: state.residual,
         cd_friction: state.cdf,
         cd_pressure: state.cdp,
-        x_separation: separation_x(&state.upper_rows).or_else(|| separation_x(&state.lower_rows)),
+        x_separation: separation_x(state, crate::state::XfoilSurface::Upper, options.mach, options.reynolds)
+            .or_else(|| separation_x(state, crate::state::XfoilSurface::Lower, options.mach, options.reynolds)),
     })
 }
 
-fn emit_full_state(state: &XfoilState, iter: usize) {
+fn emit_full_state(state: &XfoilState, iter: usize, mach: f64, reynolds: f64) {
     add_event(DebugEvent::full_bl_state(
         iter,
-        surface_state(&state.upper_rows),
-        surface_state(&state.lower_rows),
+        surface_state(surface_stations(state, crate::state::XfoilSurface::Upper, mach, reynolds)),
+        surface_state(surface_stations(state, crate::state::XfoilSurface::Lower, mach, reynolds)),
     ));
 }
 
-fn surface_state(rows: &[crate::state::XfoilBlRow]) -> SurfaceBlState {
+fn surface_state(stations: Vec<BlStation>) -> SurfaceBlState {
     SurfaceBlState {
-        x: rows.iter().map(|row| row.x).collect(),
-        theta: rows.iter().map(|row| row.theta).collect(),
-        delta_star: rows.iter().map(|row| row.dstr).collect(),
-        ue: rows.iter().map(|row| row.uedg).collect(),
-        hk: rows.iter().map(|row| row.hk).collect(),
-        cf: rows.iter().map(|row| row.cf).collect(),
-        mass_defect: rows.iter().map(|row| row.mass).collect(),
+        x: stations.iter().map(|station| station.x).collect(),
+        theta: stations.iter().map(|station| station.theta).collect(),
+        delta_star: stations.iter().map(|station| station.delta_star).collect(),
+        ue: stations.iter().map(|station| station.u).collect(),
+        hk: stations.iter().map(|station| station.hk).collect(),
+        cf: stations.iter().map(|station| station.cf).collect(),
+        mass_defect: stations.iter().map(|station| station.mass_defect).collect(),
+    }
+}
+
+fn surface_stations(
+    state: &XfoilState,
+    surface: crate::state::XfoilSurface,
+    mach: f64,
+    reynolds: f64,
+) -> Vec<BlStation> {
+    let msq = mach * mach;
+    match surface {
+        crate::state::XfoilSurface::Upper => {
+            let len = state.nbl_upper.min(state.upper_rows.len());
+            rows_to_stations(&state.upper_rows[..len], msq, reynolds)
+        }
+        crate::state::XfoilSurface::Lower => {
+            let len = state.nbl_lower.min(state.lower_rows.len());
+            rows_to_stations(&state.lower_rows[..len], msq, reynolds)
+        }
     }
 }
 
@@ -271,8 +292,14 @@ fn interpolate_surface_point(rows: &[crate::state::XfoilBlRow], target: f64) -> 
     (last.x_coord, last.y_coord)
 }
 
-fn separation_x(rows: &[crate::state::XfoilBlRow]) -> Option<f64> {
-    rows.iter()
-        .find(|row| !row.is_wake && row.cf <= 0.0)
-        .map(|row| row.x_coord)
+fn separation_x(
+    state: &XfoilState,
+    surface: crate::state::XfoilSurface,
+    mach: f64,
+    reynolds: f64,
+) -> Option<f64> {
+    surface_stations(state, surface, mach, reynolds)
+        .into_iter()
+        .find(|station| !station.is_wake && station.cf <= 0.0)
+        .map(|station| station.x_coord)
 }
