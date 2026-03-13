@@ -282,6 +282,9 @@ struct FaithfulViscousCmd {
     #[arg(short, long, default_value = "9.0")]
     ncrit: f64,
 
+    #[arg(long)]
+    max_iterations: Option<usize>,
+
     #[arg(short = 'p', long, default_value = "160")]
     panels: usize,
 
@@ -311,6 +314,9 @@ struct FaithfulPolarCmd {
 
     #[arg(short, long, default_value = "9.0")]
     ncrit: f64,
+
+    #[arg(long)]
+    max_iterations: Option<usize>,
 
     #[arg(short = 'p', long, default_value = "160")]
     panels: usize,
@@ -1037,6 +1043,9 @@ fn run_faithful_viscous(cmd: FaithfulViscousCmd) -> Result<(), CliError> {
         reynolds: cmd.re,
         mach: cmd.mach,
         ncrit: cmd.ncrit,
+        max_iterations: cmd
+            .max_iterations
+            .unwrap_or_else(|| XfoilOptions::default().max_iterations),
         ..Default::default()
     };
     let spec = match cmd.target_cl {
@@ -1093,6 +1102,9 @@ fn run_faithful_polar(cmd: FaithfulPolarCmd) -> Result<(), CliError> {
         reynolds: cmd.re,
         mach: cmd.mach,
         ncrit: cmd.ncrit,
+        max_iterations: cmd
+            .max_iterations
+            .unwrap_or_else(|| XfoilOptions::default().max_iterations),
         ..Default::default()
     };
 
@@ -1205,9 +1217,9 @@ fn load_airfoil(path: &PathBuf) -> Result<(String, Vec<Point>), CliError> {
 
     let mut points = Vec::new();
 
-    for (i, line) in lines.enumerate() {
-        let line = line.trim();
-        if line.is_empty() {
+    for (i, raw_line) in lines.enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
             continue;
         }
 

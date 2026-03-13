@@ -9,16 +9,18 @@ Test Matrix (same as XFOIL):
 - Alpha: -15 to +15 degrees in 1 degree steps
 
 Usage:
-    python scripts/generate_rustfoil_traces.py [--output-dir traces/rustfoil] [--dry-run]
+    python scripts/generate_rustfoil_traces.py [--output-dir traces/rustfoil_faithful] [--dry-run]
 """
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
+
+from sweep_matrix import get_sweep_cases
 
 
 def run_rustfoil_viscous(
@@ -30,6 +32,8 @@ def run_rustfoil_viscous(
     ncrit: float = 9.0,
     mach: float = 0.0,
     timeout: int = 120,
+    no_repanel: bool = True,
+    summary_only: bool = False,
 ) -> Optional[dict]:
     """
     Run RustFoil viscous for a single alpha/Re combination.
@@ -38,15 +42,18 @@ def run_rustfoil_viscous(
     """
     cmd = [
         str(rustfoil_bin),
-        "viscous",
+        "faithful-viscous",
         str(foil_file),
         f"--alpha={alpha}",  # Use = syntax for negative values
         f"--re={int(reynolds)}",
         f"--mach={mach}",
         f"--ncrit={ncrit}",
-        f"--debug={output_json}",
-        "--no-repanel",  # Use pre-paneled coordinates
+        "--format=json",
     ]
+    if not summary_only:
+        cmd.append(f"--debug={output_json}")
+    if no_repanel:
+        cmd.append("--no-repanel")
     
     try:
         result = subprocess.run(
@@ -63,67 +70,53 @@ def run_rustfoil_viscous(
         return None
     
     if result.returncode != 0:
-        # Check if it's a convergence failure vs actual error
-        if "Converged: false" in result.stdout:
-            converged = False
-        else:
-            print(f"    ERROR: RustFoil failed with code {result.returncode}")
-            return None
-    else:
-        converged = True
-    
-    # Parse output for CL/CD
+        print(f"    ERROR: RustFoil failed with code {result.returncode}")
+        return None
+    converged = True
+
     cl = None
     cd = None
     x_tr_upper = None
     x_tr_lower = None
+
+    try:
+        parsed = json.loads(result.stdout)
+        cl = parsed.get("cl")
+        cd = parsed.get("cd")
+        x_tr_upper = parsed.get("x_tr_upper")
+        x_tr_lower = parsed.get("x_tr_lower")
+        converged = bool(parsed.get("converged", converged))
+    except json.JSONDecodeError:
+        print("    ERROR: Failed to parse faithful JSON output")
+        return None
     
-    for line in result.stdout.split('\n'):
-        line = line.strip()
-        if line.startswith("CL:"):
-            try:
-                cl = float(line.split()[1])
-            except (ValueError, IndexError):
-                pass
-        elif line.startswith("CD:"):
-            try:
-                cd = float(line.split()[1])
-            except (ValueError, IndexError):
-                pass
-        elif line.startswith("x_tr (U):"):
-            try:
-                x_tr_upper = float(line.split()[2])
-            except (ValueError, IndexError):
-                pass
-        elif line.startswith("x_tr (L):"):
-            try:
-                x_tr_lower = float(line.split()[2])
-            except (ValueError, IndexError):
-                pass
-        elif line.startswith("Converged:"):
-            converged = "true" in line.lower()
-    
-    # Add metadata to debug output
-    if output_json.exists():
+    metadata = {
+        'foil': foil_file.stem,
+        'alpha_deg': alpha,
+        'reynolds': reynolds,
+        'ncrit': ncrit,
+        'mach': mach,
+        'cl': cl,
+        'cd': cd,
+        'converged': converged,
+        'solver_path': 'faithful-xfoil-side',
+        'summary_only': summary_only,
+    }
+
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    if summary_only:
+        with open(output_json, 'w') as f:
+            json.dump({'metadata': metadata}, f, indent=2)
+    elif output_json.exists():
         try:
             with open(output_json) as f:
                 debug_data = json.load(f)
-            
-            debug_data['metadata'] = {
-                'foil': foil_file.stem,
-                'alpha_deg': alpha,
-                'reynolds': reynolds,
-                'ncrit': ncrit,
-                'mach': mach,
-                'cl': cl,
-                'cd': cd,
-                'converged': converged,
-            }
-            
+            debug_data['metadata'] = metadata
             with open(output_json, 'w') as f:
                 json.dump(debug_data, f, indent=2)
         except (json.JSONDecodeError, IOError):
-            pass
+            with open(output_json, 'w') as f:
+                json.dump({'metadata': metadata}, f, indent=2)
     
     return {
         'alpha': alpha,
@@ -133,6 +126,7 @@ def run_rustfoil_viscous(
         'x_tr_upper': x_tr_upper,
         'x_tr_lower': x_tr_lower,
         'converged': converged,
+        'solver_path': 'faithful-xfoil-side',
         'output_file': str(output_json),
     }
 
@@ -144,8 +138,8 @@ def main():
     parser.add_argument(
         "--output-dir", "-o",
         type=Path,
-        default=Path("traces/rustfoil"),
-        help="Output directory for traces (default: traces/rustfoil)"
+        default=Path("traces/rustfoil_faithful"),
+        help="Output directory for traces (default: traces/rustfoil_faithful)"
     )
     parser.add_argument(
         "--dry-run", "-n",
@@ -161,8 +155,8 @@ def main():
     parser.add_argument(
         "--alpha-end",
         type=float,
-        default=15.0,
-        help="Ending alpha (default: 15)"
+        default=25.0,
+        help="Ending alpha (default: 25)"
     )
     parser.add_argument(
         "--alpha-step",
@@ -175,6 +169,17 @@ def main():
         type=float,
         help="Run single alpha only (for debugging)"
     )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=8,
+        help="Number of parallel RustFoil jobs (default: 8)"
+    )
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Store only per-alpha metadata instead of full debug event payloads"
+    )
     args = parser.parse_args()
     
     workspace = Path(__file__).parent.parent
@@ -186,12 +191,7 @@ def main():
         print("Build it with: cargo build --release")
         return 1
     
-    # Test matrix definition (same as XFOIL script)
-    test_cases = [
-        ("naca0012", workspace / "naca0012_xfoil_paneled.dat", [1e6, 3e6, 6e6]),
-        ("naca2412", workspace / "naca2412_xfoil_paneled.dat", [3e6]),
-        ("naca4412", workspace / "naca4412_xfoil_paneled.dat", [3e6]),
-    ]
+    test_cases = get_sweep_cases(workspace)
     
     # Alpha range
     if args.single_alpha is not None:
@@ -209,56 +209,77 @@ def main():
     print(f"  Output directory: {output_dir}")
     print(f"  Alpha range: {args.alpha_start} to {args.alpha_end} step {args.alpha_step}")
     print(f"  Total alphas: {len(alphas)}")
+    print(f"  Solver path: faithful-xfoil-side")
+    print(f"  Parallel jobs: {args.jobs}")
+    print(f"  Trace mode: {'summary-only' if args.summary_only else 'full-debug'}")
     print()
     
     if args.dry_run:
         print("DRY RUN - would generate:")
-        for foil_name, panel_file, re_list in test_cases:
-            for re in re_list:
-                print(f"  {foil_name} Re={re:.0e}: {len(alphas)} traces")
+        for case in test_cases:
+            for re in case["reynolds"]:
+                print(f"  {case['foil']} Re={re:.0e}: {len(alphas)} traces")
         return 0
     
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Summary results
-    all_results = []
-    
-    for foil_name, panel_file, re_list in test_cases:
-        print(f"\n{'='*60}")
-        print(f" {foil_name.upper()}")
-        print("=" * 60)
-        
+    tasks = []
+    grouped_results: dict[tuple[str, str], list[dict]] = {}
+
+    for case in test_cases:
+        foil_name = case["foil"]
+        panel_file = case["file"]
+        re_list = case["reynolds"]
         if not panel_file.exists():
-            print(f"  WARNING: Panel file not found: {panel_file}")
+            print(f"WARNING: Panel file not found: {panel_file}")
             continue
-        
         for re in re_list:
-            print(f"\n  Re = {re:.0e}")
             re_str = f"re{re:.0e}".replace("+", "").replace(".", "")
-            
-            foil_results = []
-            
+            grouped_results[(foil_name, re_str)] = []
             for alpha in alphas:
                 output_file = output_dir / foil_name / re_str / f"alpha_{alpha:+06.1f}.json"
                 output_file.parent.mkdir(parents=True, exist_ok=True)
-                
-                result = run_rustfoil_viscous(
-                    rustfoil_bin, panel_file, alpha, re, output_file
-                )
-                
-                if result:
-                    foil_results.append(result)
-                    status = "OK" if result['converged'] else "NC"
-                    cl_str = f"CL={result['cl']:.4f}" if result['cl'] else "CL=?"
-                    cd_str = f" CD={result['cd']:.5f}" if result.get('cd') else ""
-                    print(f"    α={alpha:+6.1f}° {status} {cl_str}{cd_str}")
-                else:
-                    print(f"    α={alpha:+6.1f}° FAILED")
-            
-            all_results.extend(foil_results)
-            
-            # Save summary for this foil/Re
+                tasks.append((foil_name, panel_file, re, re_str, alpha, output_file, case["no_repanel"]))
+
+    print(f"Submitting {len(tasks)} faithful RustFoil runs...")
+
+    all_results = []
+    with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as executor:
+        future_map = {
+            executor.submit(
+                run_rustfoil_viscous,
+                rustfoil_bin,
+                panel_file,
+                alpha,
+                re,
+                output_file,
+                no_repanel=no_repanel,
+                summary_only=args.summary_only,
+            ): (foil_name, re, re_str, alpha)
+            for foil_name, panel_file, re, re_str, alpha, output_file, no_repanel in tasks
+        }
+        for future in as_completed(future_map):
+            foil_name, re, re_str, alpha = future_map[future]
+            result = future.result()
+            if result:
+                grouped_results[(foil_name, re_str)].append(result)
+                all_results.append(result)
+                status = "OK" if result['converged'] else "NC"
+                cl_str = f"CL={result['cl']:.4f}" if result['cl'] else "CL=?"
+                cd_str = f" CD={result['cd']:.5f}" if result.get('cd') else ""
+                print(f"[{foil_name} Re={re:.0e}] α={alpha:+6.1f}° {status} {cl_str}{cd_str}")
+            else:
+                print(f"[{foil_name} Re={re:.0e}] α={alpha:+6.1f}° FAILED")
+
+    for case in test_cases:
+        foil_name = case["foil"]
+        re_list = case["reynolds"]
+        for re in re_list:
+            re_str = f"re{re:.0e}".replace("+", "").replace(".", "")
+            foil_results = sorted(grouped_results.get((foil_name, re_str), []), key=lambda row: row["alpha"])
+            if not foil_results:
+                continue
             summary_file = output_dir / foil_name / re_str / "summary.json"
             with open(summary_file, 'w') as f:
                 json.dump({
@@ -282,9 +303,9 @@ def main():
     # Save master summary
     master_summary = {
         'test_matrix': [
-            {'foil': f, 'reynolds': r, 'n_alphas': len(alphas)}
-            for f, _, r_list in test_cases
-            for r in r_list
+            {'foil': case['foil'], 'reynolds': r, 'n_alphas': len(alphas)}
+            for case in test_cases
+            for r in case['reynolds']
         ],
         'alphas': alphas,
         'total_traces': len(all_results),
