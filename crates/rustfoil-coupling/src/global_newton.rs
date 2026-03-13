@@ -38,9 +38,11 @@
 
 use nalgebra::DMatrix;
 use rustfoil_bl::closures::hkin::hkin;
-use rustfoil_bl::closures::Trchek2FullResult;
-use rustfoil_bl::equations::{bldif_full_simi, bldif_ncrit, trdif_full, FlowType};
+use rustfoil_bl::closures::trchek2_full;
+use rustfoil_bl::equations::{bldif_full_simi, bldif_ncrit, blvar, trdif_full, FlowType};
 use rustfoil_bl::state::BlStation;
+
+use crate::newton_state::{CanonicalNewtonRow, CanonicalNewtonStateView};
 
 #[derive(Debug, Clone, Copy)]
 struct TeWakeTerms {
@@ -258,8 +260,6 @@ impl GlobalNewtonSystem {
     /// * `lower_stations` - Lower surface BL stations
     /// * `upper_flow_types` - Flow types for upper surface intervals
     /// * `lower_flow_types` - Flow types for lower surface intervals
-    /// * `upper_transitions` - Optional transition results for upper intervals
-    /// * `lower_transitions` - Optional transition results for lower intervals
     /// * `dij` - Global DIJ matrix for mass defect coupling
     /// * `ue_inviscid_upper` - Inviscid edge velocities (upper)
     /// * `ue_inviscid_lower` - Inviscid edge velocities (lower)
@@ -280,8 +280,6 @@ impl GlobalNewtonSystem {
         ue_current_lower: &[f64],
         upper_flow_types: &[FlowType],
         lower_flow_types: &[FlowType],
-        upper_transitions: &[Option<Trchek2FullResult>],
-        lower_transitions: &[Option<Trchek2FullResult>],
         dij: &DMatrix<f64>,
         ue_inviscid_upper: &[f64],
         ue_inviscid_lower: &[f64],
@@ -369,7 +367,6 @@ impl GlobalNewtonSystem {
         self.build_surface_equations(
             upper_stations,
             upper_flow_types,
-            upper_transitions,
             &ue_current_upper,
             &ue_from_mass_upper,
             ncrit,
@@ -382,7 +379,6 @@ impl GlobalNewtonSystem {
         self.build_surface_equations(
             lower_stations,
             lower_flow_types,
-            lower_transitions,
             &ue_current_lower,
             &ue_from_mass_lower,
             ncrit,
@@ -546,6 +542,15 @@ impl GlobalNewtonSystem {
         let vm_row24 = focused_vm_row(24);
         let vm_row25 = focused_vm_row(25);
         let vm_row26 = focused_vm_row(26);
+        let vm_full = if std::env::var("RUSTFOIL_SETBL_FULL_VM").is_ok() {
+            Some(
+                (1..=nout)
+                    .map(|iv| (1..=nout).map(|jv| self.vm[iv][jv]).collect())
+                    .collect(),
+            )
+        } else {
+            None
+        };
 
         if std::env::var("RUSTFOIL_VM_FOCUS_DEBUG").is_ok() {
             for focus_iv in [24usize, 25, 26] {
@@ -576,6 +581,7 @@ impl GlobalNewtonSystem {
             vm_row24,
             vm_row25,
             vm_row26,
+            vm_full,
         ));
     }
 
@@ -756,7 +762,6 @@ impl GlobalNewtonSystem {
         &mut self,
         stations: &[BlStation],
         flow_types: &[FlowType],
-        transitions: &[Option<Trchek2FullResult>],
         _ue_current: &[f64],
         _ue_from_mass: &[f64],
         ncrit: f64,
@@ -776,22 +781,42 @@ impl GlobalNewtonSystem {
             let s2 = &stations[i];
             let flow_type = flow_types.get(i - 1).copied().unwrap_or(FlowType::Laminar);
             // Note: transitions parameter is no longer used - XFOIL doesn't use TRDIF in global Newton
-            let _ = transitions;  // Silence unused warning
-            
             // Compute residuals and Jacobian.
             // XFOIL BLSYS uses:
             // - SIMI-special BLDIF at the first station
             // - TRDIF on the transition interval
             // - regular BLDIF everywhere else
             let s1 = &stations[i - 1];
-            let transition = transitions.get(i - 1).and_then(|tr| tr.as_ref());
-            let transition_interval = transition.filter(|tr| {
-                tr.transition
-                    && !s1.is_turbulent
-                    && !s1.is_wake
-                    && s2.is_turbulent
-                    && !s2.is_wake
-            });
+            let is_transition_interval =
+                !s1.is_turbulent && !s1.is_wake && s2.is_turbulent && !s2.is_wake;
+            let x_forced = if surface == 0 {
+                stations.get(self.iblte_upper).map(|s| s.x)
+            } else {
+                stations.get(self.iblte_lower).map(|s| s.x)
+            };
+            let live_transition = if is_transition_interval {
+                Some(trchek2_full(
+                    s1.x,
+                    s2.x,
+                    s1.theta,
+                    s2.theta,
+                    s1.delta_star,
+                    s2.delta_star,
+                    s1.u,
+                    s2.u,
+                    s1.hk,
+                    s2.hk,
+                    s1.r_theta,
+                    s2.r_theta,
+                    s1.ampl,
+                    ncrit,
+                    x_forced,
+                    msq,
+                    re,
+                ))
+            } else {
+                None
+            };
             if std::env::var("RUSTFOIL_TRANSITION_BRANCH_DEBUG").is_ok()
                 && ((surface == 0 && (30..=31).contains(&i))
                     || (surface == 1 && (61..=62).contains(&i)))
@@ -799,13 +824,13 @@ impl GlobalNewtonSystem {
                 eprintln!(
                     "[TRANSITION BRANCH] {}[{i}] flow={flow_type:?} has_transition={} transition_flag={} live_transition={} xt={:.8e} ampl2={:.8e}",
                     if surface == 0 { "upper" } else { "lower" },
-                    transition.is_some(),
-                    transition.map(|tr| tr.transition).unwrap_or(false),
-                    transition_interval.is_some(),
-                    transition.map(|tr| tr.xt).unwrap_or(0.0),
-                    transition.map(|tr| tr.ampl2).unwrap_or(0.0),
+                    is_transition_interval,
+                    live_transition.as_ref().map(|tr| tr.transition).unwrap_or(false),
+                    live_transition.as_ref().is_some_and(|tr| tr.transition),
+                    live_transition.as_ref().map(|tr| tr.xt).unwrap_or(0.0),
+                    live_transition.as_ref().map(|tr| tr.ampl2).unwrap_or(0.0),
                 );
-                if let Some(tr) = transition {
+                if let Some(tr) = &live_transition {
                     eprintln!(
                         "[TRANSITION DERIVS] {}[{i}] xt_x1={:.12e} xt_x2={:.12e} tt_x2={:.12e} dt_x2={:.12e} ut_x2={:.12e}",
                         if surface == 0 { "upper" } else { "lower" },
@@ -819,10 +844,8 @@ impl GlobalNewtonSystem {
             }
             let (residuals, jacobian) = if i == 1 {
                 bldif_full_simi(s2, flow_type, msq, re)
-            } else if let Some(tr) = transition_interval {
+            } else if let Some(tr) = live_transition.as_ref().filter(|tr| tr.transition) {
                 trdif_full(s1, s2, tr, ncrit, msq, re)
-            } else if transition.is_some() {
-                bldif_ncrit(s1, s2, flow_type, msq, re, ncrit)
             } else {
                 bldif_ncrit(s1, s2, flow_type, msq, re, ncrit)
             };
@@ -1061,6 +1084,40 @@ impl GlobalNewtonSystem {
         // with fixed log values (XLOG=1, ULOG=BULE, TLOG=0, HLOG=0).
         // The similarity condition is handled by combining Jacobians (VS2 = VS1 + VS2)
         // which is done in the build_surface_equations loop for i==1.
+    }
+
+    pub fn build_global_system_from_view(
+        &mut self,
+        state: &CanonicalNewtonStateView,
+        dij: &DMatrix<f64>,
+        ncrit: f64,
+        msq: f64,
+        re: f64,
+        iteration: usize,
+    ) {
+        self.set_stagnation_derivs(state.sst_go, state.sst_gp);
+        self.ante = state.ante;
+        let upper_stations = state.upper_stations();
+        let lower_stations = state.lower_stations();
+        self.build_global_system(
+            &upper_stations,
+            &lower_stations,
+            &state.upper_ue_current,
+            &state.lower_ue_current,
+            &state.upper_flow_types,
+            &state.lower_flow_types,
+            dij,
+            &state.upper_ue_inviscid,
+            &state.lower_ue_inviscid,
+            &state.upper_ue_from_mass,
+            &state.lower_ue_from_mass,
+            &state.upper_ue_operating,
+            &state.lower_ue_operating,
+            ncrit,
+            msq,
+            re,
+            iteration,
+        );
     }
 
     /// Build global VM matrix with cross-surface coupling
@@ -2218,6 +2275,14 @@ fn total_dstr_for_update(station: &BlStation) -> f64 {
     }
 }
 
+fn total_dstr_for_row_update(row: &CanonicalNewtonRow) -> f64 {
+    if row.is_wake {
+        row.dstr + row.dw
+    } else {
+        row.dstr
+    }
+}
+
 /// Apply global Newton updates to both surfaces
 ///
 /// # Arguments
@@ -2240,6 +2305,7 @@ pub fn apply_global_updates(
     deltas: &[[f64; 3]],
     operating_deltas: Option<&[[f64; 3]]>,
     system: &GlobalNewtonSystem,
+    iter: usize,
     relaxation: f64,
     dij: Option<&nalgebra::DMatrix<f64>>,
     upper_ue_inv: Option<&[f64]>,
@@ -2287,6 +2353,23 @@ pub fn apply_global_updates(
             deltas[iv]
         } else {
             [0.0; 3]
+        }
+    };
+
+    let should_log_update_newton = |surface: usize, ibl: usize| -> bool {
+        if std::env::var("RUSTFOIL_UPDATE_NEWTON_DEBUG").is_err() {
+            return false;
+        }
+
+        let side = surface + 1;
+        if (6..=10).contains(&iter) {
+            ((side == 2 && (54..=60).contains(&ibl))
+                || (side == 2 && (2..=8).contains(&ibl))
+                || (side == 1 && (18..=24).contains(&ibl))
+                || (side == 1 && (26..=32).contains(&ibl))
+                || (side == 1 && (98..=106).contains(&ibl)))
+        } else {
+            ibl % 20 == 0 && (iter <= 5 || (14..=20).contains(&iter))
         }
     };
 
@@ -2351,6 +2434,23 @@ pub fn apply_global_updates(
 
         let rdn4 = rlx * dn4;
         if rdn4 > dhi { rlx = dhi / dn4; }
+
+        if rustfoil_bl::is_debug_active() && should_log_update_newton(0, ibl) {
+            rustfoil_bl::add_event(rustfoil_bl::DebugEvent::update_newton(
+                iter,
+                1,
+                ibl,
+                rlx,
+                dn1,
+                dn2,
+                dn3,
+                dn4,
+                delta[0],
+                delta[1],
+                ddstr,
+                due,
+            ));
+        }
     }
     
     // Lower surface
@@ -2407,6 +2507,23 @@ pub fn apply_global_updates(
 
         let rdn4 = rlx * dn4;
         if rdn4 > dhi { rlx = dhi / dn4; }
+
+        if rustfoil_bl::is_debug_active() && should_log_update_newton(1, ibl) {
+            rustfoil_bl::add_event(rustfoil_bl::DebugEvent::update_newton(
+                iter,
+                2,
+                ibl,
+                rlx,
+                dn1,
+                dn2,
+                dn3,
+                dn4,
+                delta[0],
+                delta[1],
+                ddstr,
+                due,
+            ));
+        }
     }
     
     // XFOIL has no relaxation floor — just clamp to [0, 1]
@@ -2634,7 +2751,7 @@ pub fn apply_global_updates(
         }
         
         rustfoil_bl::add_event(rustfoil_bl::DebugEvent::update_summary(
-            0,  // iteration will be set by caller context
+            iter,
             rlx_computed,
             rlx,
             limiting_station,
@@ -2651,6 +2768,234 @@ pub fn apply_global_updates(
         0.0
     };
     
+    GlobalUpdateResult {
+        relaxation_used: rlx,
+        rms_change,
+        max_change: max_dn,
+        upper_u_new: upper_new_ue,
+        lower_u_new: lower_new_ue,
+        upper_u_ac: upper_operating_ue,
+        lower_u_ac: lower_operating_ue,
+    }
+}
+
+pub fn apply_global_updates_from_view(
+    state: &mut CanonicalNewtonStateView,
+    deltas: &[[f64; 3]],
+    operating_deltas: Option<&[[f64; 3]]>,
+    system: &GlobalNewtonSystem,
+    iter: usize,
+    relaxation: f64,
+    dij: &nalgebra::DMatrix<f64>,
+    dac: f64,
+    msq: f64,
+    re: f64,
+) -> GlobalUpdateResult {
+    let dhi: f64 = 1.5;
+    let dlo: f64 = -0.5;
+    let mut rlx = relaxation.clamp(0.0, 1.0);
+
+    let preview = preview_global_update_ue_from_view(
+        state,
+        deltas,
+        operating_deltas,
+        system,
+        dij,
+    );
+    let upper_new_ue = preview.upper_u_new;
+    let lower_new_ue = preview.lower_u_new;
+    let upper_operating_ue = preview.upper_u_ac;
+    let lower_operating_ue = preview.lower_u_ac;
+
+    let corrected_delta = |iv: usize| -> [f64; 3] {
+        if let Some(operating) = operating_deltas.filter(|_| iv < deltas.len()) {
+            let op = operating.get(iv).copied().unwrap_or([0.0; 3]);
+            [
+                deltas[iv][0] - dac * op[0],
+                deltas[iv][1] - dac * op[1],
+                deltas[iv][2] - dac * op[2],
+            ]
+        } else if iv < deltas.len() {
+            deltas[iv]
+        } else {
+            [0.0; 3]
+        }
+    };
+
+    let mut rms_sum = 0.0;
+    let mut max_dn = 0.0_f64;
+    let mut n_stations = 0usize;
+
+    for ibl in 1..state.upper_rows.len() {
+        let iv = system.to_global(0, ibl);
+        if iv >= deltas.len() {
+            continue;
+        }
+        let delta = corrected_delta(iv);
+        let row = &state.upper_rows[ibl];
+        let dn1 = if row.is_laminar {
+            delta[0] / 10.0
+        } else if row.ctau.abs() > 1e-10 {
+            delta[0] / row.ctau
+        } else {
+            delta[0] / 0.03
+        };
+        let dn2 = if row.theta.abs() > 1e-12 { delta[1] / row.theta } else { 0.0 };
+        let new_u = upper_new_ue.get(ibl).copied().unwrap_or(row.uedg)
+            + dac * upper_operating_ue.get(ibl).copied().unwrap_or(0.0);
+        let due = new_u - row.uedg;
+        let total_dstr = total_dstr_for_row_update(row);
+        let ddstr = (delta[2] - total_dstr * due) / row.uedg.max(1e-12);
+        let dn3 = if total_dstr.abs() > 1e-12 { ddstr / total_dstr } else { 0.0 };
+        let dn4 = due.abs() / 0.25;
+        rms_sum += dn1 * dn1 + dn2 * dn2 + dn3 * dn3 + dn4 * dn4;
+        max_dn = max_dn.max(dn1.abs()).max(dn2.abs()).max(dn3.abs()).max(dn4.abs());
+        n_stations += 1;
+        let rdn1 = rlx * dn1;
+        if rdn1 > dhi { rlx = dhi / dn1; }
+        if rdn1 < dlo { rlx = dlo / dn1; }
+        let rdn2 = rlx * dn2;
+        if rdn2 > dhi { rlx = dhi / dn2; }
+        if rdn2 < dlo { rlx = dlo / dn2; }
+        let rdn3 = rlx * dn3;
+        if rdn3 > dhi { rlx = dhi / dn3; }
+        if rdn3 < dlo { rlx = dlo / dn3; }
+        let rdn4 = rlx * dn4;
+        if rdn4 > dhi { rlx = dhi / dn4; }
+    }
+
+    for ibl in 1..state.lower_rows.len() {
+        let iv = system.to_global(1, ibl);
+        if iv >= deltas.len() {
+            continue;
+        }
+        let delta = corrected_delta(iv);
+        let row = &state.lower_rows[ibl];
+        let dn1 = if row.is_laminar {
+            delta[0] / 10.0
+        } else if row.ctau.abs() > 1e-10 {
+            delta[0] / row.ctau
+        } else {
+            delta[0] / 0.03
+        };
+        let dn2 = if row.theta.abs() > 1e-12 { delta[1] / row.theta } else { 0.0 };
+        let new_u = lower_new_ue.get(ibl).copied().unwrap_or(row.uedg)
+            + dac * lower_operating_ue.get(ibl).copied().unwrap_or(0.0);
+        let due = new_u - row.uedg;
+        let total_dstr = total_dstr_for_row_update(row);
+        let ddstr = (delta[2] - total_dstr * due) / row.uedg.max(1e-12);
+        let dn3 = if total_dstr.abs() > 1e-12 { ddstr / total_dstr } else { 0.0 };
+        let dn4 = due.abs() / 0.25;
+        rms_sum += dn1 * dn1 + dn2 * dn2 + dn3 * dn3 + dn4 * dn4;
+        max_dn = max_dn.max(dn1.abs()).max(dn2.abs()).max(dn3.abs()).max(dn4.abs());
+        n_stations += 1;
+        let rdn1 = rlx * dn1;
+        if rdn1 > dhi { rlx = dhi / dn1; }
+        if rdn1 < dlo { rlx = dlo / dn1; }
+        let rdn2 = rlx * dn2;
+        if rdn2 > dhi { rlx = dhi / dn2; }
+        if rdn2 < dlo { rlx = dlo / dn2; }
+        let rdn3 = rlx * dn3;
+        if rdn3 > dhi { rlx = dhi / dn3; }
+        if rdn3 < dlo { rlx = dlo / dn3; }
+        let rdn4 = rlx * dn4;
+        if rdn4 > dhi { rlx = dhi / dn4; }
+    }
+
+    rlx = rlx.max(0.0).min(1.0);
+    let rlx_computed = rlx;
+
+    for ibl in 1..state.upper_rows.len() {
+        let iv = system.to_global(0, ibl);
+        if iv >= deltas.len() {
+            continue;
+        }
+        let delta = corrected_delta(iv);
+        let flow_type = state
+            .upper_flow_types
+            .get(ibl.saturating_sub(1))
+            .copied()
+            .unwrap_or(FlowType::Turbulent);
+        let row = &mut state.upper_rows[ibl];
+        if row.is_laminar {
+            row.ampl += rlx * delta[0];
+        } else {
+            row.ctau += rlx * delta[0];
+            row.ctau = row.ctau.min(0.25);
+        }
+        row.theta += rlx * delta[1];
+        let new_u = upper_new_ue.get(ibl).copied().unwrap_or(row.uedg)
+            + dac * upper_operating_ue.get(ibl).copied().unwrap_or(0.0);
+        let due = new_u - row.uedg;
+        let delta_mass = delta[2];
+        let total_dstr = total_dstr_for_row_update(row);
+        let d_dstar = (delta_mass - total_dstr * due) / row.uedg.max(1e-12);
+        row.uedg += rlx * due;
+        let total_dstr_after = total_dstr + rlx * d_dstar;
+        row.dstr = if row.is_wake { total_dstr_after - row.dw } else { total_dstr_after };
+        let mut station = row.as_station(flow_type);
+        station.u = row.uedg;
+        station.theta = row.theta;
+        station.delta_star = row.dstr;
+        station.ctau = row.ctau;
+        station.ampl = row.ampl;
+        station.dw = row.dw;
+        apply_dslim_like_xfoil(&mut station, msq);
+        blvar(&mut station, flow_type, msq, re);
+        station.mass_defect = station.u * total_dstr_for_update(&station);
+        row.overwrite_from_station(&station);
+    }
+
+    for ibl in 1..state.lower_rows.len() {
+        let iv = system.to_global(1, ibl);
+        if iv >= deltas.len() {
+            continue;
+        }
+        let delta = corrected_delta(iv);
+        let flow_type = state
+            .lower_flow_types
+            .get(ibl.saturating_sub(1))
+            .copied()
+            .unwrap_or(FlowType::Turbulent);
+        let row = &mut state.lower_rows[ibl];
+        if row.is_laminar {
+            row.ampl += rlx * delta[0];
+        } else {
+            row.ctau += rlx * delta[0];
+            row.ctau = row.ctau.min(0.25);
+        }
+        row.theta += rlx * delta[1];
+        let new_u = lower_new_ue.get(ibl).copied().unwrap_or(row.uedg)
+            + dac * lower_operating_ue.get(ibl).copied().unwrap_or(0.0);
+        let due = new_u - row.uedg;
+        let delta_mass = delta[2];
+        let total_dstr = total_dstr_for_row_update(row);
+        let d_dstar = (delta_mass - total_dstr * due) / row.uedg.max(1e-12);
+        row.uedg += rlx * due;
+        let total_dstr_after = total_dstr + rlx * d_dstar;
+        row.dstr = if row.is_wake { total_dstr_after - row.dw } else { total_dstr_after };
+        let mut station = row.as_station(flow_type);
+        station.u = row.uedg;
+        station.theta = row.theta;
+        station.delta_star = row.dstr;
+        station.ctau = row.ctau;
+        station.ampl = row.ampl;
+        station.dw = row.dw;
+        apply_dslim_like_xfoil(&mut station, msq);
+        blvar(&mut station, flow_type, msq, re);
+        station.mass_defect = station.u * total_dstr_for_update(&station);
+        row.overwrite_from_station(&station);
+    }
+
+    state.upper_ue_current = state.upper_rows.iter().map(|row| row.uedg).collect();
+    state.lower_ue_current = state.lower_rows.iter().map(|row| row.uedg).collect();
+
+    let rms_change = if n_stations > 0 {
+        (rms_sum / (4.0 * n_stations as f64)).sqrt()
+    } else {
+        0.0
+    };
+
     GlobalUpdateResult {
         relaxation_used: rlx,
         rms_change,
@@ -2722,6 +3067,207 @@ pub fn preview_global_update_ue(
         upper_u_ac,
         lower_u_ac,
     }
+}
+
+pub fn preview_global_update_ue_from_view(
+    state: &CanonicalNewtonStateView,
+    deltas: &[[f64; 3]],
+    operating_deltas: Option<&[[f64; 3]]>,
+    system: &GlobalNewtonSystem,
+    dij: &nalgebra::DMatrix<f64>,
+) -> GlobalOperatingPreview {
+    let (upper_u_new, lower_u_new) = compute_new_ue_via_dij_from_rows(
+        &state.upper_rows,
+        &state.lower_rows,
+        deltas,
+        system,
+        dij,
+        &state.upper_ue_inviscid,
+        &state.lower_ue_inviscid,
+    );
+    let (upper_u_ac, lower_u_ac) = if let Some(operating_deltas) = operating_deltas {
+        compute_operating_ue_via_dij_from_rows(
+            &state.upper_rows,
+            &state.lower_rows,
+            operating_deltas,
+            system,
+            dij,
+            &state.upper_ue_operating,
+            &state.lower_ue_operating,
+        )
+    } else {
+        (
+            vec![0.0; state.upper_rows.len()],
+            vec![0.0; state.lower_rows.len()],
+        )
+    };
+    GlobalOperatingPreview {
+        upper_u_new,
+        lower_u_new,
+        upper_u_ac,
+        lower_u_ac,
+    }
+}
+
+fn compute_new_ue_via_dij_from_rows(
+    upper_rows: &[CanonicalNewtonRow],
+    lower_rows: &[CanonicalNewtonRow],
+    deltas: &[[f64; 3]],
+    system: &GlobalNewtonSystem,
+    dij: &nalgebra::DMatrix<f64>,
+    upper_ue_inv: &[f64],
+    lower_ue_inv: &[f64],
+) -> (Vec<f64>, Vec<f64>) {
+    let n_upper = upper_rows.len();
+    let n_lower = lower_rows.len();
+    let mut upper_new_ue = vec![0.0; n_upper];
+    let mut lower_new_ue = vec![0.0; n_lower];
+    let vti_upper = 1.0_f64;
+    let vti_lower = -1.0_f64;
+    upper_new_ue[0] = upper_rows[0].uedg;
+    for i in 1..n_upper {
+        let panel_i = upper_rows[i].panel_idx;
+        if panel_i >= dij.nrows() {
+            upper_new_ue[i] = upper_rows[i].uedg;
+            continue;
+        }
+        let uinv_i = upper_ue_inv.get(i).copied().unwrap_or(upper_rows[i].uedg);
+        let mut dui = 0.0;
+        for j in 1..n_upper {
+            let panel_j = upper_rows[j].panel_idx;
+            if panel_j >= dij.ncols() {
+                continue;
+            }
+            let iv = system.to_global(0, j);
+            let delta_mass = if iv < deltas.len() { deltas[iv][2] } else { 0.0 };
+            let proposed_mass = upper_rows[j].mass + delta_mass;
+            let ue_m = -vti_upper * vti_upper * dij[(panel_i, panel_j)];
+            dui += ue_m * proposed_mass;
+        }
+        for j in 1..n_lower {
+            let panel_j = lower_rows[j].panel_idx;
+            if panel_j >= dij.ncols() {
+                continue;
+            }
+            let iv = system.to_global(1, j);
+            let delta_mass = if iv < deltas.len() { deltas[iv][2] } else { 0.0 };
+            let proposed_mass = lower_rows[j].mass + delta_mass;
+            let ue_m = -vti_upper * vti_lower * dij[(panel_i, panel_j)];
+            dui += ue_m * proposed_mass;
+        }
+        upper_new_ue[i] = uinv_i + dui;
+    }
+    lower_new_ue[0] = lower_rows[0].uedg;
+    for i in 1..n_lower {
+        let panel_i = lower_rows[i].panel_idx;
+        if panel_i >= dij.nrows() {
+            lower_new_ue[i] = lower_rows[i].uedg;
+            continue;
+        }
+        let uinv_i = lower_ue_inv.get(i).copied().unwrap_or(lower_rows[i].uedg);
+        let mut dui = 0.0;
+        for j in 1..n_upper {
+            let panel_j = upper_rows[j].panel_idx;
+            if panel_j >= dij.ncols() {
+                continue;
+            }
+            let iv = system.to_global(0, j);
+            let delta_mass = if iv < deltas.len() { deltas[iv][2] } else { 0.0 };
+            let proposed_mass = upper_rows[j].mass + delta_mass;
+            let ue_m = -vti_lower * vti_upper * dij[(panel_i, panel_j)];
+            dui += ue_m * proposed_mass;
+        }
+        for j in 1..n_lower {
+            let panel_j = lower_rows[j].panel_idx;
+            if panel_j >= dij.ncols() {
+                continue;
+            }
+            let iv = system.to_global(1, j);
+            let delta_mass = if iv < deltas.len() { deltas[iv][2] } else { 0.0 };
+            let proposed_mass = lower_rows[j].mass + delta_mass;
+            let ue_m = -vti_lower * vti_lower * dij[(panel_i, panel_j)];
+            dui += ue_m * proposed_mass;
+        }
+        lower_new_ue[i] = uinv_i + dui;
+    }
+    (upper_new_ue, lower_new_ue)
+}
+
+fn compute_operating_ue_via_dij_from_rows(
+    upper_rows: &[CanonicalNewtonRow],
+    lower_rows: &[CanonicalNewtonRow],
+    operating_deltas: &[[f64; 3]],
+    system: &GlobalNewtonSystem,
+    dij: &nalgebra::DMatrix<f64>,
+    upper_ue_operating: &[f64],
+    lower_ue_operating: &[f64],
+) -> (Vec<f64>, Vec<f64>) {
+    let n_upper = upper_rows.len();
+    let n_lower = lower_rows.len();
+    let mut upper_u_ac = vec![0.0; n_upper];
+    let mut lower_u_ac = vec![0.0; n_lower];
+    let vti_upper = 1.0_f64;
+    let vti_lower = -1.0_f64;
+
+    for i in 1..n_upper {
+        let panel_i = upper_rows[i].panel_idx;
+        if panel_i >= dij.nrows() {
+            continue;
+        }
+        let mut dui = upper_ue_operating.get(i).copied().unwrap_or(0.0);
+        for j in 1..n_upper {
+            let panel_j = upper_rows[j].panel_idx;
+            if panel_j >= dij.ncols() {
+                continue;
+            }
+            let iv = system.to_global(0, j);
+            let delta_mass = if iv < operating_deltas.len() { operating_deltas[iv][2] } else { 0.0 };
+            let ue_m = -vti_upper * vti_upper * dij[(panel_i, panel_j)];
+            dui += ue_m * delta_mass;
+        }
+        for j in 1..n_lower {
+            let panel_j = lower_rows[j].panel_idx;
+            if panel_j >= dij.ncols() {
+                continue;
+            }
+            let iv = system.to_global(1, j);
+            let delta_mass = if iv < operating_deltas.len() { operating_deltas[iv][2] } else { 0.0 };
+            let ue_m = -vti_upper * vti_lower * dij[(panel_i, panel_j)];
+            dui += ue_m * delta_mass;
+        }
+        upper_u_ac[i] = dui;
+    }
+
+    for i in 1..n_lower {
+        let panel_i = lower_rows[i].panel_idx;
+        if panel_i >= dij.nrows() {
+            continue;
+        }
+        let mut dui = lower_ue_operating.get(i).copied().unwrap_or(0.0);
+        for j in 1..n_upper {
+            let panel_j = upper_rows[j].panel_idx;
+            if panel_j >= dij.ncols() {
+                continue;
+            }
+            let iv = system.to_global(0, j);
+            let delta_mass = if iv < operating_deltas.len() { operating_deltas[iv][2] } else { 0.0 };
+            let ue_m = -vti_lower * vti_upper * dij[(panel_i, panel_j)];
+            dui += ue_m * delta_mass;
+        }
+        for j in 1..n_lower {
+            let panel_j = lower_rows[j].panel_idx;
+            if panel_j >= dij.ncols() {
+                continue;
+            }
+            let iv = system.to_global(1, j);
+            let delta_mass = if iv < operating_deltas.len() { operating_deltas[iv][2] } else { 0.0 };
+            let ue_m = -vti_lower * vti_lower * dij[(panel_i, panel_j)];
+            dui += ue_m * delta_mass;
+        }
+        lower_u_ac[i] = dui;
+    }
+
+    (upper_u_ac, lower_u_ac)
 }
 
 /// Compute new edge velocities via DIJ influence matrix.
@@ -3226,6 +3772,7 @@ mod tests {
             &base,
             Some(&operating),
             &system,
+            1,
             1.0,
             None,
             None,

@@ -207,6 +207,20 @@ impl BlStation {
         }
     }
 
+    /// Total displacement thickness used for wake mass defect.
+    pub fn total_delta_star(&self) -> f64 {
+        if self.is_wake {
+            self.delta_star + self.dw.max(0.0)
+        } else {
+            self.delta_star
+        }
+    }
+
+    /// Recompute the stored mass defect from the current station state.
+    pub fn refresh_mass_defect(&mut self) {
+        self.mass_defect = self.u * self.total_delta_star();
+    }
+
     /// Initialize for stagnation point using Thwaites' method (XFOIL-compatible)
     ///
     /// Uses Thwaites' formula for stagnation point initialization, matching XFOIL's
@@ -266,7 +280,7 @@ impl BlStation {
         station.hk = station.h;
 
         // Mass defect
-        station.mass_defect = station.u * station.delta_star;
+        station.refresh_mass_defect();
 
         // Reynolds number based on momentum thickness
         station.r_theta = station.u * station.theta * re;
