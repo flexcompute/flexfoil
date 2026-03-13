@@ -40,7 +40,7 @@ use super::circulation::{
 };
 use super::config::{OperatingMode, ViscousSolverConfig};
 use super::forces::{compute_forces, compute_forces_from_canonical_state, compute_panel_forces_from_gamma};
-use super::setup::{compute_arc_lengths, extract_surface_xfoil};
+use super::setup::compute_arc_lengths;
 use super::state::{TransitionalStmoveResult, XfoilLikeViscousState, XfoilSurface};
 use crate::{SolverError, SolverResult};
 
@@ -200,20 +200,6 @@ fn build_canonical_state(
     state
 }
 
-fn refresh_canonical_state_from_station_views(
-    state: &mut XfoilLikeViscousState,
-    upper_stations: &[BlStation],
-    lower_stations: &[BlStation],
-    n_panel_nodes: usize,
-    stagnation: Option<StagnationResult>,
-) {
-    state.sync_from_station_views(upper_stations, lower_stations, n_panel_nodes);
-    if let Some(stag) = stagnation {
-        state.set_stagnation_metadata(stag.ist, stag.sst, stag.sst_go, stag.sst_gp);
-    }
-    refresh_canonical_panel_arrays(state);
-}
-
 fn build_canonical_newton_view(
     state: &XfoilLikeViscousState,
     upper_ue_operating: Vec<f64>,
@@ -269,61 +255,6 @@ fn build_canonical_newton_view(
         sst_gp,
         ante,
     }
-}
-
-fn transition_arc_to_chord_on_surface(
-    stagnation: StagnationResult,
-    full_arc: &[f64],
-    panel_x: &[f64],
-    panel_y: &[f64],
-    ue_inviscid_full: &[f64],
-    is_upper: bool,
-    x_transition: Option<f64>,
-) -> Option<f64> {
-    let xt = x_transition?;
-    if full_arc.is_empty() || panel_x.is_empty() || panel_y.is_empty() || ue_inviscid_full.is_empty() {
-        return Some(xt);
-    }
-
-    let ist_next = (stagnation.ist + 1).min(ue_inviscid_full.len().saturating_sub(1));
-    let ue_stag = if ist_next > stagnation.ist && full_arc[ist_next] != full_arc[stagnation.ist] {
-        let frac = (stagnation.sst - full_arc[stagnation.ist])
-            / (full_arc[ist_next] - full_arc[stagnation.ist]);
-        ue_inviscid_full[stagnation.ist]
-            + frac * (ue_inviscid_full[ist_next] - ue_inviscid_full[stagnation.ist])
-    } else {
-        ue_inviscid_full[stagnation.ist]
-    };
-
-    let (surface_arc, surface_x, _, _) = extract_surface_xfoil(
-        stagnation.ist,
-        stagnation.sst,
-        ue_stag,
-        full_arc,
-        panel_x,
-        panel_y,
-        ue_inviscid_full,
-        is_upper,
-    );
-    if surface_arc.is_empty() || surface_x.is_empty() {
-        return Some(xt);
-    }
-    if xt <= surface_arc[0] {
-        return Some(surface_x[0]);
-    }
-
-    for i in 1..surface_arc.len() {
-        if xt <= surface_arc[i] {
-            let ds = surface_arc[i] - surface_arc[i - 1];
-            if ds.abs() <= 1.0e-12 {
-                return Some(surface_x[i]);
-            }
-            let frac = ((xt - surface_arc[i - 1]) / ds).clamp(0.0, 1.0);
-            return Some(surface_x[i - 1] + frac * (surface_x[i] - surface_x[i - 1]));
-        }
-    }
-
-    surface_x.last().copied()
 }
 
 fn operating_sensitivity_for_mode(
@@ -1599,46 +1530,14 @@ pub fn solve_viscous_two_surfaces(
 
     }
 
-    // Update transition locations from the current canonical owner state.
-    let final_stagnation = find_stagnation_with_derivs(ue_inviscid_full, &full_arc);
-    if let Some(stag) = final_stagnation {
-        canonical_state.set_stagnation_metadata(stag.ist, stag.sst, stag.sst_go, stag.sst_gp);
-    }
-
-    // Convert arc-length transition locations on the extracted surface geometry,
-    // matching XFOIL's surface-based xt -> x/c ownership more closely than BL-row
-    // interpolation.
-    if let Some(stag) = final_stagnation {
-        canonical_state.xtran_upper = transition_arc_to_chord_on_surface(
-            stag,
-            &full_arc,
-            panel_x,
-            panel_y,
-            ue_inviscid_full,
-            true,
-            canonical_state.xtran_upper,
-        );
-        canonical_state.xtran_lower = transition_arc_to_chord_on_surface(
-            stag,
-            &full_arc,
-            panel_x,
-            panel_y,
-            ue_inviscid_full,
-            false,
-            canonical_state.xtran_lower,
-        );
-    }
-
     // Check for separation on either surface
     let x_separation = upper_result
         .x_separation
         .or(lower_result.x_separation);
 
-    // === QVFUE + GAMQV: Update QVIS from edge velocities, then gamma from QVIS ===
-    // This is part of XFOIL's iteration loop that couples the BL solution back to
-    // the panel method circulation. The canonical state already owns the accepted
-    // BL rows here, so just refresh its panel arrays in place.
-    refresh_canonical_panel_arrays(&mut canonical_state);
+    // Finalize stagnation metadata, transition x/c ownership, and panel arrays
+    // from the canonical owner state before the compatibility write-back.
+    canonical_state.finalize_viscal_state(ue_inviscid_full, &full_arc, panel_x, panel_y);
     canonical_state.write_back_station_views(upper_stations, lower_stations);
 
     // === CLCALC: Compute CL using XFOIL's exact formula ===

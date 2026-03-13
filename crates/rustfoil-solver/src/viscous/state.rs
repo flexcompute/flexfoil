@@ -2,7 +2,9 @@ use rustfoil_bl::equations::FlowType;
 use rustfoil_bl::state::{BlDerivatives, BlStation};
 use rustfoil_coupling::march::{march_mixed_du, march_surface, MarchConfig, MarchResult};
 use rustfoil_coupling::newton_state::CanonicalNewtonStateView;
-use rustfoil_coupling::stmove::{adjust_transition_for_stmove, find_stagnation_with_derivs};
+use rustfoil_coupling::stmove::{
+    adjust_transition_for_stmove, find_stagnation_with_derivs, StagnationResult,
+};
 
 use super::config::OperatingMode;
 use super::setup::extract_surface_xfoil;
@@ -69,6 +71,19 @@ fn flow_type_for_station_index(ibl: usize, iblte: usize, itran: Option<usize>) -
         FlowType::Turbulent
     } else {
         FlowType::Laminar
+    }
+}
+
+fn flow_type_for_row(
+    row: &CanonicalBlRow,
+    ibl: usize,
+    iblte: usize,
+    itran: Option<usize>,
+) -> FlowType {
+    if row.is_wake {
+        FlowType::Wake
+    } else {
+        flow_type_for_station_index(ibl, iblte, itran)
     }
 }
 
@@ -430,7 +445,7 @@ impl XfoilLikeViscousState {
         self.surface_rows(surface)
             .iter()
             .enumerate()
-            .map(|(ibl, row)| row.as_station_with_flow_type(flow_type_for_station_index(ibl, iblte, itran)))
+            .map(|(ibl, row)| row.as_station_with_flow_type(flow_type_for_row(row, ibl, iblte, itran)))
             .collect()
     }
 
@@ -444,7 +459,7 @@ impl XfoilLikeViscousState {
             .iter()
             .enumerate()
             .skip(1)
-            .map(|(ibl, _)| flow_type_for_station_index(ibl, iblte, itran))
+            .map(|(ibl, row)| flow_type_for_row(row, ibl, iblte, itran))
             .collect()
     }
 
@@ -627,6 +642,38 @@ impl XfoilLikeViscousState {
         self.sync_surface_metadata();
         self.sync_panel_arrays(n_panel_nodes);
         self.sync_wake_arrays();
+    }
+
+    pub fn finalize_viscal_state(
+        &mut self,
+        ue_inviscid_full: &[f64],
+        full_arc: &[f64],
+        panel_x: &[f64],
+        panel_y: &[f64],
+    ) {
+        let final_stagnation = find_stagnation_with_derivs(ue_inviscid_full, full_arc);
+        if let Some(stag) = final_stagnation {
+            self.set_stagnation_metadata(stag.ist, stag.sst, stag.sst_go, stag.sst_gp);
+            self.xtran_upper = transition_arc_to_chord_on_surface(
+                stag,
+                full_arc,
+                panel_x,
+                panel_y,
+                ue_inviscid_full,
+                true,
+                self.xtran_upper,
+            );
+            self.xtran_lower = transition_arc_to_chord_on_surface(
+                stag,
+                full_arc,
+                panel_x,
+                panel_y,
+                ue_inviscid_full,
+                false,
+                self.xtran_lower,
+            );
+        }
+        self.refresh_panel_arrays_from_rows();
     }
 
     pub fn panel_qvis(&self) -> &[f64] {
@@ -1126,6 +1173,61 @@ fn interpolate_stagnation_velocity(
     } else {
         ue_source.get(ist).copied().unwrap_or(0.0)
     }
+}
+
+fn transition_arc_to_chord_on_surface(
+    stagnation: StagnationResult,
+    full_arc: &[f64],
+    panel_x: &[f64],
+    panel_y: &[f64],
+    ue_inviscid_full: &[f64],
+    is_upper: bool,
+    x_transition: Option<f64>,
+) -> Option<f64> {
+    let xt = x_transition?;
+    if full_arc.is_empty() || panel_x.is_empty() || panel_y.is_empty() || ue_inviscid_full.is_empty() {
+        return Some(xt);
+    }
+
+    let ist_next = (stagnation.ist + 1).min(ue_inviscid_full.len().saturating_sub(1));
+    let ue_stag = if ist_next > stagnation.ist && full_arc[ist_next] != full_arc[stagnation.ist] {
+        let frac = (stagnation.sst - full_arc[stagnation.ist])
+            / (full_arc[ist_next] - full_arc[stagnation.ist]);
+        ue_inviscid_full[stagnation.ist]
+            + frac * (ue_inviscid_full[ist_next] - ue_inviscid_full[stagnation.ist])
+    } else {
+        ue_inviscid_full[stagnation.ist]
+    };
+
+    let (surface_arc, surface_x, _, _) = extract_surface_xfoil(
+        stagnation.ist,
+        stagnation.sst,
+        ue_stag,
+        full_arc,
+        panel_x,
+        panel_y,
+        ue_inviscid_full,
+        is_upper,
+    );
+    if surface_arc.is_empty() || surface_x.is_empty() {
+        return Some(xt);
+    }
+    if xt <= surface_arc[0] {
+        return Some(surface_x[0]);
+    }
+
+    for i in 1..surface_arc.len() {
+        if xt <= surface_arc[i] {
+            let ds = surface_arc[i] - surface_arc[i - 1];
+            if ds.abs() <= 1.0e-12 {
+                return Some(surface_x[i]);
+            }
+            let frac = ((xt - surface_arc[i - 1]) / ds).clamp(0.0, 1.0);
+            return Some(surface_x[i - 1] + frac * (surface_x[i] - surface_x[i - 1]));
+        }
+    }
+
+    surface_x.last().copied()
 }
 
 fn trailing_edge_row_index(rows: &[CanonicalBlRow]) -> usize {
