@@ -276,6 +276,8 @@ impl GlobalNewtonSystem {
         &mut self,
         upper_stations: &[BlStation],
         lower_stations: &[BlStation],
+        ue_current_upper: &[f64],
+        ue_current_lower: &[f64],
         upper_flow_types: &[FlowType],
         lower_flow_types: &[FlowType],
         upper_transitions: &[Option<Trchek2FullResult>],
@@ -325,8 +327,18 @@ impl GlobalNewtonSystem {
                 .unwrap_or(0.0);
 
         // === Step 1: Save current Ue values (USAV) for forced changes ===
-        let ue_current_upper: Vec<f64> = upper_stations.iter().map(|s| s.u).collect();
-        let ue_current_lower: Vec<f64> = lower_stations.iter().map(|s| s.u).collect();
+        // Preserve the signed row UEDG values here so the stagnation coupling
+        // path can see the same near-zero sign flips as XFOIL.
+        let ue_current_upper: Vec<f64> = if ue_current_upper.len() == upper_stations.len() {
+            ue_current_upper.to_vec()
+        } else {
+            upper_stations.iter().map(|s| s.u).collect()
+        };
+        let ue_current_lower: Vec<f64> = if ue_current_lower.len() == lower_stations.len() {
+            ue_current_lower.to_vec()
+        } else {
+            lower_stations.iter().map(|s| s.u).collect()
+        };
 
         // === Step 2: Compute Ue from mass defect (UESET) ===
         // IMPORTANT: Sum over BOTH surfaces to get proper mass coupling
@@ -463,7 +475,9 @@ impl GlobalNewtonSystem {
             return;
         }
 
-        let nout = self.nsys.min(30);
+        // Emit the full assembled system so late-iteration lower-side rows can be
+        // compared directly against XFOIL's `FULL_ITER` dump.
+        let nout = self.nsys;
 
         // Extract VA blocks (3 equations x 2 variables)
         // XFOIL VA is (3,2,IVX) - we have (3,3) but only use first 2 columns
@@ -769,16 +783,25 @@ impl GlobalNewtonSystem {
             // - SIMI-special BLDIF at the first station
             // - TRDIF on the transition interval
             // - regular BLDIF everywhere else
+            let s1 = &stations[i - 1];
             let transition = transitions.get(i - 1).and_then(|tr| tr.as_ref());
+            let transition_interval = transition.filter(|tr| {
+                tr.transition
+                    && !s1.is_turbulent
+                    && !s1.is_wake
+                    && s2.is_turbulent
+                    && !s2.is_wake
+            });
             if std::env::var("RUSTFOIL_TRANSITION_BRANCH_DEBUG").is_ok()
                 && ((surface == 0 && (30..=31).contains(&i))
                     || (surface == 1 && (61..=62).contains(&i)))
             {
                 eprintln!(
-                    "[TRANSITION BRANCH] {}[{i}] flow={flow_type:?} has_transition={} transition_flag={} xt={:.8e} ampl2={:.8e}",
+                    "[TRANSITION BRANCH] {}[{i}] flow={flow_type:?} has_transition={} transition_flag={} live_transition={} xt={:.8e} ampl2={:.8e}",
                     if surface == 0 { "upper" } else { "lower" },
                     transition.is_some(),
                     transition.map(|tr| tr.transition).unwrap_or(false),
+                    transition_interval.is_some(),
                     transition.map(|tr| tr.xt).unwrap_or(0.0),
                     transition.map(|tr| tr.ampl2).unwrap_or(0.0),
                 );
@@ -796,14 +819,12 @@ impl GlobalNewtonSystem {
             }
             let (residuals, jacobian) = if i == 1 {
                 bldif_full_simi(s2, flow_type, msq, re)
-            } else if let Some(tr) = transition {
-                if tr.transition {
-                    trdif_full(&stations[i - 1], s2, tr, msq, re)
-                } else {
-                    bldif_ncrit(&stations[i - 1], s2, flow_type, msq, re, ncrit)
-                }
+            } else if let Some(tr) = transition_interval {
+                trdif_full(s1, s2, tr, ncrit, msq, re)
+            } else if transition.is_some() {
+                bldif_ncrit(s1, s2, flow_type, msq, re, ncrit)
             } else {
-                bldif_ncrit(&stations[i - 1], s2, flow_type, msq, re, ncrit)
+                bldif_ncrit(s1, s2, flow_type, msq, re, ncrit)
             };
             if std::env::var("RUSTFOIL_TRANSITION_BLOCK_DEBUG").is_ok()
                 && ((surface == 0 && (i == 30 || i == 31))
@@ -825,8 +846,8 @@ impl GlobalNewtonSystem {
             }
 
         if std::env::var("RUSTFOIL_BLDIF_DEBUG").is_ok()
-            && ((surface == 0 && (i <= 2 || (20..=35).contains(&i)))
-                || (surface == 1 && (60..=63).contains(&i)))
+            && ((surface == 0 && (i <= 2 || (20..=35).contains(&i) || (99..=105).contains(&i)))
+                || (surface == 1 && (56..=63).contains(&i)))
         {
             eprintln!(
                 "[BLDIF DEBUG] {}[{i}] flow={flow_type:?} x1={:.6e} x2={:.6e} ampl1={:.6e} ampl2={:.6e} ctau1={:.6e} ctau2={:.6e} vrez=[{:.6e}, {:.6e}, {:.6e}] vs2_row1=[{:.6e}, {:.6e}, {:.6e}, {:.6e}, {:.6e}]",
@@ -846,7 +867,10 @@ impl GlobalNewtonSystem {
                 jacobian.vs2[0][3],
                 jacobian.vs2[0][4],
             );
-                            if (24..=29).contains(&i) || (surface == 1 && (60..=63).contains(&i)) {
+                            if (24..=29).contains(&i)
+                                || (surface == 0 && (99..=105).contains(&i))
+                                || (surface == 1 && (56..=63).contains(&i))
+            {
                 for eq in 0..3 {
                     eprintln!(
                                         "[BLDIF DEBUG FULL] {}[{i}] row{} vs1=[{:.6e}, {:.6e}, {:.6e}, {:.6e}, {:.6e}] vs2=[{:.6e}, {:.6e}, {:.6e}, {:.6e}, {:.6e}]",
@@ -918,7 +942,7 @@ impl GlobalNewtonSystem {
             }
             
             // Emit JACOBIAN debug event for every 10th station
-            if rustfoil_bl::is_debug_active() && i % 10 == 0 {
+            if rustfoil_bl::is_debug_active() && (i % 10 == 0 || i <= 3) {
                 // Convert 4x5 jacobian to 3x5 for debug output (skip 4th equation)
                 let vs1_3x5: [[f64; 5]; 3] = [
                     jacobian.vs1[0],
@@ -1377,7 +1401,9 @@ impl GlobalNewtonSystem {
                 )
             };
 
-            if std::env::var("RUSTFOIL_FORCED_DEBUG").is_ok() && (20..=35).contains(&ibl) {
+            if std::env::var("RUSTFOIL_FORCED_DEBUG").is_ok()
+                && ((20..=35).contains(&ibl) || (99..=105).contains(&ibl))
+            {
                 let fc0 = self.vs1_delta[iv][0] * dds1
                     + self.vs2_delta[iv][0] * dds2
                     + self.vs1_ue[iv][0] * due1
@@ -1401,18 +1427,34 @@ impl GlobalNewtonSystem {
                     ue_current_upper.get(ibl).copied().unwrap_or(0.0),
                     ue_from_mass_upper.get(ibl).copied().unwrap_or(0.0),
                 );
+                let xi_ule1 = self.sst_go;
+                let xi_ule2 = -self.sst_gp;
+                let xi_term = xi_ule1 * self.dule1 + xi_ule2 * self.dule2;
+                eprintln!(
+                    "[FORCED DEBUG XI] upper[{ibl}] vs_x=[{:.12e}, {:.12e}, {:.12e}] xi_term={:.12e}",
+                    self.vs1_x[iv][0] + self.vs2_x[iv][0],
+                    self.vs1_x[iv][1] + self.vs2_x[iv][1],
+                    self.vs1_x[iv][2] + self.vs2_x[iv][2],
+                    xi_term,
+                );
             }
 
-            // Emit forced changes debug event at key stations (every 10th)
-            if rustfoil_bl::is_debug_active() && ibl % 10 == 0 {
+            // Emit forced changes debug event at key stations and leading edge
+            if rustfoil_bl::is_debug_active()
+                && (ibl <= 3 || ibl % 10 == 0 || (99..=105).contains(&ibl))
+            {
                 let ue_from_mass_i = ue_from_mass_upper.get(ibl).copied().unwrap_or(0.0);
                 let ue_inviscid_i = ue_inviscid_upper.get(ibl).copied().unwrap_or(0.0);
                 let ue_current_i = ue_current_upper.get(ibl).copied().unwrap_or(0.0);
+                let xi_ule1 = self.sst_go;
+                let xi_ule2 = -self.sst_gp;
+                let xi_term = xi_ule1 * self.dule1 + xi_ule2 * self.dule2;
                 
                 rustfoil_bl::add_event(rustfoil_bl::DebugEvent::forced_changes(
                     self.current_iteration,
                     ibl,
                     0,  // side = upper
+                    upper_stations.get(ibl).map(|s| s.panel_idx).unwrap_or(usize::MAX),
                     due1,
                     due2,
                     dds1,
@@ -1420,6 +1462,11 @@ impl GlobalNewtonSystem {
                     ue_from_mass_i,
                     ue_inviscid_i,
                     ue_current_i,
+                    self.dule1,
+                    self.dule2,
+                    self.sst_go,
+                    self.sst_gp,
+                    xi_term,
                 ));
             }
 
@@ -1501,16 +1548,20 @@ impl GlobalNewtonSystem {
             };
             let due2 = due_lower.get(ibl).copied().unwrap_or(0.0);
 
-            // Emit forced changes debug event at key stations (every 10th)
-            if rustfoil_bl::is_debug_active() && ibl % 10 == 0 {
+            // Emit forced changes debug event at key stations and leading edge
+            if rustfoil_bl::is_debug_active() && (ibl <= 3 || ibl % 10 == 0) {
                 let ue_from_mass_i = ue_from_mass_lower.get(ibl).copied().unwrap_or(0.0);
                 let ue_inviscid_i = ue_inviscid_lower.get(ibl).copied().unwrap_or(0.0);
                 let ue_current_i = ue_current_lower.get(ibl).copied().unwrap_or(0.0);
+                let xi_ule1 = -self.sst_go;
+                let xi_ule2 = self.sst_gp;
+                let xi_term = xi_ule1 * self.dule1 + xi_ule2 * self.dule2;
                 
                 rustfoil_bl::add_event(rustfoil_bl::DebugEvent::forced_changes(
                     self.current_iteration,
                     ibl,
                     1,  // side = lower
+                    lower_stations.get(ibl).map(|s| s.panel_idx).unwrap_or(usize::MAX),
                     due1,
                     due2,
                     dds1,
@@ -1518,10 +1569,15 @@ impl GlobalNewtonSystem {
                     ue_from_mass_i,
                     ue_inviscid_i,
                     ue_current_i,
+                    self.dule1,
+                    self.dule2,
+                    self.sst_go,
+                    self.sst_gp,
+                    xi_term,
                 ));
             }
 
-            if std::env::var("RUSTFOIL_FORCED_DEBUG").is_ok() && (60..=63).contains(&ibl) {
+            if std::env::var("RUSTFOIL_FORCED_DEBUG").is_ok() && (56..=63).contains(&ibl) {
                 let fc0 = self.vs1_delta[iv][0] * dds1
                     + self.vs2_delta[iv][0] * dds2
                     + self.vs1_ue[iv][0] * due1
@@ -1721,6 +1777,33 @@ impl GlobalNewtonSystem {
             te.tte - wake_station.theta,
             te.dte - (wake_station.delta_star + wake_station.dw),
         ];
+
+        if std::env::var("RUSTFOIL_TESYS_DEBUG").is_ok() {
+            eprintln!(
+                "[TESYS DEBUG] iv={} wake_ibl={} upper_te(ctau={:.12e}, theta={:.12e}, dstar={:.12e}, u={:.12e}) lower_te(ctau={:.12e}, theta={:.12e}, dstar={:.12e}, u={:.12e}) wake(ctau={:.12e}, theta={:.12e}, dstar={:.12e}, dw={:.12e}, u={:.12e}) cte={:.12e} tte={:.12e} dte={:.12e} base_vdel=[{:.12e}, {:.12e}, {:.12e}]",
+                iv,
+                wake_ibl,
+                upper_stations[self.iblte_upper].ctau,
+                upper_stations[self.iblte_upper].theta,
+                upper_stations[self.iblte_upper].delta_star,
+                upper_stations[self.iblte_upper].u,
+                lower_stations[self.iblte_lower].ctau,
+                lower_stations[self.iblte_lower].theta,
+                lower_stations[self.iblte_lower].delta_star,
+                lower_stations[self.iblte_lower].u,
+                wake_station.ctau,
+                wake_station.theta,
+                wake_station.delta_star,
+                wake_station.dw,
+                wake_station.u,
+                te.cte,
+                te.tte,
+                te.dte,
+                self.vdel[iv][0],
+                self.vdel[iv][1],
+                self.vdel[iv][2],
+            );
+        }
 
         self.va[iv] = [[0.0; 3]; 3];
         self.vb[iv] = [[0.0; 3]; 3];
@@ -2068,7 +2151,7 @@ pub fn emit_blsolv_solution_debug(iteration: usize, deltas: &[[f64; 3]]) {
     }
 
     let nsys = deltas.len().saturating_sub(1); // deltas[0] is unused
-    let nout = nsys.min(30);
+    let nout = nsys;
 
     // Extract solution deltas (skip index 0)
     let mut solution_deltas: Vec<[f64; 3]> = Vec::with_capacity(nout);
@@ -2124,6 +2207,14 @@ fn apply_dslim_like_xfoil(station: &mut BlStation, msq: f64) {
     if hkin_result.hk_h.abs() > 1.0e-12 {
         let dh = (hklim - hkin_result.hk).max(0.0) / hkin_result.hk_h;
         station.delta_star = dsw + dh * theta;
+    }
+}
+
+fn total_dstr_for_update(station: &BlStation) -> f64 {
+    if station.is_wake {
+        station.delta_star + station.dw
+    } else {
+        station.delta_star
     }
 }
 
@@ -2231,9 +2322,10 @@ pub fn apply_global_updates(
         let new_u = upper_new_ue.get(ibl).copied().unwrap_or(station.u)
             + dac * upper_operating_ue.get(ibl).copied().unwrap_or(0.0);
         let due = new_u - station.u;
-        let ddstr = (delta[2] - station.delta_star * due) / station.u.max(1e-12);
-        let dn3 = if station.delta_star.abs() > 1e-12 {
-            ddstr / station.delta_star
+        let total_dstr = total_dstr_for_update(station);
+        let ddstr = (delta[2] - total_dstr * due) / station.u.max(1e-12);
+        let dn3 = if total_dstr.abs() > 1e-12 {
+            ddstr / total_dstr
         } else {
             0.0
         };
@@ -2286,9 +2378,10 @@ pub fn apply_global_updates(
         let new_u = lower_new_ue.get(ibl).copied().unwrap_or(station.u)
             + dac * lower_operating_ue.get(ibl).copied().unwrap_or(0.0);
         let due = new_u - station.u;
-        let ddstr = (delta[2] - station.delta_star * due) / station.u.max(1e-12);
-        let dn3 = if station.delta_star.abs() > 1e-12 {
-            ddstr / station.delta_star
+        let total_dstr = total_dstr_for_update(station);
+        let ddstr = (delta[2] - total_dstr * due) / station.u.max(1e-12);
+        let dn3 = if total_dstr.abs() > 1e-12 {
+            ddstr / total_dstr
         } else {
             0.0
         };
@@ -2329,38 +2422,74 @@ pub fn apply_global_updates(
     
     // Track which station limited relaxation most
     if rlx < relaxation * 0.99 {
-        // Find the limiting station by checking normalized changes
-        for ibl in 1..upper_stations.len() {
-            let iv = system.to_global(0, ibl);
-            if iv >= deltas.len() { continue; }
-            let station = &upper_stations[ibl];
-            let delta = corrected_delta(iv);
-            let new_u = upper_new_ue.get(ibl).copied().unwrap_or(station.u)
-                + dac * upper_operating_ue.get(ibl).copied().unwrap_or(0.0);
-            let due = new_u - station.u;
-            
-            let dn1 = if station.is_laminar {
-                delta[0] / 10.0
-            } else if station.ctau.abs() > 1e-10 {
-                delta[0] / station.ctau
-            } else {
-                delta[0] / 0.03
-            };
-            let dn2 = if station.theta.abs() > 1e-12 { delta[1] / station.theta } else { 0.0 };
-            // XFOIL: DN4 = ABS(DUEDG)/0.25 (fixed constant, not relative to Ue)
-            let dn4 = due.abs() / 0.25;
-            
-            if (rlx * dn1).abs() >= dhi || (rlx * dn2).abs() >= dhi || (rlx * dn4).abs() >= dhi {
-                limiting_station = Some(ibl);
-                if (rlx * dn1).abs() >= dhi {
-                    limiting_reason = Some(format!("upper ctau dn1={:.3}", dn1));
-                } else if (rlx * dn2).abs() >= dhi {
-                    limiting_reason = Some(format!("upper theta dn2={:.3}", dn2));
-                } else {
-                    limiting_reason = Some(format!("upper Ue dn4={:.3}", dn4));
+        let mut best_limit = 0.0_f64;
+
+        let mut scan_surface = |
+            surface: usize,
+            side_name: &str,
+            stations: &[BlStation],
+            new_ue: &[f64],
+            operating_ue: &[f64],
+        | {
+            for ibl in 1..stations.len() {
+                let iv = system.to_global(surface, ibl);
+                if iv >= deltas.len() {
+                    continue;
                 }
-                break;
+
+                let station = &stations[ibl];
+                let delta = corrected_delta(iv);
+                let new_u = new_ue.get(ibl).copied().unwrap_or(station.u)
+                    + dac * operating_ue.get(ibl).copied().unwrap_or(0.0);
+                let due = new_u - station.u;
+                let total_dstr = total_dstr_for_update(station);
+                let d_dstar = (delta[2] - total_dstr * due) / station.u.max(1.0e-12);
+
+                let dn1 = if station.is_laminar {
+                    delta[0] / 10.0
+                } else if station.ctau.abs() > 1e-10 {
+                    delta[0] / station.ctau
+                } else {
+                    delta[0] / 0.03
+                };
+                let dn2 = if station.theta.abs() > 1e-12 {
+                    delta[1] / station.theta
+                } else {
+                    0.0
+                };
+                let dn3 = if total_dstr.abs() > 1.0e-12 {
+                    d_dstar / total_dstr
+                } else {
+                    0.0
+                };
+                let dn4 = due.abs() / 0.25;
+
+                let candidates = [
+                    ("ctau", "dn1", dn1),
+                    ("theta", "dn2", dn2),
+                    ("dstar", "dn3", dn3),
+                    ("Ue", "dn4", dn4),
+                ];
+
+                for (quantity, dn_name, dn_value) in candidates {
+                    let scaled = (rlx * dn_value).abs();
+                    if scaled >= dhi && scaled > best_limit {
+                        best_limit = scaled;
+                        limiting_station = Some(ibl);
+                        limiting_reason = Some(format!(
+                            "{} {} {}={:.3}",
+                            side_name, quantity, dn_name, dn_value
+                        ));
+                    }
+                }
             }
+        };
+
+        scan_surface(0, "upper", &upper_stations, &upper_new_ue, &upper_operating_ue);
+        scan_surface(1, "lower", &lower_stations, &lower_new_ue, &lower_operating_ue);
+        if best_limit == 0.0 {
+            limiting_station = None;
+            limiting_reason = None;
         }
     }
 
@@ -2390,23 +2519,30 @@ pub fn apply_global_updates(
         
         // XFOIL: DDSTR = (DMASS - DSTR*DUEDG) / UEDG
         let delta_mass = delta[2];
-        let d_dstar = (delta_mass - station.delta_star * due) / station.u;
+        let total_dstr = total_dstr_for_update(station);
+        let d_dstar = (delta_mass - total_dstr * due) / station.u;
         
         // XFOIL: UEDG = UEDG + RLX*DUEDG
         station.u += rlx * due;
         
-        // XFOIL: DSTR = DSTR + RLX*DDSTR
-        station.delta_star += rlx * d_dstar;
+        // XFOIL evolves total DSTR, which includes the wake gap for wake rows.
+        let mut total_dstr_after = total_dstr + rlx * d_dstar;
+        station.delta_star = if station.is_wake {
+            total_dstr_after - station.dw
+        } else {
+            total_dstr_after
+        };
 
         // P5: DSLIM with WGAP — subtract wake gap before DSLIM, add back after
         let dswaki = station.dw;
         station.delta_star -= dswaki;
         apply_dslim_like_xfoil(station, msq);
         station.delta_star += dswaki;
+        total_dstr_after = total_dstr_for_update(station);
 
-        // XFOIL: MASS = DSTR * UEDG (nonlinear update)
+        // XFOIL: MASS = DSTR * UEDG (nonlinear update, total DSTR for wake rows)
         station.h = if station.theta.abs() > 1e-20 { station.delta_star / station.theta } else { 2.0 };
-        station.mass_defect = station.u * station.delta_star;
+        station.mass_defect = station.u * total_dstr_after;
     }
 
     // === Step 3: Update lower surface BL variables ===
@@ -2433,20 +2569,27 @@ pub fn apply_global_updates(
         let due = new_u - station.u;
         
         let delta_mass = delta[2];
-        let d_dstar = (delta_mass - station.delta_star * due) / station.u;
+        let total_dstr = total_dstr_for_update(station);
+        let d_dstar = (delta_mass - total_dstr * due) / station.u;
         
         station.u += rlx * due;
         
-        station.delta_star += rlx * d_dstar;
+        let mut total_dstr_after = total_dstr + rlx * d_dstar;
+        station.delta_star = if station.is_wake {
+            total_dstr_after - station.dw
+        } else {
+            total_dstr_after
+        };
 
         // P5: DSLIM with WGAP
         let dswaki = station.dw;
         station.delta_star -= dswaki;
         apply_dslim_like_xfoil(station, msq);
         station.delta_star += dswaki;
+        total_dstr_after = total_dstr_for_update(station);
 
         station.h = if station.theta.abs() > 1e-20 { station.delta_star / station.theta } else { 2.0 };
-        station.mass_defect = station.u * station.delta_star;
+        station.mass_defect = station.u * total_dstr_after;
     }
     
     // Emit UPDATE_SUMMARY debug event with relaxation details
@@ -2471,8 +2614,9 @@ pub fn apply_global_updates(
                 delta[0] / 0.03
             };
             let dn2 = if station.theta.abs() > 1e-12 { delta[1] / station.theta } else { 0.0 };
-            let d_dstar = (delta[2] - station.delta_star * due) / station.u.max(1e-6);
-            let dn3 = if station.delta_star.abs() > 1e-12 { d_dstar / station.delta_star } else { 0.0 };
+            let total_dstr = total_dstr_for_update(station);
+            let d_dstar = (delta[2] - total_dstr * due) / station.u.max(1e-6);
+            let dn3 = if total_dstr.abs() > 1e-12 { d_dstar / total_dstr } else { 0.0 };
             // XFOIL: DN4 = ABS(DUEDG)/0.25 (fixed constant)
             let dn4 = due.abs() / 0.25;
             
