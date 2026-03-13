@@ -44,6 +44,18 @@ use super::setup::{compute_arc_lengths, extract_surface_xfoil};
 use super::state::{TransitionalStmoveResult, XfoilLikeViscousState, XfoilSurface};
 use crate::{SolverError, SolverResult};
 
+fn surface_state(stations: &[BlStation]) -> rustfoil_bl::SurfaceBlState {
+    rustfoil_bl::SurfaceBlState {
+        x: stations.iter().map(|station| station.x).collect(),
+        theta: stations.iter().map(|station| station.theta).collect(),
+        delta_star: stations.iter().map(|station| station.delta_star).collect(),
+        ue: stations.iter().map(|station| station.u).collect(),
+        hk: stations.iter().map(|station| station.hk).collect(),
+        cf: stations.iter().map(|station| station.cf).collect(),
+        mass_defect: stations.iter().map(|station| station.mass_defect).collect(),
+    }
+}
+
 /// XFOIL's CLCALC subroutine - compute CL by integrating Cp in wind axes.
 ///
 /// This is the exact XFOIL formula for lift coefficient computation:
@@ -1320,19 +1332,19 @@ pub fn solve_viscous_two_surfaces(
                 
                 // Upper surface first stations - include mass_defect for DUE analysis
                 eprintln!("  Upper[0]: x={:.6e}, theta={:.6e}, dstar={:.6e}, u={:.6}, mass={:.6e}", 
-                    upper_stations[0].x, upper_stations[0].theta, upper_stations[0].delta_star, upper_stations[0].u, upper_stations[0].mass_defect);
+                    upper_debug[0].x, upper_debug[0].theta, upper_debug[0].delta_star, upper_debug[0].u, upper_debug[0].mass_defect);
                 eprintln!("  Upper[1]: x={:.6e}, theta={:.6e}, dstar={:.6e}, u={:.6}, mass={:.6e}", 
-                    upper_stations[1].x, upper_stations[1].theta, upper_stations[1].delta_star, upper_stations[1].u, upper_stations[1].mass_defect);
+                    upper_debug[1].x, upper_debug[1].theta, upper_debug[1].delta_star, upper_debug[1].u, upper_debug[1].mass_defect);
                 eprintln!("  Upper[2]: x={:.6e}, theta={:.6e}, dstar={:.6e}, u={:.6}, mass={:.6e}", 
-                    upper_stations[2].x, upper_stations[2].theta, upper_stations[2].delta_star, upper_stations[2].u, upper_stations[2].mass_defect);
+                    upper_debug[2].x, upper_debug[2].theta, upper_debug[2].delta_star, upper_debug[2].u, upper_debug[2].mass_defect);
                     
                 // Lower surface first stations
                 eprintln!("  Lower[0]: x={:.6e}, theta={:.6e}, dstar={:.6e}, u={:.6}, mass={:.6e}", 
-                    lower_stations[0].x, lower_stations[0].theta, lower_stations[0].delta_star, lower_stations[0].u, lower_stations[0].mass_defect);
+                    lower_debug[0].x, lower_debug[0].theta, lower_debug[0].delta_star, lower_debug[0].u, lower_debug[0].mass_defect);
                 eprintln!("  Lower[1]: x={:.6e}, theta={:.6e}, dstar={:.6e}, u={:.6}, mass={:.6e}", 
-                    lower_stations[1].x, lower_stations[1].theta, lower_stations[1].delta_star, lower_stations[1].u, lower_stations[1].mass_defect);
+                    lower_debug[1].x, lower_debug[1].theta, lower_debug[1].delta_star, lower_debug[1].u, lower_debug[1].mass_defect);
                 eprintln!("  Lower[2]: x={:.6e}, theta={:.6e}, dstar={:.6e}, u={:.6}, mass={:.6e}", 
-                    lower_stations[2].x, lower_stations[2].theta, lower_stations[2].delta_star, lower_stations[2].u, lower_stations[2].mass_defect);
+                    lower_debug[2].x, lower_debug[2].theta, lower_debug[2].delta_star, lower_debug[2].u, lower_debug[2].mass_defect);
                 
                 // VDEL at problematic stations
                 for iv in [1, 2, n_upper, n_upper+1].iter() {
@@ -1493,28 +1505,14 @@ pub fn solve_viscous_two_surfaces(
             // Match XFOIL's DBGFULL_BL_STATE timing: emit the updated station
             // state before QVIS/GAM refresh and before STMOVE relocates the split.
             if rustfoil_bl::is_debug_active() {
-                let upper_bl = rustfoil_bl::SurfaceBlState {
-                    x: upper_stations.iter().map(|s| s.x).collect(),
-                    theta: upper_stations.iter().map(|s| s.theta).collect(),
-                    delta_star: upper_stations.iter().map(|s| s.delta_star).collect(),
-                    ue: upper_stations.iter().map(|s| s.u).collect(),
-                    hk: upper_stations.iter().map(|s| s.hk).collect(),
-                    cf: upper_stations.iter().map(|s| s.cf).collect(),
-                    mass_defect: upper_stations.iter().map(|s| s.mass_defect).collect(),
-                };
-                let lower_bl = rustfoil_bl::SurfaceBlState {
-                    x: lower_stations.iter().map(|s| s.x).collect(),
-                    theta: lower_stations.iter().map(|s| s.theta).collect(),
-                    delta_star: lower_stations.iter().map(|s| s.delta_star).collect(),
-                    ue: lower_stations.iter().map(|s| s.u).collect(),
-                    hk: lower_stations.iter().map(|s| s.hk).collect(),
-                    cf: lower_stations.iter().map(|s| s.cf).collect(),
-                    mass_defect: lower_stations.iter().map(|s| s.mass_defect).collect(),
-                };
+                let mut debug_state = canonical_state.clone();
+                debug_state.overwrite_from_newton_view(&newton_view);
+                let upper_post_update = debug_state.upper_station_view();
+                let lower_post_update = debug_state.lower_station_view();
                 rustfoil_bl::add_event(rustfoil_bl::DebugEvent::full_bl_state(
                     iteration,
-                    upper_bl,
-                    lower_bl,
+                    surface_state(&upper_post_update),
+                    surface_state(&lower_post_update),
                 ));
             }
 
@@ -1522,7 +1520,6 @@ pub fn solve_viscous_two_surfaces(
             // XFOIL updates QVIS/GAM from the current UEDG, then relocates the
             // stagnation split with STMOVE before the next Newton iteration.
             canonical_state.overwrite_from_newton_view(&newton_view);
-            canonical_state.write_back_station_views(upper_stations, lower_stations);
             let full_gamma_iter = canonical_state.panel_gamma().to_vec();
             let old_ist = canonical_state.ist;
             if let Some(TransitionalStmoveResult { ist: new_ist }) = canonical_state.apply_stmove_like_xfoil(
@@ -1534,7 +1531,6 @@ pub fn solve_viscous_two_surfaces(
                 re,
                 old_ist,
             ) {
-                canonical_state.write_back_station_views(upper_stations, lower_stations);
                 if new_ist != old_ist {
                     if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
                         eprintln!(
@@ -1586,13 +1582,15 @@ pub fn solve_viscous_two_surfaces(
                 break;
             }
             if rustfoil_bl::is_debug_active() {
+                let upper_iter_end = canonical_state.upper_station_view();
+                let lower_iter_end = canonical_state.lower_station_view();
                 // Emit FULL_NFACTOR debug event with N-factors at all stations
                 rustfoil_bl::add_event(rustfoil_bl::DebugEvent::full_nfactor(
                     iteration,
-                    upper_stations.iter().map(|s| s.ampl).collect(),
-                    lower_stations.iter().map(|s| s.ampl).collect(),
-                    upper_stations.iter().map(|s| s.x).collect(),
-                    lower_stations.iter().map(|s| s.x).collect(),
+                    upper_iter_end.iter().map(|s| s.ampl).collect(),
+                    lower_iter_end.iter().map(|s| s.ampl).collect(),
+                    upper_iter_end.iter().map(|s| s.x).collect(),
+                    lower_iter_end.iter().map(|s| s.x).collect(),
                 ));
             }
 
@@ -1601,15 +1599,11 @@ pub fn solve_viscous_two_surfaces(
 
     }
 
-    // Update transition locations from final station states.
+    // Update transition locations from the current canonical owner state.
     let final_stagnation = find_stagnation_with_derivs(ue_inviscid_full, &full_arc);
-    refresh_canonical_state_from_station_views(
-        &mut canonical_state,
-        upper_stations,
-        lower_stations,
-        panel_x.len(),
-        final_stagnation,
-    );
+    if let Some(stag) = final_stagnation {
+        canonical_state.set_stagnation_metadata(stag.ist, stag.sst, stag.sst_go, stag.sst_gp);
+    }
 
     // Convert arc-length transition locations on the extracted surface geometry,
     // matching XFOIL's surface-based xt -> x/c ownership more closely than BL-row
@@ -1642,14 +1636,10 @@ pub fn solve_viscous_two_surfaces(
 
     // === QVFUE + GAMQV: Update QVIS from edge velocities, then gamma from QVIS ===
     // This is part of XFOIL's iteration loop that couples the BL solution back to
-    // the panel method circulation.
-    refresh_canonical_state_from_station_views(
-        &mut canonical_state,
-        upper_stations,
-        lower_stations,
-        panel_x.len(),
-        find_stagnation_with_derivs(ue_inviscid_full, &full_arc),
-    );
+    // the panel method circulation. The canonical state already owns the accepted
+    // BL rows here, so just refresh its panel arrays in place.
+    refresh_canonical_panel_arrays(&mut canonical_state);
+    canonical_state.write_back_station_views(upper_stations, lower_stations);
 
     // === CLCALC: Compute CL using XFOIL's exact formula ===
     // XFOIL integrates Cp in wind axes around the closed airfoil contour:
