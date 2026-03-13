@@ -20,18 +20,18 @@
 
 use nalgebra::DMatrix;
 use rayon::prelude::*;
-use rustfoil_bl::closures::{trchek2_full, Trchek2FullResult};
 use rustfoil_bl::equations::{blvar, FlowType};
 use rustfoil_bl::state::BlStation;
 use rustfoil_coupling::march::{march_fixed_ue, MarchConfig, MarchResult};
 use rustfoil_coupling::global_newton::{
-    apply_global_updates, preview_global_update_ue, solve_global_system, GlobalNewtonSystem,
+    apply_global_updates_from_view, preview_global_update_ue_from_view, solve_global_system, GlobalNewtonSystem,
 };
 use rustfoil_coupling::newton::BlNewtonSystem;
+use rustfoil_coupling::newton_state::{CanonicalNewtonRow, CanonicalNewtonStateView};
 use rustfoil_coupling::solve::solve_coupled_system;
 // STMOVE module for stagnation point finding and coupling
 use rustfoil_coupling::stmove::{
-    adjust_transition_for_stmove, find_stagnation_with_derivs, StagnationResult,
+    find_stagnation_with_derivs, StagnationResult,
 };
 use rustfoil_coupling::update::{update_xfoil_style, UpdateConfig};
 
@@ -40,7 +40,7 @@ use super::circulation::{
 };
 use super::config::{OperatingMode, ViscousSolverConfig};
 use super::forces::{compute_forces, compute_forces_from_canonical_state, compute_panel_forces_from_gamma};
-use super::setup::compute_arc_lengths;
+use super::setup::{compute_arc_lengths, extract_surface_xfoil};
 use super::state::{TransitionalStmoveResult, XfoilLikeViscousState, XfoilSurface};
 use crate::{SolverError, SolverResult};
 
@@ -202,21 +202,116 @@ fn refresh_canonical_state_from_station_views(
     refresh_canonical_panel_arrays(state);
 }
 
-fn extract_operating_sensitivity_by_station(
-    stations: &[BlStation],
-    gamma_alpha_full: &[f64],
-    sign: f64,
-) -> Vec<f64> {
-    stations
-        .iter()
-        .map(|station| {
-            if station.is_wake {
-                0.0
-            } else {
-                sign * gamma_alpha_full.get(station.panel_idx).copied().unwrap_or(0.0)
+fn build_canonical_newton_view(
+    state: &XfoilLikeViscousState,
+    upper_ue_operating: Vec<f64>,
+    lower_ue_operating: Vec<f64>,
+    ante: f64,
+    sst_go: f64,
+    sst_gp: f64,
+) -> CanonicalNewtonStateView {
+    let to_row = |row: &super::state::CanonicalBlRow| CanonicalNewtonRow {
+        x: row.x,
+        x_coord: row.x_coord,
+        panel_idx: row.panel_idx,
+        uedg: row.uedg,
+        uinv: row.uinv,
+        uinv_a: row.uinv_a,
+        theta: row.theta,
+        dstr: row.dstr,
+        ctau_or_ampl: row.ctau_or_ampl,
+        ctau: row.ctau,
+        ampl: row.ampl,
+        mass: row.mass,
+        h: row.h,
+        hk: row.hk,
+        hs: row.hs,
+        hc: row.hc,
+        r_theta: row.r_theta,
+        cf: row.cf,
+        cd: row.cd,
+        us: row.us,
+        cq: row.cq,
+        de: row.de,
+        dw: row.dw,
+        is_laminar: row.is_laminar,
+        is_turbulent: row.is_turbulent,
+        is_wake: row.is_wake,
+        derivs: row.derivs.clone(),
+    };
+
+    CanonicalNewtonStateView {
+        upper_rows: state.upper_rows.iter().map(to_row).collect(),
+        lower_rows: state.lower_rows.iter().map(to_row).collect(),
+        upper_flow_types: state.flow_type_view(XfoilSurface::Upper),
+        lower_flow_types: state.flow_type_view(XfoilSurface::Lower),
+        upper_ue_current: state.uedg_view(XfoilSurface::Upper),
+        lower_ue_current: state.uedg_view(XfoilSurface::Lower),
+        upper_ue_inviscid: state.uinv_view(XfoilSurface::Upper),
+        lower_ue_inviscid: state.uinv_view(XfoilSurface::Lower),
+        upper_ue_from_mass: Vec::new(),
+        lower_ue_from_mass: Vec::new(),
+        upper_ue_operating,
+        lower_ue_operating,
+        sst_go,
+        sst_gp,
+        ante,
+    }
+}
+
+fn transition_arc_to_chord_on_surface(
+    stagnation: StagnationResult,
+    full_arc: &[f64],
+    panel_x: &[f64],
+    panel_y: &[f64],
+    ue_inviscid_full: &[f64],
+    is_upper: bool,
+    x_transition: Option<f64>,
+) -> Option<f64> {
+    let xt = x_transition?;
+    if full_arc.is_empty() || panel_x.is_empty() || panel_y.is_empty() || ue_inviscid_full.is_empty() {
+        return Some(xt);
+    }
+
+    let ist_next = (stagnation.ist + 1).min(ue_inviscid_full.len().saturating_sub(1));
+    let ue_stag = if ist_next > stagnation.ist && full_arc[ist_next] != full_arc[stagnation.ist] {
+        let frac = (stagnation.sst - full_arc[stagnation.ist])
+            / (full_arc[ist_next] - full_arc[stagnation.ist]);
+        ue_inviscid_full[stagnation.ist]
+            + frac * (ue_inviscid_full[ist_next] - ue_inviscid_full[stagnation.ist])
+    } else {
+        ue_inviscid_full[stagnation.ist]
+    };
+
+    let (surface_arc, surface_x, _, _) = extract_surface_xfoil(
+        stagnation.ist,
+        stagnation.sst,
+        ue_stag,
+        full_arc,
+        panel_x,
+        panel_y,
+        ue_inviscid_full,
+        is_upper,
+    );
+    if surface_arc.is_empty() || surface_x.is_empty() {
+        return Some(xt);
+    }
+    if xt <= surface_arc[0] {
+        return Some(surface_x[0]);
+    }
+
+    for i in 1..surface_arc.len() {
+        if xt <= surface_arc[i] {
+            let ds = surface_arc[i] - surface_arc[i - 1];
+            if ds.abs() <= 1.0e-12 {
+                return Some(surface_x[i]);
             }
-        })
-        .collect()
+            let frac = ((xt - surface_arc[i - 1]) / ds).clamp(0.0, 1.0);
+            return Some(surface_x[i - 1] + frac * (surface_x[i] - surface_x[i - 1]));
+        }
+    }
+
+    surface_x.last().copied()
 }
 
 fn operating_sensitivity_for_mode(
@@ -263,6 +358,36 @@ fn build_panel_values_from_surface_values(
     panel_values
 }
 
+fn build_panel_values_from_row_values(
+    upper_rows: &[CanonicalNewtonRow],
+    lower_rows: &[CanonicalNewtonRow],
+    upper_values: &[f64],
+    lower_values: &[f64],
+    n_panel_nodes: usize,
+) -> Vec<f64> {
+    let mut panel_values = vec![0.0; n_panel_nodes];
+
+    for (ibl, row) in upper_rows.iter().enumerate().skip(1) {
+        if row.is_wake || row.panel_idx >= n_panel_nodes {
+            continue;
+        }
+        panel_values[row.panel_idx] = upper_values.get(ibl).copied().unwrap_or(row.uedg);
+    }
+
+    for (ibl, row) in lower_rows.iter().enumerate().skip(1) {
+        if row.is_wake || row.panel_idx >= n_panel_nodes {
+            continue;
+        }
+        panel_values[row.panel_idx] = -lower_values.get(ibl).copied().unwrap_or(row.uedg);
+    }
+
+    if let Some(last) = panel_values.last_mut() {
+        *last = 0.0;
+    }
+
+    panel_values
+}
+
 fn compute_trial_cl_terms(
     panel_x: &[f64],
     panel_y: &[f64],
@@ -284,6 +409,51 @@ fn compute_trial_cl_terms(
     let qac = build_panel_values_from_surface_values(
         upper_stations,
         lower_stations,
+        upper_u_ac,
+        lower_u_ac,
+        panel_x.len(),
+    );
+    let cl_new = clcalc(panel_x, panel_y, &qnew, alpha_rad);
+
+    let eps = 1.0e-6;
+    let cl_alpha = (clcalc(panel_x, panel_y, &qnew, alpha_rad + eps)
+        - clcalc(panel_x, panel_y, &qnew, alpha_rad - eps))
+        / (2.0 * eps);
+
+    let cl_ac = if qac.iter().any(|value| value.abs() > 0.0) {
+        let qnew_operating: Vec<f64> = qnew
+            .iter()
+            .zip(qac.iter())
+            .map(|(base, operating)| base + eps * operating)
+            .collect();
+        (clcalc(panel_x, panel_y, &qnew_operating, alpha_rad) - cl_new) / eps
+    } else {
+        0.0
+    };
+
+    (cl_new, cl_alpha, cl_ac)
+}
+
+fn compute_trial_cl_terms_from_view(
+    panel_x: &[f64],
+    panel_y: &[f64],
+    state: &CanonicalNewtonStateView,
+    upper_u_new: &[f64],
+    lower_u_new: &[f64],
+    upper_u_ac: &[f64],
+    lower_u_ac: &[f64],
+    alpha_rad: f64,
+) -> (f64, f64, f64) {
+    let qnew = build_panel_values_from_row_values(
+        &state.upper_rows,
+        &state.lower_rows,
+        upper_u_new,
+        lower_u_new,
+        panel_x.len(),
+    );
+    let qac = build_panel_values_from_row_values(
+        &state.upper_rows,
+        &state.lower_rows,
         upper_u_ac,
         lower_u_ac,
         panel_x.len(),
@@ -702,65 +872,6 @@ pub fn solve_surface(
     Ok(result)
 }
 
-fn build_transition_intervals(
-    stations: &[BlStation],
-    march_result: &MarchResult,
-    ncrit: f64,
-    msq: f64,
-    re: f64,
-) -> Vec<Option<Trchek2FullResult>> {
-    let mut transitions = vec![None; stations.len().saturating_sub(1)];
-    let mut found_current_transition = false;
-
-    for i in 1..stations.len() {
-        let s1 = &stations[i - 1];
-        let s2 = &stations[i];
-
-        if s1.is_wake || s2.is_wake || !s1.is_laminar || !s2.is_turbulent {
-            continue;
-        }
-
-        let tr = trchek2_full(
-            s1.x,
-            s2.x,
-            s1.theta,
-            s2.theta,
-            s1.delta_star,
-            s2.delta_star,
-            s1.u,
-            s2.u,
-            s1.hk,
-            s2.hk,
-            s1.r_theta,
-            s2.r_theta,
-            s1.ampl,
-            ncrit,
-            None,
-            msq,
-            re,
-        );
-
-        if tr.transition {
-            transitions[i - 1] = Some(tr);
-            found_current_transition = true;
-            break;
-        }
-    }
-
-    if !found_current_transition {
-        if let (Some(idx), Some(tr)) = (
-            march_result.transition_index,
-            march_result.transition_result.clone(),
-        ) {
-            if idx > 0 && idx - 1 < transitions.len() && tr.transition {
-                transitions[idx - 1] = Some(tr);
-            }
-        }
-    }
-
-    transitions
-}
-
 #[allow(dead_code)]
 fn refresh_transition_state_from_march(stations: &mut [BlStation], march_result: &MarchResult) {
     let offset = if stations.first().map_or(false, |s| s.x < 1e-6) {
@@ -903,20 +1014,16 @@ pub fn solve_viscous_two_surfaces(
 
     canonical_state.write_back_station_views(upper_stations, lower_stations);
 
-    // Get transition locations from march results (may be updated by Newton iteration)
-    let mut x_tr_upper = upper_result.x_transition.unwrap_or(1.0);
-    let mut x_tr_lower = lower_result.x_transition.unwrap_or(1.0);
-    let mut itran_upper = upper_result
-        .transition_index
-        .unwrap_or(upper_stations.len());
-    let mut itran_lower = lower_result
-        .transition_index
-        .unwrap_or(lower_stations.len());
-    let upper_transition_meta =
-        build_transition_intervals(upper_stations, &upper_result, config.ncrit, msq, re);
-    let lower_transition_meta =
-        build_transition_intervals(lower_stations, &lower_result, config.ncrit, msq, re);
-
+    canonical_state.set_transition_metadata(
+        XfoilSurface::Upper,
+        upper_result.transition_index,
+        upper_result.x_transition,
+    );
+    canonical_state.set_transition_metadata(
+        XfoilSurface::Lower,
+        lower_result.transition_index,
+        lower_result.x_transition,
+    );
     // === Newton iteration for viscous-inviscid coupling ===
     // Full global Newton coupling using the GlobalNewtonSystem that properly
     // couples both upper and lower surfaces through the DIJ matrix.
@@ -943,14 +1050,6 @@ pub fn solve_viscous_two_surfaces(
 
     if can_run_newton {
         converged = false;
-        let mut upper_ue_inv = upper_ue.to_vec();
-        let mut lower_ue_inv = lower_ue.to_vec();
-        // Preserve the exact setup split for the first Newton iteration instead
-        // of re-deriving it from already-split station state.
-        let mut current_ist = upper_stations
-            .get(1)
-            .map(|station| station.panel_idx)
-            .unwrap_or_else(|| panel_x.len() / 2);
 
         // === Compute stagnation point derivatives (SST_GO, SST_GP) ===
         // Build a two-point local STFIND proxy around the stagnation panel:
@@ -982,22 +1081,10 @@ pub fn solve_viscous_two_surfaces(
 
         for iter in 0..max_newton_iter {
             iteration = iter + 1;
-            let n_upper = upper_stations.len();
-            let n_lower = lower_stations.len();
-            let iblte_upper = upper_stations
-                .iter()
-                .enumerate()
-                .filter(|(_, s)| !s.is_wake)
-                .map(|(i, _)| i)
-                .last()
-                .unwrap_or(n_upper.saturating_sub(1));
-            let iblte_lower = lower_stations
-                .iter()
-                .enumerate()
-                .filter(|(_, s)| !s.is_wake)
-                .map(|(i, _)| i)
-                .last()
-                .unwrap_or(n_lower.saturating_sub(1));
+            let n_upper = canonical_state.upper_rows.len();
+            let n_lower = canonical_state.lower_rows.len();
+            let iblte_upper = canonical_state.iblte_upper;
+            let iblte_lower = canonical_state.iblte_lower;
             let mut global_system =
                 GlobalNewtonSystem::new(n_upper, n_lower, iblte_upper, iblte_lower);
 
@@ -1005,13 +1092,13 @@ pub fn solve_viscous_two_surfaces(
             // For sharp TE airfoils this is zero; for blunt TE it's the gap.
             // Computed from the distance between upper and lower TE panel nodes.
             {
-                let ist_upper_te = upper_stations
+                let ist_upper_te = canonical_state.upper_rows
                     .get(iblte_upper)
-                    .map(|s| s.panel_idx)
+                    .map(|row| row.panel_idx)
                     .unwrap_or(0);
-                let ist_lower_te = lower_stations
+                let ist_lower_te = canonical_state.lower_rows
                     .get(iblte_lower)
-                    .map(|s| s.panel_idx)
+                    .map(|row| row.panel_idx)
                     .unwrap_or(0);
                 if ist_upper_te < panel_x.len() && ist_lower_te < panel_x.len() {
                     let dx = panel_x[ist_upper_te] - panel_x[ist_lower_te];
@@ -1026,17 +1113,17 @@ pub fn solve_viscous_two_surfaces(
                 let ante = global_system.ante;
                 let sharp = ante < 1e-10;
                 let telrat = 2.5_f64;
-                if !sharp && iblte_lower < lower_stations.len() {
-                    let xssi_te = lower_stations[iblte_lower].x;
+                if !sharp && iblte_lower < canonical_state.lower_rows.len() {
+                    let xssi_te = canonical_state.lower_rows[iblte_lower].x;
                     let crosp = 0.0_f64; // sharp TE approximation
                     let dwdxte = crosp / (1.0 - crosp * crosp).sqrt().max(1e-20);
                     let dwdxte = dwdxte.clamp(-3.0 / telrat, 3.0 / telrat);
                     let aa = 3.0 + telrat * dwdxte;
                     let bb = -2.0 - telrat * dwdxte;
-                    for iw in 1..=(lower_stations.len() - iblte_lower - 1) {
+                    for iw in 1..=(canonical_state.lower_rows.len() - iblte_lower - 1) {
                         let ibl = iblte_lower + iw;
-                        let zn = 1.0 - (lower_stations[ibl].x - xssi_te) / (telrat * ante);
-                        lower_stations[ibl].dw = if zn >= 0.0 {
+                        let zn = 1.0 - (canonical_state.lower_rows[ibl].x - xssi_te) / (telrat * ante);
+                        canonical_state.lower_rows[ibl].dw = if zn >= 0.0 {
                             ante * (aa + bb * zn) * zn * zn
                         } else {
                             0.0
@@ -1044,17 +1131,9 @@ pub fn solve_viscous_two_surfaces(
                     }
                 }
             }
-            refresh_canonical_state_from_station_views(
-                &mut canonical_state,
-                upper_stations,
-                lower_stations,
-                panel_x.len(),
-                None,
-            );
-            let upper_ue_alpha =
-                extract_operating_sensitivity_by_station(upper_stations, ue_inviscid_alpha_full, 1.0);
-            let lower_ue_alpha =
-                extract_operating_sensitivity_by_station(lower_stations, ue_inviscid_alpha_full, -1.0);
+            canonical_state.refresh_panel_arrays_from_rows();
+            let upper_ue_alpha = canonical_state.operating_sensitivity_view(XfoilSurface::Upper);
+            let lower_ue_alpha = canonical_state.operating_sensitivity_view(XfoilSurface::Lower);
             let (upper_ue_operating, lower_ue_operating) =
                 operating_sensitivity_for_mode(operating_mode, &upper_ue_alpha, &lower_ue_alpha);
             let (sst_go_iter, sst_gp_iter) =
@@ -1066,11 +1145,7 @@ pub fn solve_viscous_two_surfaces(
             // Save the current accepted state so a rejected Newton step rolls
             // back to the previous iterate, matching XFOIL's late-iteration
             // behavior near the stagnation region.
-            let upper_iter_backup = upper_stations.clone();
-            let lower_iter_backup = lower_stations.clone();
-            let upper_ue_inv_backup = upper_ue_inv.clone();
-            let lower_ue_inv_backup = lower_ue_inv.clone();
-            let current_ist_backup = current_ist;
+            let canonical_iter_backup = canonical_state.clone();
 
             if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() && iter < 3 {
                 eprintln!("[DEBUG Newton] Starting iter {}", iter);
@@ -1095,86 +1170,18 @@ pub fn solve_viscous_two_surfaces(
             // bubble and N-factor history across Newton iterations, unlike the
             // previous march_surface call which re-initialised from Thwaites.
 
-            let upper_transition_result =
-                canonical_state.march_mixed_du(XfoilSurface::Upper, re, msq, &march_config);
-            let lower_transition_result =
-                canonical_state.march_mixed_du(XfoilSurface::Lower, re, msq, &march_config);
-            canonical_state.write_back_station_views(upper_stations, lower_stations);
-
-            // Update transition bookkeeping from the mixed march results.
-            // The BL primary variables are already updated in-place by march_mixed_du,
-            // so we only extract transition metadata.
-            if let Some(idx) = upper_transition_result.transition_index {
-                itran_upper = idx;
-            }
-            if let Some(xt) = upper_transition_result.x_transition {
-                x_tr_upper = xt;
-            }
-            if let Some(idx) = lower_transition_result.transition_index {
-                itran_lower = idx;
-            }
-            if let Some(xt) = lower_transition_result.x_transition {
-                x_tr_lower = xt;
-            }
-
-            // Determine flow types for each interval
-            let upper_flow_types: Vec<FlowType> = upper_stations
-                .iter()
-                .skip(1)
-                .map(|s| {
-                    if s.is_wake {
-                        FlowType::Wake
-                    } else if s.is_laminar {
-                        FlowType::Laminar
-                    } else {
-                        FlowType::Turbulent
-                    }
-                })
-                .collect();
-
-            let lower_flow_types: Vec<FlowType> = lower_stations
-                .iter()
-                .skip(1)
-                .map(|s| {
-                    if s.is_wake {
-                        FlowType::Wake
-                    } else if s.is_laminar {
-                        FlowType::Laminar
-                    } else {
-                        FlowType::Turbulent
-                    }
-                })
-                .collect();
-
-            // Recompute secondary variables for both surfaces
-            for station in upper_stations.iter_mut() {
-                let flow_type = if station.is_wake {
-                    FlowType::Wake
-                } else if station.is_laminar {
-                    FlowType::Laminar
-                } else {
-                    FlowType::Turbulent
-                };
-                blvar(station, flow_type, msq, re);
-            }
-            for station in lower_stations.iter_mut() {
-                let flow_type = if station.is_wake {
-                    FlowType::Wake
-                } else if station.is_laminar {
-                    FlowType::Laminar
-                } else {
-                    FlowType::Turbulent
-                };
-                blvar(station, flow_type, msq, re);
-            }
+            canonical_state.march_mixed_du(XfoilSurface::Upper, re, msq, &march_config);
+            canonical_state.march_mixed_du(XfoilSurface::Lower, re, msq, &march_config);
+            let upper_debug = canonical_state.upper_station_view();
+            let lower_debug = canonical_state.lower_station_view();
 
             // Debug after blvar - emit BL state summaries
             if rustfoil_bl::is_debug_active() {
                 // Collect upper surface station states (every 10th station)
-                let upper_station_states: Vec<rustfoil_bl::StationState> = upper_stations
+                let upper_station_states: Vec<rustfoil_bl::StationState> = upper_debug
                     .iter()
                     .enumerate()
-                    .filter(|(i, _)| *i % 10 == 0 || *i == upper_stations.len() - 1)
+                    .filter(|(i, _)| *i % 10 == 0 || *i == upper_debug.len() - 1)
                     .map(|(i, s)| rustfoil_bl::StationState {
                         ibl: i,
                         x: s.x,
@@ -1192,10 +1199,10 @@ pub fn solve_viscous_two_surfaces(
                 ));
                 
                 // Collect lower surface station states (every 10th station)
-                let lower_station_states: Vec<rustfoil_bl::StationState> = lower_stations
+                let lower_station_states: Vec<rustfoil_bl::StationState> = lower_debug
                     .iter()
                     .enumerate()
-                    .filter(|(i, _)| *i % 10 == 0 || *i == lower_stations.len() - 1)
+                    .filter(|(i, _)| *i % 10 == 0 || *i == lower_debug.len() - 1)
                     .map(|(i, s)| rustfoil_bl::StationState {
                         ibl: i,
                         x: s.x,
@@ -1214,48 +1221,30 @@ pub fn solve_viscous_two_surfaces(
                 
                 if iter < 2 {
                     eprintln!("[DEBUG Global Newton] iter {} after blvar:", iter);
-                    for i in 1..4.min(upper_stations.len()) {
-                        let s = &upper_stations[i];
+                    for i in 1..4.min(upper_debug.len()) {
+                        let s = &upper_debug[i];
                         eprintln!("[DEBUG Global Newton]   upper[{}] theta={:.6e} dstar={:.6e} Hk={:.4}", 
                             i, s.theta, s.delta_star, s.hk);
                     }
                 }
             }
 
-            let upper_transitions = build_transition_intervals(
-                upper_stations,
-                &upper_transition_result,
-                config.ncrit,
-                msq,
-                re,
-            );
-            let lower_transitions = build_transition_intervals(
-                lower_stations,
-                &lower_transition_result,
-                config.ncrit,
-                msq,
-                re,
-            );
-
             // Build the global Newton system with full cross-surface coupling
-            global_system.build_global_system(
-                upper_stations,
-                lower_stations,
-                &upper_flow_types,
-                &lower_flow_types,
-                &upper_transitions,
-                &lower_transitions,
+            let mut newton_view = build_canonical_newton_view(
+                &canonical_state,
+                upper_ue_operating.clone(),
+                lower_ue_operating.clone(),
+                global_system.ante,
+                sst_go_iter,
+                sst_gp_iter,
+            );
+            global_system.build_global_system_from_view(
+                &newton_view,
                 dij,
-                &upper_ue_inv,
-                &lower_ue_inv,
-                &[],
-                &[],
-                &upper_ue_operating,
-                &lower_ue_operating,
                 config.ncrit,
                 msq,
                 re,
-                iter,  // Pass iteration number for debug events
+                iter,
             );
 
             // Emit SETBL_SYSTEM debug event after building the global system
@@ -1315,6 +1304,7 @@ pub fn solve_viscous_two_surfaces(
                     None,
                     None,
                     None,
+                    None,
                 ));
             }
 
@@ -1362,13 +1352,13 @@ pub fn solve_viscous_two_surfaces(
                 eprintln!("[DEBUG Newton] iter {} residual before solve: {:.6e}", iter, residual);
                 // Sample a few stations to check for blow-ups
                 for ibl in [10, 20, 30, 40, 50] {
-                    if ibl < upper_stations.len() {
-                        let s = &upper_stations[ibl];
+                    if ibl < upper_debug.len() {
+                        let s = &upper_debug[ibl];
                         eprintln!("[DEBUG Newton] iter {} upper[{}]: theta={:.6e}, dstar={:.6e}, Ue={:.6}, ctau={:.6}, mass={:.6e}",
                             iter, ibl, s.theta, s.delta_star, s.u, s.ctau, s.mass_defect);
                     }
-                    if ibl < lower_stations.len() {
-                        let s = &lower_stations[ibl];
+                    if ibl < lower_debug.len() {
+                        let s = &lower_debug[ibl];
                         eprintln!("[DEBUG Newton] iter {} lower[{}]: theta={:.6e}, dstar={:.6e}, Ue={:.6}, ctau={:.6}, mass={:.6e}",
                             iter, ibl, s.theta, s.delta_star, s.u, s.ctau, s.mass_defect);
                     }
@@ -1381,23 +1371,17 @@ pub fn solve_viscous_two_surfaces(
 
             // Solve the global Newton system
             let solve_result = solve_global_system(&mut global_system);
-            let preview = preview_global_update_ue(
-                upper_stations,
-                lower_stations,
+            let preview = preview_global_update_ue_from_view(
+                &newton_view,
                 &solve_result.state_deltas,
                 Some(&solve_result.operating_deltas),
                 &global_system,
-                Some(dij),
-                Some(&upper_ue_inv),
-                Some(&lower_ue_inv),
-                Some(&upper_ue_operating),
-                Some(&lower_ue_operating),
+                dij,
             );
-            let (cl_new, cl_alpha, cl_ac) = compute_trial_cl_terms(
+            let (cl_new, cl_alpha, cl_ac) = compute_trial_cl_terms_from_view(
                 panel_x,
                 panel_y,
-                upper_stations,
-                lower_stations,
+                &newton_view,
                 &preview.upper_u_new,
                 &preview.lower_u_new,
                 &preview.upper_u_ac,
@@ -1459,11 +1443,8 @@ pub fn solve_viscous_two_surfaces(
                 if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
                     eprintln!("[DEBUG Newton] Invalid deltas at iter {} (reverting)", iter);
                 }
-                *upper_stations = upper_iter_backup;
-                *lower_stations = lower_iter_backup;
-                upper_ue_inv = upper_ue_inv_backup;
-                lower_ue_inv = lower_ue_inv_backup;
-                current_ist = current_ist_backup;
+                canonical_state = canonical_iter_backup;
+                canonical_state.write_back_station_views(upper_stations, lower_stations);
                 iteration = 0;
                 break;
             }
@@ -1478,18 +1459,14 @@ pub fn solve_viscous_two_surfaces(
             // Debug: Track relaxation factor for iterations 6-7
             let rlx_before = rlx;
             
-            let update_result = apply_global_updates(
-                upper_stations,
-                lower_stations,
+            let update_result = apply_global_updates_from_view(
+                &mut newton_view,
                 &solve_result.state_deltas,
                 Some(&solve_result.operating_deltas),
                 &global_system,
+                iter + 1,
                 rlx,
-                Some(dij),
-                Some(&upper_ue_inv),
-                Some(&lower_ue_inv),
-                Some(&upper_ue_operating),
-                Some(&lower_ue_operating),
+                dij,
                 dac,
                 msq,
                 re,
@@ -1513,96 +1490,8 @@ pub fn solve_viscous_two_surfaces(
                     iter, update_result.relaxation_used, rlx_before, residual);
             }
 
-            
-            // XFOIL updates QVIS/GAM from the current UEDG, then relocates the
-            // stagnation split with STMOVE before the next Newton iteration.
-            refresh_canonical_state_from_station_views(
-                &mut canonical_state,
-                upper_stations,
-                lower_stations,
-                panel_x.len(),
-                None,
-            );
-            let full_gamma_iter = canonical_state.panel_gamma().to_vec();
-            if let Some(TransitionalStmoveResult {
-                ist: new_ist,
-                upper_ue_inv: upper_ue_inv_new,
-                lower_ue_inv: lower_ue_inv_new,
-            }) = canonical_state.apply_stmove_like_xfoil(
-                ue_inviscid_full,
-                panel_x,
-                panel_y,
-                &full_arc,
-                &full_gamma_iter,
-                re,
-                current_ist,
-                &upper_ue_inv,
-                &lower_ue_inv,
-            ) {
-                canonical_state.write_back_station_views(upper_stations, lower_stations);
-                upper_ue_inv = upper_ue_inv_new;
-                lower_ue_inv = lower_ue_inv_new;
-                if new_ist != current_ist {
-                    if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
-                        eprintln!(
-                            "[DEBUG Newton] STMOVE shifted stagnation panel: {} -> {}",
-                            current_ist, new_ist
-                        );
-                    }
-                    itran_upper =
-                        adjust_transition_for_stmove(itran_upper, current_ist, new_ist, true);
-                    itran_lower =
-                        adjust_transition_for_stmove(itran_lower, current_ist, new_ist, false);
-                }
-                current_ist = new_ist;
-            }
-
-            if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() && (iter < 10 || iter % 5 == 0) {
-                eprintln!("[DEBUG Newton] iter {} RMSBL after update: {:.6e} (max_change: {:.6e})", 
-                    iter, residual, update_result.max_change);
-            }
-            
-            if residual < config.tolerance {
-                if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
-                    eprintln!("[DEBUG Newton] Converged at iter {} with RMSBL={:.6e} < tolerance={:.6e}", 
-                        iter, residual, config.tolerance);
-                }
-                converged = true;
-                break;
-            }
-
-            // Check for divergence or increasing residual
-            if !residual.is_finite() || residual > 1e10 {
-                if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
-                    eprintln!("[DEBUG Newton] Diverged at iter {}: residual={:.6e} (reverting)", iter, residual);
-                }
-                *upper_stations = upper_iter_backup;
-                *lower_stations = lower_iter_backup;
-                upper_ue_inv = upper_ue_inv_backup;
-                lower_ue_inv = lower_ue_inv_backup;
-                current_ist = current_ist_backup;
-                converged = false;
-                iteration = iter + 1;
-                break;
-            }
-
-            
-            // Stop if residual is increasing rapidly (Newton diverging badly)
-            // Allow slow increase since our residual may oscillate
-            if iter > 5 && residual > prev_residual * 5.0 {
-                if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
-                    eprintln!("[DEBUG Newton] Rapid increase at iter {}: residual={:.6e}, prev={:.6e} (reverting)", iter, residual, prev_residual);
-                }
-                *upper_stations = upper_iter_backup;
-                *lower_stations = lower_iter_backup;
-                upper_ue_inv = upper_ue_inv_backup;
-                lower_ue_inv = lower_ue_inv_backup;
-                current_ist = current_ist_backup;
-                converged = false;
-                iteration = iter + 1;
-                break;
-            }
-            // Emit FULL_BL_STATE debug event with complete BL state for both surfaces
+            // Match XFOIL's DBGFULL_BL_STATE timing: emit the updated station
+            // state before QVIS/GAM refresh and before STMOVE relocates the split.
             if rustfoil_bl::is_debug_active() {
                 let upper_bl = rustfoil_bl::SurfaceBlState {
                     x: upper_stations.iter().map(|s| s.x).collect(),
@@ -1627,7 +1516,76 @@ pub fn solve_viscous_two_surfaces(
                     upper_bl,
                     lower_bl,
                 ));
+            }
 
+            
+            // XFOIL updates QVIS/GAM from the current UEDG, then relocates the
+            // stagnation split with STMOVE before the next Newton iteration.
+            canonical_state.overwrite_from_newton_view(&newton_view);
+            canonical_state.write_back_station_views(upper_stations, lower_stations);
+            let full_gamma_iter = canonical_state.panel_gamma().to_vec();
+            let old_ist = canonical_state.ist;
+            if let Some(TransitionalStmoveResult { ist: new_ist }) = canonical_state.apply_stmove_like_xfoil(
+                ue_inviscid_full,
+                panel_x,
+                panel_y,
+                &full_arc,
+                &full_gamma_iter,
+                re,
+                old_ist,
+            ) {
+                canonical_state.write_back_station_views(upper_stations, lower_stations);
+                if new_ist != old_ist {
+                    if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+                        eprintln!(
+                            "[DEBUG Newton] STMOVE shifted stagnation panel: {} -> {}",
+                            old_ist, new_ist
+                        );
+                    }
+                    canonical_state.adjust_transition_metadata_for_stmove(old_ist, new_ist);
+                }
+            }
+
+            if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() && (iter < 10 || iter % 5 == 0) {
+                eprintln!("[DEBUG Newton] iter {} RMSBL after update: {:.6e} (max_change: {:.6e})", 
+                    iter, residual, update_result.max_change);
+            }
+            
+            if residual < config.tolerance {
+                if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+                    eprintln!("[DEBUG Newton] Converged at iter {} with RMSBL={:.6e} < tolerance={:.6e}", 
+                        iter, residual, config.tolerance);
+                }
+                converged = true;
+                break;
+            }
+
+            // Check for divergence or increasing residual
+            if !residual.is_finite() || residual > 1e10 {
+                if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+                    eprintln!("[DEBUG Newton] Diverged at iter {}: residual={:.6e} (reverting)", iter, residual);
+                }
+                canonical_state = canonical_iter_backup;
+                canonical_state.write_back_station_views(upper_stations, lower_stations);
+                converged = false;
+                iteration = iter + 1;
+                break;
+            }
+
+            
+            // Stop if residual is increasing rapidly (Newton diverging badly)
+            // Allow slow increase since our residual may oscillate
+            if iter > 5 && residual > prev_residual * 5.0 {
+                if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+                    eprintln!("[DEBUG Newton] Rapid increase at iter {}: residual={:.6e}, prev={:.6e} (reverting)", iter, residual, prev_residual);
+                }
+                canonical_state = canonical_iter_backup;
+                canonical_state.write_back_station_views(upper_stations, lower_stations);
+                converged = false;
+                iteration = iter + 1;
+                break;
+            }
+            if rustfoil_bl::is_debug_active() {
                 // Emit FULL_NFACTOR debug event with N-factors at all stations
                 rustfoil_bl::add_event(rustfoil_bl::DebugEvent::full_nfactor(
                     iteration,
@@ -1644,42 +1602,37 @@ pub fn solve_viscous_two_surfaces(
     }
 
     // Update transition locations from final station states.
+    let final_stagnation = find_stagnation_with_derivs(ue_inviscid_full, &full_arc);
     refresh_canonical_state_from_station_views(
         &mut canonical_state,
         upper_stations,
         lower_stations,
         panel_x.len(),
-        find_stagnation_with_derivs(ue_inviscid_full, &full_arc),
+        final_stagnation,
     );
 
-    // Interpolate the x/c coordinate between the last laminar and first turbulent
-    // station using the arc-length transition point from march results (XFOIL
-    // converts from arc length xt to x/c via SEVAL+XOCTR in xbl.f:491-494).
-    for (i, station) in upper_stations.iter().enumerate() {
-        if !station.is_laminar && i > 0 && upper_stations[i - 1].is_laminar {
-            let prev = &upper_stations[i - 1];
-            let ds = station.x - prev.x;
-            if ds > 1e-12 && x_tr_upper > 0.0 && x_tr_upper < station.x {
-                let frac = ((x_tr_upper - prev.x) / ds).clamp(0.0, 1.0);
-                x_tr_upper = prev.x_coord + frac * (station.x_coord - prev.x_coord);
-            } else {
-                x_tr_upper = station.x_coord;
-            }
-            break;
-        }
-    }
-    for (i, station) in lower_stations.iter().enumerate() {
-        if !station.is_laminar && i > 0 && lower_stations[i - 1].is_laminar {
-            let prev = &lower_stations[i - 1];
-            let ds = station.x - prev.x;
-            if ds > 1e-12 && x_tr_lower > 0.0 && x_tr_lower < station.x {
-                let frac = ((x_tr_lower - prev.x) / ds).clamp(0.0, 1.0);
-                x_tr_lower = prev.x_coord + frac * (station.x_coord - prev.x_coord);
-            } else {
-                x_tr_lower = station.x_coord;
-            }
-            break;
-        }
+    // Convert arc-length transition locations on the extracted surface geometry,
+    // matching XFOIL's surface-based xt -> x/c ownership more closely than BL-row
+    // interpolation.
+    if let Some(stag) = final_stagnation {
+        canonical_state.xtran_upper = transition_arc_to_chord_on_surface(
+            stag,
+            &full_arc,
+            panel_x,
+            panel_y,
+            ue_inviscid_full,
+            true,
+            canonical_state.xtran_upper,
+        );
+        canonical_state.xtran_lower = transition_arc_to_chord_on_surface(
+            stag,
+            &full_arc,
+            panel_x,
+            panel_y,
+            ue_inviscid_full,
+            false,
+            canonical_state.xtran_lower,
+        );
     }
 
     // Check for separation on either surface
@@ -1788,8 +1741,8 @@ pub fn solve_viscous_two_surfaces(
         cl: forces.cl,
         cd: forces.cd,
         cm: forces.cm,
-        x_tr_upper,
-        x_tr_lower,
+        x_tr_upper: canonical_state.xtran_upper.unwrap_or(1.0),
+        x_tr_lower: canonical_state.xtran_lower.unwrap_or(1.0),
         iterations: iteration,
         residual,
         converged,
@@ -2058,7 +2011,6 @@ mod tests {
             false,
             re,
         );
-        let mut lower_ue_inv = lower_ue.clone();
         for wake_idx in 0..2 {
             let mut wake_station = BlStation::new();
             wake_station.x = lower_stations.last().unwrap().x + 0.1 * (wake_idx as f64 + 1.0);
@@ -2067,11 +2019,9 @@ mod tests {
             wake_station.u = 0.7 - 0.05 * wake_idx as f64;
             wake_station.mass_defect = wake_station.u * wake_station.delta_star;
             wake_station.is_wake = true;
-            lower_ue_inv.push(wake_station.u);
             lower_stations.push(wake_station);
         }
         let old_lower_wake_count = lower_stations.iter().filter(|station| station.is_wake).count();
-        let mut upper_ue_inv = upper_ue.clone();
         let current_gamma = vec![0.8, 0.2, -0.15, -0.4, -0.6, -0.8, -0.95];
 
         let mut canonical_state = build_canonical_state(
@@ -2089,13 +2039,9 @@ mod tests {
                 &current_gamma,
                 re,
                 old_ist,
-                &upper_ue_inv,
-                &lower_ue_inv,
             )
             .expect("stagnation relocation");
         canonical_state.write_back_station_views(&mut upper_stations, &mut lower_stations);
-        upper_ue_inv = stmove.upper_ue_inv;
-        lower_ue_inv = stmove.lower_ue_inv;
         let new_ist = stmove.ist;
 
         assert_eq!(new_ist, 1);
@@ -2103,7 +2049,6 @@ mod tests {
             lower_stations.iter().filter(|station| station.is_wake).count(),
             old_lower_wake_count
         );
-        assert_eq!(lower_stations.len(), lower_ue_inv.len());
         assert!(lower_stations.last().unwrap().is_wake);
     }
 

@@ -1,6 +1,8 @@
+use rustfoil_bl::equations::FlowType;
 use rustfoil_bl::state::{BlDerivatives, BlStation};
 use rustfoil_coupling::march::{march_mixed_du, march_surface, MarchConfig, MarchResult};
-use rustfoil_coupling::stmove::find_stagnation_with_derivs;
+use rustfoil_coupling::newton_state::CanonicalNewtonStateView;
+use rustfoil_coupling::stmove::{adjust_transition_for_stmove, find_stagnation_with_derivs};
 
 use super::config::OperatingMode;
 use super::setup::extract_surface_xfoil;
@@ -59,6 +61,17 @@ impl XfoilBlIndex {
     }
 }
 
+fn flow_type_for_station_index(ibl: usize, iblte: usize, itran: Option<usize>) -> FlowType {
+    let itran = itran.unwrap_or(iblte + 1);
+    if ibl > iblte {
+        FlowType::Wake
+    } else if ibl + 1 >= itran {
+        FlowType::Turbulent
+    } else {
+        FlowType::Laminar
+    }
+}
+
 /// Canonical per-station row owned by the transitional XFOIL-style state.
 ///
 /// This is intentionally close to the existing `BlStation` shape so the current
@@ -67,8 +80,11 @@ impl XfoilBlIndex {
 pub struct CanonicalBlRow {
     pub x: f64,
     pub x_coord: f64,
+    pub y_coord: f64,
     pub panel_idx: usize,
     pub uedg: f64,
+    pub uinv: f64,
+    pub uinv_a: f64,
     pub theta: f64,
     pub dstr: f64,
     pub ctau_or_ampl: f64,
@@ -97,8 +113,11 @@ impl CanonicalBlRow {
         let mut row = Self {
             x: station.x,
             x_coord: station.x_coord,
+            y_coord: 0.0,
             panel_idx: station.panel_idx,
             uedg: station.u,
+            uinv: station.u,
+            uinv_a: 0.0,
             theta: station.theta,
             dstr: station.delta_star,
             ctau_or_ampl: 0.0,
@@ -125,7 +144,10 @@ impl CanonicalBlRow {
         row
     }
 
-    pub fn as_station(&self) -> BlStation {
+    pub fn as_station_with_flow_type(&self, flow_type: FlowType) -> BlStation {
+        let is_wake = matches!(flow_type, FlowType::Wake);
+        let is_turbulent = matches!(flow_type, FlowType::Turbulent | FlowType::Wake);
+        let is_laminar = matches!(flow_type, FlowType::Laminar);
         BlStation {
             x: self.x,
             x_coord: self.x_coord,
@@ -147,9 +169,9 @@ impl CanonicalBlRow {
             de: self.de,
             mass_defect: self.mass,
             dw: self.dw,
-            is_laminar: self.is_laminar,
-            is_wake: self.is_wake,
-            is_turbulent: self.is_turbulent,
+            is_laminar,
+            is_wake,
+            is_turbulent,
             derivs: self.derivs.clone(),
         }
     }
@@ -216,8 +238,6 @@ pub struct XfoilLikeViscousState {
 #[derive(Debug, Clone)]
 pub struct TransitionalStmoveResult {
     pub ist: usize,
-    pub upper_ue_inv: Vec<f64>,
-    pub lower_ue_inv: Vec<f64>,
 }
 
 impl XfoilLikeViscousState {
@@ -253,6 +273,59 @@ impl XfoilLikeViscousState {
         self.sst_gp = sst_gp;
     }
 
+    pub fn set_transition_metadata(
+        &mut self,
+        surface: XfoilSurface,
+        transition_index: Option<usize>,
+        x_transition: Option<f64>,
+    ) {
+        match surface {
+            XfoilSurface::Upper => {
+                self.itran_upper = transition_index;
+                self.xtran_upper = x_transition;
+            }
+            XfoilSurface::Lower => {
+                self.itran_lower = transition_index;
+                self.xtran_lower = x_transition;
+            }
+        }
+    }
+
+    pub fn update_transition_metadata(
+        &mut self,
+        surface: XfoilSurface,
+        transition_index: Option<usize>,
+        x_transition: Option<f64>,
+    ) {
+        match surface {
+            XfoilSurface::Upper => {
+                if let Some(idx) = transition_index {
+                    self.itran_upper = Some(idx);
+                }
+                if let Some(x) = x_transition {
+                    self.xtran_upper = Some(x);
+                }
+            }
+            XfoilSurface::Lower => {
+                if let Some(idx) = transition_index {
+                    self.itran_lower = Some(idx);
+                }
+                if let Some(x) = x_transition {
+                    self.xtran_lower = Some(x);
+                }
+            }
+        }
+    }
+
+    pub fn adjust_transition_metadata_for_stmove(&mut self, old_ist: usize, new_ist: usize) {
+        self.itran_upper = self
+            .itran_upper
+            .map(|itran| adjust_transition_for_stmove(itran, old_ist, new_ist, true));
+        self.itran_lower = self
+            .itran_lower
+            .map(|itran| adjust_transition_for_stmove(itran, old_ist, new_ist, false));
+    }
+
     pub fn set_panel_inviscid_arrays(&mut self, qinv: &[f64], qinv_a: &[f64]) {
         resize_if_needed(&mut self.qinv, qinv.len());
         resize_if_needed(&mut self.qinv_a, qinv_a.len());
@@ -260,6 +333,7 @@ impl XfoilLikeViscousState {
         self.qinv.clone_from_slice(qinv);
         self.qinv_a.clone_from_slice(qinv_a);
         self.uinv.clone_from_slice(qinv);
+        self.sync_row_inviscid_from_panel_arrays();
     }
 
     pub fn set_operating_mode(&mut self, operating_mode: OperatingMode) {
@@ -348,9 +422,29 @@ impl XfoilLikeViscousState {
 
     /// Derive a `BlStation` view for one surface.
     pub fn station_view(&self, surface: XfoilSurface) -> Vec<BlStation> {
+        let iblte = self.iblte(surface);
+        let itran = match surface {
+            XfoilSurface::Upper => self.itran_upper,
+            XfoilSurface::Lower => self.itran_lower,
+        };
         self.surface_rows(surface)
             .iter()
-            .map(CanonicalBlRow::as_station)
+            .enumerate()
+            .map(|(ibl, row)| row.as_station_with_flow_type(flow_type_for_station_index(ibl, iblte, itran)))
+            .collect()
+    }
+
+    pub fn flow_type_view(&self, surface: XfoilSurface) -> Vec<FlowType> {
+        let iblte = self.iblte(surface);
+        let itran = match surface {
+            XfoilSurface::Upper => self.itran_upper,
+            XfoilSurface::Lower => self.itran_lower,
+        };
+        self.surface_rows(surface)
+            .iter()
+            .enumerate()
+            .skip(1)
+            .map(|(ibl, _)| flow_type_for_station_index(ibl, iblte, itran))
             .collect()
     }
 
@@ -359,6 +453,20 @@ impl XfoilLikeViscousState {
         self.surface_rows(surface)
             .iter()
             .map(|row| row.uedg)
+            .collect()
+    }
+
+    pub fn uinv_view(&self, surface: XfoilSurface) -> Vec<f64> {
+        self.surface_rows(surface)
+            .iter()
+            .map(|row| row.uinv)
+            .collect()
+    }
+
+    pub fn operating_sensitivity_view(&self, surface: XfoilSurface) -> Vec<f64> {
+        self.surface_rows(surface)
+            .iter()
+            .map(|row| row.uinv_a)
             .collect()
     }
 
@@ -384,6 +492,11 @@ impl XfoilLikeViscousState {
         let ue: Vec<f64> = stations.iter().map(|station| station.u).collect();
         let result = march_surface(&x, &ue, re, msq, config, surface.xfoil_is());
         self.apply_march_result_to_surface(surface, &result);
+        self.set_transition_metadata(
+            surface,
+            result.transition_index,
+            result.x_transition,
+        );
         self.refresh_panel_arrays_from_rows();
         result
     }
@@ -400,6 +513,11 @@ impl XfoilLikeViscousState {
         let mut stations = self.station_view(surface);
         let result = march_mixed_du(&mut stations, re, msq, config, surface.xfoil_is());
         self.overwrite_surface_rows_from_stations(surface, &stations);
+        self.update_transition_metadata(
+            surface,
+            result.transition_index,
+            result.x_transition,
+        );
         self.refresh_panel_arrays_from_rows();
         result
     }
@@ -413,6 +531,7 @@ impl XfoilLikeViscousState {
     ) {
         self.upper_rows = upper_stations.iter().map(CanonicalBlRow::from_station).collect();
         self.lower_rows = lower_stations.iter().map(CanonicalBlRow::from_station).collect();
+        self.sync_row_inviscid_from_panel_arrays();
         self.sync_surface_metadata();
         self.sync_panel_arrays(n_panel_nodes);
         self.sync_wake_arrays();
@@ -428,10 +547,83 @@ impl XfoilLikeViscousState {
         *lower_stations = self.lower_station_view();
     }
 
+    pub fn overwrite_from_newton_view(&mut self, view: &CanonicalNewtonStateView) {
+        self.upper_rows = view
+            .upper_rows
+            .iter()
+            .map(|row| CanonicalBlRow {
+                x: row.x,
+                x_coord: row.x_coord,
+                y_coord: 0.0,
+                panel_idx: row.panel_idx,
+                uedg: row.uedg,
+                uinv: row.uinv,
+                uinv_a: row.uinv_a,
+                theta: row.theta,
+                dstr: row.dstr,
+                ctau_or_ampl: row.ctau_or_ampl,
+                ctau: row.ctau,
+                ampl: row.ampl,
+                mass: row.mass,
+                h: row.h,
+                hk: row.hk,
+                hs: row.hs,
+                hc: row.hc,
+                r_theta: row.r_theta,
+                cf: row.cf,
+                cd: row.cd,
+                us: row.us,
+                cq: row.cq,
+                de: row.de,
+                dw: row.dw,
+                is_laminar: row.is_laminar,
+                is_turbulent: row.is_turbulent,
+                is_wake: row.is_wake,
+                derivs: row.derivs.clone(),
+            })
+            .collect();
+        self.lower_rows = view
+            .lower_rows
+            .iter()
+            .map(|row| CanonicalBlRow {
+                x: row.x,
+                x_coord: row.x_coord,
+                y_coord: 0.0,
+                panel_idx: row.panel_idx,
+                uedg: row.uedg,
+                uinv: row.uinv,
+                uinv_a: row.uinv_a,
+                theta: row.theta,
+                dstr: row.dstr,
+                ctau_or_ampl: row.ctau_or_ampl,
+                ctau: row.ctau,
+                ampl: row.ampl,
+                mass: row.mass,
+                h: row.h,
+                hk: row.hk,
+                hs: row.hs,
+                hc: row.hc,
+                r_theta: row.r_theta,
+                cf: row.cf,
+                cd: row.cd,
+                us: row.us,
+                cq: row.cq,
+                de: row.de,
+                dw: row.dw,
+                is_laminar: row.is_laminar,
+                is_turbulent: row.is_turbulent,
+                is_wake: row.is_wake,
+                derivs: row.derivs.clone(),
+            })
+            .collect();
+        self.refresh_panel_arrays_from_rows();
+    }
+
     /// Phase 3 canonical owner path: refresh `QVIS/GAM/GAM_A` from the currently
     /// owned BL rows while preserving the panel-space inviscid arrays.
     pub fn refresh_panel_arrays_from_rows(&mut self) {
         let n_panel_nodes = self.n_panel_nodes();
+        self.sync_row_inviscid_from_panel_arrays();
         self.sync_surface_metadata();
         self.sync_panel_arrays(n_panel_nodes);
         self.sync_wake_arrays();
@@ -461,8 +653,6 @@ impl XfoilLikeViscousState {
         current_gamma: &[f64],
         re: f64,
         old_ist: usize,
-        upper_ue_inv: &[f64],
-        lower_ue_inv: &[f64],
     ) -> Option<TransitionalStmoveResult> {
         let stag = find_stagnation_with_derivs(current_gamma, full_arc)?;
         let ue_stag = interpolate_stagnation_velocity(ue_inviscid_full, full_arc, stag.ist, stag.sst);
@@ -514,10 +704,6 @@ impl XfoilLikeViscousState {
             .get(old_lower_wake_start..)
             .unwrap_or(&[])
             .to_vec();
-        let lower_wake_ue_inv = lower_ue_inv
-            .get(old_lower_wake_start..)
-            .unwrap_or(&[])
-            .to_vec();
 
         if stag.ist == old_ist {
             apply_geometry_in_place(&mut self.upper_rows, &upper_geom.rows);
@@ -530,8 +716,6 @@ impl XfoilLikeViscousState {
             self.refresh_panel_arrays_from_rows();
             return Some(TransitionalStmoveResult {
                 ist: stag.ist,
-                upper_ue_inv: upper_ue_inv.to_vec(),
-                lower_ue_inv: lower_ue_inv.to_vec(),
             });
         }
 
@@ -602,13 +786,8 @@ impl XfoilLikeViscousState {
         self.lower_rows = new_lower_rows;
         self.set_stagnation_metadata(stag.ist, stag.sst, stag.sst_go, stag.sst_gp);
         self.refresh_panel_arrays_from_rows();
-
-        let mut lower_ue_full = lower_geom.ue_inv;
-        lower_ue_full.extend(lower_wake_ue_inv);
         Some(TransitionalStmoveResult {
             ist: stag.ist,
-            upper_ue_inv: upper_geom.ue_inv,
-            lower_ue_inv: lower_ue_full,
         })
     }
 
@@ -708,7 +887,6 @@ impl XfoilLikeViscousState {
     }
 
     fn sync_wake_arrays(&mut self) {
-        let previous_wake_y = self.wake_y.clone();
         self.wake_x.clear();
         self.wake_y.clear();
         self.wake_s.clear();
@@ -716,14 +894,40 @@ impl XfoilLikeViscousState {
         self.wake_uedg.clear();
         self.wake_mass.clear();
 
-        for (idx, row) in self.lower_rows.iter().filter(|row| row.is_wake).enumerate() {
+        for row in self.lower_rows.iter().filter(|row| row.is_wake) {
             self.wake_x.push(row.x_coord);
-            self.wake_y
-                .push(previous_wake_y.get(idx).copied().unwrap_or(0.0));
+            self.wake_y.push(row.y_coord);
             self.wake_s.push(row.x);
             self.wake_panel_indices.push(row.panel_idx);
             self.wake_uedg.push(row.uedg);
             self.wake_mass.push(row.mass);
+        }
+    }
+
+    fn sync_row_inviscid_from_panel_arrays(&mut self) {
+        for row in &mut self.upper_rows {
+            if row.panel_idx == usize::MAX {
+                row.uinv = 0.0;
+                row.uinv_a = 0.0;
+            } else if row.is_wake {
+                row.uinv = row.uedg;
+                row.uinv_a = 0.0;
+            } else {
+                row.uinv = self.qinv.get(row.panel_idx).copied().unwrap_or(row.uedg).abs();
+                row.uinv_a = self.qinv_a.get(row.panel_idx).copied().unwrap_or(0.0);
+            }
+        }
+        for row in &mut self.lower_rows {
+            if row.panel_idx == usize::MAX {
+                row.uinv = 0.0;
+                row.uinv_a = 0.0;
+            } else if row.is_wake {
+                row.uinv = row.uedg;
+                row.uinv_a = 0.0;
+            } else {
+                row.uinv = self.qinv.get(row.panel_idx).copied().unwrap_or(row.uedg).abs();
+                row.uinv_a = -self.qinv_a.get(row.panel_idx).copied().unwrap_or(0.0);
+            }
         }
     }
 }
@@ -736,6 +940,7 @@ fn resize_if_needed(values: &mut Vec<f64>, size: usize) {
 
 fn update_row_from_march_station(row: &mut CanonicalBlRow, station: &BlStation) {
     row.uedg = station.u;
+    row.uinv = station.u;
     row.theta = station.theta;
     row.dstr = station.delta_star;
     row.ctau = station.ctau;
@@ -760,7 +965,6 @@ fn update_row_from_march_station(row: &mut CanonicalBlRow, station: &BlStation) 
 #[derive(Debug, Clone)]
 struct SurfaceGeometrySeed {
     rows: Vec<CanonicalBlRow>,
-    ue_inv: Vec<f64>,
 }
 
 fn build_surface_geometry(
@@ -774,7 +978,7 @@ fn build_surface_geometry(
     is_upper: bool,
     re: f64,
 ) -> SurfaceGeometrySeed {
-    let (arc, x, _y, ue_inv) = extract_surface_xfoil(
+    let (arc, x, y, ue_inv) = extract_surface_xfoil(
         ist,
         sst,
         ue_stag,
@@ -792,8 +996,10 @@ fn build_surface_geometry(
     let mut stag_row = CanonicalBlRow::from_station(&BlStation::stagnation(seed_x, seed_ue, re));
     stag_row.x = arc[0];
     stag_row.x_coord = x[0];
+    stag_row.y_coord = y[0];
     stag_row.panel_idx = usize::MAX;
     stag_row.uedg = 0.0;
+    stag_row.uinv = 0.0;
     stag_row.mass = 0.0;
     stag_row.is_wake = false;
     rows.push(stag_row);
@@ -802,8 +1008,10 @@ fn build_surface_geometry(
         let mut row = CanonicalBlRow::default();
         row.x = arc[i];
         row.x_coord = x[i];
+        row.y_coord = y[i];
         row.panel_idx = surface_panel_idx(ist, panel_x.len(), is_upper, i);
         row.uedg = ue_inv[i].abs();
+        row.uinv = ue_inv[i].abs();
         row.theta = 0.001;
         row.dstr = 0.002;
         row.mass = row.uedg * row.dstr;
@@ -822,7 +1030,7 @@ fn build_surface_geometry(
         rows.push(row);
     }
 
-    SurfaceGeometrySeed { rows, ue_inv }
+    SurfaceGeometrySeed { rows }
 }
 
 fn surface_panel_idx(
@@ -850,6 +1058,8 @@ fn copy_row_state(dst: &mut CanonicalBlRow, src: &CanonicalBlRow) {
     dst.ctau = src.ctau;
     dst.ampl = src.ampl;
     dst.uedg = src.uedg;
+    dst.uinv = src.uinv;
+    dst.uinv_a = src.uinv_a;
     dst.h = src.h;
     dst.hk = src.hk;
     dst.hs = src.hs;
@@ -872,6 +1082,7 @@ fn apply_geometry_in_place(dst: &mut [CanonicalBlRow], geom_rows: &[CanonicalBlR
     for (row, geom) in dst.iter_mut().zip(geom_rows.iter()) {
         row.x = geom.x;
         row.x_coord = geom.x_coord;
+        row.y_coord = geom.y_coord;
         row.panel_idx = geom.panel_idx;
         row.is_wake = geom.is_wake;
     }
@@ -953,7 +1164,7 @@ mod tests {
         station.u = u;
         station.theta = 0.01 + x;
         station.delta_star = 0.02 + x;
-        station.mass_defect = station.u * station.delta_star;
+        station.refresh_mass_defect();
         station
     }
 

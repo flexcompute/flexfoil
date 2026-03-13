@@ -8,8 +8,8 @@
 //! - TESYS: xbl.f lines 236-276 (TE system setup)
 //! - Wake marching: xbl.f lines 607-927 (same as MRCHUE but with wake flag)
 
-use crate::solve::{invert_3x3, multiply_3x3_vec};
-use rustfoil_bl::equations::{bldif, blvar, FlowType};
+use crate::march::newton_solve_station_transition;
+use rustfoil_bl::equations::{blvar, FlowType};
 use rustfoil_bl::state::BlStation;
 
 /// Combine upper and lower trailing edge stations into wake initial condition.
@@ -32,15 +32,17 @@ use rustfoil_bl::state::BlStation;
 /// DTE = DSTR(IBLTE(1),1) + DSTR(IBLTE(2),2) + ANTE
 /// CTE = (CTAU(IBLTE(1),1)*THET(IBLTE(1),1) + CTAU(IBLTE(2),2)*THET(IBLTE(2),2)) / TTE
 /// ```
-pub fn combine_te_for_wake(upper_te: &BlStation, lower_te: &BlStation) -> BlStation {
+pub fn combine_te_for_wake(upper_te: &BlStation, lower_te: &BlStation, ante: f64) -> BlStation {
     let mut wake = BlStation::default();
 
     // Momentum thickness adds (conservation of momentum)
     wake.theta = upper_te.theta + lower_te.theta;
 
-    // Displacement thickness adds (both surfaces contribute)
-    // Note: ANTE (base thickness for blunt TE) is not included here
+    // XFOIL stores the wake-gap/base-thickness separately as DW. The wake
+    // displacement thickness carried in the BL state is the net DSTR term
+    // without ANTE; total wake mass defect uses DSTR + DW.
     wake.delta_star = upper_te.delta_star + lower_te.delta_star;
+    wake.dw = ante.max(0.0);
 
     // Shape factor from combined values
     wake.h = if wake.theta > 1e-12 {
@@ -59,8 +61,8 @@ pub fn combine_te_for_wake(upper_te: &BlStation, lower_te: &BlStation) -> BlStat
     // Edge velocity is average (should be similar at TE)
     wake.u = 0.5 * (upper_te.u.abs() + lower_te.u.abs());
 
-    // Mass defect
-    wake.mass_defect = wake.u * wake.delta_star;
+    // XFOIL wake mass uses the total displacement D + DW.
+    wake.mass_defect = wake.u * (wake.delta_star + wake.dw);
 
     // Wake flags
     wake.is_wake = true;
@@ -200,10 +202,11 @@ pub fn march_wake(
     initial: &BlStation,
     wake_x: &[f64],
     wake_ue: &[f64],
+    wake_dw: &[f64],
     re: f64,
     msq: f64,
 ) -> Vec<BlStation> {
-    if wake_x.is_empty() || wake_x.len() != wake_ue.len() {
+    if wake_x.is_empty() || wake_x.len() != wake_ue.len() || wake_x.len() != wake_dw.len() {
         return vec![initial.clone()];
     }
 
@@ -215,9 +218,10 @@ pub fn march_wake(
     for i in 0..wake_x.len() {
         let x_new = wake_x[i];
         let ue_new = wake_ue[i].abs().max(0.01);
+        let dw_new = wake_dw[i].max(0.0);
         
-        // Solve wake station using simplified direct mode
-        let mut station = solve_wake_station(&prev, x_new, ue_new, re, msq);
+        // Solve wake station through the shared Newton marcher with wake semantics.
+        let mut station = solve_wake_station(&prev, x_new, ue_new, dw_new, re, msq);
         
         // Compute secondary variables
         blvar(&mut station, FlowType::Wake, msq, re);
@@ -239,73 +243,46 @@ fn solve_wake_station(
     prev: &BlStation,
     x_new: f64,
     ue_new: f64,
+    dw_new: f64,
     re: f64,
     msq: f64,
 ) -> BlStation {
-    let mut station = BlStation::default();
-    station.x = x_new;
-    station.x_coord = 1.0;
-    station.u = ue_new;
-    station.is_wake = true;
-    station.is_turbulent = true;
-    station.is_laminar = false;
-
     let ue_prev = prev.u.max(0.01);
     let ue_curr = ue_new.max(0.01);
     let ue_ratio = ue_prev / ue_curr;
 
+    let mut station = prev.clone();
+    station.x = x_new;
+    station.x_coord = 1.0;
+    station.u = ue_new;
+    station.dw = dw_new;
+    station.is_wake = true;
+    station.is_turbulent = true;
+    station.is_laminar = false;
     station.theta = (prev.theta * ue_ratio).max(1e-8);
     station.delta_star = (prev.delta_star * ue_ratio).max(station.theta * 1.00005);
     station.ctau = prev.ctau.max(1e-4);
 
-    let max_iter = 20;
-    let tolerance = 1.0e-10;
-
-    for _ in 0..max_iter {
-        blvar(&mut station, FlowType::Wake, msq, re);
-        let (residuals, jacobian) = bldif(prev, &station, FlowType::Wake, msq, re);
-
-        let a = [
-            [jacobian.vs2[0][0], jacobian.vs2[0][1], jacobian.vs2[0][2]],
-            [jacobian.vs2[1][0], jacobian.vs2[1][1], jacobian.vs2[1][2]],
-            [jacobian.vs2[2][0], jacobian.vs2[2][1], jacobian.vs2[2][2]],
-        ];
-        let rhs = [residuals.res_third, residuals.res_mom, residuals.res_shape];
-        let delta = multiply_3x3_vec(&invert_3x3(&a), &rhs);
-
-        let mut rlx: f64 = 1.0;
-        if delta[0] < 0.0 {
-            rlx = rlx.min(0.5 * station.ctau.max(1.0e-4) / (-delta[0]).max(1.0e-12));
-        }
-        if delta[1] < 0.0 {
-            rlx = rlx.min(0.5 * station.theta.max(1.0e-8) / (-delta[1]).max(1.0e-12));
-        }
-        if delta[2] < 0.0 {
-            rlx = rlx.min(
-                0.5 * station.delta_star.max(1.0e-8) / (-delta[2]).max(1.0e-12),
-            );
-        }
-        rlx = rlx.clamp(0.05, 1.0);
-
-        station.ctau = (station.ctau + rlx * delta[0]).clamp(1.0e-6, 0.25);
-        station.theta = (station.theta + rlx * delta[1]).max(1.0e-8);
-        station.delta_star = (station.delta_star + rlx * delta[2]).max(station.theta * 1.00005);
-
-        let max_rel = [
-            delta[0].abs() / station.ctau.max(1.0e-4),
-            delta[1].abs() / station.theta.max(1.0e-8),
-            delta[2].abs() / station.delta_star.max(1.0e-8),
-        ]
-        .into_iter()
-        .fold(0.0, f64::max);
-
-        if max_rel < tolerance {
-            break;
-        }
-    }
-
-    blvar(&mut station, FlowType::Wake, msq, re);
-    station.mass_defect = station.u * station.delta_star;
+    let (mut station, _converged, _dmax) = newton_solve_station_transition(
+        prev,
+        Some(&station),
+        x_new,
+        ue_new,
+        re,
+        msq,
+        false,
+        true,
+        0.0,
+        25,
+        1.0e-10,
+        3.8,
+        1.51509,
+        None,
+        None,
+        None,
+    );
+    station.dw = dw_new;
+    station.mass_defect = station.u * (station.delta_star + station.dw);
     station
 }
 
@@ -327,12 +304,14 @@ mod tests {
         lower.ctau = 0.025;
         lower.u = 0.93;
 
-        let wake = combine_te_for_wake(&upper, &lower);
+        let wake = combine_te_for_wake(&upper, &lower, 0.001);
 
         // Theta adds
         assert!((wake.theta - 0.0038).abs() < 1e-10);
         // Delta star adds
         assert!((wake.delta_star - 0.009).abs() < 1e-10);
+        // Base thickness is carried in DW, not folded into DSTR
+        assert!((wake.dw - 0.001).abs() < 1e-10);
         // Wake flags
         assert!(wake.is_wake);
         assert!(wake.is_turbulent);

@@ -18,6 +18,7 @@ pub mod dij;
 pub mod global_newton;
 pub mod march;
 pub mod newton;
+pub mod newton_state;
 pub mod solve;
 pub mod stmove;
 pub mod update;

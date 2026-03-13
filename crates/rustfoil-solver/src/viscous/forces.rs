@@ -122,17 +122,19 @@ pub fn compute_forces_from_canonical_state(
     let lower_wake: Vec<&CanonicalBlRow> = state.lower_rows.iter().filter(|row| row.is_wake).collect();
     let te_extrapolated_cd = compute_cd_from_te_rows(&state.upper_rows, &state.lower_rows);
     let cd_total = if !lower_wake.is_empty() {
-        let cd_wake = compute_cd_from_wake_rows(&lower_wake, cd_friction);
-        let te_floor = te_extrapolated_cd.max(cd_friction).max(1.0e-6);
-        if cd_wake.is_finite() && cd_wake > 0.0 && cd_wake <= 2.0 * te_floor {
+        let cd_wake = compute_cd_from_wake_rows(&lower_wake);
+        if cd_wake.is_finite() && cd_wake > 0.0 {
             cd_wake
         } else {
-            te_floor
+            te_extrapolated_cd.max(1.0e-6)
         }
     } else {
-        te_extrapolated_cd
+        te_extrapolated_cd.max(1.0e-6)
     };
-    let cd = cd_total.max(cd_friction);
+    // Match XFOIL CDCALC: the wake/TE total drag can be lower than the
+    // integrated skin-friction contribution, which yields a negative form-drag
+    // component at low alpha. Do not floor total CD to CDf here.
+    let cd = cd_total;
     let cd_pressure = cd - cd_friction;
 
     if is_debug_active() {
@@ -378,11 +380,10 @@ pub fn compute_forces_two_surfaces(
 
     let cd_total = if !lower_wake.is_empty() {
         let cd_wake = compute_cd_from_wake(&lower_wake, cd_friction);
-        let te_floor = te_extrapolated_cd.max(cd_friction).max(1.0e-6);
-        if cd_wake.is_finite() && cd_wake > 0.0 && cd_wake <= 2.0 * te_floor {
+        if cd_wake.is_finite() && cd_wake > 0.0 {
             cd_wake
         } else {
-            te_floor
+            te_extrapolated_cd.max(cd_friction).max(1.0e-6)
         }
     } else {
         te_extrapolated_cd
@@ -688,8 +689,10 @@ fn compute_cd_from_te_rows(upper_rows: &[CanonicalBlRow], lower_rows: &[Canonica
 /// # Returns
 /// Pressure drag coefficient.
 pub fn squire_young_drag(theta: f64, ue: f64, h: f64) -> f64 {
-    let h_clamped = h.clamp(1.0, 4.0);
-    let exponent = (5.0 + h_clamped) / 2.0;
+    if !theta.is_finite() || !ue.is_finite() || !h.is_finite() || theta <= 0.0 {
+        return 0.0;
+    }
+    let exponent = (5.0 + h) / 2.0;
     2.0 * theta * ue.abs().powf(exponent)
 }
 
@@ -735,23 +738,18 @@ pub fn compute_cd_from_wake(wake_stations: &[BlStation], cd_friction: f64) -> f6
     if wake_stations.is_empty() {
         return cd_friction;
     }
-    
-    let far_wake = wake_stations
-        .iter()
-        .rev()
-        .find(|s| s.theta > 1e-10 && s.u > 0.01 && s.h.is_finite())
-        .unwrap_or_else(|| wake_stations.last().unwrap());
-    
+
+    let far_wake = wake_stations.last().unwrap();
     let theta_wake = far_wake.theta;
-    let ue_wake = far_wake.u.abs().max(0.01);
-    // XFOIL CDCALC uses SHWAKE = DSTR/THET directly (not Hk)
+    let ue_wake = far_wake.u.abs();
+    // XFOIL CDCALC uses SHWAKE = DSTR/THET at the last lower wake row,
+    // where DSTR is the total wake displacement thickness.
     let h_wake = if far_wake.theta > 1e-12 {
-        let h_raw = far_wake.delta_star / far_wake.theta;
-        if h_raw > 0.5 && h_raw < 5.0 { h_raw } else { 1.04 }
+        (far_wake.delta_star + far_wake.dw.max(0.0)) / far_wake.theta
     } else {
-        1.04
+        0.0
     };
-    
+
     let mut cd_total = squire_young_drag(theta_wake, ue_wake, h_wake);
     cd_total = cd_total.max(cd_friction);
     
@@ -764,28 +762,22 @@ pub fn compute_cd_from_wake(wake_stations: &[BlStation], cd_friction: f64) -> f6
     cd_total
 }
 
-fn compute_cd_from_wake_rows(wake_rows: &[&CanonicalBlRow], cd_friction: f64) -> f64 {
+fn compute_cd_from_wake_rows(wake_rows: &[&CanonicalBlRow]) -> f64 {
     if wake_rows.is_empty() {
-        return cd_friction;
+        return 0.0;
     }
 
-    let far_wake = wake_rows
-        .iter()
-        .rev()
-        .copied()
-        .find(|row| row.theta > 1.0e-10 && row.uedg > 0.01 && row.h.is_finite())
-        .unwrap_or_else(|| *wake_rows.last().expect("non-empty wake rows"));
+    let far_wake = *wake_rows.last().expect("non-empty wake rows");
 
     let theta_wake = far_wake.theta;
-    let ue_wake = far_wake.uedg.abs().max(0.01);
+    let ue_wake = far_wake.uedg.abs();
     let h_wake = if far_wake.theta > 1.0e-12 {
-        let h_raw = far_wake.dstr / far_wake.theta;
-        if h_raw > 0.5 && h_raw < 5.0 { h_raw } else { 1.04 }
+        (far_wake.dstr + far_wake.dw.max(0.0)) / far_wake.theta
     } else {
-        1.04
+        0.0
     };
 
-    squire_young_drag(theta_wake, ue_wake, h_wake).max(cd_friction)
+    squire_young_drag(theta_wake, ue_wake, h_wake)
 }
 
 /// Compute CL and CM from coupled edge velocities.
@@ -1178,6 +1170,98 @@ mod tests {
 
         assert!((forces.cd - expected_cd).abs() < 1e-10);
         assert!(forces.cd_pressure >= 0.0);
+    }
+
+    #[test]
+    fn test_compute_forces_from_canonical_state_allows_negative_pressure_drag() {
+        let mut upper = create_test_stations(8);
+        let mut lower = create_test_stations(8);
+
+        for station in upper.iter_mut().chain(lower.iter_mut()) {
+            station.cf = 0.01;
+            station.u = 1.0;
+            station.is_wake = false;
+            station.is_laminar = true;
+            station.is_turbulent = false;
+        }
+
+        for station in lower.iter_mut().skip(6) {
+            station.is_wake = true;
+            station.is_laminar = false;
+            station.is_turbulent = true;
+            station.cf = 0.0;
+            station.theta = 0.001;
+            station.delta_star = 0.00105;
+            station.h = station.delta_star / station.theta;
+            station.u = 0.99;
+        }
+
+        let state = XfoilLikeViscousState::from_station_views(&upper, &lower, 4);
+        let forces = compute_forces_from_canonical_state(
+            &state,
+            &[0.0, 1.0, 1.0, 0.0],
+            &[0.0, 0.0, 0.1, 0.1],
+            0.0,
+            &ViscousSolverConfig::default(),
+        );
+
+        assert!(forces.cd_friction > 0.0);
+        assert!(forces.cd > 0.0);
+        assert!(forces.cd < forces.cd_friction);
+        assert!(forces.cd_pressure < 0.0);
+    }
+
+    #[test]
+    fn test_compute_forces_from_canonical_state_keeps_large_valid_wake_drag() {
+        let mut upper = create_test_stations(8);
+        let mut lower = create_test_stations(8);
+
+        for station in upper.iter_mut().chain(lower.iter_mut()) {
+            station.u = 1.0;
+            station.cf = 0.001;
+            station.is_wake = false;
+        }
+
+        // Keep the airfoil TE estimate modest.
+        if let Some(upper_te) = upper.get_mut(7) {
+            upper_te.theta = 0.002;
+            upper_te.delta_star = 0.004;
+            upper_te.h = upper_te.delta_star / upper_te.theta;
+        }
+        if let Some(lower_te) = lower.get_mut(5) {
+            lower_te.theta = 0.0015;
+            lower_te.delta_star = 0.003;
+            lower_te.h = lower_te.delta_star / lower_te.theta;
+        }
+
+        // Make the far wake materially thicker than the TE estimate so the
+        // regression would fail if we reintroduce the old clipping heuristic.
+        for (idx, station) in lower.iter_mut().enumerate().skip(6) {
+            station.is_wake = true;
+            station.is_laminar = false;
+            station.is_turbulent = true;
+            station.cf = 0.0;
+            station.theta = if idx == 6 { 0.02 } else { 0.03 };
+            station.delta_star = station.theta * 1.15;
+            station.h = station.delta_star / station.theta;
+            station.u = 0.97;
+        }
+
+        let state = XfoilLikeViscousState::from_station_views(&upper, &lower, 4);
+        let forces = compute_forces_from_canonical_state(
+            &state,
+            &[0.0, 1.0, 1.0, 0.0],
+            &[0.0, 0.0, 0.1, 0.1],
+            0.0,
+            &ViscousSolverConfig::default(),
+        );
+
+        let lower_wake: Vec<_> = state.lower_rows.iter().filter(|row| row.is_wake).collect();
+        let expected_cd = compute_cd_from_wake_rows(&lower_wake);
+        let te_cd = compute_cd_from_te_rows(&state.upper_rows, &state.lower_rows);
+
+        assert!(expected_cd > 2.0 * te_cd);
+        assert!((forces.cd - expected_cd).abs() < 1e-10);
     }
 
     #[test]

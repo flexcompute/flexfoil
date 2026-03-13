@@ -61,6 +61,9 @@ pub struct ViscousSetup {
 
     /// Wake arc-length coordinates measured from the airfoil trailing edge.
     pub wake_s: Vec<f64>,
+
+    /// Inviscid wake-edge velocities used to seed the wake BL march.
+    pub wake_ue: Vec<f64>,
 }
 
 impl ViscousSetup {
@@ -96,6 +99,7 @@ impl ViscousSetup {
             wake_x: Vec::new(),
             wake_y: Vec::new(),
             wake_s: Vec::new(),
+            wake_ue: Vec::new(),
         }
     }
 
@@ -699,7 +703,11 @@ pub fn initialize_surface_stations_with_panel_idx(
 // =============================================================================
 
 use rustfoil_core::Body;
-use rustfoil_inviscid::{FlowConditions as InviscidFlowConditions, InviscidSolution, InviscidSolver};
+use rustfoil_inviscid::influence::psilin_with_dqdm;
+use rustfoil_inviscid::system::{compute_wake_count, setexp};
+use rustfoil_inviscid::{
+    FactorizedSystem, FlowConditions as InviscidFlowConditions, InviscidSolution, InviscidSolver,
+};
 
 /// Error type for setup operations
 #[derive(Debug)]
@@ -869,12 +877,21 @@ fn initialize_canonical_state(
     if n_wake_panels > 0 {
         let upper_te = upper_stations.last().cloned().unwrap_or_default();
         let lower_te = lower_stations.last().cloned().unwrap_or_default();
+        let ante = if upper_te.panel_idx < node_x.len() && lower_te.panel_idx < node_x.len() {
+            let dx = node_x[upper_te.panel_idx] - node_x[lower_te.panel_idx];
+            let dy = node_y[upper_te.panel_idx] - node_y[lower_te.panel_idx];
+            (dx * dx + dy * dy).sqrt()
+        } else {
+            0.0
+        };
         let wake_stations = initialize_wake_bl_stations(
             &upper_te,
             &lower_te,
+            ante,
             n_airfoil_panels,
             &setup.wake_x,
             &setup.wake_s,
+            &setup.wake_ue,
             reynolds,
             msq,
         );
@@ -964,14 +981,11 @@ pub fn setup_from_body(body: &Body, alpha_deg: f64) -> Result<ViscousSetupResult
     // Find stagnation using XFOIL's interpolation method
     let (ist, sst, _ue_stag) = interpolate_stagnation(&ue_inviscid, &arc_lengths);
     
-    // Build DIJ matrix with wake panels (XFOIL-style, wake length = 1 chord)
-    let (wake_x, wake_y) = factorized.build_wake_coordinates(1.0);
-    let wake_s = compute_wake_arc_lengths(
-        0.5 * (node_x.first().copied().unwrap_or(1.0) + node_x.last().copied().unwrap_or(1.0)),
-        0.5 * (node_y.first().copied().unwrap_or(0.0) + node_y.last().copied().unwrap_or(0.0)),
-        &wake_x,
-        &wake_y,
-    );
+    // Build wake geometry and wake-edge velocity from the inviscid field,
+    // matching XFOIL's XYWAKE/QWCALC ownership more closely than the older
+    // straight-wake + heuristic-Ue setup path.
+    let (wake_x, wake_y, wake_s, wake_ue) =
+        build_xfoil_wake_geometry_and_ue(&factorized, &inv_solution.gamma, flow.alpha);
     let dij = factorized.build_dij_with_wake(&wake_x, &wake_y)?;
     
     // Emit FULLDIJ debug event if debug collection is active
@@ -1013,6 +1027,7 @@ pub fn setup_from_body(body: &Body, alpha_deg: f64) -> Result<ViscousSetupResult
         wake_x,
         wake_y,
         wake_s,
+        wake_ue,
     };
     
     Ok(ViscousSetupResult {
@@ -1056,14 +1071,11 @@ pub fn setup_from_coords(coords: &[(f64, f64)], alpha_deg: f64) -> Result<Viscou
     let arc_lengths = compute_arc_lengths(&node_x, &node_y);
     let (ist, sst, _) = interpolate_stagnation(&ue_inviscid, &arc_lengths);
     
-    // Build DIJ matrix with wake panels (XFOIL-style, wake length = 1 chord)
-    let (wake_x, wake_y) = factorized.build_wake_coordinates(1.0);
-    let wake_s = compute_wake_arc_lengths(
-        0.5 * (node_x.first().copied().unwrap_or(1.0) + node_x.last().copied().unwrap_or(1.0)),
-        0.5 * (node_y.first().copied().unwrap_or(0.0) + node_y.last().copied().unwrap_or(0.0)),
-        &wake_x,
-        &wake_y,
-    );
+    // Build wake geometry and wake-edge velocity from the inviscid field,
+    // matching XFOIL's XYWAKE/QWCALC ownership more closely than the older
+    // straight-wake + heuristic-Ue setup path.
+    let (wake_x, wake_y, wake_s, wake_ue) =
+        build_xfoil_wake_geometry_and_ue(&factorized, &inv_solution.gamma, flow.alpha);
     let dij = factorized.build_dij_with_wake(&wake_x, &wake_y)?;
     
     // Emit FULLDIJ debug event if debug collection is active
@@ -1104,6 +1116,7 @@ pub fn setup_from_coords(coords: &[(f64, f64)], alpha_deg: f64) -> Result<Viscou
         wake_x,
         wake_y,
         wake_s,
+        wake_ue,
     };
     
     Ok(ViscousSetupResult {
@@ -1141,37 +1154,47 @@ pub fn setup_from_coords(coords: &[(f64, f64)], alpha_deg: f64) -> Result<Viscou
 pub fn initialize_wake_bl_stations(
     upper_te: &BlStation,
     lower_te: &BlStation,
+    ante: f64,
     n_airfoil_panels: usize,
     inviscid_wake_x: &[f64],
     inviscid_wake_s: &[f64],
+    inviscid_wake_ue: &[f64],
     re: f64,
     msq: f64,
 ) -> Vec<BlStation> {
-    let n_wake_panels = inviscid_wake_x.len().min(inviscid_wake_s.len());
+    let n_wake_panels = inviscid_wake_x
+        .len()
+        .min(inviscid_wake_s.len())
+        .min(inviscid_wake_ue.len());
     if n_wake_panels == 0 {
         return Vec::new();
     }
     
     // Combine upper and lower TE for wake initial condition (TESYS) and place
     // the first wake row on the same inviscid wake node used by the DIJ matrix.
-    use rustfoil_coupling::wake::{combine_te_for_wake, march_wake, wake_edge_velocity};
+    use rustfoil_coupling::wake::{combine_te_for_wake, march_wake};
     
-    let mut wake_initial = combine_te_for_wake(upper_te, lower_te);
-    let wake_ue: Vec<f64> = inviscid_wake_x
-        .iter()
-        .take(n_wake_panels)
-        .map(|&x_coord| wake_edge_velocity(x_coord, wake_initial.u))
-        .collect();
-    wake_initial.x = inviscid_wake_s[0];
+    let mut wake_initial = combine_te_for_wake(upper_te, lower_te, ante);
+    let wake_arc_offset = lower_te.x;
+    wake_initial.x = wake_arc_offset + inviscid_wake_s[0];
     wake_initial.x_coord = inviscid_wake_x[0];
-    wake_initial.u = wake_ue[0];
-    wake_initial.mass_defect = wake_initial.u * wake_initial.delta_star;
+    wake_initial.u = inviscid_wake_ue[0].abs().max(0.01);
+    wake_initial.dw = wake_gap_from_te_distance(ante, inviscid_wake_s[0]);
+    wake_initial.mass_defect = wake_initial.u * (wake_initial.delta_star + wake_initial.dw);
     
     let mut wake_stations = if n_wake_panels > 1 {
+        let wake_dw: Vec<f64> = inviscid_wake_s[1..n_wake_panels]
+            .iter()
+            .map(|s| wake_gap_from_te_distance(ante, *s))
+            .collect();
         march_wake(
             &wake_initial,
-            &inviscid_wake_s[1..n_wake_panels],
-            &wake_ue[1..n_wake_panels],
+            &inviscid_wake_s[1..n_wake_panels]
+                .iter()
+                .map(|s| wake_arc_offset + *s)
+                .collect::<Vec<_>>(),
+            &inviscid_wake_ue[1..n_wake_panels],
+            &wake_dw,
             re,
             msq,
         )
@@ -1186,7 +1209,14 @@ pub fn initialize_wake_bl_stations(
         station.is_wake = true;
         station.is_turbulent = true;
         station.is_laminar = false;
-        station.x = inviscid_wake_s.get(i).copied().unwrap_or(station.x);
+        station.dw = inviscid_wake_s
+            .get(i)
+            .map(|s| wake_gap_from_te_distance(ante, *s))
+            .unwrap_or(station.dw);
+        station.x = inviscid_wake_s
+            .get(i)
+            .map(|s| wake_arc_offset + *s)
+            .unwrap_or(station.x);
         station.x_coord = inviscid_wake_x.get(i).copied().unwrap_or(station.x_coord);
     }
     
@@ -1198,6 +1228,160 @@ pub fn initialize_wake_bl_stations(
     }
     
     wake_stations
+}
+
+fn wake_gap_from_te_distance(ante: f64, wake_s_from_te: f64) -> f64 {
+    if ante <= 1.0e-10 {
+        return 0.0;
+    }
+
+    let telrat = 2.5_f64;
+    let dwdxte = 0.0_f64;
+    let aa = 3.0 + telrat * dwdxte;
+    let bb = -2.0 - telrat * dwdxte;
+    let zn = 1.0 - wake_s_from_te / (telrat * ante);
+
+    if zn >= 0.0 {
+        ante * (aa + bb * zn) * zn * zn
+    } else {
+        0.0
+    }
+}
+
+fn build_xfoil_wake_geometry_and_ue(
+    factorized: &FactorizedSystem,
+    _gamma: &[f64],
+    alpha_rad: f64,
+) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+    let geom = factorized.geometry();
+    let n = geom.n;
+    if n < 2 {
+        return (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    }
+
+    let wake_length = 1.0;
+    let n_wake = compute_wake_count(n, wake_length);
+    if n_wake == 0 {
+        return (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    }
+
+    let ds1 = 0.5 * ((geom.s[1] - geom.s[0]) + (geom.s[n - 1] - geom.s[n - 2]));
+    let snew = setexp(ds1, wake_length * geom.chord, n_wake);
+    let xte = 0.5 * (geom.x[0] + geom.x[n - 1]);
+    let yte = 0.5 * (geom.y[0] + geom.y[n - 1]);
+
+    let sx = 0.5 * (geom.yp[n - 1] - geom.yp[0]);
+    let sy = 0.5 * (geom.xp[0] - geom.xp[n - 1]);
+    let smod = (sx * sx + sy * sy).sqrt().max(1.0e-12);
+    let nx_init = sx / smod;
+    let ny_init = sy / smod;
+
+    let cosa = alpha_rad.cos();
+    let sina = alpha_rad.sin();
+    let (surface_qinvu_0, surface_qinvu_90) = factorized.surface_qinvu_basis();
+    let mut gam = (0..n)
+        .map(|i| cosa * factorized.gamu_0[i] + sina * factorized.gamu_90[i])
+        .collect::<Vec<_>>();
+    if let Some(last) = gam.last_mut() {
+        *last = 0.0;
+    }
+
+    let mut wake_x = Vec::with_capacity(n_wake);
+    let mut wake_y = Vec::with_capacity(n_wake);
+    let mut wake_nx = vec![0.0; n_wake];
+    let mut wake_ny = vec![0.0; n_wake];
+
+    wake_x.push(xte - 0.0001 * ny_init);
+    wake_y.push(yte + 0.0001 * nx_init);
+    wake_nx[0] = nx_init;
+    wake_ny[0] = ny_init;
+
+    let (psi_x0, psi_y0) =
+        compute_psi_gradient_at_wake_point(geom, n, wake_x[0], wake_y[0], &gam, cosa, sina);
+    let grad_mag0 = (psi_x0 * psi_x0 + psi_y0 * psi_y0).sqrt().max(1.0e-12);
+    let mut nx_next = -psi_x0 / grad_mag0;
+    let mut ny_next = -psi_y0 / grad_mag0;
+    if n_wake > 1 {
+        wake_nx[1] = nx_next;
+        wake_ny[1] = ny_next;
+    }
+
+    for i in 1..n_wake {
+        let ds = snew[i] - snew[i - 1];
+        let xi = wake_x[i - 1] - ds * ny_next;
+        let yi = wake_y[i - 1] + ds * nx_next;
+        wake_x.push(xi);
+        wake_y.push(yi);
+
+        if i < n_wake - 1 {
+            let (psi_x, psi_y) =
+                compute_psi_gradient_at_wake_point(geom, n + i, xi, yi, &gam, cosa, sina);
+            let grad_mag = (psi_x * psi_x + psi_y * psi_y).sqrt().max(1.0e-12);
+            nx_next = -psi_x / grad_mag;
+            ny_next = -psi_y / grad_mag;
+            wake_nx[i + 1] = nx_next;
+            wake_ny[i + 1] = ny_next;
+        }
+    }
+
+    let wake_s = snew.clone();
+    let mut wake_qinvu_0 = vec![0.0; n_wake];
+    let mut wake_qinvu_90 = vec![0.0; n_wake];
+    wake_qinvu_0[0] = surface_qinvu_0[n - 1];
+    wake_qinvu_90[0] = surface_qinvu_90[n - 1];
+    for i in 1..n_wake {
+        let (psi_x_0, psi_y_0) = compute_psi_gradient_at_wake_point(
+            geom,
+            n + i,
+            wake_x[i],
+            wake_y[i],
+            &factorized.gamu_0,
+            1.0,
+            0.0,
+        );
+        let (psi_x_90, psi_y_90) = compute_psi_gradient_at_wake_point(
+            geom,
+            n + i,
+            wake_x[i],
+            wake_y[i],
+            &factorized.gamu_90,
+            0.0,
+            1.0,
+        );
+        wake_qinvu_0[i] = psi_x_0 * wake_nx[i] + psi_y_0 * wake_ny[i];
+        wake_qinvu_90[i] = psi_x_90 * wake_nx[i] + psi_y_90 * wake_ny[i];
+    }
+    let wake_ue = wake_qinvu_0
+        .iter()
+        .zip(wake_qinvu_90.iter())
+        .map(|(&q0, &q90)| (cosa * q0 + sina * q90).abs())
+        .collect();
+
+    (wake_x, wake_y, wake_s, wake_ue)
+}
+
+fn compute_psi_gradient_at_wake_point(
+    geom: &rustfoil_inviscid::geometry::AirfoilGeometry,
+    point_index: usize,
+    x: f64,
+    y: f64,
+    gamma: &[f64],
+    cosa: f64,
+    sina: f64,
+) -> (f64, f64) {
+    let result_x = psilin_with_dqdm(geom, point_index, x, y, 1.0, 0.0);
+    let result_y = psilin_with_dqdm(geom, point_index, x, y, 0.0, 1.0);
+
+    let mut psi_x = -sina;
+    let mut psi_y = cosa;
+    for (&dqdg_x, &g) in result_x.dqdg.iter().zip(gamma.iter()) {
+        psi_x += dqdg_x * g;
+    }
+    for (&dqdg_y, &g) in result_y.dqdg.iter().zip(gamma.iter()) {
+        psi_y += dqdg_y * g;
+    }
+
+    (psi_x, psi_y)
 }
 
 fn compute_wake_arc_lengths(te_x: f64, te_y: f64, wake_x: &[f64], wake_y: &[f64]) -> Vec<f64> {
@@ -1485,6 +1669,7 @@ mod tests {
             wake_x: vec![1.05, 1.25],
             wake_y: vec![-0.01, -0.02],
             wake_s: compute_wake_arc_lengths(1.0, 0.0, &[1.05, 1.25], &[-0.01, -0.02]),
+            wake_ue: vec![0.8, 0.9],
         };
 
         let state = initialize_canonical_state(

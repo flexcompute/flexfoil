@@ -1,6 +1,7 @@
 use rustfoil_bl::BlStation;
 
 use crate::canonical_state::rows_to_stations;
+use crate::state::XfoilBlRow;
 use crate::state::XfoilState;
 use rustfoil_solver::viscous::config::ViscousSolverConfig;
 use rustfoil_solver::viscous::forces::compute_forces_from_canonical_state;
@@ -44,10 +45,22 @@ pub fn update_force_state(state: &mut XfoilState, mach: f64, reynolds: f64) {
     let (cl, cm) =
         compute_panel_forces_from_gamma(&state.panel_x, &state.panel_y, &state.gam, state.alpha_rad);
     let msq = mach * mach;
-    let upper_len = state.nbl_upper.min(state.upper_rows.len());
-    let lower_len = state.nbl_lower.min(state.lower_rows.len());
-    let upper_stations = rows_to_stations(&state.upper_rows[..upper_len], msq, reynolds);
-    let lower_stations = rows_to_stations(&state.lower_rows[..lower_len], msq, reynolds);
+    let upper_len = active_force_len(&state.upper_rows, state.nbl_upper);
+    let lower_len = active_force_len(&state.lower_rows, state.nbl_lower);
+    let upper_stations = rows_to_stations(
+        &state.upper_rows[..upper_len],
+        state.iblte_upper,
+        state.itran_upper,
+        msq,
+        reynolds,
+    );
+    let lower_stations = rows_to_stations(
+        &state.lower_rows[..lower_len],
+        state.iblte_lower,
+        state.itran_lower,
+        msq,
+        reynolds,
+    );
     let canonical_state = canonical_force_state(state, &upper_stations, &lower_stations);
     let drag_forces = compute_forces_from_canonical_state(
         &canonical_state,
@@ -62,6 +75,22 @@ pub fn update_force_state(state: &mut XfoilState, mach: f64, reynolds: f64) {
     state.cdf = drag_forces.cd_friction;
     state.cdp = drag_forces.cd_pressure;
     state.cd = drag_forces.cd;
+}
+
+fn active_force_len(rows: &[XfoilBlRow], fallback_len: usize) -> usize {
+    let fallback_len = fallback_len.min(rows.len());
+    let discovered_len = rows
+        .iter()
+        .rposition(|row| {
+            row.is_wake
+                || row.panel_idx != 0
+                || row.theta > 1.0e-12
+                || row.dstr > 1.0e-12
+                || row.uedg.abs() > 1.0e-12
+        })
+        .map(|idx| idx + 1)
+        .unwrap_or(fallback_len);
+    discovered_len.max(fallback_len)
 }
 
 fn canonical_force_state(
@@ -81,8 +110,11 @@ fn canonical_row_from_station(station: &BlStation) -> CanonicalBlRow {
     CanonicalBlRow {
         x: station.x,
         x_coord: station.x_coord,
+        y_coord: 0.0,
         panel_idx: station.panel_idx,
         uedg: station.u,
+        uinv: station.u,
+        uinv_a: 0.0,
         theta: station.theta,
         dstr: station.delta_star,
         ctau_or_ampl: if station.is_laminar && !station.is_turbulent {
