@@ -604,8 +604,20 @@ C     Enhanced version includes mass_defect, H, and Hk
       INTEGER LUDBG, IDBGCALL, IDBGITER
 C
       IF(.NOT.LDBG) RETURN
-C---- Limit output to first 30 stations per side (extended from 15)
-      IF(IBL.GT.30) RETURN
+C---- Keep default low-index coverage, but include stalled-case bands.
+      IF(IDBGITER.GE.6 .AND. IDBGITER.LE.10) THEN
+        IF(.NOT.(
+     &      IBL.LE.30 .OR.
+     &      (ISIDE.EQ.2 .AND. IBL.GE.54 .AND. IBL.LE.60) .OR.
+     &      (ISIDE.EQ.2 .AND. IBL.GE.2  .AND. IBL.LE.8 ) .OR.
+     &      (ISIDE.EQ.1 .AND. IBL.GE.18 .AND. IBL.LE.24) .OR.
+     &      (ISIDE.EQ.1 .AND. IBL.GE.26 .AND. IBL.LE.32) .OR.
+     &      (ISIDE.EQ.1 .AND. IBL.GE.98 .AND. IBL.LE.106)
+     &    )) RETURN
+      ELSE
+C---- Limit output to first 30 stations per side outside targeted window
+        IF(IBL.GT.30) RETURN
+      ENDIF
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -1181,8 +1193,8 @@ C     VDEL(3,2,*) - RHS (col 1) and alpha sensitivity (col 2)
 C
       IF(.NOT.LDBG) RETURN
 C
-C---- Limit output to first 30 stations for large systems
-      NOUT = MIN(NSYS, 30)
+C---- Emit the full pre-solve system for direct parity comparison
+      NOUT = NSYS
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -1324,8 +1336,8 @@ C     VDEL(1:3,1,1:NSYS) contains the solution [dCtau, dTheta, dMass]
 C
       IF(.NOT.LDBG) RETURN
 C
-C---- Limit output to first 30 stations for large systems
-      NOUT = MIN(NSYS, 30)
+C---- Emit the full solved system for direct parity comparison
+      NOUT = NSYS
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -1735,6 +1747,44 @@ C
       ELSE
         WRITE(LUDBG,'(A)') '  "forced": false'
       ENDIF
+      WRITE(LUDBG,'(A)') '}'
+      RETURN
+      END
+
+
+C---- Dump STMOVE lower-row state around stagnation shifts
+      SUBROUTINE DBGSTMOVEROW(PHASE, ISTOLD, ISTNEW, ISIDE, IBL)
+      CHARACTER*(*) PHASE
+      INTEGER ISTOLD, ISTNEW, ISIDE, IBL
+      INCLUDE 'XFOIL.INC'
+      COMMON /XDEBUG/ LDBG, LUDBG, IDBGCALL, IDBGITER
+      LOGICAL LDBG
+      INTEGER LUDBG, IDBGCALL, IDBGITER
+      INTEGER IP
+C
+      IF(.NOT.LDBG) RETURN
+      IF(IDBGITER.LT.8 .OR. IDBGITER.GT.10) RETURN
+      IF(ISIDE.NE.2) RETURN
+      IF(IBL.LT.2 .OR. IBL.GT.6) RETURN
+      IP = IPAN(IBL,ISIDE)
+C
+      CALL DBGCOMMA()
+      WRITE(LUDBG,'(A)') '{'
+      WRITE(LUDBG,'(A,I6,A)') '  "call_id": ', IDBGCALL, ','
+      WRITE(LUDBG,'(A)') '  "subroutine": "STMOVE_ROW",'
+      WRITE(LUDBG,'(A,I4,A)') '  "iteration": ', IDBGITER, ','
+      WRITE(LUDBG,'(A,A,A)') '  "phase": "', TRIM(PHASE), '",'
+      WRITE(LUDBG,'(A,I4,A)') '  "IST_old": ', ISTOLD, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "IST_new": ', ISTNEW, ','
+      WRITE(LUDBG,'(A,I2,A)') '  "side": ', ISIDE, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "ibl": ', IBL, ','
+      WRITE(LUDBG,'(A,I4,A)') '  "panel": ', IP, ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "xssi": ', XSSI(IBL,ISIDE), ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "uinv": ', UINV(IBL,ISIDE), ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "uedg": ', UEDG(IBL,ISIDE), ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "theta": ', THET(IBL,ISIDE), ','
+      WRITE(LUDBG,'(A,E17.10,A)') '  "dstr": ', DSTR(IBL,ISIDE), ','
+      WRITE(LUDBG,'(A,E17.10)') '  "mass": ', MASS(IBL,ISIDE)
       WRITE(LUDBG,'(A)') '}'
       RETURN
       END
@@ -3752,10 +3802,15 @@ C     This helps identify where the 2x factor discrepancy originates
 C
       IF(.NOT.LDBG) RETURN
       IF(LDBGLOCK) RETURN
-C---- Only log every 10th station (including station 0)
-      IF(MOD(IV,10).NE.0) RETURN
-C---- Only log iterations 1-5 (where we care about the 2x factor)
-      IF(IDBGITER.LT.1 .OR. IDBGITER.GT.5) RETURN
+C---- Log leading-edge rows explicitly, plus every 10th station elsewhere,
+C     and keep the stalled upper-tail band.
+      IF(.NOT.(
+     &    IV.LE.3 .OR.
+     &    MOD(IV,10).EQ.0 .OR.
+     &    (IV.GE.98 .AND. IV.LE.106)
+     &  )) RETURN
+C---- Capture later stalled iterations too
+      IF(IDBGITER.LT.1 .OR. IDBGITER.GT.10) RETURN
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -3826,10 +3881,21 @@ C---- DBGUPDATE_NEWTON: Dump update info at each station in Newton loop
       INTEGER LUDBG, IDBGCALL, IDBGITER
 C
       IF(.NOT.LDBG) RETURN
-C---- Only log every 20th station
-      IF(MOD(IBL,20).NE.0) RETURN
-C---- Only log iterations 0-5 and 14-20
-      IF(IDBGITER.GT.5 .AND. IDBGITER.LT.14) RETURN
+C---- Keep broad sparse coverage, but widen the live stalled-case bands.
+      IF(IDBGITER.GE.6 .AND. IDBGITER.LE.10) THEN
+        IF(.NOT.(
+     &      (IS.EQ.2 .AND. IBL.GE.54 .AND. IBL.LE.60) .OR.
+     &      (IS.EQ.2 .AND. IBL.GE.2  .AND. IBL.LE.8 ) .OR.
+     &      (IS.EQ.1 .AND. IBL.GE.18 .AND. IBL.LE.24) .OR.
+     &      (IS.EQ.1 .AND. IBL.GE.26 .AND. IBL.LE.32) .OR.
+     &      (IS.EQ.1 .AND. IBL.GE.98 .AND. IBL.LE.106)
+     &    )) RETURN
+      ELSE
+C---- Only log every 20th station outside the targeted stalled window
+        IF(MOD(IBL,20).NE.0) RETURN
+C---- Only log iterations 0-5 and 14-20 outside the targeted stalled window
+        IF(IDBGITER.GT.5 .AND. IDBGITER.LT.14) RETURN
+      ENDIF
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -4035,10 +4101,14 @@ C---- DBGXIULE: Dump stagnation point coupling terms
       INTEGER LUDBG, IDBGCALL, IDBGITER
 C
       IF(.NOT.LDBG) RETURN
-C---- Only log at a few key stations per iteration (every 20th)
-      IF(MOD(IBL, 20).NE.0) RETURN
-C---- Only log first 3 iterations
-      IF(IDBGITER.GT.3) RETURN
+C---- Log leading-edge stations explicitly, plus every 20th station elsewhere
+      IF(.NOT.(
+     &    IBL.LE.4 .OR.
+     &    MOD(IBL,20).EQ.0 .OR.
+     &    (IS.EQ.1 .AND. IBL.GE.98 .AND. IBL.LE.106)
+     &  )) RETURN
+C---- Capture later stalled iterations too
+      IF(IDBGITER.GT.10) RETURN
 C
       CALL DBGCOMMA()
       WRITE(LUDBG,'(A)') '{'
@@ -4070,10 +4140,14 @@ C---- DBGDUE: Dump DUE values at first few stations
 C
       IF(.NOT.LDBG) RETURN
       IF(LDBGLOCK) RETURN
-C---- Log every 10th station, aligned with RustFoil (ibl=11,21,31... -> RF ibl=10,20,30)
-      IF(MOD(IBL-1,10).NE.0) RETURN
-C---- Only log iterations 1-5
-      IF(IDBGITER.LT.1 .OR. IDBGITER.GT.5) RETURN
+C---- Log leading-edge stations explicitly, plus every 10th station elsewhere
+      IF(.NOT.(
+     &    IBL.LE.4 .OR.
+     &    MOD(IBL-1,10).EQ.0 .OR.
+     &    (IS.EQ.1 .AND. IBL.GE.98 .AND. IBL.LE.106)
+     &  )) RETURN
+C---- Capture later stalled iterations too
+      IF(IDBGITER.LT.1 .OR. IDBGITER.GT.10) RETURN
 C
 C---- Compute mass contribution = USAV - UINV
       MASS_CONTRIB = USAV_VAL - UINV_VAL

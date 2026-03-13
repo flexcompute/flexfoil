@@ -1793,6 +1793,11 @@ C------ move top side BL variables upstream
        ENDIF
 C
 C----- tweak Ue so it's not zero, in case stag. point is right on node
+       IF(ISTOLD.NE.IST) THEN
+        DO 45 IBL=2, MIN(NBL(2),6)
+          CALL DBGSTMOVEROW('after_shift', ISTOLD, IST, 2, IBL)
+   45   CONTINUE
+       ENDIF
        UEPS = 1.0E-7
        DO IS = 1, 2
          DO IBL = 2, NBL(IS)
@@ -1814,6 +1819,12 @@ C---- set new mass array since Ue has been tweaked
   510   CONTINUE
    50 CONTINUE
 C
+      IF(ISTOLD.NE.IST) THEN
+       DO 55 IBL=2, MIN(NBL(2),6)
+         CALL DBGSTMOVEROW('after_mass', ISTOLD, IST, 2, IBL)
+   55  CONTINUE
+      ENDIF
+C
       RETURN
       END
 
@@ -1830,6 +1841,7 @@ C---- Debug common block
 C---- Local arrays to store before state for debug
       REAL UEDG_BEFORE(IVX,2)
       REAL DUI_UPPER1, DUI_LOWER1, DUI_LOWERWAKE1, DUI_CONTRIB
+      REAL DUI_UPPER2L, DUI_LOWER2L, DUI_LOWERWAKE2L
       REAL DUI_UPPER30, DUI_LOWER30, DUI_LOWERWAKE30
       REAL DUI_UPPER31, DUI_LOWER31, DUI_LOWERWAKE31
 C
@@ -1845,6 +1857,9 @@ C
       DUI_UPPER1 = 0.
       DUI_LOWER1 = 0.
       DUI_LOWERWAKE1 = 0.
+      DUI_UPPER2L = 0.
+      DUI_LOWER2L = 0.
+      DUI_LOWERWAKE2L = 0.
       DUI_UPPER30 = 0.
       DUI_LOWER30 = 0.
       DUI_LOWERWAKE30 = 0.
@@ -1869,6 +1884,33 @@ C
                   DUI_LOWER1 = DUI_LOWER1 + DUI_CONTRIB
                 ELSE
                   DUI_LOWERWAKE1 = DUI_LOWERWAKE1 + DUI_CONTRIB
+                ENDIF
+              ENDIF
+              IF(IS.EQ.2 .AND. IBL.EQ.2) THEN
+                IF(JS.EQ.1) THEN
+                  DUI_UPPER2L = DUI_UPPER2L + DUI_CONTRIB
+                  IF(ABS(DUI_CONTRIB).GT.1.0E-5) THEN
+                    WRITE(*,*) '[XFOIL UESET L2 U] ibl=', IBL,
+     &                ' jbl=', JBL, ' panel=', J,
+     &                ' mass=', MASS(JBL,JS),
+     &                ' contrib=', DUI_CONTRIB
+                  ENDIF
+                ELSE IF(JBL.LE.IBLTE(2)) THEN
+                  DUI_LOWER2L = DUI_LOWER2L + DUI_CONTRIB
+                  IF(ABS(DUI_CONTRIB).GT.1.0E-5) THEN
+                    WRITE(*,*) '[XFOIL UESET L2 L] ibl=', IBL,
+     &                ' jbl=', JBL, ' panel=', J,
+     &                ' mass=', MASS(JBL,JS),
+     &                ' contrib=', DUI_CONTRIB
+                  ENDIF
+                ELSE
+                  DUI_LOWERWAKE2L = DUI_LOWERWAKE2L + DUI_CONTRIB
+                  IF(ABS(DUI_CONTRIB).GT.1.0E-5) THEN
+                    WRITE(*,*) '[XFOIL UESET L2 W] ibl=', IBL,
+     &                ' jbl=', JBL, ' panel=', J,
+     &                ' mass=', MASS(JBL,JS),
+     &                ' contrib=', DUI_CONTRIB
+                  ENDIF
                 ENDIF
               ENDIF
               IF(IS.EQ.1 .AND. IBL.EQ.30) THEN
@@ -1919,6 +1961,14 @@ C
      &        ' upper=', DUI_UPPER31,
      &        ' lower=', DUI_LOWER31,
      &        ' wake=', DUI_LOWERWAKE31,
+     &        ' uedg=', UEDG(IBL,IS)
+          ENDIF
+          IF(IS.EQ.2 .AND. IBL.EQ.2) THEN
+            WRITE(*,*) '[XFOIL UESET SPLIT L2] ibl=', IBL,
+     &        ' uinv=', UINV(IBL,IS),
+     &        ' upper=', DUI_UPPER2L,
+     &        ' lower=', DUI_LOWER2L,
+     &        ' wake=', DUI_LOWERWAKE2L,
      &        ' uedg=', UEDG(IBL,IS)
           ENDIF
 C

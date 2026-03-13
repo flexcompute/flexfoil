@@ -59,12 +59,29 @@ pub fn stfind(state: &mut XfoilState) {
 
     state.ist = ist;
 
+    let interp_xy = |sst: f64| {
+        let ds = s1 - s0;
+        if ds.abs() <= 1.0e-20 {
+            (state.panel_x[ist], state.panel_y[ist])
+        } else {
+            let t = (sst - s0) / ds;
+            (
+                state.panel_x[ist] + t * (state.panel_x[ist + 1] - state.panel_x[ist]),
+                state.panel_y[ist] + t * (state.panel_y[ist + 1] - state.panel_y[ist]),
+            )
+        }
+    };
+
     if dgam.abs() <= 1.0e-20 || !dgam.is_finite() {
         // Degenerate stagnation interpolation: keep the point finite and
         // disable XI_ULE sensitivity rather than propagating NaNs.
         state.sst = 0.5 * (s0 + s1);
         state.sst_go = 0.0;
         state.sst_gp = 0.0;
+        if rustfoil_bl::is_debug_active() {
+            let (xst, yst) = interp_xy(state.sst);
+            rustfoil_bl::add_event(rustfoil_bl::DebugEvent::stfind(ist + 1, state.sst, xst, yst));
+        }
         return;
     }
 
@@ -78,6 +95,11 @@ pub fn stfind(state: &mut XfoilState) {
     state.sst = sst;
     state.sst_go = (sst - s1) / dgam;
     state.sst_gp = (s0 - sst) / dgam;
+
+    if rustfoil_bl::is_debug_active() {
+        let (xst, yst) = interp_xy(sst);
+        rustfoil_bl::add_event(rustfoil_bl::DebugEvent::stfind(ist + 1, sst, xst, yst));
+    }
 }
 
 pub fn iblpan(state: &mut XfoilState) {
@@ -106,6 +128,16 @@ pub fn iblpan(state: &mut XfoilState) {
     state.nbl_lower = state.ipan_lower.len();
 
     isys_from_ipan(state);
+
+    if rustfoil_bl::is_debug_active() {
+        rustfoil_bl::add_event(rustfoil_bl::DebugEvent::iblpan(
+            state.ist + 1,
+            state.nbl_upper,
+            state.nbl_lower,
+            state.iblte_upper + 1,
+            state.iblte_lower + 1,
+        ));
+    }
 }
 
 fn isys_from_ipan(state: &mut XfoilState) {
@@ -129,72 +161,88 @@ pub fn xicalc(state: &mut XfoilState) {
     let mut upper_rows = Vec::with_capacity(state.ipan_upper.len());
     let mut lower_rows = Vec::with_capacity(state.ipan_lower.len());
 
-    upper_rows.push(XfoilBlRow::default());
-    lower_rows.push(XfoilBlRow::default());
+    upper_rows.push(state.upper_rows.first().cloned().unwrap_or_default());
+    lower_rows.push(state.lower_rows.first().cloned().unwrap_or_default());
 
-    for &ipan in state.ipan_upper.iter().skip(1).take(state.iblte_upper) {
+    for (ibl, &ipan) in state.ipan_upper.iter().enumerate().skip(1).take(state.iblte_upper) {
         let x = (state.sst - state.panel_s[ipan]).max(xeps);
-        upper_rows.push(seed_row(
+        upper_rows.push(refresh_or_seed_row(
+            state.upper_rows.get(ibl),
             x,
             state.panel_x[ipan],
             state.panel_y[ipan],
             ipan,
             state.qinv[ipan].abs(),
+            state.qinv_a[ipan],
             false,
         ));
     }
 
-    for &ipan in state.ipan_lower.iter().skip(1).take(state.iblte_lower) {
+    for (ibl, &ipan) in state.ipan_lower.iter().enumerate().skip(1).take(state.iblte_lower) {
         let x = (state.panel_s[ipan] - state.sst).max(xeps);
-        lower_rows.push(seed_row(
+        lower_rows.push(refresh_or_seed_row(
+            state.lower_rows.get(ibl),
             x,
             state.panel_x[ipan],
             state.panel_y[ipan],
             ipan,
-            (-state.qinv[ipan]).abs(),
+            signed_q_component_at(
+                &state.qinv,
+                &state.wake_qinv,
+                state.n_panel_nodes(),
+                ipan,
+                XfoilSurface::Lower,
+            ),
+            signed_q_component_at(
+                &state.qinv_a,
+                &state.wake_qinv_a,
+                state.n_panel_nodes(),
+                ipan,
+                XfoilSurface::Lower,
+            ),
             false,
         ));
     }
 
     let upper_te_x = upper_rows.last().map(|row| row.x).unwrap_or(0.0);
     let lower_te_x = lower_rows.last().map(|row| row.x).unwrap_or(0.0);
+    let mut upper_wake_arc = upper_te_x;
+    let mut lower_wake_arc = lower_te_x;
 
     for iw in 0..state.wake_x.len() {
         // XFOIL's XICALC does not reuse the target wake spacing array here.
         // It pins the first wake station to the TE xi and then accumulates the
         // actual geometric distance between wake nodes.
-        let arc = if iw == 0 {
-            0.0
-        } else {
+        if iw > 0 {
             let dx = state.wake_x[iw] - state.wake_x[iw - 1];
             let dy = state.wake_y[iw] - state.wake_y[iw - 1];
             let dxssi = (dx * dx + dy * dy).sqrt();
-            let prev = upper_rows.last().map(|row| row.x).unwrap_or(upper_te_x);
-            prev + dxssi - upper_te_x
-        };
-        upper_rows.push(seed_row(
-            upper_te_x + arc,
+            upper_wake_arc += dxssi;
+            lower_wake_arc += dxssi;
+        }
+        let wake_panel = state.n_panel_nodes() + iw;
+        let wake_uinv = state.wake_qinv.get(iw).copied().unwrap_or(0.0).abs();
+        let wake_uinv_a = state.wake_qinv_a.get(iw).copied().unwrap_or(0.0).abs();
+        let upper_ibl = state.iblte_upper + 1 + iw;
+        let lower_ibl = state.iblte_lower + 1 + iw;
+        upper_rows.push(refresh_or_seed_row(
+            state.upper_rows.get(upper_ibl),
+            upper_wake_arc,
             state.wake_x[iw],
             state.wake_y[iw],
-            state.n_panel_nodes() + iw,
-            state.wake_qinv.get(iw).copied().unwrap_or(0.0).abs(),
+            wake_panel,
+            wake_uinv,
+            wake_uinv_a,
             true,
         ));
-        let lower_arc = if iw == 0 {
-            0.0
-        } else {
-            let dx = state.wake_x[iw] - state.wake_x[iw - 1];
-            let dy = state.wake_y[iw] - state.wake_y[iw - 1];
-            let dxssi = (dx * dx + dy * dy).sqrt();
-            let prev = lower_rows.last().map(|row| row.x).unwrap_or(lower_te_x);
-            prev + dxssi - lower_te_x
-        };
-        lower_rows.push(seed_row(
-            lower_te_x + lower_arc,
+        lower_rows.push(refresh_or_seed_row(
+            state.lower_rows.get(lower_ibl),
+            lower_wake_arc,
             state.wake_x[iw],
             state.wake_y[iw],
-            state.n_panel_nodes() + iw,
-            state.wake_qinv.get(iw).copied().unwrap_or(0.0).abs(),
+            wake_panel,
+            wake_uinv,
+            wake_uinv_a,
             true,
         ));
     }
@@ -204,6 +252,33 @@ pub fn xicalc(state: &mut XfoilState) {
     state.upper_rows = upper_rows;
     state.lower_rows = lower_rows;
     update_wgap(state);
+}
+
+fn refresh_or_seed_row(
+    existing: Option<&XfoilBlRow>,
+    x: f64,
+    x_coord: f64,
+    y_coord: f64,
+    panel_idx: usize,
+    uinv: f64,
+    uinv_a: f64,
+    is_wake: bool,
+) -> XfoilBlRow {
+    let mut row = existing
+        .cloned()
+        .unwrap_or_else(|| seed_row(x, x_coord, y_coord, panel_idx, uinv, is_wake));
+    row.x = x;
+    row.x_coord = x_coord;
+    row.y_coord = y_coord;
+    row.panel_idx = panel_idx;
+    row.uinv = uinv;
+    row.uinv_a = uinv_a;
+    row.is_wake = is_wake;
+    if is_wake {
+        row.is_laminar = false;
+        row.is_turbulent = true;
+    }
+    row
 }
 
 fn set_stagnation_anchor(rows: &mut [XfoilBlRow], state: &XfoilState, surface: XfoilSurface) {
@@ -347,7 +422,9 @@ pub fn gamqv(state: &mut XfoilState) {
 
 pub fn stmove(state: &mut XfoilState) {
     let old_ist = state.ist;
+    maybe_debug_stmove_rows(state, "before_stfind", old_ist, old_ist);
     stfind(state);
+    maybe_debug_stmove_rows(state, "after_stfind", old_ist, state.ist);
     if state.ist != old_ist {
         let old_upper = state.upper_rows.clone();
         let old_lower = state.lower_rows.clone();
@@ -355,16 +432,20 @@ pub fn stmove(state: &mut XfoilState) {
         iblpan(state);
         uicalc(state);
         xicalc(state);
+        maybe_debug_stmove_rows(state, "after_xicalc", old_ist, state.ist);
         shift_stagnation_state(state, old_ist, &old_upper, &old_lower);
+        maybe_debug_stmove_rows(state, "after_shift", old_ist, state.ist);
         apply_ue_floor(state);
-        recompute_mass_from_state(state);
         refresh_shifted_row_views(state);
+        recompute_mass_from_state(state);
         sync_state_views_from_rows(state);
+        maybe_debug_stmove_rows(state, "after_sync", old_ist, state.ist);
     } else {
         xicalc(state);
         apply_ue_floor(state);
         recompute_mass_from_state(state);
         sync_state_views_from_rows(state);
+        maybe_debug_stmove_rows(state, "after_sync", old_ist, state.ist);
     }
 }
 
@@ -430,8 +511,8 @@ fn coupled_uedg(
 ) -> f64 {
     let mut ue = uinv;
     let debug_first = std::env::var("RUSTFOIL_UESET_STATE_DEBUG").is_ok()
-        && vti > 0.0
-        && panel_idx != usize::MAX;
+        && panel_idx != usize::MAX
+        && (vti > 0.0 || (vti < 0.0 && matches!(panel_idx, 102 | 103 | 104)));
     let mut debug_upper = 0.0;
     let mut debug_lower_airfoil = 0.0;
     let mut debug_lower_wake = 0.0;
@@ -450,17 +531,17 @@ fn coupled_uedg(
             }
         }
     }
-    if debug_first && matches!(panel_idx, 98 | 70 | 69) {
+    if debug_first && matches!(panel_idx, 0 | 98 | 70 | 69 | 102 | 103 | 104) {
         eprintln!(
-            "[STATE UESET] panel={} uinv={:.8e} upper={:.8e} lower_airfoil={:.8e} lower_wake={:.8e} uedg={:.8e}",
-            panel_idx, uinv, debug_upper, debug_lower_airfoil, debug_lower_wake, ue
+            "[STATE UESET] panel={} vti={:.0} uinv={:.8e} upper={:.8e} lower_airfoil={:.8e} lower_wake={:.8e} uedg={:.8e}",
+            panel_idx, vti, uinv, debug_upper, debug_lower_airfoil, debug_lower_wake, ue
         );
         if std::env::var("RUSTFOIL_UESET_DETAIL_DEBUG").is_ok() {
             for (other_vti, other_panel, mass) in coupling {
                 if *other_vti > 0.0
                     && panel_idx < dij.nrows()
                     && *other_panel < dij.ncols()
-                    && matches!(panel_idx, 70 | 69)
+                    && matches!(panel_idx, 0 | 70 | 69 | 102 | 103 | 104)
                 {
                     let dij_val = dij[(panel_idx, *other_panel)];
                     let contrib = -vti * *other_vti * dij_val * *mass;
@@ -476,10 +557,25 @@ fn coupled_uedg(
                 {
                     let dij_val = dij[(panel_idx, *other_panel)];
                     let contrib = -vti * *other_vti * dij_val * *mass;
-                    if contrib.abs() > 2.0e-4 {
+                    if contrib.abs() > 1.0e-5
+                        && matches!(panel_idx, 0 | 70 | 69 | 102 | 103 | 104)
+                    {
                         eprintln!(
-                            "[STATE UESET DETAIL] lower_airfoil panel={} dij={:.8e} mass={:.8e} contrib={:.8e}",
-                            other_panel, dij_val, mass, contrib
+                            "[STATE UESET DETAIL LOWER] panel={} other_panel={} dij={:.8e} mass={:.8e} contrib={:.8e}",
+                            panel_idx, other_panel, dij_val, mass, contrib
+                        );
+                    }
+                }
+                if *other_vti < 0.0 && *other_panel >= n_panel_nodes
+                    && panel_idx < dij.nrows() && *other_panel < dij.ncols()
+                    && matches!(panel_idx, 0 | 102 | 103 | 104)
+                {
+                    let dij_val = dij[(panel_idx, *other_panel)];
+                    let contrib = -vti * *other_vti * dij_val * *mass;
+                    if contrib.abs() > 1.0e-5 {
+                        eprintln!(
+                            "[STATE UESET DETAIL WAKE] panel={} other_panel={} dij={:.8e} mass={:.8e} contrib={:.8e}",
+                            panel_idx, other_panel, dij_val, mass, contrib
                         );
                     }
                 }
@@ -601,7 +697,13 @@ fn refresh_surface_row_views(rows: &mut [XfoilBlRow], nbl: usize, iblte: usize, 
     let len = nbl.min(rows.len());
     for (ibl, row) in rows.iter_mut().enumerate().take(len).skip(1) {
         let wake = ibl > iblte;
-        let turbulent = wake || ibl >= itran;
+        let turbulent = wake || ibl + 1 >= itran;
+        if !wake && row.dw.abs() > 0.0 {
+            // Wake rows store total DSTR = delta_star + dw. If a stagnation move
+            // reclassifies that row back onto the airfoil, remove the carried wake gap.
+            row.dstr = (row.dstr - row.dw).max(1.0e-12);
+            row.dw = 0.0;
+        }
         row.is_wake = wake;
         row.is_turbulent = turbulent;
         row.is_laminar = !turbulent;
@@ -609,8 +711,38 @@ fn refresh_surface_row_views(rows: &mut [XfoilBlRow], nbl: usize, iblte: usize, 
             row.ampl = row.ctau.max(0.0);
         }
     }
-    let stations = rows_to_stations(&rows[..len], 0.0, 1.0e6);
-    sync_rows_from_stations(&mut rows[..len], &stations);
+}
+
+fn maybe_debug_stmove_rows(state: &XfoilState, phase: &str, old_ist: usize, new_ist: usize) {
+    if std::env::var("RUSTFOIL_STMOVE_DEBUG").is_err() {
+        return;
+    }
+    eprintln!(
+        "[STMOVE DEBUG] phase={} old_ist={} new_ist={} nbl_lower={} iblte_lower={}",
+        phase,
+        old_ist + 1,
+        new_ist + 1,
+        state.nbl_lower,
+        state.iblte_lower
+    );
+    for ibl in 1..6.min(state.lower_rows.len()) {
+        let row = &state.lower_rows[ibl];
+        eprintln!(
+            "[STMOVE DEBUG] phase={} lower ibl={} panel={} x={:.8e} uinv={:.8e} uedg={:.8e} theta={:.8e} dstr={:.8e} mass={:.8e} wake={} lam={} turb={}",
+            phase,
+            ibl + 1,
+            row.panel_idx,
+            row.x,
+            row.uinv,
+            row.uedg,
+            row.theta,
+            row.dstr,
+            row.mass,
+            row.is_wake,
+            row.is_laminar,
+            row.is_turbulent
+        );
+    }
 }
 
 fn apply_ue_floor(state: &mut XfoilState) {

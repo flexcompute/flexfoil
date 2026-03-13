@@ -151,6 +151,8 @@ pub enum DebugData {
     ForcedChanges(ForcedChangesEvent),
     // Full iteration dump (matches XFOIL DBGFULLITER)
     FullIter(FullIterEvent),
+    Iblpan(IblpanEvent),
+    Stfind(StfindEvent),
 }
 
 /// VISCAL iteration start event
@@ -917,6 +919,34 @@ pub struct BlInitEvent {
     pub delta_star: Vec<f64>,
 }
 
+/// STFIND stagnation-point event - mirrors instrumented XFOIL output
+#[derive(Serialize, Clone)]
+pub struct StfindEvent {
+    #[serde(rename = "IST")]
+    pub ist: usize,
+    #[serde(rename = "SST")]
+    pub sst: f64,
+    #[serde(rename = "XST")]
+    pub xst: f64,
+    #[serde(rename = "YST")]
+    pub yst: f64,
+}
+
+/// IBLPAN boundary-layer pointer layout event - mirrors instrumented XFOIL output
+#[derive(Serialize, Clone)]
+pub struct IblpanEvent {
+    #[serde(rename = "IST")]
+    pub ist: usize,
+    #[serde(rename = "NBL_upper")]
+    pub nbl_upper: usize,
+    #[serde(rename = "NBL_lower")]
+    pub nbl_lower: usize,
+    #[serde(rename = "IBLTE_upper")]
+    pub iblte_upper: usize,
+    #[serde(rename = "IBLTE_lower")]
+    pub iblte_lower: usize,
+}
+
 // =============================================================================
 // CLOSURE-LEVEL DEBUG EVENTS
 // These match XFOIL's instrumented output format for method-by-method comparison
@@ -1167,6 +1197,8 @@ pub struct ForcedChangesEvent {
     pub ibl: usize,
     /// Surface side (0=upper, 1=lower)
     pub side: usize,
+    /// Underlying panel index for this BL station
+    pub panel_idx: usize,
     /// Ue mismatch at upstream station: DUE1 = Ue_current - Ue_from_mass
     pub due1: f64,
     /// Ue mismatch at downstream station: DUE2 = Ue_current - Ue_from_mass
@@ -1181,6 +1213,16 @@ pub struct ForcedChangesEvent {
     pub ue_inviscid: f64,
     /// Current station Ue (before update)
     pub ue_current: f64,
+    /// Leading-edge Ue mismatch on upper side used by XI_ULE
+    pub dule1: f64,
+    /// Leading-edge Ue mismatch on lower side used by XI_ULE
+    pub dule2: f64,
+    /// Stagnation interpolation derivative toward upper side
+    pub sst_go: f64,
+    /// Stagnation interpolation derivative toward lower side
+    pub sst_gp: f64,
+    /// Combined XI_ULE forcing term = XI_ULE1*DULE1 + XI_ULE2*DULE2
+    pub xi_term: f64,
 }
 
 // Helper functions to create events easily
@@ -1903,6 +1945,38 @@ impl DebugEvent {
         }
     }
 
+    /// Create an IBLPAN debug event matching instrumented XFOIL output
+    pub fn iblpan(
+        ist: usize,
+        nbl_upper: usize,
+        nbl_lower: usize,
+        iblte_upper: usize,
+        iblte_lower: usize,
+    ) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "IBLPAN".to_string(),
+            iteration: None,
+            data: DebugData::Iblpan(IblpanEvent {
+                ist,
+                nbl_upper,
+                nbl_lower,
+                iblte_upper,
+                iblte_lower,
+            }),
+        }
+    }
+
+    /// Create a STFIND debug event matching instrumented XFOIL output
+    pub fn stfind(ist: usize, sst: f64, xst: f64, yst: f64) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "STFIND".to_string(),
+            iteration: None,
+            data: DebugData::Stfind(StfindEvent { ist, sst, xst, yst }),
+        }
+    }
+
     /// Create a FULL_GAMMA_ITER debug event with circulation at all panels
     ///
     /// # Arguments
@@ -2260,6 +2334,7 @@ impl DebugEvent {
         iter: usize,
         ibl: usize,
         side: usize,
+        panel_idx: usize,
         due1: f64,
         due2: f64,
         dds1: f64,
@@ -2267,6 +2342,11 @@ impl DebugEvent {
         ue_from_mass: f64,
         ue_inviscid: f64,
         ue_current: f64,
+        dule1: f64,
+        dule2: f64,
+        sst_go: f64,
+        sst_gp: f64,
+        xi_term: f64,
     ) -> Self {
         Self {
             call_id: 0,
@@ -2276,6 +2356,7 @@ impl DebugEvent {
                 iter,
                 ibl,
                 side,
+                panel_idx,
                 due1,
                 due2,
                 dds1,
@@ -2283,6 +2364,11 @@ impl DebugEvent {
                 ue_from_mass,
                 ue_inviscid,
                 ue_current,
+                dule1,
+                dule2,
+                sst_go,
+                sst_gp,
+                xi_term,
             }),
         }
     }
