@@ -235,7 +235,7 @@ No Rθ or Mach dependence for laminar flow.
 
 | Test | Why It's Needed | What It Proves |
 |------|-----------------|----------------|
-| `test_hsl_low_hk` | Tests the primary branch (Hk < 4.35) which covers most laminar BL conditions from leading edge to adverse pressure gradient | Cubic polynomial coefficients (0.0111, 0.0278, 0.0002) and base value (1.528) are correct |
+| `test_hsl_low_hk` | Tests the primary branch (Hk below 4.35) which covers most laminar BL conditions from leading edge to adverse pressure gradient | Cubic polynomial coefficients (0.0111, 0.0278, 0.0002) and base value (1.528) are correct |
 | `test_hsl_high_hk` | Tests the secondary branch (Hk ≥ 4.35) used near laminar separation where Hk grows large | Quadratic coefficient (0.015) and branch switching work correctly |
 | `test_hsl_at_branch_point` | Tests continuity at Hk = 4.35 where the two branches meet | Both branches produce the same Hs value at the switching point—no discontinuity that would cause Newton solver oscillation |
 | `test_hsl_derivative_hk` | Numerical derivative check using central differences (low branch) | Analytical derivative ∂Hs/∂Hk matches finite difference approximation—correct Jacobian entry |
@@ -248,7 +248,7 @@ No Rθ or Mach dependence for laminar flow.
 |------|-----------------|----------------|
 | `test_hst_attached` | Tests attached turbulent BL (Hk < HO) which is the normal operating regime | The 1991 correlation with HR, RTZ terms produces physically reasonable values (1.5–2.5) |
 | `test_hst_separated` | Tests separated turbulent BL (Hk ≥ HO) with logarithmic Rθ dependence | Separated branch with HDIF, GRT, HTMP terms produces correct values for adverse pressure gradient |
-| `test_hst_low_rt` | Tests Rθ < 200 clipping where RTZ is floored at 200 | The limiter prevents divide-by-zero/NaN and matches XFOIL behavior at low Reynolds numbers |
+| `test_hst_low_rt` | Tests Rθ below 200 clipping where RTZ is floored at 200 | The limiter prevents divide-by-zero/NaN and matches XFOIL behavior at low Reynolds numbers |
 | `test_hst_ho_transition` | Tests the HO threshold computation (3.0 + 400/RT for RT > 400, else 4.0) | Branch point between attached/separated regimes moves correctly with Rθ |
 | `test_hst_compressibility` | Tests Whitfield's correction for high-subsonic flows | Compressibility increases Hs as expected; higher Mach → higher Hs |
 | `test_hst_derivative_hk` | Numerical derivative check for ∂Hs/∂Hk in attached regime | Analytical Jacobian matches finite differences—Newton solver will converge correctly |
@@ -260,7 +260,7 @@ No Rθ or Mach dependence for laminar flow.
 
 | Test | Why It's Needed | What It Proves |
 |------|-----------------|----------------|
-| `test_hs_physical_bounds` | Hs should be > 1.0 for physical boundary layers (energy thickness > momentum thickness) | No pathological inputs produce unphysical Hs < 1 across wide range of Hk, Rθ |
+| `test_hs_physical_bounds` | Hs should be above 1.0 for physical boundary layers (energy thickness above momentum thickness) | No pathological inputs produce unphysical Hs below 1 across wide range of Hk, Rθ |
 | `test_hsl_monotonic_high_branch` | In high Hk branch, Hs should increase monotonically toward separation | Polynomial doesn't oscillate or decrease at large Hk |
 | `test_hst_hs_near_hsmin` | At high Rθ and low Hk, Hs should approach HSMIN (1.5) | Limiting behavior correct—formula asymptotes properly |
 
@@ -296,7 +296,7 @@ The skin friction coefficient Cf represents the wall shear stress normalized by 
 **Laminar (CFL) - Falkner-Skan Correlation (xblsys.f:2354-2371):**
 
 Two branches meeting at Hk = 5.5:
-- **Attached branch (Hk < 5.5):** Uses `TMP = (5.5-Hk)³/(Hk+1)` with Cf proportional to TMP
+- **Attached branch (Hk below 5.5):** Uses `TMP = (5.5-Hk)³/(Hk+1)` with Cf proportional to TMP
 - **Separated branch (Hk ≥ 5.5):** Uses `TMP = 1 - 1/(Hk-4.5)` with Cf proportional to TMP²
 
 Both branches scale as 1/Rθ (viscous scaling) and have no Mach dependence (cf_msq = 0).
@@ -332,14 +332,14 @@ The base Cf uses CFFAC (normally 1.0) and combines the power-law and tanh correc
 | `test_cft_attached_typical` | Tests attached turbulent BL (Hk=1.4, Rθ=2000, M²=0) - the normal operating regime for most of an airfoil | Cf is positive; all three Jacobian entries (∂Cf/∂Hk, ∂Cf/∂Rθ, ∂Cf/∂M²) match numerical derivatives |
 | `test_cft_with_compressibility` | Tests compressible turbulent flow (Hk=2.5, Rθ=5000, M²=0.1) | Compressibility correction reduces Cf as expected; ∂Cf/∂M² captures the sensitivity correctly |
 | `test_cft_high_re_high_mach` | Tests extreme conditions (Hk=3.0, Rθ=10000, M²=0.3) near turbulent separation at high speed | All derivatives remain accurate even at challenging parameter values |
-| `test_cft_grt_clamping` | Tests GRT clamping at low Rθ (Rθ=15) where ln(Rθ/FC) < 3.0 | When GRT is clamped, ∂Cf/∂Rθ correctly becomes zero (Cf no longer varies with Rθ in clamped regime) |
+| `test_cft_grt_clamping` | Tests GRT clamping at low Rθ (Rθ=15) where ln(Rθ/FC) falls below 3.0 | When GRT is clamped, ∂Cf/∂Rθ correctly becomes zero (Cf no longer varies with Rθ in clamped regime) |
 
 ##### FORTRAN Comparison Tests
 
 | Test | Why It's Needed | What It Proves |
 |------|-----------------|----------------|
 | `test_cfl_matches_fortran` | Ensures bit-level compatibility with XFOIL's CFL subroutine | All 130 CFL test cases (13 Hk × 10 Rθ values) match FORTRAN reference within tolerance |
-| `test_cfl_reference_coverage` | Validates the test grid spans both branches | Hk range 2.0→8.0 includes both attached (< 5.5) and separated (≥ 5.5) regimes |
+| `test_cfl_reference_coverage` | Validates the test grid spans both branches | Hk range 2.0→8.0 includes both attached (below 5.5) and separated (at or above 5.5) regimes |
 | `test_cft_matches_fortran` | Ensures bit-level compatibility with XFOIL's CFT subroutine | All 480 CFT test cases (8 Hk × 10 Rθ × 6 M² values) match FORTRAN reference within tolerance |
 | `test_cft_reference_coverage` | Validates the test grid covers turbulent parameter space | Hk: 1.2→3.3 (attached to near-separation), Rθ: 500→18500, M²: 0→0.5 |
 
@@ -431,7 +431,7 @@ Note: XFOIL's `RCD_HK` formula is empirical and doesn't match the analytical der
 
 | Test | Why It's Needed | What It Proves |
 |------|-----------------|----------------|
-| `test_dil_attached_flow` | Typical Blasius conditions (Hk ≈ 2.59) should produce positive dissipation | DI > 0, DI_HK < 0, DI_RT < 0 — all signs physically correct |
+| `test_dil_attached_flow` | Typical Blasius conditions (Hk ≈ 2.59) should produce positive dissipation | DI is positive, DI_HK is negative, and DI_RT is negative — all signs physically correct |
 | `test_dil_near_separation` | Near Hk = 4.0, the (4-Hk)^5.5 term vanishes | DI approaches baseline 0.207/Rθ as separation is reached |
 | `test_dil_separated_flow` | For Hk > 4.0, the denominator limiting should prevent numerical issues | Separated flow branch produces valid, positive dissipation |
 | `test_dil_branch_continuity` | The two branches must be continuous at Hk = 4.0 | DI(3.999) ≈ DI(4.001) within 1e-4 — no Newton solver oscillation |
@@ -442,16 +442,16 @@ Note: XFOIL's `RCD_HK` formula is empirical and doesn't match the analytical der
 
 | Test | Why It's Needed | What It Proves |
 |------|-----------------|----------------|
-| `test_dit_typical_conditions` | Typical turbulent BL (Hs=1.6, Us=0.98, Cf=0.003, St=0.02) | DI > 0, DI_HS < 0 — dissipation positive, scales inversely with Hs |
+| `test_dit_typical_conditions` | Typical turbulent BL (Hs=1.6, Us=0.98, Cf=0.003, St=0.02) | DI is positive and DI_HS is negative — dissipation is positive and scales inversely with Hs |
 | `test_dit_cf_dominates_at_wall` | When Us → 1, skin friction term should dominate | 0.5×Cf×Us term > St²×(1-Us) term for Us = 0.99 |
-| `test_dit_derivative_signs` | All partial derivatives should have physically correct signs | DI_HS < 0, DI_CF > 0, DI_ST > 0 |
+| `test_dit_derivative_signs` | All partial derivatives should have physically correct signs | DI_HS is negative, DI_CF is positive, and DI_ST is positive |
 | `test_dit_derivative_consistency` | All 4 Jacobian entries must be correct for Newton convergence | All derivatives match finite differences to 1e-6 |
 
 ##### DILW (Wake Dissipation) Tests
 
 | Test | Why It's Needed | What It Proves |
 |------|-----------------|----------------|
-| `test_dilw_typical_wake` | Wake at Hk=2.0, Rθ=1000 should produce valid dissipation | DI > 0, DI_RT < 0 — physically correct behavior |
+| `test_dilw_typical_wake` | Wake at Hk=2.0, Rθ=1000 should produce valid dissipation | DI is positive and DI_RT is negative — physically correct behavior |
 | `test_dilw_vs_dil_magnitude` | Wake and BL dissipation should differ (no wall in wake) | DILW ≠ DIL for same inputs — different physical models |
 | `test_dilw_hk_dependence` | Wake dissipation varies with Hk | Different Hk values produce different DI |
 | `test_dilw_derivative_consistency` | DI_RT should match finite difference (DI_HK uses XFOIL's empirical formula) | DI_RT accurate to 1e-8, DI_HK is finite and non-zero |
@@ -756,7 +756,7 @@ At M=0: `Hk = H` (incompressible limit)
 **FORTRAN Source:** `xblsys.f` HSL (line 2327), HST (line 2388)
 
 **Key Formulas:**
-- **Laminar (HSL):** Piecewise correlation depending on whether Hk < 4.35 or Hk ≥ 4.35
+- **Laminar (HSL):** Piecewise correlation depending on whether Hk is below 4.35 or at or above 4.35
 - **Turbulent (HST):** Complex correlation with Rθ dependence (~90 lines)
 
 **Outputs:** `hs`, `∂Hs/∂Hk`, `∂Hs/∂Rθ`, `∂Hs/∂M²`
@@ -944,7 +944,7 @@ The UPW parameter transitions smoothly from 0.5 (trapezoidal) to 1.0 (backward E
 | `test_blvar_laminar_basic` | Verify basic laminar BL computation | H = δ*/θ correct, Hk ≈ H at M=0, Cf > 0, CD > 0, Hs in [1.4, 2.0] |
 | `test_blvar_turbulent_basic` | Verify turbulent BL computation | H correct, Cf > 0 for turbulent, CD includes outer layer contribution |
 | `test_blvar_wake_cf_zero` | Wake has no wall → no skin friction | `Cf = 0` exactly for wake, but CD > 0 (wake dissipation exists) |
-| `test_blvar_hk_clamping` | Prevent Hk < 1 which causes singularities | For H ≈ 1, Hk is clamped to ≥ 1.05 |
+| `test_blvar_hk_clamping` | Prevent Hk below 1, which causes singularities | For H ≈ 1, Hk is clamped to at least 1.05 |
 | `test_blvar_compressibility` | Verify compressibility corrections work | Hk differs between M=0 and M=0.5, Hc = 0 at M=0 and Hc > 0 at M > 0 |
 | `test_blvar_reynolds_dependence` | Verify Re affects closures correctly | Higher Re gives higher Rθ, lower laminar Cf (1/Rθ scaling) |
 
@@ -1218,7 +1218,7 @@ det(M) = M[0][0]×(M[1][1]×M[2][2] - M[1][2]×M[2][1])
        + M[0][2]×(M[1][0]×M[2][1] - M[1][1]×M[2][0])
 ```
 
-For singular matrices (|det| < 1e-30), the function returns identity and logs a warning. This fallback prevents crashes but indicates a problem in the upstream BL equations.
+For singular matrices (`|det|` below `1e-30`), the function returns identity and logs a warning. This fallback prevents crashes but indicates a problem in the upstream BL equations.
 
 #### Test Results
 
@@ -1238,7 +1238,7 @@ For singular matrices (|det| < 1e-30), the function returns identity and logs a 
 | `test_multiply_vec_identity` | I×v = v property | Vector unchanged by identity |
 | `test_multiply_vec_general` | Matrix-vector product | Diagonal scaling gives expected result |
 | `test_det_identity` | det(I) = 1 | Determinant of identity is exactly 1.0 |
-| `test_det_singular` | Singular matrix has det ≈ 0 | Linearly dependent rows give det < 1e-10 |
+| `test_det_singular` | Singular matrix has det ≈ 0 | Linearly dependent rows give det below `1e-10` |
 | `test_det_diagonal` | det(diag) = product of diagonal | det(diag(2,3,4)) = 24 |
 | `test_add_subtract` | Matrix arithmetic | Element-wise add/subtract correct |
 
@@ -1256,7 +1256,7 @@ For singular matrices (|det| < 1e-30), the function returns identity and logs a 
 | Test | Why It's Needed | What It Proves |
 |------|-----------------|----------------|
 | `test_solve_bl_like_system` | System resembling actual BL Jacobian | Solution satisfies VA×x + VB×x_prev = rhs at each station |
-| `test_solve_convergence_to_zero_residual` | Verify solver gives exact solution | Residual norms < 1e-9 everywhere |
+| `test_solve_convergence_to_zero_residual` | Verify solver gives exact solution | Residual norms stay below `1e-9` everywhere |
 
 ##### Edge Cases
 
@@ -1324,7 +1324,7 @@ The marching procedure integrates the boundary layer equations from the stagnati
 
 4. **Transition detection:** Uses e^n method with `amplification_rate()` and `check_transition()`
 
-5. **Separation detection:** Monitors Cf < 0
+5. **Separation detection:** Monitors negative `Cf`
 
 #### Test Results
 
@@ -1453,7 +1453,7 @@ Ue_i = Ue_inviscid_i + Σ_j (-VTI_i × VTI_j × DIJ_ij) × mass_j
 |------|-----------------|----------------|
 | `test_update_stations_empty` | Edge case handling | Empty input returns safely |
 | `test_update_stations_small_change` | Normal operation | Small changes don't trigger limiting |
-| `test_update_stations_large_change_triggers_limiting` | Under-relaxation works | Large changes reduce rlx < 1.0 |
+| `test_update_stations_large_change_triggers_limiting` | Under-relaxation works | Large changes reduce `rlx` below `1.0` |
 | `test_update_stations_ctau_clamping` | Stability limit | cτ clamped to 0.25 max |
 | `test_update_stations_laminar` | Laminar mode | Amplification N updated, stays ≥ 0 |
 | `test_limit_delta_star_for_hk` | DSLIM works | δ* increased to maintain Hk ≥ 1.02 |
@@ -2168,7 +2168,7 @@ XFOIL Reference (α=4°):
 
 ### Success Criteria Met
 
-1. ✓ Closure functions (Hk, Hs, Cf): < 1% for laminar/turbulent
+1. ✓ Closure functions (Hk, Hs, Cf): below 1% for laminar/turbulent
 2. ✓ Newton system structure matches XFOIL (VA, VB, VM)
 3. ✓ Coupled solver implements BLSOLV algorithm
 4. ✓ UPDATE relaxation behavior matches XFOIL pattern
@@ -2435,7 +2435,7 @@ let z_t2 = 1.0 / s2.theta + z_cfx * cfx_t2;
 |--------|--------|-------|
 | dθ single step (IBL=3) | -6.5e-6 (30% error) | -4.995e-6 (0.0% error) |
 | dδ* single step (IBL=3) | -1.5e-5 (21% error) | -1.256e-5 (0.0% error) |
-| Early stations (0-17) | ~40% error | < 1% error |
+| Early stations (0-17) | ~40% error | below 1% error |
 | Transition region (31+) | ~55% error | ~55% error |
 
 **The Newton iteration is now exact. The remaining ~55% error at station 31+ is in transition handling, not the Jacobian.**
@@ -2447,7 +2447,7 @@ let z_t2 = 1.0 / s2.theta + z_cfx * cfx_t2;
 ### Current Status
 
 The theta evolution test shows:
-- **Stations 0-17**: < 1% error (laminar flow, perfect match)
+- **Stations 0-17**: below 1% error (laminar flow, perfect match)
 - **Stations 18-24**: 1-6% error (gradual growth)
 - **Station 31+**: Sudden jump to ~55% error
 
@@ -2576,10 +2576,10 @@ These feed into the global Jacobian for viscous-inviscid coupling.
 
 | Test | Purpose | Success Criteria |
 |------|---------|------------------|
-| `test_axset_comparison` | Verify AXSET matches XFOIL | < 0.1% error |
-| `test_amplification_march` | N-factor evolution | < 1% error through transition |
-| `test_transition_location` | XT matches XFOIL | < 1% difference |
-| `test_post_transition_theta` | θ evolution after transition | < 5% error |
+| `test_axset_comparison` | Verify AXSET matches XFOIL | below 0.1% error |
+| `test_amplification_march` | N-factor evolution | below 1% error through transition |
+| `test_transition_location` | XT matches XFOIL | below 1% difference |
+| `test_post_transition_theta` | θ evolution after transition | below 5% error |
 
 ### Files to Modify
 
@@ -2593,17 +2593,17 @@ These feed into the global Jacobian for viscous-inviscid coupling.
 
 ### Success Criteria
 
-1. **N-factor evolution**: < 1% error vs XFOIL through transition
-2. **Transition location**: < 1% error in x_transition
-3. **Post-transition θ**: < 5% error continuing through all stations
-4. **δ* evolution**: < 5% error through entire march
+1. **N-factor evolution**: below 1% error vs XFOIL through transition
+2. **Transition location**: below 1% error in x_transition
+3. **Post-transition θ**: below 5% error continuing through all stations
+4. **δ* evolution**: below 5% error through entire march
 
 ---
 
 ## Newton Tolerance Bug Fix (2026-01-22)
 
 **Status:** Complete  
-**Impact:** Laminar station accuracy improved from ~2.4% error to <0.5% error
+**Impact:** Laminar station accuracy improved from ~2.4% error to less than 0.5% error
 
 ### Problem Discovery
 
@@ -2674,7 +2674,7 @@ DEBUG station 18: Newton did not converge!
 | 19 | 0.0483 | - | -0.1% | -0.1% |
 | 20 | 0.0526 | - | -0.0% | -0.1% |
 
-All laminar stations (8-24) now have <0.5% error.
+All laminar stations (8-24) now have below 0.5% error.
 
 ### Newton Iteration Trace
 

@@ -1,0 +1,195 @@
+---
+title: Faithful Coupled Newton Solve
+description: Function-level reference for SETBL, BLSOLV, UPDATE, and stagnation coupling in the faithful solver
+sidebar_position: 6
+---
+
+# Faithful Coupled Newton Solve
+
+This page documents the coupled Newton core of the faithful solver: build the global BL system, solve it, apply forced changes and operating corrections, then move the stagnation point consistently with the new viscous gamma field.
+
+## Primary Rust Owners
+
+- `crates/rustfoil-xfoil/src/assembly.rs`
+- `crates/rustfoil-xfoil/src/solve.rs`
+- `crates/rustfoil-xfoil/src/update.rs`
+- `crates/rustfoil-coupling/src/global_newton.rs`
+- `crates/rustfoil-coupling/src/update.rs`
+- `crates/rustfoil-coupling/src/stmove.rs`
+
+## Fortran Anchors
+
+- `Xfoil-instrumented/src/xbl.f`: `SETBL`, `UPDATE`
+- `Xfoil-instrumented/src/xsolve.f`: `BLSOLV`
+- `Xfoil-instrumented/src/xpanel.f`: `STMOVE`
+- `Xfoil-instrumented/src/xblsys.f`: `BLSYS`, `TESYS`, `BLPRV`, `BLKIN`
+
+## Key Fortran Excerpts
+
+```fortran
+      SUBROUTINE SETBL
+...
+      IF(.NOT.LBLINI) THEN
+       CALL MRCHUE
+       LBLINI = .TRUE.
+      ENDIF
+      CALL MRCHDU
+      CALL UESET
+```
+
+```fortran
+      SUBROUTINE UPDATE
+...
+      UNEW(IBL,IS) = UINV(IBL,IS) + DUI
+      U_AC(IBL,IS) = UINV_AC      + DUI_AC
+...
+      CALL QVFUE
+      CALL GAMQV
+      CALL STMOVE
+```
+
+## Faithful Stage Wrappers
+
+### `setbl()`
+
+- `Function`: `setbl()` in `crates/rustfoil-xfoil/src/assembly.rs`
+- `Role`: runs the pre-assembly march steps, rebuilds coherent mass state, prepares canonical station views, and delegates global system assembly.
+- `XFOIL Mapping`: `SETBL`
+- `Fortran Reference`: `Xfoil-instrumented/src/xbl.f`, `SUBROUTINE SETBL`
+- `Why This Looks Different`: Rust must explicitly project row state into typed station slices before passing them to the shared Newton builder; XFOIL does this implicitly through shared array ownership.
+- `Current Fidelity Status`: mostly faithful.
+
+### `blsolv()`
+
+- `Function`: `blsolv()` in `crates/rustfoil-xfoil/src/solve.rs`
+- `Role`: wraps the global Newton solve and packages the resulting deltas for the faithful loop.
+- `XFOIL Mapping`: `BLSOLV`
+- `Fortran Reference`: `Xfoil-instrumented/src/xsolve.f`, `SUBROUTINE BLSOLV`
+- `Why This Looks Different`: Rust keeps the solution state in a return struct instead of leaving it embedded only in the global matrix arrays.
+- `Current Fidelity Status`: mostly faithful wrapper around a faithful shared solver.
+
+### `update()`
+
+- `Function`: `update()` in `crates/rustfoil-xfoil/src/update.rs`
+- `Role`: previews the next coupled `Ue` field, computes operating correction, applies the global update, refreshes secondary variables, and syncs the canonical row owner.
+- `XFOIL Mapping`: `UPDATE`
+- `Fortran Reference`: `Xfoil-instrumented/src/xbl.f`, `SUBROUTINE UPDATE`
+- `Why This Looks Different`: Rust splits trial-`CL` calculation, operating correction, update application, and row sync into explicit phases rather than letting them share one mutable namespace.
+- `Current Fidelity Status`: mostly faithful, with explicit operating-mode plumbing.
+
+## Shared Newton Builder And Solver
+
+### `GlobalNewtonSystem::build_global_system()`
+
+- `Function`: `build_global_system()` in `crates/rustfoil-coupling/src/global_newton.rs`
+- `Role`: assembles the full coupled upper/lower/wake Newton system including `VA`, `VB`, `VM`, `VZ`, forced changes, and operating RHS.
+- `XFOIL Mapping`: shared implementation of `SETBL`
+- `Fortran Reference`: `Xfoil-instrumented/src/xbl.f`, `SUBROUTINE SETBL`
+- `Why This Looks Different`:
+  - accepts typed station slices, flow-type slices, and explicit `DIJ` / `Ue` views
+  - separates setup into named stages such as index mapping, surface equation build, TE interface build, VM build, and forced-change insertion
+  - preserves XFOIL-specific details like signed current `Ue`, both-surface `UESET` coupling, and stagnation derivative injection
+- `Current Fidelity Status`: mostly faithful shared core.
+
+### `GlobalNewtonSystem::to_global()` / `from_global()`
+
+- `Function`: `to_global()` and `from_global()` in `crates/rustfoil-coupling/src/global_newton.rs`
+- `Role`: map between surface-local BL indices and the global Newton row numbering.
+- `XFOIL Mapping`: support for XFOIL’s `ISYS` ownership
+- `Fortran Reference`: XFOIL `IBLSYS` and the global station ordering implied by `SETBL` / `BLSOLV`
+- `Why This Looks Different`: Rust makes the mapping explicit and testable instead of scattering it through array conventions.
+- `Current Fidelity Status`: faithful support layer.
+
+### `GlobalNewtonSystem::set_stagnation_derivs()`
+
+- `Function`: `set_stagnation_derivs()` in `crates/rustfoil-coupling/src/global_newton.rs`
+- `Role`: injects `sst_go` and `sst_gp` into the Newton system so stagnation movement influences the forced-change path.
+- `XFOIL Mapping`: support for the `XI_ULE` / stagnation derivative coupling in `SETBL`
+- `Fortran Reference`: stagnation derivative use in XFOIL’s forced-change assembly
+- `Why This Looks Different`: Rust isolates stagnation sensitivity as explicit system state rather than relying on nearby mutable scalars.
+- `Current Fidelity Status`: mostly faithful.
+
+### `solve_global_system()`
+
+- `Function`: `solve_global_system()` in `crates/rustfoil-coupling/src/global_newton.rs`
+- `Role`: solves the assembled block-coupled system and returns the state and operating deltas.
+- `XFOIL Mapping`: shared `BLSOLV`
+- `Fortran Reference`: `Xfoil-instrumented/src/xsolve.f`, `SUBROUTINE BLSOLV`
+- `Why This Looks Different`: Rust stores the result in typed return values while still respecting the same block structure and coupling ownership.
+- `Current Fidelity Status`: mostly faithful.
+
+### `apply_global_updates()` and `preview_global_update_ue()`
+
+- `Function`: `apply_global_updates()` and `preview_global_update_ue()` in `crates/rustfoil-coupling/src/global_newton.rs`
+- `Role`: preview and apply the coupled update implied by the Newton solution, including the mass-based `Ue` reconstruction that XFOIL uses to limit and correct the state.
+- `XFOIL Mapping`: `UPDATE` plus `UESET` behavior
+- `Fortran Reference`: `Xfoil-instrumented/src/xbl.f`, `SUBROUTINE UPDATE`; `Xfoil-instrumented/src/xpanel.f`, `SUBROUTINE UESET`
+- `Why This Looks Different`: Rust exposes preview and application separately so operating correction and debug comparisons can be made without mutating state too early.
+- `Current Fidelity Status`: mostly faithful.
+
+## Shared Update Helpers
+
+### `set_edge_velocities()` and `compute_new_edge_velocities()`
+
+- `Function`: `set_edge_velocities()` and `compute_new_edge_velocities()` in `crates/rustfoil-coupling/src/update.rs`
+- `Role`: helper-level reconstruction of `Ue` from inviscid data plus the mass field.
+- `XFOIL Mapping`: `UESET`
+- `Fortran Reference`: `Xfoil-instrumented/src/xpanel.f`, `SUBROUTINE UESET`
+- `Why This Looks Different`: exposed as reusable functions because multiple callers need to reason about `Ue` before or after update application.
+- `Current Fidelity Status`: faithful helper layer.
+
+### `update_xfoil_style()`
+
+- `Function`: `update_xfoil_style()` in `crates/rustfoil-coupling/src/update.rs`
+- `Role`: apply XFOIL-style under-relaxed updates to the primary BL variables, derive `delta_star` from mass and `Ue`, and enforce `Hk` limits.
+- `XFOIL Mapping`: `UPDATE`
+- `Fortran Reference`: `Xfoil-instrumented/src/xbl.f`, `SUBROUTINE UPDATE`
+- `Why This Looks Different`: Rust makes the normalization, relaxation, and variable clamping explicit and testable in a standalone function.
+- `Current Fidelity Status`: mostly faithful.
+
+## Stagnation Coupling Helpers
+
+### `find_stagnation_with_derivs()`
+
+- `Function`: `find_stagnation_with_derivs()` in `crates/rustfoil-coupling/src/stmove.rs`
+- `Role`: computes `ist`, `sst`, and the derivatives required by the coupled stagnation-move logic.
+- `XFOIL Mapping`: `STFIND`
+- `Fortran Reference`: `Xfoil-instrumented/src/xpanel.f`, `SUBROUTINE STFIND`
+- `Why This Looks Different`: returns a typed result object, making the derivative-carrying stagnation state easy to pass into the Newton builder.
+- `Current Fidelity Status`: faithful helper.
+
+### `stmove()`
+
+- `Function`: `stmove()` in `crates/rustfoil-coupling/src/stmove.rs`
+- `Role`: shared helper for shifting BL state after the stagnation point moves.
+- `XFOIL Mapping`: `STMOVE`
+- `Fortran Reference`: `Xfoil-instrumented/src/xpanel.f`, `SUBROUTINE STMOVE`
+- `Why This Looks Different`: Rust spells out the downstream/upstream row shifting and interpolation behavior rather than hiding it in index arithmetic and array copies.
+- `Current Fidelity Status`: mostly faithful.
+
+### `adjust_transition_for_stmove()`
+
+- `Function`: `adjust_transition_for_stmove()` in `crates/rustfoil-coupling/src/stmove.rs`
+- `Role`: updates transition indices when the stagnation shift changes the BL row layout.
+- `XFOIL Mapping`: support logic implicit in `STMOVE`
+- `Fortran Reference`: `STMOVE`’s `ITRAN` shifts in `xpanel.f`
+- `Why This Looks Different`: Rust gives the transition-index mutation a name because the row/station distinction is explicit.
+- `Current Fidelity Status`: faithful support layer.
+
+## Recent Rationale That Matters Here
+
+The parity notes from the last few days surfaced several choices that now deserve explicit documentation:
+
+- the faithful loop must not call `QVFUE` / `GAMQV` again after `STMOVE`
+- the Newton builder must preserve signed current `Ue` in stagnation-coupling paths
+- `UESET` comparisons are only meaningful if wake/airfoil row ownership is already coherent
+- several “mismatches” turned out to be row-owner or index-convention bugs rather than formula differences
+
+That is why the current docs emphasize ownership and sequencing just as much as equations.
+
+## Related Pages
+
+- [Faithful Operating Loop](./faithful-operating-loop)
+- [Faithful State And Panel Ops](./faithful-state-and-panel-ops)
+- [Faithful Marching And Transition](./faithful-marching-and-transition)
+- [Faithful BL Kernels](./faithful-bl-kernels)

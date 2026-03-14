@@ -1,0 +1,171 @@
+---
+title: Faithful Marching And Transition
+description: Function-level reference for BLPINI, MRCHUE, MRCHDU, and transition handling in the faithful solver
+sidebar_position: 5
+---
+
+# Faithful Marching And Transition
+
+This page documents the functions that initialize and remarch the boundary layer before each coupled Newton assembly. In XFOIL terms, this is the `BLPINI` / `MRCHUE` / `MRCHDU` / transition interval layer.
+
+## Primary Rust Owners
+
+- `crates/rustfoil-xfoil/src/march.rs`
+- selected shared kernels in `crates/rustfoil-coupling/src/march.rs`
+- transition kernels in `crates/rustfoil-bl/src/closures/transition.rs`
+
+## Fortran Anchors
+
+- `Xfoil-instrumented/src/xbl.f`: `MRCHUE`, `MRCHDU`
+- `Xfoil-instrumented/src/xblsys.f`: `TRCHEK`, `TRCHEK2`, `AXSET`, `TRDIF`, `DAMPL`, `DAMPL2`
+
+## Key Fortran Excerpt
+
+```fortran
+      SUBROUTINE MRCHUE
+...
+      HLMAX = 3.8
+      HTMAX = 2.5
+...
+      CALL XIFSET(IS)
+...
+      CALL BLPRV(...)
+      CALL BLKIN
+      CALL TRCHEK
+...
+      IF(IBL.EQ.IBLTE(IS)+1) THEN
+        CALL TESYS(CTE,TTE,DTE)
+      ELSE
+        CALL BLSYS
+      ENDIF
+...
+      IF(DIRECT) THEN
+        VS2(4,4) = 1.0
+        VSREZ(4) = 0.
+        CALL GAUSS(4,4,VS2,VSREZ,1)
+      ENDIF
+```
+
+## Faithful Marching Functions
+
+### `blpini()`
+
+- `Function`: `blpini()` in `crates/rustfoil-xfoil/src/march.rs`
+- `Role`: initializes the BL model state before the first coupled solve.
+- `XFOIL Mapping`: `BLPINI`
+- `Fortran Reference`: XFOIL initialization path prior to marching
+- `Why This Looks Different`: Rust expresses initialization directly on `XfoilState` row storage instead of writing through multiple COMMON arrays.
+- `Current Fidelity Status`: mostly faithful support layer.
+
+### `mrchue()`
+
+- `Function`: `mrchue()` in `crates/rustfoil-xfoil/src/march.rs`
+- `Role`: marches the BL in direct mode and switches to prescribed-`Hk` inverse mode when separation logic demands it.
+- `XFOIL Mapping`: `MRCHUE`
+- `Fortran Reference`: `Xfoil-instrumented/src/xbl.f`, `SUBROUTINE MRCHUE`
+- `Why This Looks Different`:
+  - Rust uses typed station structs and helper routines like `build_and_fill_station()`.
+  - The same direct/inverse ownership is preserved even though the local 4x4 solve is wrapped in Rust helpers.
+  - Recent fixes made the transition station numbering follow XFOIL’s BL-station numbering rather than a row index.
+- `Current Fidelity Status`: mostly faithful, with parity-driven guardrails and debug hooks.
+
+### `mrchdu()`
+
+- `Function`: `mrchdu()` in `crates/rustfoil-xfoil/src/march.rs`
+- `Role`: remarches the BL using the current `Ue` and `Ds` to establish the transition location before global assembly.
+- `XFOIL Mapping`: `MRCHDU`
+- `Fortran Reference`: `Xfoil-instrumented/src/xbl.f`, `SUBROUTINE MRCHDU`
+- `Why This Looks Different`: Rust makes the mixed-`dUe` sensitivity machinery explicit rather than burying it inside mutable station arrays.
+- `Current Fidelity Status`: mostly faithful.
+
+## Shared Marching Kernels
+
+These live in `rustfoil-coupling` and are reused by the faithful crate. They are not all one-to-one XFOIL routine names, but they preserve the same station-level solve contracts.
+
+### `march_fixed_ue()`
+
+- `Function`: `march_fixed_ue()` in `crates/rustfoil-coupling/src/march.rs`
+- `Role`: shared fixed-`Ue` marching kernel used for `MRCHUE`-style surface marching.
+- `XFOIL Mapping`: mostly `MRCHUE`
+- `Fortran Reference`: `Xfoil-instrumented/src/xbl.f`, `SUBROUTINE MRCHUE`
+- `Why This Looks Different`: abstracts the per-station Newton loop into a reusable kernel while preserving XFOIL’s transition-check ordering.
+- `Current Fidelity Status`: mostly faithful shared kernel.
+
+### `march_surface()`
+
+- `Function`: `march_surface()` in `crates/rustfoil-coupling/src/march.rs`
+- `Role`: reusable surface-march orchestrator over a station slice.
+- `XFOIL Mapping`: Rust support layer over the march path.
+- `Fortran Reference`: derived from `MRCHUE`/`MRCHDU` behavior rather than a direct single routine.
+- `Why This Looks Different`: pulls repeated slice-oriented surface logic out of the faithful crate without changing the local station contracts.
+- `Current Fidelity Status`: support layer.
+
+### `march_mixed_du()`
+
+- `Function`: `march_mixed_du()` in `crates/rustfoil-coupling/src/march.rs`
+- `Role`: shared mixed-`dUe` remarch kernel used to represent `MRCHDU` behavior.
+- `XFOIL Mapping`: mostly `MRCHDU`
+- `Fortran Reference`: `Xfoil-instrumented/src/xbl.f`, `SUBROUTINE MRCHDU`
+- `Why This Looks Different`: Rust names the mixed-`dUe` behavior directly, which makes the Goldstein-singularity avoidance logic easier to follow than in the original monolithic Fortran.
+- `Current Fidelity Status`: mostly faithful shared kernel.
+
+### `march_coupled()`
+
+- `Function`: `march_coupled()` in `crates/rustfoil-coupling/src/march.rs`
+- `Role`: higher-level shared helper for coupled marching workflows.
+- `XFOIL Mapping`: Rust support layer
+- `Fortran Reference`: no single direct routine
+- `Why This Looks Different`: provides typed orchestration for callers that need the same local station solver behavior outside the monolithic faithful loop.
+- `Current Fidelity Status`: support layer.
+
+### `newton_solve_station()` and `newton_solve_station_transition()`
+
+- `Function`: `newton_solve_station()` and `newton_solve_station_transition()` in `crates/rustfoil-coupling/src/march.rs`
+- `Role`: solve the local station Newton problem in normal or transition-interval mode.
+- `XFOIL Mapping`: local `MRCHUE` / `TRDIF` solve machinery
+- `Fortran Reference`: `MRCHUE`, `TRDIF`, local 4x4 `GAUSS` usage in `xbl.f` and `xblsys.f`
+- `Why This Looks Different`: Rust separates the reusable Newton kernel from the outer march control logic so transition and non-transition paths can be tested directly.
+- `Current Fidelity Status`: mostly faithful shared kernels.
+
+## Transition Functions
+
+### `amplification_rate()`
+
+- `Function`: `amplification_rate()` in `crates/rustfoil-bl/src/closures/transition.rs`
+- `Role`: computes `dN/dx` for the envelope `e^N` transition model.
+- `XFOIL Mapping`: `DAMPL`
+- `Fortran Reference`: `Xfoil-instrumented/src/xblsys.f`, `SUBROUTINE DAMPL`
+- `Why This Looks Different`: Rust returns a typed result with derivatives instead of writing them into mutable output arguments.
+- `Current Fidelity Status`: faithful.
+
+### `axset()` and `axset_full()`
+
+- `Function`: `axset()` and `axset_full()` in `crates/rustfoil-bl/src/closures/transition.rs`
+- `Role`: average the amplification rate over an interval and provide the derivatives needed by transition logic and Jacobian assembly.
+- `XFOIL Mapping`: `AXSET`
+- `Fortran Reference`: `Xfoil-instrumented/src/xblsys.f`, `SUBROUTINE AXSET`
+- `Why This Looks Different`: Rust exposes both a compact value-level API and a full-derivative API because the transition model is reused by both marching and Jacobian code.
+- `Current Fidelity Status`: faithful.
+
+### `trchek2()` and `trchek2_full()`
+
+- `Function`: `trchek2()` and `trchek2_full()` in `crates/rustfoil-bl/src/closures/transition.rs`
+- `Role`: perform the second-order transition check and, in the full form, expose the derivative-rich result used by transition-interval assembly.
+- `XFOIL Mapping`: `TRCHEK2`
+- `Fortran Reference`: `Xfoil-instrumented/src/xblsys.f`, `SUBROUTINE TRCHEK2`
+- `Why This Looks Different`: Rust keeps the “do we transition?” result and the derivative-rich transition interval result as separate types, which is clearer than repurposing mutable Fortran scratch state.
+- `Current Fidelity Status`: faithful.
+
+## Design Choices Called Out By Recent Notes
+
+These are the main recent rationale points worth preserving in the docs:
+
+- `itran` must use XFOIL station numbering, not a Rust row number
+- transition should be checked after the station Newton solve, matching XFOIL’s sequencing
+- the faithful crate keeps explicit debug emission around `MRCHUE` and `TRCHEK2` because these routines have repeatedly been used to isolate parity splits
+
+## Related Pages
+
+- [Faithful State And Panel Ops](./faithful-state-and-panel-ops)
+- [Faithful Coupled Newton Solve](./faithful-coupled-newton)
+- [Faithful BL Kernels](./faithful-bl-kernels)

@@ -1,0 +1,138 @@
+---
+title: Faithful Operating Loop
+description: The top-level faithful XFOIL operating-point loop in rustfoil-xfoil
+sidebar_position: 3
+---
+
+# Faithful Operating Loop
+
+This page documents the functions that own the outer operating-point loop. In XFOIL terms, this is the `SPECAL` + `VISCAL` layer: build the current inviscid state, initialize wake and BL topology, then iterate the coupled viscous solve until convergence.
+
+## Primary Rust Owner
+
+- `crates/rustfoil-xfoil/src/oper.rs`
+
+## Fortran Anchors
+
+- `Xfoil-instrumented/src/xoper.f`: `SPECAL`, `VISCAL`
+- `Xfoil-instrumented/src/xpanel.f`: topology and wake support called by `VISCAL`
+
+## Key Fortran Excerpt
+
+```fortran
+      SUBROUTINE VISCAL(NITER1)
+...
+      IF(.NOT.LWAKE) THEN
+       CALL XYWAKE
+      ENDIF
+      CALL QWCALC
+      CALL QISET
+...
+      CALL STFIND
+      CALL IBLPAN
+      CALL XICALC
+      CALL IBLSYS
+      CALL UICALC
+...
+      CALL SETBL
+      CALL BLSOLV
+      CALL UPDATE
+      CALL QVFUE
+      CALL GAMQV
+      CALL STMOVE
+      CALL CLCALC(...)
+      CALL CDCALC
+```
+
+## Function Reference
+
+### `coords_from_body()`
+
+- `Function`: `coords_from_body()` in `crates/rustfoil-xfoil/src/oper.rs`
+- `Role`: extracts a node list from a `Body` so the faithful solver can start from explicit coordinates.
+- `XFOIL Mapping`: Rust-only support layer.
+- `Fortran Reference`: none; XFOIL expects geometry arrays to already exist.
+- `Why This Looks Different`: XFOIL lives on in-memory COMMON-block geometry, while the Rust entrypoint accepts typed geometry objects from the rest of the workspace.
+- `Current Fidelity Status`: faithful support layer, not a direct XFOIL routine.
+
+### `build_state_from_coords()`
+
+- `Function`: `build_state_from_coords()` in `crates/rustfoil-xfoil/src/oper.rs`
+- `Role`: factorizes the inviscid basis, builds `XfoilState`, and seeds the canonical data needed by the faithful operating loop.
+- `XFOIL Mapping`: partial analogue to the pre-`SPECAL` setup state in XFOIL.
+- `Fortran Reference`: upstream setup before `SPECAL`/`VISCAL`, plus `GGCALC`-style basis creation.
+- `Why This Looks Different`: Rust splits factorization from operating-point iteration so the same basis can be reused across calls without reconstructing opaque COMMON state.
+- `Current Fidelity Status`: mostly faithful, with Rust API conveniences around state creation.
+
+### `solve_coords_oper_point()`
+
+- `Function`: `solve_coords_oper_point()` in `crates/rustfoil-xfoil/src/oper.rs`
+- `Role`: convenience wrapper that builds state and immediately enters the faithful operating loop.
+- `XFOIL Mapping`: Rust-only wrapper around `VISCAL`-style behavior.
+- `Fortran Reference`: none directly.
+- `Why This Looks Different`: separates user-facing ergonomics from the actual XFOIL-like solver loop.
+- `Current Fidelity Status`: faithful support layer.
+
+### `solve_body_oper_point()`
+
+- `Function`: `solve_body_oper_point()` in `crates/rustfoil-xfoil/src/oper.rs`
+- `Role`: same as `solve_coords_oper_point()`, but begins from `Body`.
+- `XFOIL Mapping`: Rust-only wrapper.
+- `Fortran Reference`: none directly.
+- `Why This Looks Different`: required by the workspace’s geometry pipeline.
+- `Current Fidelity Status`: faithful support layer.
+
+### `solve_operating_point_from_state()`
+
+- `Function`: `solve_operating_point_from_state()` in `crates/rustfoil-xfoil/src/oper.rs`
+- `Role`: top-level faithful operating loop.
+- `XFOIL Mapping`: `VISCAL`
+- `Fortran Reference`: `Xfoil-instrumented/src/xoper.f`, `SUBROUTINE VISCAL`
+- `Why This Looks Different`:
+  - Rust calls named helpers in modules instead of mutating everything inline.
+  - The loop is still intentionally ordered to match XFOIL.
+  - Prescribed-CL handling is represented through `OperatingMode` instead of XFOIL’s global flags, but the call-order distinction is preserved.
+- `Current Fidelity Status`: faithful main loop, with some operating-column behavior still documented as an active parity area.
+
+## Current Rust Order
+
+```rust
+specal(state, state.alpha_rad);
+xywake(state, factorized, options.wake_length_chords);
+qwcalc(state, factorized);
+stfind(state);
+iblpan(state);
+xicalc(state);
+uicalc(state);
+uedginit(state);
+qdcalc(state, factorized)?;
+blpini(state, options.reynolds);
+
+for iter in 1..=options.max_iterations {
+    let mut assembly = setbl(...);
+    let solve = blsolv(...);
+    update(...);
+    qvfue(state);
+    gamqv(state);
+    stmove(state);
+    update_force_state(state, options.mach, options.reynolds);
+}
+```
+
+## Why The Ordering Matters
+
+Recent parity work explicitly corrected this loop to match XFOIL’s mutation order. The key documented choice is:
+
+- `UPDATE` must complete before `QVFUE`
+- `QVFUE` must complete before `GAMQV`
+- `GAMQV` must complete before `STMOVE`
+- force accumulation must happen after the stagnation move
+
+This was not a cosmetic cleanup. It affected branch behavior in stalled/high-alpha comparisons and is now part of the public architecture contract.
+
+## Related Pages
+
+- [Faithful XFOIL Solver Architecture](./xfoil-architecture-spec)
+- [Faithful State And Panel Ops](./faithful-state-and-panel-ops)
+- [Faithful Coupled Newton Solve](./faithful-coupled-newton)
+- [Faithful Forces And Operating Modes](./faithful-forces-and-operating-modes)

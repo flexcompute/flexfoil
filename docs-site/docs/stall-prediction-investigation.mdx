@@ -149,8 +149,8 @@ if station.hk > hk_separation_threshold && !transition_occurred {
 
 | Issue | Before | After | Target |
 |-------|--------|-------|--------|
-| Transition delay | +43% | +14% | <2% |
-| CD at low α | +69% | +26% | <10% |
+| Transition delay | +43% | +14% | less than 2% |
+| CD at low α | +69% | +26% | less than 10% |
 
 ### ❌ Remaining Critical Issues
 
@@ -233,7 +233,7 @@ The 30-120% CD errors suggest issues in:
 2. **Test at α=0°**
    - Eliminate stall complications
    - Focus on basic turbulent BL accuracy
-   - Should achieve CD < 5% error
+   - Should achieve CD error below 5%
 
 3. **Station-by-Station Comparison**
    - Compare θ, δ*, H from LE to TE
@@ -245,7 +245,7 @@ The 30-120% CD errors suggest issues in:
 4. **Fix Turbulent BL Growth**
    - Implement any missing XFOIL formulas
    - Verify integration method
-   - Target: CD < 10% at all angles
+   - Target: CD below 10% at all angles
 
 5. **Stabilize Newton with Re-March**
    - Add adaptive damping
@@ -289,7 +289,7 @@ Even 7% errors accumulate and prevent stall prediction. Every detail must match 
 ### 5. XFOIL is the Standard
 Don't assume your implementation matches XFOIL. Verify every:
 - Geometry point (machine precision)
-- Inviscid Ue value (< 0.1%)
+- Inviscid Ue value (below 0.1%)
 - Closure relation formula (symbol-by-symbol)
 - BL equation implementation (term-by-term)
 

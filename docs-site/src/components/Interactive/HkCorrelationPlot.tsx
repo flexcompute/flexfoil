@@ -19,7 +19,7 @@ interface HkCorrelationPlotProps {
 export default function HkCorrelationPlot({ 
   initialMach = 0, 
   height = 300 
-}: HkCorrelationPlotProps): JSX.Element {
+}: HkCorrelationPlotProps): React.JSX.Element {
   const [mach, setMach] = useState(initialMach);
 
   // Compute Hk from H for various H values

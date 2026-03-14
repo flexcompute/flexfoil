@@ -1,0 +1,179 @@
+---
+title: Faithful BL Kernels
+description: Reference for boundary-layer equations and closure relations used by the faithful solver
+sidebar_position: 7
+---
+
+# Faithful BL Kernels
+
+This page documents the low-level BL kernels reused by the faithful solver. These functions are where the local XFOIL physics and Jacobian structure live: closure relations, interval equations, transition-rate correlations, and transition-interval assembly.
+
+## Primary Rust Owner
+
+- `crates/rustfoil-bl`
+
+## Fortran Anchors
+
+- `Xfoil-instrumented/src/xblsys.f`: `BLVAR`, `BLDIF`, `TRDIF`, `DAMPL`, `DAMPL2`, `AXSET`, `TRCHEK2`, `HKIN`, `HSL`, `HST`, `CFL`, `CFT`, `DIL`, `DILW`, `DIT`, `HCT`
+
+## Key Fortran Excerpts
+
+```fortran
+      SUBROUTINE BLSYS
+...
+      IF(WAKE) THEN
+       CALL BLVAR(3)
+       CALL BLMID(3)
+      ELSE IF(TURB.OR.TRAN) THEN
+       CALL BLVAR(2)
+       CALL BLMID(2)
+      ELSE
+       CALL BLVAR(1)
+       CALL BLMID(1)
+      ENDIF
+...
+      IF(TRAN) THEN
+       CALL TRDIF
+      ELSE IF(SIMI) THEN
+       CALL BLDIF(0)
+      ELSE IF(.NOT.TURB) THEN
+       CALL BLDIF(1)
+      ELSE IF(WAKE) THEN
+       CALL BLDIF(3)
+      ELSE IF(TURB) THEN
+       CALL BLDIF(2)
+      ENDIF
+```
+
+```fortran
+      SUBROUTINE DAMPL( HK, TH, RT, AX, AX_HK, AX_TH, AX_RT )
+...
+      IF(GR .LT. GRCRIT-DGR) THEN
+       AX    = 0.
+...
+      ELSE
+       RNORM = (GR - (GRCRIT-DGR)) / (2.0*DGR)
+...
+       AX    = (AF   *DADR/TH) * RFAC
+      ENDIF
+```
+
+## Equation Kernels
+
+### `blvar()`
+
+- `Function`: `blvar()` in `crates/rustfoil-bl/src/equations.rs`
+- `Role`: compute all secondary BL variables from the primary station variables for laminar, turbulent, or wake flow.
+- `XFOIL Mapping`: `BLVAR`
+- `Fortran Reference`: `Xfoil-instrumented/src/xblsys.f`, `SUBROUTINE BLVAR`
+- `Why This Looks Different`: Rust returns the fully updated station through struct mutation rather than via COMMON-block temporaries, but the same closure calls and flow-type branching are preserved.
+- `Current Fidelity Status`: faithful.
+
+### `bldif()` / `bldif_ncrit()` / `bldif_simi()`
+
+- `Function`: `bldif()` family in `crates/rustfoil-bl/src/equations.rs`
+- `Role`: build the residuals and Jacobian blocks for one BL interval under laminar, turbulent, wake, or similarity-station assumptions.
+- `XFOIL Mapping`: `BLDIF`
+- `Fortran Reference`: `Xfoil-instrumented/src/xblsys.f`, `SUBROUTINE BLDIF`
+- `Why This Looks Different`: Rust splits the major BLDIF use-cases into separate entrypoints so callers do not need to encode mode flags implicitly.
+- `Current Fidelity Status`: faithful.
+
+### `trdif()` / `trdif_full()`
+
+- `Function`: `trdif()` and `trdif_full()` in `crates/rustfoil-bl/src/equations.rs`
+- `Role`: assemble the transition interval where laminar and turbulent behavior must both be represented.
+- `XFOIL Mapping`: `TRDIF`
+- `Fortran Reference`: `Xfoil-instrumented/src/xblsys.f`, `SUBROUTINE TRDIF`
+- `Why This Looks Different`: Rust exposes a “full” derivative-carrying version explicitly because the transition interval is also used in debug and parity tooling.
+- `Current Fidelity Status`: faithful.
+
+## Transition Kernels
+
+### `amplification_rate()`
+
+- `Function`: `amplification_rate()` in `crates/rustfoil-bl/src/closures/transition.rs`
+- `Role`: compute the local envelope amplification rate for the `e^N` method.
+- `XFOIL Mapping`: `DAMPL`
+- `Fortran Reference`: `Xfoil-instrumented/src/xblsys.f`, `SUBROUTINE DAMPL`
+- `Why This Looks Different`: Rust packages the value and derivatives in `AmplificationResult`, which is easier to thread through typed solver code than multiple mutable output arguments.
+- `Current Fidelity Status`: faithful.
+
+### `axset()` / `axset_full()`
+
+- `Function`: `axset()` and `axset_full()` in `crates/rustfoil-bl/src/closures/transition.rs`
+- `Role`: compute the averaged interval amplification rate used by transition checks and transition-interval assembly.
+- `XFOIL Mapping`: `AXSET`
+- `Fortran Reference`: `Xfoil-instrumented/src/xblsys.f`, `SUBROUTINE AXSET`
+- `Why This Looks Different`: the Rust API separates compact and full-derivative forms, while XFOIL computes everything in one routine because all outputs are written into shared variables.
+- `Current Fidelity Status`: faithful.
+
+### `trchek2()` / `trchek2_full()`
+
+- `Function`: `trchek2()` and `trchek2_full()` in `crates/rustfoil-bl/src/closures/transition.rs`
+- `Role`: check whether transition occurs in the current interval and, if so, where.
+- `XFOIL Mapping`: `TRCHEK2`
+- `Fortran Reference`: `Xfoil-instrumented/src/xblsys.f`, `SUBROUTINE TRCHEK2`
+- `Why This Looks Different`: Rust gives the caller an explicit typed transition result rather than using shared flags like `TRAN`, `XT`, and updated amplification variables.
+- `Current Fidelity Status`: faithful.
+
+## Closure Relations
+
+### `hkin()`
+
+- `Function`: `hkin()` in `crates/rustfoil-bl/src/closures/hkin.rs`
+- `Role`: compute the kinematic shape factor and its derivatives.
+- `XFOIL Mapping`: `HKIN`
+- `Fortran Reference`: `Xfoil-instrumented/src/xblsys.f`, `SUBROUTINE HKIN` logic
+- `Why This Looks Different`: returns a typed derivative object.
+- `Current Fidelity Status`: faithful.
+
+### `hs_laminar()` and `hs_turbulent()`
+
+- `Function`: `hs_laminar()` and `hs_turbulent()` in `crates/rustfoil-bl/src/closures/hs.rs`
+- `Role`: compute the energy shape factor for laminar and turbulent flow.
+- `XFOIL Mapping`: `HSL` and `HST`
+- `Fortran Reference`: `Xfoil-instrumented/src/xblsys.f`, `HSL` / `HST` sections
+- `Why This Looks Different`: the laminar and turbulent correlations are exposed separately instead of being hidden behind one mode parameter.
+- `Current Fidelity Status`: faithful.
+
+### `cf_laminar()` and `cf_turbulent()`
+
+- `Function`: `cf_laminar()` and `cf_turbulent()` in `crates/rustfoil-bl/src/closures/cf.rs`
+- `Role`: compute laminar and turbulent skin friction plus derivatives.
+- `XFOIL Mapping`: `CFL` and `CFT`
+- `Fortran Reference`: `Xfoil-instrumented/src/xblsys.f`, `CFL` / `CFT` sections
+- `Why This Looks Different`: Rust makes the derivative-return contract explicit and preserves the XFOIL clamping/correction choices in readable code.
+- `Current Fidelity Status`: faithful.
+
+### `dissipation_laminar()`, `dissipation_turbulent()`, and `dissipation_wake()`
+
+- `Function`: dissipation closures in `crates/rustfoil-bl/src/closures/dissipation.rs`
+- `Role`: compute the dissipation coefficient for laminar, turbulent, and wake flow.
+- `XFOIL Mapping`: `DIL`, `DIT`, `DILW`
+- `Fortran Reference`: `Xfoil-instrumented/src/xblsys.f`, corresponding dissipation routines
+- `Why This Looks Different`: Rust separates the three correlations into explicit functions rather than overloading one routine with mode switches.
+- `Current Fidelity Status`: faithful.
+
+### `density_shape()`
+
+- `Function`: `density_shape()` in `crates/rustfoil-bl/src/closures/density.rs`
+- `Role`: compute the density shape parameter used in the shape equation.
+- `XFOIL Mapping`: `HCT`
+- `Fortran Reference`: `Xfoil-instrumented/src/xblsys.f`, `HCT` logic
+- `Why This Looks Different`: direct typed return value.
+- `Current Fidelity Status`: faithful.
+
+## Why These Functions Live In `rustfoil-bl`
+
+The faithful solver does not inline these closures into `rustfoil-xfoil` because:
+
+- they are mathematically self-contained
+- they are reused by multiple solver paths and debug harnesses
+- typed return values make Jacobian propagation easier to inspect than the original mutable output-argument style
+
+That is a Rust structural adaptation, not a deliberate change in physical or numerical intent.
+
+## Related Pages
+
+- [Faithful Marching And Transition](./faithful-marching-and-transition)
+- [Faithful Coupled Newton Solve](./faithful-coupled-newton)

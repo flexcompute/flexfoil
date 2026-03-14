@@ -1,0 +1,207 @@
+---
+title: Faithful State And Panel Ops
+description: Reference for the named XFOIL state, panel, wake, and topology operations in rustfoil-xfoil
+sidebar_position: 4
+---
+
+# Faithful State And Panel Ops
+
+This page covers the functions that manipulate the canonical faithful solver state around the airfoil, wake, stagnation point, and BL/panel topology.
+
+## Primary Rust Owners
+
+- `crates/rustfoil-xfoil/src/state.rs`
+- `crates/rustfoil-xfoil/src/state_ops.rs`
+- `crates/rustfoil-xfoil/src/wake_panel.rs`
+
+## Fortran Anchors
+
+- `Xfoil-instrumented/src/xoper.f`: `SPECAL`
+- `Xfoil-instrumented/src/xpanel.f`: `XYWAKE`, `QWCALC`, `QDCALC`, `STFIND`, `IBLPAN`, `XICALC`, `UICALC`, `QVFUE`, `GAMQV`, `STMOVE`, `UESET`, `DSSET`
+
+## Representative Fortran Excerpts
+
+```fortran
+      SUBROUTINE SPECAL
+      COSA = COS(ALFA)
+      SINA = SIN(ALFA)
+      DO I=1, N
+        GAM(I)   =  COSA*GAMU(I,1) + SINA*GAMU(I,2)
+        GAM_A(I) = -SINA*GAMU(I,1) + COSA*GAMU(I,2)
+      END DO
+```
+
+```fortran
+      SUBROUTINE STFIND
+      IF(GAM(I) .LT. -GAM(I+1)) THEN
+       SST = S(I)   - DS*(GAM(I)  /DGAM)
+      ELSE
+       SST = S(I+1) - DS*(GAM(I+1)/DGAM)
+      ENDIF
+      SST_GO = (SST  - S(I+1))/DGAM
+      SST_GP = (S(I) - SST   )/DGAM
+```
+
+## Canonical State Types
+
+### `XfoilState`
+
+- `Function`: `XfoilState` in `crates/rustfoil-xfoil/src/state.rs`
+- `Role`: owns the current panel geometry, wake geometry, inviscid/viscous velocities, gamma arrays, BL row state, and operating-point metadata.
+- `XFOIL Mapping`: typed Rust analogue to the combined XFOIL global arrays.
+- `Fortran Reference`: `XFOIL.INC` and related COMMON-block storage.
+- `Why This Looks Different`: Rust replaces COMMON blocks with explicit typed ownership and vectors, but still keeps XFOIL-like concepts such as `ist`, `sst`, `iblte`, `itran`, `qinv`, `qvis`, `gam`, and row-owned BL quantities.
+- `Current Fidelity Status`: faithful owner model with Rust-native structure.
+
+### `XfoilBlRow`
+
+- `Function`: `XfoilBlRow` in `crates/rustfoil-xfoil/src/state.rs`
+- `Role`: row-level BL state aligned with the canonical panel/BL topology.
+- `XFOIL Mapping`: structured analogue to per-row slices of `THET`, `DSTR`, `CTAU`, `UEDG`, `MASS`, and related arrays.
+- `Fortran Reference`: XFOIL BL arrays and panel-pointer arrays.
+- `Why This Looks Different`: consolidates row data into one struct to make row ownership and transitions explicit, especially around wake/airfoil reclassification.
+- `Current Fidelity Status`: mostly faithful, with explicit Rust row typing instead of scattered arrays.
+
+## Function Reference
+
+### `specal()`
+
+- `Function`: `specal()` in `crates/rustfoil-xfoil/src/state_ops.rs`
+- `Role`: combines the alpha-zero and alpha-90 basis solutions into the current `qinv`, `qinv_a`, `gam`, and `gam_a` state.
+- `XFOIL Mapping`: `SPECAL`
+- `Fortran Reference`: `Xfoil-instrumented/src/xoper.f`, `SUBROUTINE SPECAL`
+- `Why This Looks Different`: Rust updates both surface and wake basis arrays explicitly on `XfoilState`, whereas XFOIL relies on shared global arrays and subsequent calls like `QISET`.
+- `Current Fidelity Status`: faithful.
+
+### `xywake()`
+
+- `Function`: `xywake()` in `crates/rustfoil-xfoil/src/wake_panel.rs`
+- `Role`: reconstructs wake geometry by following the streamline off the trailing edge.
+- `XFOIL Mapping`: `XYWAKE`
+- `Fortran Reference`: `Xfoil-instrumented/src/xpanel.f`, `SUBROUTINE XYWAKE`
+- `Why This Looks Different`: the Rust version computes the same streamline-following wake using typed geometry and `psilin_with_dqdm()` rather than mutating Fortran arrays in place.
+- `Current Fidelity Status`: faithful.
+
+### `qwcalc()`
+
+- `Function`: `qwcalc()` in `crates/rustfoil-xfoil/src/wake_panel.rs`
+- `Role`: builds wake inviscid velocities for alpha-zero and alpha-90, then combines them at the current alpha.
+- `XFOIL Mapping`: `QWCALC`
+- `Fortran Reference`: `Xfoil-instrumented/src/xpanel.f`, `SUBROUTINE QWCALC`
+- `Why This Looks Different`: Rust stores wake basis arrays separately as `wake_qinvu_0` and `wake_qinvu_90`, which makes the wake’s inviscid basis explicit and reusable.
+- `Current Fidelity Status`: faithful.
+
+### `qdcalc()`
+
+- `Function`: `qdcalc()` in `crates/rustfoil-xfoil/src/wake_panel.rs`
+- `Role`: builds the coupled source-influence matrix including the current wake geometry.
+- `XFOIL Mapping`: `QDCALC`
+- `Fortran Reference`: `Xfoil-instrumented/src/xpanel.f`, `SUBROUTINE QDCALC`
+- `Why This Looks Different`: Rust delegates to the factorized inviscid system’s `build_dij_with_wake_state()` method, but the purpose and ownership match XFOIL’s `DIJ` setup.
+- `Current Fidelity Status`: faithful.
+
+### `stfind()`
+
+- `Function`: `stfind()` in `crates/rustfoil-xfoil/src/state_ops.rs`
+- `Role`: finds the gamma sign change, interpolates the stagnation location, and stores `sst_go` / `sst_gp`.
+- `XFOIL Mapping`: `STFIND`
+- `Fortran Reference`: `Xfoil-instrumented/src/xpanel.f`, `SUBROUTINE STFIND`
+- `Why This Looks Different`: Rust includes explicit finite fallbacks for degenerate gamma intervals so debug comparisons do not explode into NaNs, but the main interpolation formula matches XFOIL.
+- `Current Fidelity Status`: faithful with defensive Rust fallback behavior.
+
+### `iblpan()`
+
+- `Function`: `iblpan()` in `crates/rustfoil-xfoil/src/state_ops.rs`
+- `Role`: maps BL rows to surface and wake panel indices and establishes the surface direction signs.
+- `XFOIL Mapping`: `IBLPAN`
+- `Fortran Reference`: `Xfoil-instrumented/src/xpanel.f`, `SUBROUTINE IBLPAN`
+- `Why This Looks Different`: Rust keeps upper wake rows as explicit plotting/state entries while still preserving the lower-side canonical ownership needed by the Newton path.
+- `Current Fidelity Status`: mostly faithful.
+
+### `xicalc()`
+
+- `Function`: `xicalc()` in `crates/rustfoil-xfoil/src/state_ops.rs`
+- `Role`: sets BL arc-length coordinates relative to the current stagnation point and refreshes row views.
+- `XFOIL Mapping`: `XICALC`
+- `Fortran Reference`: `Xfoil-instrumented/src/xpanel.f`, `SUBROUTINE XICALC`
+- `Why This Looks Different`: Rust also refreshes row-owned view data while recomputing `x`, which is where recent parity fixes landed for signed lower-surface `uinv` handling and wake-to-airfoil ownership cleanup.
+- `Current Fidelity Status`: mostly faithful, with documented row-refresh responsibilities.
+
+### `uicalc()`
+
+- `Function`: `uicalc()` in `crates/rustfoil-xfoil/src/state_ops.rs`
+- `Role`: maps panel-space `qinv` and `qinv_a` into BL-space `uinv` and `uinv_a` using `VTI` sign conventions.
+- `XFOIL Mapping`: `UICALC`
+- `Fortran Reference`: `Xfoil-instrumented/src/xpanel.f`, `SUBROUTINE UICALC`
+- `Why This Looks Different`: Rust makes the sign convention explicit at the row level, which helped expose lower-surface sign bugs during recent parity work.
+- `Current Fidelity Status`: faithful.
+
+### `uedginit()`
+
+- `Function`: `uedginit()` in `crates/rustfoil-xfoil/src/state_ops.rs`
+- `Role`: seeds the first viscous edge-velocity field from the inviscid edge velocity.
+- `XFOIL Mapping`: equivalent to the `VISCAL` initialization block before the first `SETBL`.
+- `Fortran Reference`: `Xfoil-instrumented/src/xoper.f`, lines where `UEDG` is initialized from `UINV` when `LBLINI` is false
+- `Why This Looks Different`: Rust isolates this into a named helper rather than leaving it inline inside the main operating loop.
+- `Current Fidelity Status`: faithful support layer.
+
+### `ueset()`
+
+- `Function`: `ueset()` in `crates/rustfoil-xfoil/src/state_ops.rs`
+- `Role`: reconstructs `UEDG` from the inviscid field plus the mass-defect coupling through `DIJ`.
+- `XFOIL Mapping`: `UESET`
+- `Fortran Reference`: `Xfoil-instrumented/src/xpanel.f`, `SUBROUTINE UESET`
+- `Why This Looks Different`: Rust iterates over explicit row objects and panel indices, but preserves the same sign-sensitive coupling logic that proved important in the recent parity fixes.
+- `Current Fidelity Status`: faithful, with active debug support because `UESET` remains a critical parity checkpoint.
+
+### `dsset()`
+
+- `Function`: `dsset()` in `crates/rustfoil-xfoil/src/state_ops.rs`
+- `Role`: reconstructs displacement thickness from the coupled mass/velocity state.
+- `XFOIL Mapping`: `DSSET`
+- `Fortran Reference`: `Xfoil-instrumented/src/xpanel.f`, `SUBROUTINE DSSET`
+- `Why This Looks Different`: Rust operates on row objects and keeps wake-gap ownership explicit.
+- `Current Fidelity Status`: faithful.
+
+### `qvfue()`
+
+- `Function`: `qvfue()` in `crates/rustfoil-xfoil/src/state_ops.rs`
+- `Role`: writes the current BL edge velocity back to panel-space viscous tangential velocity.
+- `XFOIL Mapping`: `QVFUE`
+- `Fortran Reference`: `Xfoil-instrumented/src/xpanel.f`, `SUBROUTINE QVFUE`
+- `Why This Looks Different`: Rust uses row and panel vectors rather than direct array mutation.
+- `Current Fidelity Status`: faithful.
+
+### `gamqv()`
+
+- `Function`: `gamqv()` in `crates/rustfoil-xfoil/src/state_ops.rs`
+- `Role`: updates the surface gamma field from the viscous tangential velocity.
+- `XFOIL Mapping`: `GAMQV`
+- `Fortran Reference`: `Xfoil-instrumented/src/xpanel.f`, `SUBROUTINE GAMQV`
+- `Why This Looks Different`: Rust keeps `gam_a` and related basis data alongside the same update.
+- `Current Fidelity Status`: faithful.
+
+### `stmove()`
+
+- `Function`: `stmove()` in `crates/rustfoil-xfoil/src/state_ops.rs`
+- `Role`: relocates the stagnation point after the new gamma field is known and shifts BL row ownership accordingly.
+- `XFOIL Mapping`: `STMOVE`
+- `Fortran Reference`: `Xfoil-instrumented/src/xpanel.f`, `SUBROUTINE STMOVE`
+- `Why This Looks Different`: Rust makes the row-shift, wake-row refresh, and mass/state recomputation steps explicit instead of letting them stay implicit inside array-copy loops. Recent parity work around wake-to-airfoil `dw` ownership landed here.
+- `Current Fidelity Status`: mostly faithful with explicit row-management helpers.
+
+## Recent Rationale From Parity Work
+
+Three architecture choices in this area came directly from the last few days of parity notes:
+
+- lower-surface `uinv` must remain signed when `xicalc()` reseeds rows
+- wake rows that become airfoil rows after `STMOVE` must clear carried `dw`
+- the wake path must reuse the same current gamma field prepared by `SPECAL`, not a looser approximation
+
+Those are now part of the documented contract because they changed solver behavior, not just trace output.
+
+## Related Pages
+
+- [Faithful Operating Loop](./faithful-operating-loop)
+- [Faithful Marching And Transition](./faithful-marching-and-transition)
+- [Faithful Coupled Newton Solve](./faithful-coupled-newton)

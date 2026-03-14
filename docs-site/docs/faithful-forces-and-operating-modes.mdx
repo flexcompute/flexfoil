@@ -1,0 +1,120 @@
+---
+title: Faithful Forces And Operating Modes
+description: Reference for force accumulation and operating-mode behavior in the faithful solver
+sidebar_position: 8
+---
+
+# Faithful Forces And Operating Modes
+
+This page documents the functions that translate the converged faithful state into user-visible outputs such as `CL`, `CD`, and `CM`, plus the code paths that distinguish prescribed-alpha from prescribed-CL behavior.
+
+## Primary Rust Owners
+
+- `crates/rustfoil-xfoil/src/forces.rs`
+- `crates/rustfoil-xfoil/src/oper.rs`
+- `crates/rustfoil-xfoil/src/config.rs`
+
+## Fortran Anchors
+
+- `Xfoil-instrumented/src/xfoil.f`: `CLCALC`, `CDCALC`
+- `Xfoil-instrumented/src/xoper.f`: `SPECAL`, `VISCAL` operating-mode updates
+
+## Key Fortran Excerpt
+
+```fortran
+      SUBROUTINE CLCALC(...)
+...
+      CL = CL + DX*AG
+      CDP = CDP - DY*AG
+      CM = CM - DX*(AG*AX + DG*DX/12.0)
+     &        - DY*(AG*AY + DG*DY/12.0)
+```
+
+```fortran
+      SUBROUTINE CDCALC
+...
+      THWAKE = THET(NBL(2),2)
+      UEWAKE = UEDG(NBL(2),2) * (1.0-TKLAM) / (1.0 - TKLAM*URAT**2)
+      SHWAKE = DSTR(NBL(2),2)/THET(NBL(2),2)
+      CD = 2.0*THWAKE * (UEWAKE/QINF)**(0.5*(5.0+SHWAKE))
+...
+      CDF = CDF + 0.5*(TAU(IBL,IS)+TAU(IBL-1,IS))*DX * 2.0/QINF**2
+```
+
+## Function Reference
+
+### `AlphaSpec`
+
+- `Function`: `AlphaSpec` in `crates/rustfoil-xfoil/src/oper.rs`
+- `Role`: public-facing choice between prescribed-alpha and target-`CL` operating modes.
+- `XFOIL Mapping`: higher-level API wrapper over XFOIL’s `LALFA` / specified-`CL` behavior
+- `Fortran Reference`: operating-mode branches inside `SPECAL`, `SPECCL`, and `VISCAL`
+- `Why This Looks Different`: Rust turns the mode choice into a typed enum instead of using global flags.
+- `Current Fidelity Status`: faithful API abstraction.
+
+### `OperatingMode`
+
+- `Function`: `OperatingMode` in `crates/rustfoil-xfoil/src/config.rs`
+- `Role`: internal mode representation used by the faithful loop and update logic.
+- `XFOIL Mapping`: internal analogue to XFOIL’s alpha-held versus `CL`-held control path.
+- `Fortran Reference`: `LALFA`-dependent branches in XFOIL
+- `Why This Looks Different`: explicit typed state rather than implicit flag checks throughout the loop.
+- `Current Fidelity Status`: faithful support layer.
+
+### `compute_panel_forces_from_gamma()`
+
+- `Function`: `compute_panel_forces_from_gamma()` in `crates/rustfoil-xfoil/src/forces.rs`
+- `Role`: compute pressure-derived `CL` and `CM` from the current gamma field.
+- `XFOIL Mapping`: mostly `CLCALC`
+- `Fortran Reference`: `Xfoil-instrumented/src/xfoil.f`, `SUBROUTINE CLCALC`
+- `Why This Looks Different`: Rust computes a simplified pressure-based integration directly from gamma, then uses the canonical drag path separately for drag decomposition.
+- `Current Fidelity Status`: mostly faithful for lift/moment integration.
+
+### `update_force_state()`
+
+- `Function`: `update_force_state()` in `crates/rustfoil-xfoil/src/forces.rs`
+- `Role`: updates `cl`, `cm`, `cdf`, `cdp`, and total `cd` from the converged faithful state.
+- `XFOIL Mapping`: combined `CLCALC` + `CDCALC`
+- `Fortran Reference`: `Xfoil-instrumented/src/xfoil.f`, `SUBROUTINE CLCALC`, `SUBROUTINE CDCALC`
+- `Why This Looks Different`:
+  - Rust reconstructs a canonical force-state view and delegates drag to `compute_forces_from_canonical_state()`
+  - the goal is to preserve wake-aware drag ownership while reusing the canonical solver-force machinery rather than duplicating it inside `rustfoil-xfoil`
+- `Current Fidelity Status`: mostly faithful and explicitly tied to the converged wake state.
+
+## Operating-Mode Behavior In The Loop
+
+The faithful loop handles the two operating modes differently after `UPDATE`:
+
+- prescribed alpha:
+  - hold `alpha_rad`
+  - continue with the same inviscid basis angle
+- prescribed `CL`:
+  - update the operating variable
+  - rerun the angle-sensitive inviscid reconstruction before continuing
+
+That is why `solve_operating_point_from_state()` contains:
+
+```rust
+if let OperatingMode::PrescribedCl { .. } = state.operating_mode {
+    specal(state, state.alpha_rad);
+    uicalc(state);
+}
+```
+
+This corresponds to the same distinction XFOIL makes between alpha-driven and `CL`-driven operating-point updates.
+
+## Important Current Documentation Note
+
+Recent parity notes identified the operating-sensitivity column as an area that still deserves explicit scrutiny, especially in prescribed-alpha runs. That does not mean the force path is speculative; it means this page should make clear that:
+
+- force parity depends on the exact upstream state and wake ownership
+- operating-mode correctness is not only a final-output concern, but a solve-path concern
+
+## Why Drag Documentation Must Mention The Wake
+
+One of the main shifts in the faithful path was moving away from synthetic or heuristic drag evaluation and back toward drag coming from the converged faithful state. That is why the docs now treat `CDCALC`-style wake ownership as part of the solver architecture, not as an optional post-process detail.
+
+## Related Pages
+
+- [Faithful Operating Loop](./faithful-operating-loop)
+- [Faithful Coupled Newton Solve](./faithful-coupled-newton)
