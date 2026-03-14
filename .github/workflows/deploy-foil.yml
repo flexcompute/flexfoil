@@ -57,7 +57,9 @@ jobs:
         working-directory: ./flexfoil-ui
         run: npm run build
         env:
+          NODE_OPTIONS: --max-old-space-size=4096
           BASE_URL: ${{ env.BASE_URL }}
+          VITE_AG_GRID_LICENSE_KEY: ${{ secrets.AG_GRID_LICENSE_KEY }}
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
