@@ -12,6 +12,8 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 rustfoil-core = { path = "../rustfoil-core" }
 rustfoil-solver = { path = "../rustfoil-solver" }
+rustfoil-inviscid = { path = "../rustfoil-inviscid" }
+rustfoil-xfoil = { path = "../rustfoil-xfoil" }
 wasm-bindgen = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 serde-wasm-bindgen = "0.6"

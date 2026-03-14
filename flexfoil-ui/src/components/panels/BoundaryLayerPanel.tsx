@@ -28,7 +28,7 @@ const VARIABLE_COLORS = {
 };
 
 export function BoundaryLayerPanel() {
-  const { panels, displayAlpha, reynolds, solverMode } = useAirfoilStore();
+  const { panels, displayAlpha, reynolds } = useAirfoilStore();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -42,7 +42,7 @@ export function BoundaryLayerPanel() {
 
   // Fetch BL data when inputs change
   useEffect(() => {
-    if (!isWasmReady() || panels.length < 3 || solverMode !== 'viscous') {
+    if (!isWasmReady() || panels.length < 3) {
       setBLData(null);
       return;
     }
@@ -60,7 +60,7 @@ export function BoundaryLayerPanel() {
       }
       setIsLoading(false);
     });
-  }, [panels, displayAlpha, reynolds, solverMode]);
+  }, [panels, displayAlpha, reynolds]);
 
   // Get data for current variable
   const getData = useCallback((variable: PlotVariable, surface: 'upper' | 'lower'): { x: number[]; y: number[] } => {
@@ -99,8 +99,6 @@ export function BoundaryLayerPanel() {
       return { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
     }
 
-    const xMin = Math.min(...allX);
-    const xMax = Math.max(...allX);
     const yMin = Math.min(...allY, 0);
     const yMax = Math.max(...allY);
     
@@ -296,13 +294,6 @@ export function BoundaryLayerPanel() {
         ctx.textAlign = 'center';
         ctx.fillText(`Tr L: ${(blData.x_tr_lower * 100).toFixed(0)}%`, xTr, margin.top + 10);
       }
-    } else if (solverMode !== 'viscous') {
-      // No data - show message
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-      ctx.font = '14px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('Switch to Viscous mode to see BL data', width / 2, height / 2);
     } else if (isLoading) {
       ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
       ctx.font = '14px sans-serif';
@@ -324,7 +315,7 @@ export function BoundaryLayerPanel() {
     ctx.fillRect(width - 90, 26, 12, 12);
     ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
     ctx.fillText('Lower', width - 74, 36);
-  }, [canvasSize, blData, plotVariable, bounds, getData, solverMode, isLoading]);
+  }, [canvasSize, blData, plotVariable, bounds, getData, isLoading]);
   
   // Resize observer
   useEffect(() => {

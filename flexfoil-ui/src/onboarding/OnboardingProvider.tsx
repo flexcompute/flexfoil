@@ -193,7 +193,7 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
         }, 100);
         
         // Handle challenge if present, also poll for element visibility
-        const challenge = originalStep?.challengeId ? getChallenge(originalStep.challengeId) : null;
+        const challenge = originalStep?.challengeId ? (getChallenge(originalStep.challengeId) ?? null) : null;
         
         if (challenge || elementSelector) {
           currentChallengeRef.current = challenge;

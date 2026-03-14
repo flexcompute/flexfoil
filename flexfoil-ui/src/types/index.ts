@@ -18,6 +18,7 @@ export interface AirfoilPoint extends Point {
 
 /** Control modes for airfoil manipulation */
 export type ControlMode = 'parameters' | 'camber-spline' | 'thickness-spline';
+export type SolverMode = 'viscous';
 
 /** Spacing panel modes */
 export type SpacingPanelMode = 'simple' | 'advanced';
@@ -110,6 +111,10 @@ export interface AirfoilState {
   curvatureWeight: number;
   /** Current angle of attack for visualization (degrees) */
   displayAlpha: number;
+  /** Reynolds number for faithful viscous analysis */
+  reynolds: number;
+  /** Active solver mode */
+  solverMode: SolverMode;
   /** Polar sweep data */
   polarData: PolarPoint[];
   /** Spacing panel mode: simple (curvature-based) or advanced (SSP) */
@@ -136,6 +141,7 @@ export interface AirfoilState {
 export interface PolarPoint {
   alpha: number;
   cl: number;
+  cd?: number;
   cm: number;
 }
 

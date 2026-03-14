@@ -10,9 +10,10 @@ import init, {
     repanel_xfoil,
     repanel_xfoil_with_params,
     compute_curvature_spacing,
-    analyze_airfoil,
-    compute_streamlines,
-    compute_psi_grid,
+    analyze_airfoil_faithful,
+    compute_streamlines_faithful,
+    compute_psi_grid_faithful,
+    get_bl_distribution_faithful,
     WasmSmokeSystem,
     greet,
     RustFoil,
@@ -282,25 +283,85 @@ export function repanelXfoilWithParams(
  */
 export interface AnalysisResult {
     cl: number;
+    cd: number;
     cm: number;
     cp: number[];
     cp_x: number[];
     gamma: number[];  // Now always returned from solver
     psi_0: number;    // Dividing streamline value
+    converged: boolean;
+    iterations: number;
+    residual: number;
+    x_tr_upper: number;
+    x_tr_lower: number;
+    success: boolean;
+    error?: string;
+}
+
+export interface BLDistribution {
+    x_upper: number[];
+    x_lower: number[];
+    theta_upper: number[];
+    theta_lower: number[];
+    delta_star_upper: number[];
+    delta_star_lower: number[];
+    h_upper: number[];
+    h_lower: number[];
+    cf_upper: number[];
+    cf_lower: number[];
+    x_tr_upper: number;
+    x_tr_lower: number;
+    converged: boolean;
+    iterations: number;
+    residual: number;
     success: boolean;
     error?: string;
 }
 
 export function analyzeAirfoil(
     coordinates: { x: number; y: number }[],
-    alphaDeg: number
+    alphaDeg: number,
+    reynolds: number = 1e6,
+    mach: number = 0,
+    ncrit: number = 9,
+    maxIterations: number = 100
 ): AnalysisResult {
     if (!initialized) {
         throw new Error('WASM not initialized. Call initWasm() first.');
     }
     
     const coordsFlat = pointsToFlat(coordinates);
-    return analyze_airfoil(coordsFlat, alphaDeg) as AnalysisResult;
+    return analyze_airfoil_faithful(
+        coordsFlat,
+        alphaDeg,
+        reynolds,
+        mach,
+        ncrit,
+        maxIterations
+    ) as AnalysisResult;
+}
+
+export function getBLDistribution(
+    coordinates: { x: number; y: number }[],
+    alphaDeg: number,
+    reynolds: number = 1e6,
+    mach: number = 0,
+    ncrit: number = 9,
+    maxIterations: number = 100
+): BLDistribution {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+
+    const coordsFlat = pointsToFlat(coordinates);
+    return get_bl_distribution_faithful(
+        coordsFlat,
+        alphaDeg,
+        reynolds,
+        mach,
+        ncrit,
+        maxIterations
+    ) as BLDistribution;
 }
 
 /**
@@ -319,7 +380,11 @@ export interface GammaResult {
 
 export function computeGamma(
     coordinates: { x: number; y: number }[],
-    alphaDeg: number
+    alphaDeg: number,
+    reynolds: number = 1e6,
+    mach: number = 0,
+    ncrit: number = 9,
+    maxIterations: number = 100
 ): GammaResult {
     if (!initialized) {
         return { gamma: null, psi_0: 0, success: false, error: 'WASM not initialized' };
@@ -327,7 +392,7 @@ export function computeGamma(
     
     try {
         // Call the actual solver to get real gamma values
-        const result = analyzeAirfoil(coordinates, alphaDeg);
+        const result = analyzeAirfoil(coordinates, alphaDeg, reynolds, mach, ncrit, maxIterations);
         
         if (!result.success || !result.gamma || result.gamma.length === 0) {
             return { 
@@ -371,15 +436,28 @@ export interface StreamlineResult {
 export function computeStreamlines(
     coordinates: { x: number; y: number }[],
     alphaDeg: number,
+    reynolds: number = 1e6,
     seedCount: number = 25,
-    bounds: [number, number, number, number] = [-0.5, 2.0, -0.5, 0.5]
+    bounds: [number, number, number, number] = [-0.5, 2.0, -0.5, 0.5],
+    mach: number = 0,
+    ncrit: number = 9,
+    maxIterations: number = 100
 ): StreamlineResult {
     if (!initialized) {
         throw new Error('WASM not initialized. Call initWasm() first.');
     }
     
     const coordsFlat = pointsToFlat(coordinates);
-    return compute_streamlines(coordsFlat, alphaDeg, seedCount, new Float64Array(bounds)) as StreamlineResult;
+    return compute_streamlines_faithful(
+        coordsFlat,
+        alphaDeg,
+        reynolds,
+        mach,
+        ncrit,
+        maxIterations,
+        seedCount,
+        new Float64Array(bounds)
+    ) as StreamlineResult;
 }
 
 /**
@@ -416,17 +494,25 @@ export interface PsiGridResult {
 export function computePsiGrid(
     coordinates: { x: number; y: number }[],
     alphaDeg: number,
+    reynolds: number = 1e6,
     bounds: [number, number, number, number] = [-1.0, 2.0, -1.0, 1.0],
-    resolution: [number, number] = [100, 80]
+    resolution: [number, number] = [100, 80],
+    mach: number = 0,
+    ncrit: number = 9,
+    maxIterations: number = 100
 ): PsiGridResult {
     if (!initialized) {
         throw new Error('WASM not initialized. Call initWasm() first.');
     }
     
     const coordsFlat = pointsToFlat(coordinates);
-    return compute_psi_grid(
+    return compute_psi_grid_faithful(
         coordsFlat, 
         alphaDeg, 
+        reynolds,
+        mach,
+        ncrit,
+        maxIterations,
         new Float64Array(bounds), 
         new Uint32Array(resolution)
     ) as PsiGridResult;
