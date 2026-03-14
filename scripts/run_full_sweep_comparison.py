@@ -331,7 +331,7 @@ def write_plot_html(cases: list[dict[str, Any]], output_path: Path, rust_solver_
       .controls {{ grid-template-columns:1fr; gap:10px; margin-bottom:12px; }}
       .summary {{ display:flex; overflow-x:auto; scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch; gap:12px; padding-bottom:4px; margin-bottom:8px; scrollbar-width:none; }}
       .summary::-webkit-scrollbar {{ display:none; }}
-      .card {{ min-width:78vw; flex-shrink:0; scroll-snap-align:start; min-height:auto; padding:14px 16px; }}
+      .card {{ min-width:calc(50% - 6px); flex-shrink:0; scroll-snap-align:start; min-height:auto; padding:14px 16px; }}
       .value {{ font-size:22px; }}
       .dot-row {{ display:flex; }}
       .plot-tabs {{ display:flex; }}
