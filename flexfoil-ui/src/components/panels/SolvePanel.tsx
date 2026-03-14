@@ -1,15 +1,17 @@
 /**
- * SolvePanel - Aerodynamic analysis controls
- * 
- * Provides:
- * - Single-point faithful viscous analysis
- * - Alpha polar generation
+ * SolvePanel - Aerodynamic analysis controls with solver caching.
+ *
+ * Every solver evaluation is persisted to the run database (SQLite).
+ * Before calling the WASM solver, the cache is checked — cache hits
+ * skip the solver entirely and return the stored result.
  */
 
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
+import { useRunStore } from '../../stores/runStore';
 import { analyzeAirfoil, isWasmReady, type AnalysisResult } from '../../lib/wasm';
 import type { PolarPoint } from '../../types';
+import type { RunInsert } from '../../lib/runDatabase';
 
 type RunMode = 'alpha' | 'cl';
 
@@ -23,129 +25,169 @@ export function SolvePanel() {
     setDisplayAlpha,
     setReynolds,
     setPolarData,
-    clearPolar
+    clearPolar,
   } = useAirfoilStore();
-  
+
+  const { lookup, addRun, hashPanels } = useRunStore();
+
   const [runMode, setRunMode] = useState<RunMode>('alpha');
-  
-  // Single-point inputs - initialize from store's displayAlpha
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // Solver parameters with sensible defaults
+  const [mach, setMach] = useState(0);
+  const [ncrit, setNcrit] = useState(9);
+  const [maxIterations, setMaxIterations] = useState(100);
+
+  // Single-point inputs
   const [targetAlpha, setTargetAlphaLocal] = useState(displayAlpha);
   const [targetCl, setTargetCl] = useState(0.5);
-  
-  // Debounce timer ref
+
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
-  // Sync local targetAlpha with store on mount (respect store's initial value)
   const initializedRef = useRef(false);
+
   useEffect(() => {
     if (!initializedRef.current) {
       initializedRef.current = true;
-      // On first load, update store to match initial targetAlpha if different
       if (displayAlpha !== targetAlpha) {
         setDisplayAlpha(targetAlpha);
       }
     }
   }, [displayAlpha, targetAlpha, setDisplayAlpha]);
-  
-  // Wrapper to update both local state and store displayAlpha (debounced)
+
   const setTargetAlpha = useCallback((alpha: number) => {
     setTargetAlphaLocal(alpha);
-    
-    // Debounce the store update to avoid excessive recomputation while typing
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-    }
-    debounceRef.current = setTimeout(() => {
-      setDisplayAlpha(alpha);
-    }, 300); // 300ms debounce
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setDisplayAlpha(alpha), 300);
   }, [setDisplayAlpha]);
-  
-  // Cleanup debounce timer on unmount
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-      }
-    };
-  }, []);
-  
+
+  useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
+
   // Polar settings
   const [alphaStart, setAlphaStart] = useState(-5);
   const [alphaEnd, setAlphaEnd] = useState(15);
   const [alphaStep, setAlphaStep] = useState(1);
-  
+
   // Results
   const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [resultAlpha, setResultAlpha] = useState<number | null>(null); // Alpha that was solved for
+  const [resultAlpha, setResultAlpha] = useState<number | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
-  // Use store's polarData instead of local state
+  const [cacheStats, setCacheStats] = useState<{ hits: number; misses: number } | null>(null);
+
   const polar = polarData;
 
-  // Run single-point analysis
-  const runAnalysis = useCallback(() => {
+  // --------------- helpers ---------------
+
+  /** Run a single point — check cache first, fall back to solver. */
+  const solveOrCache = useCallback(async (
+    alpha: number,
+    airfoilHash: string,
+    nPanels: number,
+  ): Promise<AnalysisResult | null> => {
+    const cached = lookup(airfoilHash, alpha, reynolds, mach, ncrit, nPanels, maxIterations);
+    if (cached && cached.success) {
+      return {
+        cl: cached.cl ?? 0,
+        cd: cached.cd ?? 0,
+        cm: cached.cm ?? 0,
+        cp: [],
+        cp_x: [],
+        gamma: [],
+        psi_0: 0,
+        converged: cached.converged,
+        iterations: cached.iterations ?? 0,
+        residual: cached.residual ?? 0,
+        x_tr_upper: cached.x_tr_upper ?? 0,
+        x_tr_lower: cached.x_tr_lower ?? 0,
+        success: true,
+        _cached: true,
+      } as AnalysisResult & { _cached?: boolean };
+    }
+
+    const res = analyzeAirfoil(panels, alpha, reynolds, mach, ncrit, maxIterations);
+
+    const run: RunInsert = {
+      airfoil_name: name,
+      airfoil_hash: airfoilHash,
+      alpha,
+      reynolds,
+      mach,
+      ncrit,
+      n_panels: nPanels,
+      max_iter: maxIterations,
+      cl: res.cl,
+      cd: res.cd,
+      cm: res.cm,
+      converged: res.converged,
+      iterations: res.iterations,
+      residual: res.residual,
+      x_tr_upper: res.x_tr_upper,
+      x_tr_lower: res.x_tr_lower,
+      success: res.success,
+      error: res.error ?? null,
+    };
+    await addRun(run);
+
+    return res;
+  }, [panels, name, reynolds, mach, ncrit, maxIterations, lookup, addRun]);
+
+  // --------------- single-point ---------------
+
+  const runAnalysis = useCallback(async () => {
     if (!isWasmReady() || panels.length < 3) {
       setError('WASM not ready or insufficient geometry');
       return;
     }
-    
+
     setIsRunning(true);
     setError(null);
     setResultAlpha(null);
-    
+    setCacheStats(null);
+
     try {
+      const airfoilHash = await hashPanels(panels);
+      const nPanels = panels.length - 1;
+
       if (runMode === 'alpha') {
-        // Direct alpha analysis
-        const res = analyzeAirfoil(panels, targetAlpha, reynolds);
+        const res = await solveOrCache(targetAlpha, airfoilHash, nPanels);
+        if (!res) { setError('Analysis returned no result'); setIsRunning(false); return; }
         setResult(res);
         setResultAlpha(targetAlpha);
         if (!res.success) {
           setError(res.error || 'Analysis failed');
         } else if (!res.converged) {
-          setError(`Faithful viscous solver did not converge (residual ${res.residual.toExponential(2)})`);
+          setError(`Viscous solver did not converge (residual ${res.residual.toExponential(2)})`);
         }
       } else {
-        // Iterate to find alpha for target CL
         let alpha = 0;
-        let cl = 0;
         const maxIter = 20;
         const tol = 0.001;
-        
+
         for (let i = 0; i < maxIter; i++) {
-          const res = analyzeAirfoil(panels, alpha, reynolds);
-          if (!res.success) {
-            setError(res.error || 'Analysis failed during CL iteration');
+          const res = await solveOrCache(alpha, airfoilHash, nPanels);
+          if (!res || !res.success) {
+            setError(res?.error || 'Analysis failed during CL iteration');
             setIsRunning(false);
             return;
           }
-          
-          cl = res.cl;
-          const clError = targetCl - cl;
-          
+
+          const clError = targetCl - res.cl;
           if (Math.abs(clError) < tol) {
             setResult(res);
             setResultAlpha(alpha);
-            // Update display alpha to show the found alpha
             setDisplayAlpha(alpha);
             break;
           }
-          
-          // Estimate cl_alpha (thin airfoil: ~2π per radian ≈ 0.11 per degree)
-          const clAlpha = 0.11;
-          alpha += clError / clAlpha;
-          
-          // Clamp to reasonable range
+
+          alpha += clError / 0.11;
           alpha = Math.max(-20, Math.min(25, alpha));
-          
+
           if (i === maxIter - 1) {
-            // Last iteration - use whatever we got
-            const finalRes = analyzeAirfoil(panels, alpha, reynolds);
+            const finalRes = await solveOrCache(alpha, airfoilHash, nPanels);
             setResult(finalRes);
             setResultAlpha(alpha);
-            // Update display alpha even if not fully converged
             setDisplayAlpha(alpha);
-            if (Math.abs(targetCl - finalRes.cl) > 0.01) {
+            if (finalRes && Math.abs(targetCl - finalRes.cl) > 0.01) {
               setError(`Could not converge to CL=${targetCl.toFixed(3)}. Got CL=${finalRes.cl.toFixed(3)} at α=${alpha.toFixed(2)}°`);
             }
           }
@@ -154,65 +196,103 @@ export function SolvePanel() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unknown error');
     }
-    
-    setIsRunning(false);
-  }, [panels, runMode, targetAlpha, targetCl, reynolds, setDisplayAlpha]);
 
-  // Run polar sweep
-  const runPolar = useCallback(() => {
+    setIsRunning(false);
+  }, [panels, runMode, targetAlpha, targetCl, reynolds, setDisplayAlpha, hashPanels, solveOrCache]);
+
+  // --------------- polar sweep ---------------
+
+  const runPolar = useCallback(async () => {
     if (!isWasmReady() || panels.length < 3) {
       setError('WASM not ready or insufficient geometry');
       return;
     }
-    
+
     setIsRunning(true);
     setError(null);
     clearPolar();
-    
+    setCacheStats(null);
+
     try {
+      const airfoilHash = await hashPanels(panels);
+      const nPanels = panels.length - 1;
       const points: PolarPoint[] = [];
-      
-      for (let alpha = alphaStart; alpha <= alphaEnd; alpha += alphaStep) {
-        const res = analyzeAirfoil(panels, alpha, reynolds);
-        if (res.success) {
-          points.push({
-            alpha,
+      let hits = 0;
+      let misses = 0;
+
+      for (let alpha = alphaStart; alpha <= alphaEnd + 1e-9; alpha += alphaStep) {
+        const roundedAlpha = Math.round(alpha * 1e6) / 1e6;
+
+        // Check cache (returns null if DB not ready yet — no problem)
+        let wasCached = false;
+        const cached = lookup(airfoilHash, roundedAlpha, reynolds, mach, ncrit, nPanels, maxIterations);
+        if (cached && cached.success) {
+          points.push({ alpha: roundedAlpha, cl: cached.cl ?? 0, cd: cached.cd ?? 0, cm: cached.cm ?? 0 });
+          hits++;
+          wasCached = true;
+        }
+
+        if (!wasCached) {
+          const res = analyzeAirfoil(panels, roundedAlpha, reynolds, mach, ncrit, maxIterations);
+          misses++;
+
+          const run: RunInsert = {
+            airfoil_name: name,
+            airfoil_hash: airfoilHash,
+            alpha: roundedAlpha,
+            reynolds,
+            mach,
+            ncrit,
+            n_panels: nPanels,
+            max_iter: maxIterations,
             cl: res.cl,
             cd: res.cd,
             cm: res.cm,
-          });
+            converged: res.converged,
+            iterations: res.iterations,
+            residual: res.residual,
+            x_tr_upper: res.x_tr_upper,
+            x_tr_lower: res.x_tr_lower,
+            success: res.success,
+            error: res.error ?? null,
+          };
+          await addRun(run);
+
+          if (res.success) {
+            points.push({ alpha: roundedAlpha, cl: res.cl, cd: res.cd, cm: res.cm });
+          }
         }
       }
-      
+
       setPolarData(points);
-      
+      setCacheStats({ hits, misses });
+
       if (points.length === 0) {
         setError('No valid points in polar');
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unknown error');
     }
-    
-    setIsRunning(false);
-  }, [panels, alphaStart, alphaEnd, alphaStep, reynolds, clearPolar, setPolarData]);
 
-  // Compute cl_alpha from polar
+    setIsRunning(false);
+  }, [panels, name, alphaStart, alphaEnd, alphaStep, reynolds, mach, ncrit, maxIterations,
+      clearPolar, setPolarData, hashPanels, lookup, addRun]);
+
+  // --------------- derived ---------------
+
   const clAlpha = useMemo(() => {
     if (polar.length < 2) return null;
-    
-    // Linear regression in the linear region (-5 to 10 deg typically)
     const linearPoints = polar.filter(p => p.alpha >= -5 && p.alpha <= 10);
     if (linearPoints.length < 2) return null;
-    
     const n = linearPoints.length;
     const sumX = linearPoints.reduce((s, p) => s + p.alpha, 0);
     const sumY = linearPoints.reduce((s, p) => s + p.cl, 0);
     const sumXY = linearPoints.reduce((s, p) => s + p.alpha * p.cl, 0);
     const sumX2 = linearPoints.reduce((s, p) => s + p.alpha * p.alpha, 0);
-    
-    const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
-    return slope; // per degree
+    return (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
   }, [polar]);
+
+  // --------------- render ---------------
 
   return (
     <div className="panel">
@@ -224,7 +304,8 @@ export function SolvePanel() {
             Faithful XFOIL viscous solver
           </div>
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
-            Frontend flow analysis now uses the faithful Rust reproduction path.
+            Results are cached in a local SQLite database.
+            Results cached in local SQLite database.
           </div>
         </div>
 
@@ -238,11 +319,72 @@ export function SolvePanel() {
           />
         </div>
 
+        {/* Advanced Solver Settings */}
+        <div className="form-group">
+          <button
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            style={{
+              width: '100%',
+              padding: '4px 8px',
+              fontSize: '11px',
+              background: 'transparent',
+              border: '1px solid var(--border-color)',
+              borderRadius: '4px',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}
+          >
+            <span>Advanced Settings</span>
+            <span style={{ fontSize: '10px' }}>{showAdvanced ? '▲' : '▼'}</span>
+          </button>
+          {showAdvanced && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+              <div>
+                <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Mach Number</label>
+                <input
+                  type="number"
+                  value={mach}
+                  onChange={(e) => setMach(Math.max(0, Math.min(0.8, parseFloat(e.target.value) || 0)))}
+                  step={0.01}
+                  min={0}
+                  max={0.8}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                  Ncrit (e<sup>N</sup> transition)
+                </label>
+                <input
+                  type="number"
+                  value={ncrit}
+                  onChange={(e) => setNcrit(Math.max(1, Math.min(14, parseFloat(e.target.value) || 9)))}
+                  step={0.5}
+                  min={1}
+                  max={14}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Max Iterations</label>
+                <input
+                  type="number"
+                  value={maxIterations}
+                  onChange={(e) => setMaxIterations(Math.max(10, Math.min(500, parseInt(e.target.value) || 100)))}
+                  step={10}
+                  min={10}
+                  max={500}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Single Point Analysis */}
         <div className="form-group" data-tour="solve-alpha">
           <div className="form-label">Single Point</div>
-          
-          {/* Run mode toggle */}
+
           <div style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
             <button
               onClick={() => setRunMode('alpha')}
@@ -259,8 +401,7 @@ export function SolvePanel() {
               Run to CL
             </button>
           </div>
-          
-          {/* Input field */}
+
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <label style={{ fontSize: '12px', minWidth: '60px' }}>
               {runMode === 'alpha' ? 'Alpha (°):' : 'Target CL:'}
@@ -270,11 +411,8 @@ export function SolvePanel() {
               value={runMode === 'alpha' ? targetAlpha : targetCl}
               onChange={(e) => {
                 const val = parseFloat(e.target.value);
-                if (runMode === 'alpha') {
-                  setTargetAlpha(val);
-                } else {
-                  setTargetCl(val);
-                }
+                if (runMode === 'alpha') setTargetAlpha(val);
+                else setTargetCl(val);
               }}
               step={runMode === 'alpha' ? 0.5 : 0.1}
               style={{ flex: 1 }}
@@ -317,38 +455,22 @@ export function SolvePanel() {
         {/* Polar Sweep */}
         <div className="form-group" style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-color)' }} data-tour="solve-polar">
           <div className="form-label">Alpha Polar</div>
-          
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
             <div>
               <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Start (°)</label>
-              <input
-                type="number"
-                value={alphaStart}
-                onChange={(e) => setAlphaStart(parseFloat(e.target.value))}
-                step={1}
-              />
+              <input type="number" value={alphaStart} onChange={(e) => setAlphaStart(parseFloat(e.target.value))} step={1} />
             </div>
             <div>
               <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>End (°)</label>
-              <input
-                type="number"
-                value={alphaEnd}
-                onChange={(e) => setAlphaEnd(parseFloat(e.target.value))}
-                step={1}
-              />
+              <input type="number" value={alphaEnd} onChange={(e) => setAlphaEnd(parseFloat(e.target.value))} step={1} />
             </div>
             <div>
               <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Step (°)</label>
-              <input
-                type="number"
-                value={alphaStep}
-                onChange={(e) => setAlphaStep(parseFloat(e.target.value))}
-                step={0.5}
-                min={0.1}
-              />
+              <input type="number" value={alphaStep} onChange={(e) => setAlphaStep(parseFloat(e.target.value))} step={0.5} min={0.1} />
             </div>
           </div>
-          
+
           <button
             onClick={runPolar}
             disabled={isRunning || !isWasmReady()}
@@ -357,6 +479,13 @@ export function SolvePanel() {
             {isRunning ? 'Running...' : 'Generate Polar'}
           </button>
         </div>
+
+        {/* Cache stats */}
+        {cacheStats && (
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', padding: '4px 0' }}>
+            Cache: {cacheStats.hits} hits, {cacheStats.misses} computed
+          </div>
+        )}
 
         {/* Polar Results */}
         {polar.length > 0 && (
@@ -369,8 +498,7 @@ export function SolvePanel() {
                 </span>
               )}
             </div>
-            
-            {/* Mini polar table */}
+
             <div style={{
               maxHeight: '200px',
               overflow: 'auto',
@@ -379,10 +507,9 @@ export function SolvePanel() {
               fontFamily: 'var(--font-mono)',
               fontSize: '10px',
             }}>
-              {/* Header */}
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: '1fr 1fr 1fr',
+                gridTemplateColumns: '1fr 1fr 1fr 1fr',
                 gap: '4px',
                 padding: '4px 8px',
                 background: 'var(--bg-tertiary)',
@@ -392,36 +519,33 @@ export function SolvePanel() {
               }}>
                 <span>α (°)</span>
                 <span>CL</span>
+                <span>CD</span>
                 <span>CM</span>
               </div>
-              
-              {/* Data rows */}
+
               {polar.map((p, i) => (
-                <div
-                  key={i}
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr 1fr',
-                    gap: '4px',
-                    padding: '2px 8px',
-                    borderBottom: '1px solid var(--border-color)',
-                  }}
-                >
+                <div key={i} style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr 1fr 1fr',
+                  gap: '4px',
+                  padding: '2px 8px',
+                  borderBottom: '1px solid var(--border-color)',
+                }}>
                   <span>{p.alpha.toFixed(1)}</span>
                   <span style={{ color: p.cl >= 0 ? 'var(--accent-primary)' : 'var(--accent-secondary)' }}>
                     {p.cl.toFixed(4)}
                   </span>
+                  <span>{p.cd !== undefined ? p.cd.toFixed(5) : '—'}</span>
                   <span>{p.cm.toFixed(4)}</span>
                 </div>
               ))}
             </div>
-            
-            {/* Export polar */}
+
             <button
               onClick={() => {
-                const header = `# ${name} - Inviscid Polar\n# Alpha(deg)  CL        CM\n`;
-                const data = polar.map(p => 
-                  `${p.alpha.toFixed(2).padStart(8)} ${p.cl.toFixed(6).padStart(10)} ${p.cm.toFixed(6).padStart(10)}`
+                const header = `# ${name} - Viscous Polar (Re=${reynolds})\n# Alpha(deg)  CL        CD         CM\n`;
+                const data = polar.map(p =>
+                  `${p.alpha.toFixed(2).padStart(8)} ${p.cl.toFixed(6).padStart(10)} ${(p.cd ?? 0).toFixed(6).padStart(10)} ${p.cm.toFixed(6).padStart(10)}`
                 ).join('\n');
                 const blob = new Blob([header + data], { type: 'text/plain' });
                 const url = URL.createObjectURL(blob);
@@ -483,9 +607,9 @@ function ResultCard({ label, value, highlight }: { label: string; value: string;
       <div style={{ fontSize: '10px', color: highlight ? 'var(--bg-primary)' : 'var(--text-muted)', marginBottom: '2px' }}>
         {label}
       </div>
-      <div style={{ 
-        fontFamily: 'var(--font-mono)', 
-        fontWeight: 600, 
+      <div style={{
+        fontFamily: 'var(--font-mono)',
+        fontWeight: 600,
         fontSize: '14px',
         color: highlight ? 'var(--bg-primary)' : 'inherit',
       }}>

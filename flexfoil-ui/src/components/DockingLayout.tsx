@@ -15,11 +15,13 @@ import { PropertiesPanel } from './panels/PropertiesPanel';
 import { SolvePanel } from './panels/SolvePanel';
 import { PolarPanel } from './panels/PolarPanel';
 import { VisualizationPanel } from './panels/VisualizationPanel';
+import { DataExplorerPanel } from './panels/DataExplorerPanel';
+import { PlotBuilderPanel } from './panels/PlotBuilderPanel';
 import { MenuBar } from './MenuBar';
 import { LayoutProvider } from '../contexts/LayoutContext';
 
 // Storage keys
-const LAYOUT_STORAGE_KEY = 'flexfoil-layout-v1';
+const LAYOUT_STORAGE_KEY = 'flexfoil-layout-v2';
 
 // Panel definitions
 export const PANELS = [
@@ -31,6 +33,8 @@ export const PANELS = [
   { id: 'solve', name: 'Solve', component: 'solve' },
   { id: 'polar', name: 'Polar Plot', component: 'polar' },
   { id: 'visualization', name: 'Visualization', component: 'visualization' },
+  { id: 'data-explorer', name: 'Data Explorer', component: 'data-explorer' },
+  { id: 'plot-builder', name: 'Plot Builder', component: 'plot-builder' },
 ];
 
 // Default layout configuration
@@ -82,6 +86,8 @@ const defaultLayoutJson: IJsonModel = {
             weight: 30,
             children: [
               { type: 'tab', id: 'polar', name: 'Polar Plot', component: 'polar' },
+              { type: 'tab', id: 'plot-builder', name: 'Plot Builder', component: 'plot-builder' },
+              { type: 'tab', id: 'data-explorer', name: 'Data Explorer', component: 'data-explorer' },
             ],
           },
         ],
@@ -304,6 +310,18 @@ export function DockingLayout({ wasmStatus, initialViewport }: DockingLayoutProp
         return (
           <div data-tour="panel-visualization" style={{ width: '100%', height: '100%' }}>
             <VisualizationPanel />
+          </div>
+        );
+      case 'data-explorer':
+        return (
+          <div data-tour="panel-data-explorer" style={{ width: '100%', height: '100%' }}>
+            <DataExplorerPanel />
+          </div>
+        );
+      case 'plot-builder':
+        return (
+          <div data-tour="panel-plot-builder" style={{ width: '100%', height: '100%' }}>
+            <PlotBuilderPanel />
           </div>
         );
       default:
