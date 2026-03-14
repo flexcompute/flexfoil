@@ -20,6 +20,8 @@ interface VisualizationStore extends VisualizationState {
   setShowPsiContours: (show: boolean) => void;
   setShowCp: (show: boolean) => void;
   setShowForces: (show: boolean) => void;
+  setShowBoundaryLayer: (show: boolean) => void;
+  setShowWake: (show: boolean) => void;
   
   // Animation options actions
   setEnableMorphing: (enable: boolean) => void;
@@ -46,6 +48,9 @@ interface VisualizationStore extends VisualizationState {
   
   // Force vector options actions
   setForceScale: (scale: number) => void;
+  
+  // Boundary layer overlay options
+  setBlThicknessScale: (scale: number) => void;
   
   // GPU acceleration actions
   setUseGPU: (use: boolean) => void;
@@ -75,6 +80,8 @@ const DEFAULT_STATE: VisualizationState = {
   showPsiContours: false,
   showCp: false,
   showForces: false,
+  showBoundaryLayer: false,
+  showWake: false,
   
   // Animation options
   enableMorphing: true,
@@ -102,6 +109,9 @@ const DEFAULT_STATE: VisualizationState = {
   // Force vector options
   forceScale: 0.15,
   
+  // Boundary layer overlay options
+  blThicknessScale: 1,
+  
   // GPU acceleration
   useGPU: false,             // Default to CPU, enable when detected
   gpuAvailable: false,       // Set by feature detection
@@ -122,6 +132,8 @@ export const useVisualizationStore = create<VisualizationStore>((set) => ({
   setShowPsiContours: (show) => set({ showPsiContours: show }),
   setShowCp: (show) => set({ showCp: show }),
   setShowForces: (show) => set({ showForces: show }),
+  setShowBoundaryLayer: (show) => set({ showBoundaryLayer: show }),
+  setShowWake: (show) => set({ showWake: show }),
   
   // Animation options actions
   setEnableMorphing: (enable) => set({ enableMorphing: enable }),
@@ -169,6 +181,11 @@ export const useVisualizationStore = create<VisualizationStore>((set) => ({
   // Force vector options actions
   setForceScale: (scale) => set({ 
     forceScale: Math.max(0.05, Math.min(0.5, scale)) 
+  }),
+  
+  // Boundary layer overlay options
+  setBlThicknessScale: (scale) => set({
+    blThicknessScale: Math.max(1, Math.min(100, scale))
   }),
   
   // GPU acceleration actions

@@ -14,6 +14,7 @@ import init, {
     compute_streamlines_faithful,
     compute_psi_grid_faithful,
     get_bl_distribution_faithful,
+    get_bl_visualization_faithful,
     WasmSmokeSystem,
     greet,
     RustFoil,
@@ -316,6 +317,64 @@ export interface BLDistribution {
     residual: number;
     success: boolean;
     error?: string;
+}
+
+export interface BLStationData {
+    x: number[];
+    y: number[];
+    delta_star: number[];
+    theta: number[];
+    cf: number[];
+    ue: number[];
+    hk: number[];
+    ampl: number[];
+    is_laminar: boolean[];
+}
+
+export interface WakeData {
+    x: number[];
+    y: number[];
+    delta_star: number[];
+    theta: number[];
+}
+
+export interface BLVisualizationData {
+    upper: BLStationData;
+    lower: BLStationData;
+    wake: WakeData;
+    wake_upper_fraction: number;
+    wake_geometry_x: number[];
+    wake_geometry_y: number[];
+    x_tr_upper: number;
+    x_tr_lower: number;
+    converged: boolean;
+    iterations: number;
+    residual: number;
+    success: boolean;
+    error?: string;
+}
+
+export function getBLVisualizationData(
+    coordinates: { x: number; y: number }[],
+    alphaDeg: number,
+    reynolds: number = 1e6,
+    mach: number = 0,
+    ncrit: number = 9,
+    maxIterations: number = 100
+): BLVisualizationData {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+
+    const coordsFlat = pointsToFlat(coordinates);
+    return get_bl_visualization_faithful(
+        coordsFlat,
+        alphaDeg,
+        reynolds,
+        mach,
+        ncrit,
+        maxIterations
+    ) as BLVisualizationData;
 }
 
 export function analyzeAirfoil(

@@ -634,6 +634,46 @@ pub struct BLDistribution {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BLStationData {
+    pub x: Vec<f64>,
+    pub y: Vec<f64>,
+    pub delta_star: Vec<f64>,
+    pub theta: Vec<f64>,
+    pub cf: Vec<f64>,
+    pub ue: Vec<f64>,
+    pub hk: Vec<f64>,
+    pub ampl: Vec<f64>,
+    pub is_laminar: Vec<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WakeData {
+    pub x: Vec<f64>,
+    pub y: Vec<f64>,
+    pub delta_star: Vec<f64>,
+    pub theta: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BLVisualizationData {
+    pub upper: BLStationData,
+    pub lower: BLStationData,
+    pub wake: WakeData,
+    /// Fraction of wake δ* attributed to the upper side (for asymmetric splitting).
+    /// At the TE: upper_fraction = upper_δ* / (upper_δ* + lower_δ*).
+    pub wake_upper_fraction: f64,
+    pub wake_geometry_x: Vec<f64>,
+    pub wake_geometry_y: Vec<f64>,
+    pub x_tr_upper: f64,
+    pub x_tr_lower: f64,
+    pub converged: bool,
+    pub iterations: usize,
+    pub residual: f64,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
 struct FaithfulSnapshot {
     nodes: Vec<Point>,
     gamma: Vec<f64>,
@@ -644,6 +684,8 @@ struct FaithfulSnapshot {
     lower_rows: Vec<rustfoil_xfoil::XfoilBlRow>,
     iblte_upper: usize,
     iblte_lower: usize,
+    wake_x: Vec<f64>,
+    wake_y: Vec<f64>,
 }
 
 fn analysis_error(message: impl Into<String>) -> AnalysisResult {
@@ -794,6 +836,8 @@ fn faithful_snapshot(
         lower_rows: state.lower_rows.clone(),
         iblte_upper: state.iblte_upper,
         iblte_lower: state.iblte_lower,
+        wake_x: state.wake_x.clone(),
+        wake_y: state.wake_y.clone(),
     })
 }
 
@@ -931,6 +975,102 @@ pub fn get_bl_distribution_faithful(
             snapshot.result.residual,
         ),
         Err(message) => bl_error(message),
+    };
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+fn rows_to_station_data(rows: &[rustfoil_xfoil::XfoilBlRow]) -> BLStationData {
+    BLStationData {
+        x: rows.iter().map(|r| r.x_coord).collect(),
+        y: rows.iter().map(|r| r.y_coord).collect(),
+        delta_star: rows.iter().map(|r| r.dstr).collect(),
+        theta: rows.iter().map(|r| r.theta).collect(),
+        cf: rows.iter().map(|r| r.cf).collect(),
+        ue: rows.iter().map(|r| r.uedg).collect(),
+        hk: rows.iter().map(|r| r.hk).collect(),
+        ampl: rows.iter().map(|r| r.ampl).collect(),
+        is_laminar: rows.iter().map(|r| r.is_laminar).collect(),
+    }
+}
+
+fn build_bl_visualization(snapshot: &FaithfulSnapshot) -> BLVisualizationData {
+    let upper_end = snapshot.iblte_upper.min(snapshot.upper_rows.len().saturating_sub(1));
+    let lower_end = snapshot.iblte_lower.min(snapshot.lower_rows.len().saturating_sub(1));
+
+    let upper_surface = &snapshot.upper_rows[..=upper_end];
+    let lower_surface = &snapshot.lower_rows[..=lower_end];
+
+    // Wake rows (upper and lower have identical δ* in XFOIL -- wake is a single entity)
+    let wake_rows: Vec<_> = snapshot.upper_rows.iter()
+        .skip(upper_end + 1)
+        .cloned()
+        .collect();
+
+    let wake = WakeData {
+        x: wake_rows.iter().map(|r| r.x_coord).collect(),
+        y: wake_rows.iter().map(|r| r.y_coord).collect(),
+        delta_star: wake_rows.iter().map(|r| r.dstr).collect(),
+        theta: wake_rows.iter().map(|r| r.theta).collect(),
+    };
+
+    // Compute the upper/lower fraction for asymmetric wake splitting.
+    // This ensures the wake envelope connects smoothly to the surface BL at the TE.
+    let upper_dstr_te = upper_surface.last().map_or(0.0, |r| r.dstr);
+    let lower_dstr_te = lower_surface.last().map_or(0.0, |r| r.dstr);
+    let total_te = upper_dstr_te + lower_dstr_te;
+    let wake_upper_fraction = if total_te > 1e-12 { upper_dstr_te / total_te } else { 0.5 };
+
+    BLVisualizationData {
+        upper: rows_to_station_data(upper_surface),
+        lower: rows_to_station_data(lower_surface),
+        wake,
+        wake_upper_fraction,
+        wake_geometry_x: snapshot.wake_x.clone(),
+        wake_geometry_y: snapshot.wake_y.clone(),
+        x_tr_upper: snapshot.result.x_tr_upper,
+        x_tr_lower: snapshot.result.x_tr_lower,
+        converged: snapshot.result.converged,
+        iterations: snapshot.result.iterations,
+        residual: snapshot.result.residual,
+        success: true,
+        error: None,
+    }
+}
+
+fn bl_vis_error(message: impl Into<String>) -> BLVisualizationData {
+    let empty_station = BLStationData {
+        x: vec![], y: vec![], delta_star: vec![], theta: vec![],
+        cf: vec![], ue: vec![], hk: vec![], ampl: vec![], is_laminar: vec![],
+    };
+    BLVisualizationData {
+        upper: empty_station.clone(),
+        lower: empty_station,
+        wake: WakeData { x: vec![], y: vec![], delta_star: vec![], theta: vec![] },
+        wake_upper_fraction: 0.5,
+        wake_geometry_x: vec![],
+        wake_geometry_y: vec![],
+        x_tr_upper: 1.0,
+        x_tr_lower: 1.0,
+        converged: false,
+        iterations: 0,
+        residual: 0.0,
+        success: false,
+        error: Some(message.into()),
+    }
+}
+
+#[wasm_bindgen]
+pub fn get_bl_visualization_faithful(
+    coords: &[f64],
+    alpha_deg: f64,
+    reynolds: f64,
+    mach: f64,
+    ncrit: f64,
+    max_iterations: usize,
+) -> JsValue {
+    let result = match faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations) {
+        Ok(snapshot) => build_bl_visualization(&snapshot),
+        Err(message) => bl_vis_error(message),
     };
     serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
 }

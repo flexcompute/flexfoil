@@ -4,96 +4,120 @@
  * Displays:
  * - Momentum thickness (θ)
  * - Displacement thickness (δ*)
- * - Shape factor (H)
+ * - Shape factor (H / Hk)
  * - Skin friction (Cf)
+ * - Edge velocity (Ue)
+ * - Amplification factor (N)
  * - Transition location markers
+ * - Wake region (extends x-axis beyond x/c = 1)
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
-import { getBLDistribution, isWasmReady, type BLDistribution } from '../../lib/wasm';
+import { getBLVisualizationData, isWasmReady, type BLVisualizationData } from '../../lib/wasm';
 
-type PlotVariable = 'theta' | 'delta_star' | 'h' | 'cf';
+type PlotVariable = 'theta' | 'delta_star' | 'h' | 'hk' | 'cf' | 'ue' | 'ampl';
 
 const VARIABLE_LABELS: Record<PlotVariable, string> = {
   theta: 'θ (momentum thickness)',
   delta_star: 'δ* (displacement thickness)',
   h: 'H (shape factor)',
+  hk: 'Hk (kinematic shape factor)',
   cf: 'Cf (skin friction)',
+  ue: 'Ue (edge velocity)',
+  ampl: 'N (amplification factor)',
 };
 
 const VARIABLE_COLORS = {
   upper: '#00d4aa',
   lower: '#ff6b9d',
+  wake: '#ffc832',
 };
 
+function getVariableData(
+  data: BLVisualizationData,
+  variable: PlotVariable,
+  surface: 'upper' | 'lower',
+): { x: number[]; y: number[] } {
+  const side = data[surface];
+  const x = side.x;
+  let y: number[];
+
+  switch (variable) {
+    case 'theta': y = side.theta; break;
+    case 'delta_star': y = side.delta_star; break;
+    case 'h':
+      y = side.delta_star.map((ds, i) => side.theta[i] > 0 ? ds / side.theta[i] : 0);
+      break;
+    case 'hk': y = side.hk; break;
+    case 'cf': y = side.cf; break;
+    case 'ue': y = side.ue; break;
+    case 'ampl': y = side.ampl; break;
+  }
+
+  return { x, y };
+}
+
+function getWakeData(
+  data: BLVisualizationData,
+  variable: PlotVariable,
+): { x: number[]; y: number[] } {
+  const wake = data.wake;
+  if (wake.x.length === 0) return { x: [], y: [] };
+
+  switch (variable) {
+    case 'theta': return { x: wake.x, y: wake.theta };
+    case 'delta_star': return { x: wake.x, y: wake.delta_star };
+    default: return { x: [], y: [] };
+  }
+}
+
 export function BoundaryLayerPanel() {
-  const { panels, displayAlpha, reynolds } = useAirfoilStore();
+  const { panels, displayAlpha, reynolds, mach, ncrit, maxIterations } = useAirfoilStore();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
   const [plotVariable, setPlotVariable] = useState<PlotVariable>('h');
+  const [showWakeRegion, setShowWakeRegion] = useState(false);
   const [canvasSize, setCanvasSize] = useState({ width: 400, height: 300 });
-  const [blData, setBLData] = useState<BLDistribution | null>(null);
+  const [blData, setBlData] = useState<BLVisualizationData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   
-  // Margins for axis labels
   const margin = { top: 20, right: 20, bottom: 40, left: 60 };
 
-  // Fetch BL data when inputs change
   useEffect(() => {
     if (!isWasmReady() || panels.length < 3) {
-      setBLData(null);
+      setBlData(null);
       return;
     }
 
     setIsLoading(true);
     
-    // Use requestAnimationFrame to avoid blocking
     requestAnimationFrame(() => {
       try {
-        const data = getBLDistribution(panels, displayAlpha, reynolds);
-        setBLData(data);
+        const data = getBLVisualizationData(panels, displayAlpha, reynolds, mach, ncrit, maxIterations);
+        setBlData(data.success ? data : null);
       } catch (e) {
         console.error('BL computation failed:', e);
-        setBLData(null);
+        setBlData(null);
       }
       setIsLoading(false);
     });
-  }, [panels, displayAlpha, reynolds]);
+  }, [panels, displayAlpha, reynolds, mach, ncrit, maxIterations]);
 
-  // Get data for current variable
-  const getData = useCallback((variable: PlotVariable, surface: 'upper' | 'lower'): { x: number[]; y: number[] } => {
-    if (!blData) return { x: [], y: [] };
-
-    const x = surface === 'upper' ? blData.x_upper : blData.x_lower;
-    let y: number[];
-
-    switch (variable) {
-      case 'theta':
-        y = surface === 'upper' ? blData.theta_upper : blData.theta_lower;
-        break;
-      case 'delta_star':
-        y = surface === 'upper' ? blData.delta_star_upper : blData.delta_star_lower;
-        break;
-      case 'h':
-        y = surface === 'upper' ? blData.h_upper : blData.h_lower;
-        break;
-      case 'cf':
-        y = surface === 'upper' ? blData.cf_upper : blData.cf_lower;
-        break;
-    }
-
-    return { x, y };
+  const hasWakeData = useMemo(() => {
+    return blData !== null && blData.wake.x.length > 0;
   }, [blData]);
 
-  // Compute axis bounds
   const bounds = useMemo(() => {
-    const upperData = getData(plotVariable, 'upper');
-    const lowerData = getData(plotVariable, 'lower');
+    if (!blData) return { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
+
+    const upperData = getVariableData(blData, plotVariable, 'upper');
+    const lowerData = getVariableData(blData, plotVariable, 'lower');
+    const wakeData = showWakeRegion ? getWakeData(blData, plotVariable) : { x: [], y: [] };
     
-    const allX = [...upperData.x, ...lowerData.x];
-    const allY = [...upperData.y, ...lowerData.y];
+    const allX = [...upperData.x, ...lowerData.x, ...wakeData.x];
+    const allY = [...upperData.y, ...lowerData.y, ...wakeData.y];
     
     if (allX.length === 0) {
       return { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
@@ -101,18 +125,20 @@ export function BoundaryLayerPanel() {
 
     const yMin = Math.min(...allY, 0);
     const yMax = Math.max(...allY);
+    const xMax = showWakeRegion && wakeData.x.length > 0
+      ? Math.max(1, ...wakeData.x)
+      : 1;
     
     const yPadding = (yMax - yMin) * 0.1 || 0.1;
     
     return {
       xMin: 0,
-      xMax: 1,
+      xMax,
       yMin: yMin - yPadding,
       yMax: yMax + yPadding,
     };
-  }, [getData, plotVariable]);
+  }, [blData, plotVariable, showWakeRegion]);
 
-  // Generate nice tick values
   const generateTicks = (min: number, max: number, count: number = 5): number[] => {
     const range = max - min;
     if (range <= 0) return [min];
@@ -132,7 +158,6 @@ export function BoundaryLayerPanel() {
     return ticks;
   };
 
-  // Draw the plot
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -144,12 +169,10 @@ export function BoundaryLayerPanel() {
     const plotWidth = width - margin.left - margin.right;
     const plotHeight = height - margin.top - margin.bottom;
     
-    // Clear
     ctx.fillStyle = getComputedStyle(document.documentElement)
       .getPropertyValue('--bg-primary').trim() || '#0f0f0f';
     ctx.fillRect(0, 0, width, height);
     
-    // Transform functions
     const toCanvasX = (x: number) => {
       return margin.left + ((x - bounds.xMin) / (bounds.xMax - bounds.xMin)) * plotWidth;
     };
@@ -157,7 +180,7 @@ export function BoundaryLayerPanel() {
       return margin.top + (1 - (y - bounds.yMin) / (bounds.yMax - bounds.yMin)) * plotHeight;
     };
     
-    // Draw grid
+    // Grid
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
     ctx.lineWidth = 1;
     
@@ -179,24 +202,44 @@ export function BoundaryLayerPanel() {
       ctx.lineTo(width - margin.right, cy);
       ctx.stroke();
     }
+
+    // Wake region shading (x > 1)
+    if (showWakeRegion && bounds.xMax > 1) {
+      const wakeStart = toCanvasX(1);
+      const wakeEnd = toCanvasX(bounds.xMax);
+      ctx.fillStyle = 'rgba(255, 200, 50, 0.05)';
+      ctx.fillRect(wakeStart, margin.top, wakeEnd - wakeStart, plotHeight);
+      
+      // TE marker line
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(wakeStart, margin.top);
+      ctx.lineTo(wakeStart, height - margin.bottom);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      
+      ctx.fillStyle = 'rgba(255, 200, 50, 0.5)';
+      ctx.font = '9px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText('wake', wakeStart + 3, margin.top + 10);
+    }
     
-    // Draw axes
+    // Axes
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
     ctx.lineWidth = 1;
     
-    // X axis
     ctx.beginPath();
     ctx.moveTo(margin.left, height - margin.bottom);
     ctx.lineTo(width - margin.right, height - margin.bottom);
     ctx.stroke();
     
-    // Y axis
     ctx.beginPath();
     ctx.moveTo(margin.left, margin.top);
     ctx.lineTo(margin.left, height - margin.bottom);
     ctx.stroke();
     
-    // Draw tick labels
+    // Tick labels
     ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
     ctx.font = '10px sans-serif';
     ctx.textAlign = 'center';
@@ -210,11 +253,12 @@ export function BoundaryLayerPanel() {
     ctx.textBaseline = 'middle';
     for (const y of yTicks) {
       const cy = toCanvasY(y);
-      const yStr = plotVariable === 'h' ? y.toFixed(1) : y.toExponential(1);
+      const useExponential = plotVariable !== 'h' && plotVariable !== 'hk' && plotVariable !== 'ue' && plotVariable !== 'ampl';
+      const yStr = useExponential ? y.toExponential(1) : y.toFixed(1);
       ctx.fillText(yStr, margin.left - 5, cy);
     }
     
-    // Draw axis labels
+    // Axis labels
     ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
     ctx.font = '12px sans-serif';
     ctx.textAlign = 'center';
@@ -230,37 +274,31 @@ export function BoundaryLayerPanel() {
     
     // Draw data
     if (blData) {
-      // Draw upper surface
-      const upperData = getData(plotVariable, 'upper');
-      if (upperData.x.length > 0) {
-        ctx.strokeStyle = VARIABLE_COLORS.upper;
+      const drawLine = (data: { x: number[]; y: number[] }, color: string, dashed = false) => {
+        if (data.x.length === 0) return;
+        ctx.strokeStyle = color;
         ctx.lineWidth = 2;
+        if (dashed) ctx.setLineDash([6, 3]);
         ctx.beginPath();
-        for (let i = 0; i < upperData.x.length; i++) {
-          const cx = toCanvasX(upperData.x[i]);
-          const cy = toCanvasY(upperData.y[i]);
+        for (let i = 0; i < data.x.length; i++) {
+          const cx = toCanvasX(data.x[i]);
+          const cy = toCanvasY(data.y[i]);
           if (i === 0) ctx.moveTo(cx, cy);
           else ctx.lineTo(cx, cy);
         }
         ctx.stroke();
+        if (dashed) ctx.setLineDash([]);
+      };
+
+      drawLine(getVariableData(blData, plotVariable, 'upper'), VARIABLE_COLORS.upper);
+      drawLine(getVariableData(blData, plotVariable, 'lower'), VARIABLE_COLORS.lower);
+
+      if (showWakeRegion) {
+        const wakeData = getWakeData(blData, plotVariable);
+        drawLine(wakeData, VARIABLE_COLORS.wake, true);
       }
       
-      // Draw lower surface
-      const lowerData = getData(plotVariable, 'lower');
-      if (lowerData.x.length > 0) {
-        ctx.strokeStyle = VARIABLE_COLORS.lower;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        for (let i = 0; i < lowerData.x.length; i++) {
-          const cx = toCanvasX(lowerData.x[i]);
-          const cy = toCanvasY(lowerData.y[i]);
-          if (i === 0) ctx.moveTo(cx, cy);
-          else ctx.lineTo(cx, cy);
-        }
-        ctx.stroke();
-      }
-      
-      // Draw transition markers
+      // Transition markers
       if (blData.x_tr_upper < 1) {
         const xTr = toCanvasX(blData.x_tr_upper);
         ctx.strokeStyle = VARIABLE_COLORS.upper;
@@ -271,7 +309,6 @@ export function BoundaryLayerPanel() {
         ctx.stroke();
         ctx.setLineDash([]);
         
-        // Label
         ctx.fillStyle = VARIABLE_COLORS.upper;
         ctx.font = '10px sans-serif';
         ctx.textAlign = 'center';
@@ -288,7 +325,6 @@ export function BoundaryLayerPanel() {
         ctx.stroke();
         ctx.setLineDash([]);
         
-        // Label
         ctx.fillStyle = VARIABLE_COLORS.lower;
         ctx.font = '10px sans-serif';
         ctx.textAlign = 'center';
@@ -315,9 +351,15 @@ export function BoundaryLayerPanel() {
     ctx.fillRect(width - 90, 26, 12, 12);
     ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
     ctx.fillText('Lower', width - 74, 36);
-  }, [canvasSize, blData, plotVariable, bounds, getData, isLoading]);
+
+    if (showWakeRegion && hasWakeData) {
+      ctx.fillStyle = VARIABLE_COLORS.wake;
+      ctx.fillRect(width - 90, 42, 12, 12);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+      ctx.fillText('Wake', width - 74, 52);
+    }
+  }, [canvasSize, blData, plotVariable, bounds, isLoading, showWakeRegion, hasWakeData]);
   
-  // Resize observer
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -331,14 +373,12 @@ export function BoundaryLayerPanel() {
     
     observer.observe(container);
     
-    // Initial size
     const rect = container.getBoundingClientRect();
     setCanvasSize({ width: Math.max(200, rect.width), height: Math.max(150, rect.height) });
     
     return () => observer.disconnect();
   }, []);
   
-  // Redraw when data/size changes
   useEffect(() => {
     draw();
   }, [draw]);
@@ -362,11 +402,26 @@ export function BoundaryLayerPanel() {
             style={{ padding: '4px', fontSize: '12px' }}
           >
             <option value="h">Shape Factor H</option>
+            <option value="hk">Kinematic Hk</option>
             <option value="theta">Momentum θ</option>
             <option value="delta_star">Displacement δ*</option>
             <option value="cf">Skin Friction Cf</option>
+            <option value="ue">Edge Velocity Ue</option>
+            <option value="ampl">Amplification N</option>
           </select>
         </label>
+
+        {hasWakeData && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--text-secondary)' }}>
+            <input
+              type="checkbox"
+              checked={showWakeRegion}
+              onChange={(e) => setShowWakeRegion(e.target.checked)}
+              style={{ width: '12px', height: '12px' }}
+            />
+            Wake
+          </label>
+        )}
         
         {blData && (
           <span style={{ 
@@ -375,6 +430,7 @@ export function BoundaryLayerPanel() {
             color: 'var(--text-secondary)' 
           }}>
             α={displayAlpha.toFixed(1)}° | Re={(reynolds / 1e6).toFixed(2)}M
+            {mach > 0 ? ` | M=${mach.toFixed(2)}` : ''}
           </span>
         )}
       </div>

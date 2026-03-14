@@ -72,6 +72,14 @@ export function VisualizationPanel() {
     forceScale,
     setForceScale,
     
+    // Boundary layer overlay options
+    showBoundaryLayer,
+    showWake,
+    blThicknessScale,
+    setShowBoundaryLayer,
+    setShowWake,
+    setBlThicknessScale,
+    
     // GPU acceleration
     useGPU,
     gpuAvailable,
@@ -243,6 +251,49 @@ export function VisualizationPanel() {
           <ToggleItem label="Force Vectors" checked={showForces} onChange={setShowForces} />
         </div>
       </section>
+
+      {/* Boundary Layer Overlay Section */}
+      <section>
+        <h4 style={{ 
+          margin: '0 0 8px 0', 
+          fontSize: '12px', 
+          fontWeight: 600,
+          color: 'var(--text-primary)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.5px',
+        }}>
+          Boundary Layer
+        </h4>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <ToggleItem label="BL Envelope (δ*)" checked={showBoundaryLayer} onChange={setShowBoundaryLayer} />
+          <ToggleItem label="Wake" checked={showWake} onChange={setShowWake} />
+        </div>
+      </section>
+
+      {/* BL Thickness Scale */}
+      {(showBoundaryLayer || showWake) && (
+        <section>
+          <h4 style={{ 
+            margin: '0 0 8px 0', 
+            fontSize: '12px', 
+            fontWeight: 600,
+            color: 'var(--text-primary)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+          }}>
+            BL Display Options
+          </h4>
+          <SliderItem
+            label="Thickness Scale"
+            value={blThicknessScale}
+            min={1}
+            max={100}
+            step={1}
+            onChange={setBlThicknessScale}
+            formatValue={(v) => `${v}x`}
+          />
+        </section>
+      )}
 
       {/* Cp Options Section */}
       {showCp && (
