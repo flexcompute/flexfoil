@@ -4,6 +4,7 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import { OnboardingProvider, useOnboarding } from './onboarding';
 import { initWasm } from './lib/wasm';
 import { useAirfoilStore } from './stores/airfoilStore';
+import { useRunStore } from './stores/runStore';
 import { useVisualizationStore } from './stores/visualizationStore';
 import { loadFromUrl } from './lib/urlState';
 import 'flexlayout-react/style/light.css';
@@ -47,10 +48,12 @@ function AppContent() {
   const setCpBarScale = useVisualizationStore((s) => s.setCpBarScale);
   const setForceScale = useVisualizationStore((s) => s.setForceScale);
   
+  const initRunDb = useRunStore((s) => s.init);
   const { startTour, hasStartedTour } = useOnboarding();
 
-  // Initialize WASM and hydrate from URL
+  // Initialize WASM, run DB, and hydrate from URL
   useEffect(() => {
+    initRunDb().catch(err => console.warn('Run DB init failed:', err));
     initWasm()
       .then(() => {
         setWasmStatus('ready');
