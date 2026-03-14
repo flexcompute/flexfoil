@@ -16,16 +16,29 @@ pub fn update(
     solve: &SolveState,
     mach: f64,
     reynolds: f64,
+    iteration: usize,
 ) {
     let msq = mach * mach;
     let upper_len = state.nbl_upper.min(state.upper_rows.len());
     let lower_len = state.nbl_lower.min(state.lower_rows.len());
-    let mut upper_stations = rows_to_stations(&state.upper_rows[..upper_len], msq, reynolds);
-    let mut lower_stations = rows_to_stations(&state.lower_rows[..lower_len], msq, reynolds);
+    let mut upper_stations = rows_to_stations(
+        &state.upper_rows[..upper_len],
+        state.iblte_upper,
+        state.itran_upper,
+        msq,
+        reynolds,
+    );
+    let mut lower_stations = rows_to_stations(
+        &state.lower_rows[..lower_len],
+        state.iblte_lower,
+        state.itran_lower,
+        msq,
+        reynolds,
+    );
     let upper_before = upper_stations.clone();
     let lower_before = lower_stations.clone();
-    let upper_ue_inv: Vec<f64> = state.upper_rows[..upper_len].iter().map(|row| row.uinv.abs()).collect();
-    let lower_ue_inv: Vec<f64> = state.lower_rows[..lower_len].iter().map(|row| row.uinv.abs()).collect();
+    let upper_ue_inv: Vec<f64> = state.upper_rows[..upper_len].iter().map(|row| row.uinv).collect();
+    let lower_ue_inv: Vec<f64> = state.lower_rows[..lower_len].iter().map(|row| row.uinv).collect();
     let (upper_ue_operating, lower_ue_operating) = match state.operating_mode {
         OperatingMode::PrescribedAlpha => (
             vec![0.0; upper_len],
@@ -58,14 +71,22 @@ pub fn update(
         &preview.upper_u_ac,
         &preview.lower_u_ac,
     );
-    let dac = compute_operating_correction(state.operating_mode, cl_new, cl_a, cl_ac);
+    let dac = compute_operating_correction(
+        state.operating_mode,
+        state.cl,
+        cl_new,
+        cl_a,
+        cl_ac,
+    );
+    let initial_relaxation = relaxation_limit_from_operating_correction(state.operating_mode, dac);
     let update_result = apply_global_updates(
         &mut upper_stations,
         &mut lower_stations,
         &solve.state_deltas,
         Some(&solve.operating_deltas),
         &assembly.system,
-        1.0,
+        iteration,
+        initial_relaxation,
         Some(&state.dij),
         Some(&upper_ue_inv),
         Some(&lower_ue_inv),
@@ -91,6 +112,7 @@ pub fn update(
         solve,
         dac,
         update_result.relaxation_used,
+        iteration,
     );
     sync_rows_from_stations(&mut state.upper_rows[..upper_len], &upper_stations);
     sync_rows_from_stations(&mut state.lower_rows[..lower_len], &lower_stations);
@@ -193,6 +215,7 @@ fn emit_update_debug_events(
     solve: &SolveState,
     dac: f64,
     relaxation: f64,
+    iteration: usize,
 ) {
     if !rustfoil_bl::is_debug_active() {
         return;
@@ -208,6 +231,7 @@ fn emit_update_debug_events(
         solve,
         dac,
         relaxation,
+        iteration,
     );
     emit_update_debug_surface(
         system,
@@ -219,6 +243,7 @@ fn emit_update_debug_events(
         solve,
         dac,
         relaxation,
+        iteration,
     );
 }
 
@@ -233,9 +258,10 @@ fn emit_update_debug_surface(
     solve: &SolveState,
     dac: f64,
     relaxation: f64,
+    iteration: usize,
 ) {
-    let surface = if side == 1 { 0 } else { 1 };
-    for ibl in 1..before.len().min(30) {
+    let surface = side - 1;
+    for ibl in 1..before.len() {
         let iv = system.to_global(surface, ibl);
         if iv >= solve.state_deltas.len() || iv >= solve.operating_deltas.len() {
             break;
@@ -263,7 +289,7 @@ fn emit_update_debug_surface(
         };
 
         rustfoil_bl::add_event(rustfoil_bl::DebugEvent::update(
-            1,
+            iteration,
             side,
             ibl + 1,
             relaxation * raw_dctau,
@@ -273,7 +299,7 @@ fn emit_update_debug_surface(
             relaxation,
         ));
         rustfoil_bl::add_event(rustfoil_bl::DebugEvent::update_detailed(
-            1,
+            iteration,
             side,
             ibl + 1,
             ctau_before,
@@ -380,9 +406,22 @@ fn compute_trial_cl_terms(
     (cl_new, cl_a, cl_ac, qnew, qac)
 }
 
-fn compute_operating_correction(mode: OperatingMode, cl_new: f64, cl_a: f64, cl_ac: f64) -> f64 {
+fn compute_operating_correction(
+    mode: OperatingMode,
+    current_cl: f64,
+    cl_new: f64,
+    cl_a: f64,
+    cl_ac: f64,
+) -> f64 {
     match mode {
-        OperatingMode::PrescribedAlpha => 0.0,
+        OperatingMode::PrescribedAlpha => {
+            let denominator = 1.0 - cl_ac;
+            if denominator.abs() < 1.0e-12 {
+                0.0
+            } else {
+                (cl_new - current_cl) / denominator
+            }
+        }
         OperatingMode::PrescribedCl { target_cl } => {
             let denominator = -(cl_ac + cl_a);
             if denominator.abs() < 1.0e-12 {
@@ -394,4 +433,24 @@ fn compute_operating_correction(mode: OperatingMode, cl_new: f64, cl_a: f64, cl_
             }
         }
     }
+}
+
+fn relaxation_limit_from_operating_correction(mode: OperatingMode, dac: f64) -> f64 {
+    if dac.abs() <= 1.0e-12 {
+        return 1.0;
+    }
+
+    let (max_delta, min_delta) = match mode {
+        OperatingMode::PrescribedAlpha => (0.5, -0.5),
+        OperatingMode::PrescribedCl { .. } => (0.5_f64.to_radians(), -0.5_f64.to_radians()),
+    };
+
+    let mut rlx = 1.0;
+    if rlx * dac > max_delta {
+        rlx = max_delta / dac;
+    }
+    if rlx * dac < min_delta {
+        rlx = min_delta / dac;
+    }
+    rlx.clamp(0.0, 1.0)
 }

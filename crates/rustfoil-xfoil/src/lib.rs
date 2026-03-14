@@ -11,6 +11,7 @@ pub mod error;
 pub mod forces;
 pub mod march;
 pub mod oper;
+pub mod qdes;
 pub mod result;
 pub mod solve;
 pub mod state;
@@ -21,7 +22,12 @@ pub mod wake_panel;
 pub use config::{OperatingMode, XfoilOptions};
 pub use error::{Result, XfoilError};
 pub use oper::{
-    solve_body_oper_point, solve_coords_oper_point, solve_operating_point_from_state, AlphaSpec,
+    build_state_from_coords, coords_from_body, solve_body_oper_point, solve_coords_oper_point,
+    solve_operating_point_from_state, AlphaSpec,
 };
-pub use result::XfoilViscousResult;
+pub use qdes::{solve_body_qdes, solve_coords_qdes, InverseDesignSession, QdesOptions};
+pub use result::{
+    QdesIterationSnapshot, QdesResult, QdesSpec, QdesTarget, QdesTargetKind, SurfaceDistribution,
+    XfoilViscousResult,
+};
 pub use state::{XfoilBlRow, XfoilState, XfoilSurface};

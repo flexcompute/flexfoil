@@ -2,7 +2,7 @@ use rustfoil_bl::FlowType;
 use rustfoil_coupling::global_newton::GlobalNewtonSystem;
 
 use crate::{
-    canonical_state::{flow_type_for_row, rows_to_stations},
+    canonical_state::{flow_type_for_station_index, recompute_mass_from_state, rows_to_stations},
     config::OperatingMode,
     march::{mrchdu, mrchue},
     state::{XfoilBlRow, XfoilState},
@@ -22,7 +22,7 @@ pub fn setbl(
     iteration: usize,
 ) -> AssemblyState {
     if !state.lblini {
-        mrchue(state, reynolds, ncrit);
+        mrchue(state, reynolds, ncrit, iteration);
         if std::env::var("RUSTFOIL_SETBL_HANDOFF_DEBUG").is_ok() {
             let start = state.nbl_upper.saturating_sub(3);
             for ibl in start..state.nbl_upper {
@@ -42,7 +42,12 @@ pub fn setbl(
             }
         }
     }
-    mrchdu(state, reynolds, ncrit);
+    mrchdu(state, reynolds, ncrit, iteration);
+
+    // XFOIL re-enters SETBL with MASS coherent to the current BL state.
+    // Keep the row cache aligned before building canonical stations or the
+    // mass-coupled UESET reference state used for forced-change assembly.
+    recompute_mass_from_state(state);
 
     state.allocate_newton_state();
     state.usav_upper = state.upper_rows.iter().map(|row| row.uedg).collect();
@@ -51,20 +56,24 @@ pub fn setbl(
     let upper_rows = &state.upper_rows[..state.nbl_upper.min(state.upper_rows.len())];
     let lower_rows = &state.lower_rows[..state.nbl_lower.min(state.lower_rows.len())];
 
-    let upper_stations = rows_to_stations(upper_rows, mach * mach, reynolds);
-    let lower_stations = rows_to_stations(lower_rows, mach * mach, reynolds);
-    let upper_flow = rows_to_flow_types(upper_rows);
-    let lower_flow = rows_to_flow_types(lower_rows);
-    let upper_transitions = if state.upper_transitions.len() == upper_flow.len() {
-        state.upper_transitions.clone()
-    } else {
-        vec![None; upper_flow.len()]
-    };
-    let lower_transitions = if state.lower_transitions.len() == lower_flow.len() {
-        state.lower_transitions.clone()
-    } else {
-        vec![None; lower_flow.len()]
-    };
+    let upper_stations = rows_to_stations(
+        upper_rows,
+        state.iblte_upper,
+        state.itran_upper,
+        mach * mach,
+        reynolds,
+    );
+    let lower_stations = rows_to_stations(
+        lower_rows,
+        state.iblte_lower,
+        state.itran_lower,
+        mach * mach,
+        reynolds,
+    );
+    let upper_ue_current: Vec<f64> = upper_rows.iter().map(|row| row.uedg).collect();
+    let lower_ue_current: Vec<f64> = lower_rows.iter().map(|row| row.uedg).collect();
+    let upper_flow = rows_to_flow_types(upper_rows, state.iblte_upper, state.itran_upper);
+    let lower_flow = rows_to_flow_types(lower_rows, state.iblte_lower, state.itran_lower);
     let upper_ue_inv: Vec<f64> = upper_rows.iter().map(|row| row.uinv).collect();
     let lower_ue_inv: Vec<f64> = lower_rows.iter().map(|row| row.uinv).collect();
     let mut mass_state = state.clone();
@@ -77,27 +86,12 @@ pub fn setbl(
         .iter()
         .map(|row| row.uedg)
         .collect();
-    if std::env::var("RUSTFOIL_TRANSITION_BRANCH_DEBUG").is_ok() {
-        eprintln!(
-            "[SETBL TRANSITION LEN] state_upper={} upper_flow={}",
-            state.upper_transitions.len(),
-            upper_flow.len()
-        );
-        for (idx, tr) in upper_transitions.iter().enumerate().filter_map(|(idx, tr)| tr.as_ref().map(|tr| (idx, tr))) {
-            eprintln!(
-                "[SETBL TRANSITION] upper interval={} transition={} xt={:.8e} ampl2={:.8e}",
-                idx + 1,
-                tr.transition,
-                tr.xt,
-                tr.ampl2
-            );
-        }
-    }
     if std::env::var("RUSTFOIL_SETBL_DEBUG").is_ok() {
         for (name, stations) in [("upper", &upper_stations), ("lower", &lower_stations)] {
             for (ibl, station) in stations.iter().enumerate().take(6) {
                 eprintln!(
-                    "[SETBL DEBUG] {name}[{ibl}] panel={} x={:.6e} u={:.6e} theta={:.6e} dstar={:.6e} mass={:.6e} ampl={:.6e} ctau={:.6e} wake={} turb={}",
+                    "[SETBL DEBUG] iter={} {name}[{ibl}] panel={} x={:.6e} u={:.6e} theta={:.6e} dstar={:.6e} mass={:.6e} ampl={:.6e} ctau={:.6e} wake={} turb={}",
+                    iteration,
                     station.panel_idx,
                     station.x,
                     station.u,
@@ -114,7 +108,8 @@ pub fn setbl(
         for ibl in 0..6.min(upper_stations.len()) {
             let station = &upper_stations[ibl];
             eprintln!(
-                "[SETBL DEBUG EXACT] upper[{ibl}] panel={} x={:.12e} u={:.12e} theta={:.12e} dstar={:.12e} mass={:.12e} ampl={:.12e} ctau={:.12e}",
+                "[SETBL DEBUG EXACT] iter={} upper[{ibl}] panel={} x={:.12e} u={:.12e} theta={:.12e} dstar={:.12e} mass={:.12e} ampl={:.12e} ctau={:.12e}",
+                iteration,
                 station.panel_idx,
                 station.x,
                 station.u,
@@ -128,14 +123,17 @@ pub fn setbl(
         let upper_airfoil_start = upper_stations.len().saturating_sub(6);
         for ibl in upper_airfoil_start..upper_stations.len() {
             let station = &upper_stations[ibl];
+            let row = upper_rows.get(ibl);
             eprintln!(
-                "[SETBL DEBUG EXACT TAIL] upper[{ibl}] panel={} x={:.12e} u={:.12e} theta={:.12e} dstar={:.12e} mass={:.12e} ampl={:.12e} ctau={:.12e}",
+                "[SETBL DEBUG EXACT TAIL] iter={} upper[{ibl}] panel={} x={:.12e} u={:.12e} theta={:.12e} dstar={:.12e} mass={:.12e} dw={:.12e} ampl={:.12e} ctau={:.12e}",
+                iteration,
                 station.panel_idx,
                 station.x,
                 station.u,
                 station.theta,
                 station.delta_star,
                 station.mass_defect,
+                row.map(|r| r.dw).unwrap_or(0.0),
                 station.ampl,
                 station.ctau,
             );
@@ -143,7 +141,8 @@ pub fn setbl(
         for ibl in 28..32.min(upper_stations.len()) {
             let station = &upper_stations[ibl];
             eprintln!(
-                "[SETBL DEBUG] upper_transition[{ibl}] panel={} x={:.6e} u={:.6e} theta={:.6e} dstar={:.6e} mass={:.6e} ampl={:.6e} ctau={:.6e} wake={} turb={}",
+                "[SETBL DEBUG] iter={} upper_transition[{ibl}] panel={} x={:.6e} u={:.6e} theta={:.6e} dstar={:.6e} mass={:.6e} ampl={:.6e} ctau={:.6e} wake={} turb={}",
+                iteration,
                 station.panel_idx,
                 station.x,
                 station.u,
@@ -159,7 +158,26 @@ pub fn setbl(
         for ibl in 60..65.min(lower_stations.len()) {
             let station = &lower_stations[ibl];
             eprintln!(
-                "[SETBL DEBUG] lower_tail[{ibl}] panel={} x={:.6e} u={:.6e} theta={:.6e} dstar={:.6e} mass={:.6e} dw={:.6e} ampl={:.6e} ctau={:.6e} wake={} turb={}",
+                "[SETBL DEBUG] iter={} lower_tail[{ibl}] panel={} x={:.6e} u={:.6e} theta={:.6e} dstar={:.6e} mass={:.6e} dw={:.6e} ampl={:.6e} ctau={:.6e} wake={} turb={}",
+                iteration,
+                station.panel_idx,
+                station.x,
+                station.u,
+                station.theta,
+                station.delta_star,
+                station.mass_defect,
+                station.dw,
+                station.ampl,
+                station.ctau,
+                station.is_wake,
+                station.is_turbulent,
+            );
+        }
+        for ibl in 54..59.min(lower_stations.len()) {
+            let station = &lower_stations[ibl];
+            eprintln!(
+                "[SETBL DEBUG] iter={} lower_mid[{ibl}] panel={} x={:.6e} u={:.6e} theta={:.6e} dstar={:.6e} mass={:.6e} dw={:.6e} ampl={:.6e} ctau={:.6e} wake={} turb={}",
+                iteration,
                 station.panel_idx,
                 station.x,
                 station.u,
@@ -175,7 +193,7 @@ pub fn setbl(
         }
         for (name, values) in [("upper_mass_ue", &upper_ue_mass), ("lower_mass_ue", &lower_ue_mass)] {
             for (ibl, value) in values.iter().enumerate().take(6) {
-                eprintln!("[SETBL DEBUG] {name}[{ibl}] ue={value:.6e}");
+                eprintln!("[SETBL DEBUG] iter={} {name}[{ibl}] ue={value:.6e}", iteration);
             }
         }
     }
@@ -201,10 +219,10 @@ pub fn setbl(
     system.build_global_system(
         &upper_stations,
         &lower_stations,
+        &upper_ue_current,
+        &lower_ue_current,
         &upper_flow,
         &lower_flow,
-        &upper_transitions,
-        &lower_transitions,
         &state.dij,
         &upper_ue_inv,
         &lower_ue_inv,
@@ -223,10 +241,11 @@ pub fn setbl(
     AssemblyState { system }
 }
 
-fn rows_to_flow_types(rows: &[XfoilBlRow]) -> Vec<FlowType> {
+fn rows_to_flow_types(rows: &[XfoilBlRow], iblte: usize, itran: usize) -> Vec<FlowType> {
     rows.iter()
+        .enumerate()
         .skip(1)
-        .map(flow_type_for_row)
+        .map(|(ibl, _)| flow_type_for_station_index(ibl, iblte, itran))
         .collect()
 }
 

@@ -2,7 +2,8 @@ use rustfoil_bl::{
     add_event, is_debug_active, BlStation, DebugEvent, SurfaceBlState,
 };
 use rustfoil_core::Body;
-use rustfoil_inviscid::InviscidSolver;
+use rustfoil_inviscid::{FactorizedSystem, InviscidSolver};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     assembly::setbl,
@@ -19,17 +20,13 @@ use crate::{
     wake_panel::{qdcalc, qwcalc, xywake},
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum AlphaSpec {
     AlphaDeg(f64),
     TargetCl(f64),
 }
 
-pub fn solve_body_oper_point(
-    body: &Body,
-    spec: AlphaSpec,
-    options: &XfoilOptions,
-) -> Result<XfoilViscousResult> {
+pub fn coords_from_body(body: &Body) -> Vec<(f64, f64)> {
     let panels = body.panels();
     let mut node_x: Vec<f64> = panels.iter().map(|panel| panel.p1.x).collect();
     let mut node_y: Vec<f64> = panels.iter().map(|panel| panel.p1.y).collect();
@@ -39,16 +36,28 @@ pub fn solve_body_oper_point(
             node_y.push(last.p2.y);
         }
     }
-    let coords: Vec<(f64, f64)> = node_x.iter().zip(node_y.iter()).map(|(&x, &y)| (x, y)).collect();
+    node_x
+        .iter()
+        .zip(node_y.iter())
+        .map(|(&x, &y)| (x, y))
+        .collect()
+}
+
+pub fn solve_body_oper_point(
+    body: &Body,
+    spec: AlphaSpec,
+    options: &XfoilOptions,
+) -> Result<XfoilViscousResult> {
+    let coords = coords_from_body(body);
     solve_coords_oper_point(&body.name, &coords, spec, options)
 }
 
-pub fn solve_coords_oper_point(
+pub fn build_state_from_coords(
     name: &str,
     coords: &[(f64, f64)],
     spec: AlphaSpec,
     options: &XfoilOptions,
-) -> Result<XfoilViscousResult> {
+) -> Result<(XfoilState, FactorizedSystem)> {
     options
         .validate()
         .map_err(|msg| XfoilError::Message(msg.to_string()))?;
@@ -96,6 +105,16 @@ pub fn solve_coords_oper_point(
     state.sharp = factorized.geometry().sharp;
     state.ante = factorized.geometry().ante;
 
+    Ok((state, factorized))
+}
+
+pub fn solve_coords_oper_point(
+    name: &str,
+    coords: &[(f64, f64)],
+    spec: AlphaSpec,
+    options: &XfoilOptions,
+) -> Result<XfoilViscousResult> {
+    let (mut state, factorized) = build_state_from_coords(name, coords, spec, options)?;
     solve_operating_point_from_state(&mut state, &factorized, options)
 }
 
@@ -146,17 +165,30 @@ pub fn solve_operating_point_from_state(
     for iter in 1..=options.max_iterations {
         let mut assembly = setbl(state, options.reynolds, options.ncrit, options.mach, iter);
         let solve = blsolv(state, &mut assembly, iter);
-        update(state, &assembly, &solve, options.mach, options.reynolds);
+        update(
+            state,
+            &assembly,
+            &solve,
+            options.mach,
+            options.reynolds,
+            iter,
+        );
         if let OperatingMode::PrescribedCl { .. } = state.operating_mode {
             specal(state, state.alpha_rad);
             uicalc(state);
         }
+        if is_debug_active() {
+            // Match XFOIL: dump BL state after UPDATE, before QVFUE/GAMQV/STMOVE.
+            emit_full_state(state, iter, options.mach, options.reynolds);
+        }
         qvfue(state);
         gamqv(state);
+        if is_debug_active() {
+            // Match XFOIL: dump panel gamma after GAMQV, before STMOVE.
+            add_event(DebugEvent::full_gamma_iter(iter, state.gam.clone()));
+        }
         if std::env::var("RUSTFOIL_DISABLE_STMOVE").is_err() {
             stmove(state);
-            qvfue(state);
-            gamqv(state);
         }
         update_force_state(state, options.mach, options.reynolds);
         state.iterations = iter;
@@ -164,8 +196,6 @@ pub fn solve_operating_point_from_state(
         state.converged = solve.rms <= options.tolerance;
 
         if is_debug_active() {
-            emit_full_state(state, iter, options.mach, options.reynolds);
-            add_event(DebugEvent::full_gamma_iter(iter, state.gam.clone()));
             add_event(DebugEvent::viscal_result(
                 iter,
                 solve.rms,
@@ -228,11 +258,23 @@ fn surface_stations(
     match surface {
         crate::state::XfoilSurface::Upper => {
             let len = state.nbl_upper.min(state.upper_rows.len());
-            rows_to_stations(&state.upper_rows[..len], msq, reynolds)
+            rows_to_stations(
+                &state.upper_rows[..len],
+                state.iblte_upper,
+                state.itran_upper,
+                msq,
+                reynolds,
+            )
         }
         crate::state::XfoilSurface::Lower => {
             let len = state.nbl_lower.min(state.lower_rows.len());
-            rows_to_stations(&state.lower_rows[..len], msq, reynolds)
+            rows_to_stations(
+                &state.lower_rows[..len],
+                state.iblte_lower,
+                state.itran_lower,
+                msq,
+                reynolds,
+            )
         }
     }
 }
