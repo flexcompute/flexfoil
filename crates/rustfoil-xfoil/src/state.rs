@@ -1,5 +1,4 @@
 use nalgebra::DMatrix;
-use rustfoil_bl::closures::Trchek2FullResult;
 use rustfoil_bl::state::BlDerivatives;
 
 use crate::config::OperatingMode;
@@ -115,8 +114,6 @@ pub struct XfoilState {
     pub itran_lower: usize,
     pub xssitr_upper: f64,
     pub xssitr_lower: f64,
-    pub upper_transitions: Vec<Option<Trchek2FullResult>>,
-    pub lower_transitions: Vec<Option<Trchek2FullResult>>,
     pub lblini: bool,
     pub ipan_upper: Vec<usize>,
     pub ipan_lower: Vec<usize>,
@@ -242,8 +239,6 @@ impl XfoilState {
             itran_lower: 0,
             xssitr_upper: 0.0,
             xssitr_lower: 0.0,
-            upper_transitions: Vec::new(),
-            lower_transitions: Vec::new(),
             lblini: false,
             ipan_upper: Vec::new(),
             ipan_lower: Vec::new(),

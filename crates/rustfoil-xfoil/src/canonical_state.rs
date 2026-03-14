@@ -2,19 +2,30 @@ use rustfoil_bl::{blvar, BlStation, FlowType};
 
 use crate::state::{XfoilBlRow, XfoilState, XfoilSurface};
 
-pub(crate) fn flow_type_for_row(row: &XfoilBlRow) -> FlowType {
-    if row.is_wake {
+pub(crate) fn flow_type_for_station_index(ibl: usize, iblte: usize, itran: usize) -> FlowType {
+    if ibl > iblte {
         FlowType::Wake
-    } else if row.is_turbulent {
+    } else if ibl + 1 >= itran {
         FlowType::Turbulent
     } else {
         FlowType::Laminar
     }
 }
 
-pub(crate) fn rows_to_stations(rows: &[XfoilBlRow], msq: f64, reynolds: f64) -> Vec<BlStation> {
+pub(crate) fn rows_to_stations(
+    rows: &[XfoilBlRow],
+    iblte: usize,
+    itran: usize,
+    msq: f64,
+    reynolds: f64,
+) -> Vec<BlStation> {
     rows.iter()
-        .map(|row| {
+        .enumerate()
+        .map(|(ibl, row)| {
+            let flow_type = flow_type_for_station_index(ibl, iblte, itran);
+            let is_wake = matches!(flow_type, FlowType::Wake);
+            let is_turbulent = matches!(flow_type, FlowType::Turbulent | FlowType::Wake);
+            let is_laminar = matches!(flow_type, FlowType::Laminar);
             let mut station = BlStation::new();
             let total_dstr = row.dstr.max(1.0e-12);
             station.x = row.x;
@@ -23,22 +34,22 @@ pub(crate) fn rows_to_stations(rows: &[XfoilBlRow], msq: f64, reynolds: f64) -> 
             station.u = row.uedg.abs().max(1.0e-9);
             station.theta = row.theta.max(1.0e-12);
             station.dw = row.dw.max(0.0);
-            station.delta_star = if row.is_wake {
+            station.delta_star = if is_wake {
                 (total_dstr - station.dw).max(1.0e-12)
             } else {
                 total_dstr
             };
-            station.ctau = if row.is_laminar {
+            station.ctau = if is_laminar {
                 0.03
             } else {
                 row.ctau.max(1.0e-7)
             };
             station.ampl = row.ampl.max(0.0);
             station.mass_defect = row.mass.max(1.0e-12);
-            station.is_laminar = row.is_laminar;
-            station.is_turbulent = row.is_turbulent;
-            station.is_wake = row.is_wake;
-            blvar(&mut station, flow_type_for_row(row), msq, reynolds);
+            station.is_laminar = is_laminar;
+            station.is_turbulent = is_turbulent;
+            station.is_wake = is_wake;
+            blvar(&mut station, flow_type, msq, reynolds);
             station
         })
         .collect()
@@ -48,8 +59,16 @@ pub(crate) fn sync_rows_from_stations(rows: &mut [XfoilBlRow], stations: &[BlSta
     for (row, station) in rows.iter_mut().zip(stations.iter()) {
         row.uedg = station.u;
         row.theta = station.theta;
-        row.dstr = station.delta_star;
-        row.mass = station.mass_defect;
+        row.dw = if station.is_wake {
+            station.dw.max(0.0)
+        } else {
+            0.0
+        };
+        row.dstr = if station.is_wake {
+            station.delta_star + station.dw
+        } else {
+            station.delta_star
+        };
         row.ampl = station.ampl;
         row.ctau = if station.is_laminar {
             station.ampl
@@ -66,6 +85,7 @@ pub(crate) fn sync_rows_from_stations(rows: &mut [XfoilBlRow], stations: &[BlSta
         row.us = station.us;
         row.cq = station.cq;
         row.de = station.de;
+        row.mass = station.mass_defect;
         row.is_laminar = station.is_laminar;
         row.is_turbulent = station.is_turbulent;
         row.is_wake = station.is_wake;
@@ -95,25 +115,20 @@ pub(crate) fn mirror_upper_wake_from_lower(state: &mut XfoilState) {
 }
 
 pub(crate) fn rebuild_qvis_from_rows(state: &mut XfoilState) {
-    let n_panel_nodes = state.n_panel_nodes();
     let n_total_nodes = state.n_total_nodes();
     state.qvis.clear();
     state.qvis.resize(n_total_nodes, 0.0);
 
-    for row in state.upper_rows.iter().skip(1).take(state.nbl_upper.saturating_sub(1)) {
-        if !row.is_wake && row.panel_idx < state.qvis.len() {
-            state.qvis[row.panel_idx] = XfoilSurface::Upper.vti() * row.uedg;
+    for ibl in 1..state.nbl_upper.min(state.upper_rows.len()).min(state.ipan_upper.len()) {
+        let panel_idx = state.ipan_upper[ibl];
+        if panel_idx < state.qvis.len() {
+            state.qvis[panel_idx] = XfoilSurface::Upper.vti() * state.upper_rows[ibl].uedg;
         }
     }
-    for row in state.lower_rows.iter().skip(1).take(state.nbl_lower.saturating_sub(1)) {
-        if !row.is_wake && row.panel_idx < state.qvis.len() {
-            state.qvis[row.panel_idx] = XfoilSurface::Lower.vti() * row.uedg;
-        } else if row.is_wake {
-            let wake_idx = row.panel_idx.saturating_sub(n_panel_nodes);
-            let qvis_idx = n_panel_nodes + wake_idx;
-            if qvis_idx < state.qvis.len() {
-                state.qvis[qvis_idx] = row.uedg.abs();
-            }
+    for ibl in 1..state.nbl_lower.min(state.lower_rows.len()).min(state.ipan_lower.len()) {
+        let panel_idx = state.ipan_lower[ibl];
+        if panel_idx < state.qvis.len() {
+            state.qvis[panel_idx] = XfoilSurface::Lower.vti() * state.lower_rows[ibl].uedg;
         }
     }
 }

@@ -92,7 +92,15 @@ fn build_and_fill_station(
     s.ctau = ctau;
     s.ampl = ampl;
     s.h = s.delta_star / s.theta;
-    s.mass_defect = s.u * s.delta_star;
+    // XFOIL's wake mass state is carried on total DSTR = delta_star + dw.
+    // BLPRV/BLKIN still use the wake-free delta_star for local closure work,
+    // but the coupled/marched mass contract must include the wake gap.
+    let total_dstr = if matches!(flow_type, FlowType::Wake) {
+        s.delta_star + s.dw
+    } else {
+        s.delta_star
+    };
+    s.mass_defect = s.u * total_dstr;
     s.is_laminar = matches!(flow_type, FlowType::Laminar);
     s.is_turbulent = matches!(flow_type, FlowType::Turbulent) || matches!(flow_type, FlowType::Wake);
     s.is_wake = matches!(flow_type, FlowType::Wake);
@@ -101,10 +109,26 @@ fn build_and_fill_station(
 }
 
 /// Determine flow type for a station.
+fn xfoil_ibl(ibl: usize) -> usize {
+    ibl + 1
+}
+
+fn is_transition_or_turbulent(ibl: usize, itran: usize) -> bool {
+    xfoil_ibl(ibl) >= itran
+}
+
+fn is_laminar_interval(ibl: usize, itran: usize) -> bool {
+    xfoil_ibl(ibl) < itran
+}
+
+fn is_transition_interval(ibl: usize, itran: usize) -> bool {
+    xfoil_ibl(ibl) == itran
+}
+
 fn flow_type_for(ibl: usize, itran: usize, wake: bool) -> FlowType {
     if wake {
         FlowType::Wake
-    } else if ibl >= itran {
+    } else if is_transition_or_turbulent(ibl, itran) {
         FlowType::Turbulent
     } else {
         FlowType::Laminar
@@ -123,10 +147,12 @@ fn store_to_row(
     itran: usize,
     wake: bool,
 ) {
-    let is_turb = ibl >= itran || wake;
+    let is_turb = is_transition_or_turbulent(ibl, itran) || wake;
+    let dw = if wake { station.dw.max(0.0) } else { 0.0 };
     // Primary
     row.theta = station.theta;
     row.dstr = dsi;
+    row.dw = dw;
     row.uedg = uei;
     row.mass = dsi * uei;
     // CTAU stores AMI for laminar, CTI for turbulent (matching Fortran convention)
@@ -163,10 +189,10 @@ fn compute_htarg(
     hmax: f64,
 ) -> f64 {
     let dx = (x2 - x1).max(1e-12);
-    let htarg = if ibl < itran {
+    let htarg = if is_laminar_interval(ibl, itran) {
         // Laminar: slow increase
         hk1 + 0.03 * dx / t1.max(1e-12)
-    } else if ibl == itran {
+    } else if is_transition_interval(ibl, itran) {
         // Transition interval: weighted
         hk1 + (0.03 * (xt - x1) - 0.15 * (x2 - xt)) / t1.max(1e-12)
     } else if wake {
@@ -207,30 +233,28 @@ pub fn blpini(state: &mut XfoilState, _reynolds: f64) {
 // ---------------------------------------------------------------------------
 
 /// MRCHUE: Direct-mode BL march with transition checking (xbl.f:584-986).
-pub fn mrchue(state: &mut XfoilState, reynolds: f64, ncrit: f64) {
+pub fn mrchue(state: &mut XfoilState, reynolds: f64, ncrit: f64, iteration: usize) {
     let msq = 0.0_f64;
 
     // Upper surface (IS=1): other side = lower (stale values)
     let other_te = te_values(&state.lower_rows, state.iblte_lower);
-    let (itran_u, xssitr_u, transitions_u) = march_ue_side(
+    let (itran_u, xssitr_u) = march_ue_side(
         1,
         &mut state.upper_rows, state.nbl_upper, state.iblte_upper,
-        other_te, state.ante, reynolds, ncrit, msq,
+        other_te, state.ante, reynolds, ncrit, msq, iteration,
     );
     state.itran_upper = itran_u;
     state.xssitr_upper = xssitr_u;
-    state.upper_transitions = transitions_u;
 
     // Lower surface (IS=2): other side = upper (fresh values)
     let other_te = te_values(&state.upper_rows, state.iblte_upper);
-    let (itran_l, xssitr_l, transitions_l) = march_ue_side(
+    let (itran_l, xssitr_l) = march_ue_side(
         2,
         &mut state.lower_rows, state.nbl_lower, state.iblte_lower,
-        other_te, state.ante, reynolds, ncrit, msq,
+        other_te, state.ante, reynolds, ncrit, msq, iteration,
     );
     state.itran_lower = itran_l;
     state.xssitr_lower = xssitr_l;
-    state.lower_transitions = transitions_l;
 
     state.lblini = true;
 }
@@ -249,9 +273,9 @@ fn te_values(rows: &[XfoilBlRow], iblte: usize) -> TeValues {
     )
 }
 
-/// Per-side MRCHUE march.  Returns (itran, xssitr, transition intervals).
+/// Per-side MRCHUE march. Returns `(itran, xssitr)`.
 fn march_ue_side(
-    _side: usize,
+    side: usize,
     rows: &mut [XfoilBlRow],
     nbl: usize,
     iblte: usize,
@@ -260,15 +284,15 @@ fn march_ue_side(
     re: f64,
     ncrit: f64,
     msq: f64,
-) -> (usize, f64, Vec<Option<Trchek2FullResult>>) {
+    iteration: usize,
+) -> (usize, f64) {
     if nbl < 2 {
-        return (iblte, 0.0, Vec::new());
+        return (iblte, 0.0);
     }
 
-    let mut itran = iblte;
+    let mut itran = xfoil_ibl(iblte);
     let mut xssitr = 0.0;
     let mut turb = false;
-    let mut transitions = vec![None; nbl - 1];
     let x_forced = rows.get(iblte).map(|row| row.x);
 
     // ---- Similarity station init (IBL=2 = index 1) ----
@@ -323,9 +347,36 @@ fn march_ue_side(
                     station_1.ampl, ncrit,
                     x_forced, msq, re,
                 );
+                if rustfoil_bl::is_debug_active() {
+                    rustfoil_bl::add_event(rustfoil_bl::DebugEvent::trchek2_final(
+                        iteration,
+                        side,
+                        ibl + 1,
+                        tr.iterations,
+                        tr.converged,
+                        station_1.x,
+                        station_2.x,
+                        station_1.ampl,
+                        tr.ampl2,
+                        tr.ax,
+                        tr.xt,
+                        ncrit,
+                        tr.transition,
+                        tr.forced,
+                        Some(tr.wf1),
+                        Some(tr.wf2),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ));
+                }
                 ami = tr.ampl2;
                 if tr.transition {
-                    itran = ibl;
+                    itran = xfoil_ibl(ibl);
                     tran = true;
                     xt = tr.xt;
                     if cti <= 0.0 {
@@ -333,12 +384,10 @@ fn march_ue_side(
                     }
                     tr_result = Some(tr);
                 } else {
-                    itran = ibl + 2;
+                    itran = xfoil_ibl(ibl) + 2;
                     tran = false;
                     tr_result = None;
                 }
-                transitions[ibl - 1] = Some(tr);
-
                 // Rebuild station_2 if flow type changed
                 let ft_new = flow_type_for(ibl, itran, wake);
                 if ft != ft_new {
@@ -383,7 +432,14 @@ fn march_ue_side(
                 let (res, jac) = if simi {
                     bldif_full_simi(&station_2, FlowType::Laminar, msq, re)
                 } else if tran && tr_result.is_some() {
-                    trdif_full(&station_1, &station_2, tr_result.as_ref().unwrap(), msq, re)
+                    trdif_full(
+                        &station_1,
+                        &station_2,
+                        tr_result.as_ref().unwrap(),
+                        ncrit,
+                        msq,
+                        re,
+                    )
                 } else {
                     bldif(&station_1, &station_2, ft, msq, re)
                 };
@@ -406,10 +462,10 @@ fn march_ue_side(
 
                 // Compute DMAX and RLX
                 dmax = (rhs[1] / thi.max(1e-12)).abs().max((rhs[2] / dsi.max(1e-12)).abs());
-                if ibl < itran {
+                if is_laminar_interval(ibl, itran) {
                     dmax = dmax.max((rhs[0] / 10.0).abs());
                 }
-                if ibl >= itran {
+                if is_transition_or_turbulent(ibl, itran) {
                     dmax = dmax.max((rhs[0] / cti.max(1e-12)).abs());
                 }
                 let rlx = if dmax > 0.3 { 0.3 / dmax } else { 1.0 };
@@ -418,7 +474,7 @@ fn march_ue_side(
                 if ibl != iblte + 1 {
                     let htest = (dsi + rlx * rhs[2]) / (thi + rlx * rhs[1]).max(1e-12);
                     let hktest = hkin(htest, msq).hk;
-                    let hmax = if ibl < itran { HLMAX } else { HTMAX };
+                    let hmax = if is_laminar_interval(ibl, itran) { HLMAX } else { HTMAX };
                     if hktest >= hmax {
                         direct = false;
                         htarg = compute_htarg(
@@ -430,7 +486,7 @@ fn march_ue_side(
                 }
 
                 // Apply direct updates (AMI not updated in MRCHUE — commented out in Fortran)
-                if ibl >= itran {
+                if is_transition_or_turbulent(ibl, itran) {
                     cti += rlx * rhs[0];
                 }
                 thi += rlx * rhs[1];
@@ -448,13 +504,13 @@ fn march_ue_side(
                     .abs()
                     .max((rhs[2] / dsi.max(1e-12)).abs())
                     .max((rhs[3] / uei.abs().max(1e-6)).abs());
-                if ibl >= itran {
+                if is_transition_or_turbulent(ibl, itran) {
                     dmax = dmax.max((rhs[0] / cti.max(1e-12)).abs());
                 }
                 let rlx = if dmax > 0.3 { 0.3 / dmax } else { 1.0 };
 
                 // Apply inverse updates
-                if ibl >= itran {
+                if is_transition_or_turbulent(ibl, itran) {
                     cti += rlx * rhs[0];
                 }
                 thi += rlx * rhs[1];
@@ -463,7 +519,7 @@ fn march_ue_side(
             }
 
             // ---- Clamp CTI ----
-            if ibl >= itran {
+            if is_transition_or_turbulent(ibl, itran) {
                 cti = cti.clamp(1e-7, 0.30);
             }
 
@@ -504,10 +560,10 @@ fn march_ue_side(
                     (xsi - rows[ibl - 1].x) / (10.0 * rows[ibl - 1].dstr.max(1e-12));
                 dsi = (rows[ibl - 1].dstr + thi * ratlen) / (1.0 + ratlen);
             }
-            if ibl == itran {
+            if is_transition_interval(ibl, itran) {
                 cti = 0.05;
             }
-            if ibl > itran {
+            if xfoil_ibl(ibl) > itran {
                 cti = rows[ibl - 1].ctau;
             }
             uei = rows[ibl].uedg;
@@ -550,18 +606,44 @@ fn march_ue_side(
                     msq,
                     re,
                 );
+                if rustfoil_bl::is_debug_active() {
+                    rustfoil_bl::add_event(rustfoil_bl::DebugEvent::trchek2_final(
+                        iteration,
+                        side,
+                        ibl + 1,
+                        tr.iterations,
+                        tr.converged,
+                        station_1.x,
+                        fallback_station.x,
+                        station_1.ampl,
+                        tr.ampl2,
+                        tr.ax,
+                        tr.xt,
+                        ncrit,
+                        tr.transition,
+                        tr.forced,
+                        Some(tr.wf1),
+                        Some(tr.wf2),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ));
+                }
                 ami = tr.ampl2;
                 if tr.transition {
-                    itran = ibl;
+                    itran = xfoil_ibl(ibl);
                     tran = true;
                     xt = tr.xt;
                     tr_result = Some(tr);
                 } else {
-                    itran = ibl + 2;
+                    itran = xfoil_ibl(ibl) + 2;
                     tran = false;
                     tr_result = None;
                 }
-                transitions[ibl - 1] = Some(tr);
                 fallback_station = build_and_fill_station(
                     xsi,
                     uei,
@@ -611,6 +693,18 @@ fn march_ue_side(
             );
         }
         store_to_row(&station_final, &mut rows[ibl], dsi, uei, cti, ami, ibl, itran, wake);
+        if rustfoil_bl::is_debug_active() {
+            rustfoil_bl::add_event(rustfoil_bl::DebugEvent::mrchue(
+                side,
+                ibl + 1,
+                station_final.x,
+                station_final.u,
+                station_final.theta,
+                station_final.delta_star,
+                station_final.hk,
+                station_final.cf,
+            ));
+        }
 
         // ---- Set station_1 for next station (xbl.f:953-965) ----
         station_1 = station_final;
@@ -630,7 +724,7 @@ fn march_ue_side(
         }
     }
 
-    (itran, xssitr, transitions)
+    (itran, xssitr)
 }
 
 // ---------------------------------------------------------------------------
@@ -638,35 +732,33 @@ fn march_ue_side(
 // ---------------------------------------------------------------------------
 
 /// MRCHDU: Mixed Ue-Hk march with transition checking (xbl.f:990-1312).
-pub fn mrchdu(state: &mut XfoilState, reynolds: f64, ncrit: f64) {
+pub fn mrchdu(state: &mut XfoilState, reynolds: f64, ncrit: f64, iteration: usize) {
     let msq = 0.0_f64;
 
     // Upper surface
     let other_te = te_values(&state.lower_rows, state.iblte_lower);
     let itrold_u = state.itran_upper;
-    let (itran_u, xssitr_u, transitions_u) = march_du_side(
+    let (itran_u, xssitr_u) = march_du_side(
         1,
         &mut state.upper_rows, state.nbl_upper, state.iblte_upper,
-        other_te, state.ante, itrold_u, reynolds, ncrit, msq,
+        other_te, state.ante, itrold_u, reynolds, ncrit, msq, iteration,
     );
     state.itran_upper = itran_u;
     state.xssitr_upper = xssitr_u;
-    state.upper_transitions = transitions_u;
 
     // Lower surface (uses freshly updated upper TE)
     let other_te = te_values(&state.upper_rows, state.iblte_upper);
     let itrold_l = state.itran_lower;
-    let (itran_l, xssitr_l, transitions_l) = march_du_side(
+    let (itran_l, xssitr_l) = march_du_side(
         2,
         &mut state.lower_rows, state.nbl_lower, state.iblte_lower,
-        other_te, state.ante, itrold_l, reynolds, ncrit, msq,
+        other_te, state.ante, itrold_l, reynolds, ncrit, msq, iteration,
     );
     state.itran_lower = itran_l;
     state.xssitr_lower = xssitr_l;
-    state.lower_transitions = transitions_l;
 }
 
-/// Per-side MRCHDU march.  Returns (itran, xssitr, transition intervals).
+/// Per-side MRCHDU march. Returns `(itran, xssitr)`.
 #[allow(clippy::too_many_arguments)]
 fn march_du_side(
     side: usize,
@@ -679,20 +771,20 @@ fn march_du_side(
     re: f64,
     ncrit: f64,
     msq: f64,
-) -> (usize, f64, Vec<Option<Trchek2FullResult>>) {
+    iteration: usize,
+) -> (usize, f64) {
     if nbl < 2 {
-        return (iblte, 0.0, Vec::new());
+        return (iblte, 0.0);
     }
 
     const DEPS: f64 = 5.0e-6;
     const SENSWT: f64 = 1000.0;
 
-    let mut itran = iblte;
+    let mut itran = xfoil_ibl(iblte);
     let mut xssitr = 0.0;
     let mut turb = false;
     let mut sens = 0.0_f64;
     let mut ami = rows[1].ctau;
-    let mut transitions = vec![None; nbl - 1];
     let x_forced = rows.get(iblte).map(|row| row.x);
 
     // Build station_1 from stored similarity station (index 1)
@@ -722,7 +814,7 @@ fn march_du_side(
 
         // Initialize AMI/CTI from stored CTAU based on ITROLD (xbl.f:1050-1056)
         let mut cti;
-        if ibl < itrold {
+        if is_laminar_interval(ibl, itrold) {
             ami = rows[ibl].ctau;
             cti = 0.03;
         } else {
@@ -767,6 +859,33 @@ fn march_du_side(
                     station_1.ampl, ncrit,
                     x_forced, msq, re,
                 );
+                if rustfoil_bl::is_debug_active() {
+                    rustfoil_bl::add_event(rustfoil_bl::DebugEvent::trchek2_final(
+                        iteration,
+                        side,
+                        ibl + 1,
+                        tr.iterations,
+                        tr.converged,
+                        station_1.x,
+                        station_2.x,
+                        station_1.ampl,
+                        tr.ampl2,
+                        tr.ax,
+                        tr.xt,
+                        ncrit,
+                        tr.transition,
+                        tr.forced,
+                        Some(tr.wf1),
+                        Some(tr.wf2),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ));
+                }
                 if std::env::var("RUSTFOIL_TRCHEK_DEBUG").is_ok() {
                     eprintln!(
                         "[TRCHEK DU] side={} ibl={} itran={} itrold={} x1={:.12e} x2={:.12e} th1={:.12e} th2={:.12e} ds1={:.12e} ds2={:.12e} u1={:.12e} u2={:.12e} hk1={:.12e} hk2={:.12e} rt1={:.12e} rt2={:.12e} ampl1={:.12e} ampl2={:.12e} transition={} xt={:.12e} xforced={:?}",
@@ -795,16 +914,15 @@ fn march_du_side(
                 }
                 ami = tr.ampl2;
                 if tr.transition {
-                    itran = ibl;
+                    itran = xfoil_ibl(ibl);
                     tran = true;
                     xt = tr.xt;
                     tr_result = Some(tr);
                 } else {
-                    itran = ibl + 2;
+                    itran = xfoil_ibl(ibl) + 2;
                     tran = false;
                     tr_result = None;
                 }
-                transitions[ibl - 1] = Some(tr);
                 let ft_new = flow_type_for(ibl, itran, wake);
                 station_2 = build_and_fill_station(
                     xsi, uei, thi, (dsi - dswaki).max(1e-12), dswaki, cti, ami,
@@ -842,7 +960,14 @@ fn march_du_side(
                 rhs[2] = dte - station_2.delta_star - station_2.dw;
             } else {
                 let (res, jac) = if tran && tr_result.is_some() {
-                    trdif_full(&station_1, &station_2, tr_result.as_ref().unwrap(), msq, re)
+                    trdif_full(
+                        &station_1,
+                        &station_2,
+                        tr_result.as_ref().unwrap(),
+                        ncrit,
+                        msq,
+                        re,
+                    )
                 } else if simi {
                     bldif_full_simi(&station_2, FlowType::Laminar, msq, re)
                 } else {
@@ -864,7 +989,7 @@ fn march_du_side(
                 hkref = station_2.hk;
 
                 // Transition reversal (xbl.f:1108-1115)
-                if ibl < itran && ibl >= itrold {
+                if is_laminar_interval(ibl, itran) && is_transition_or_turbulent(ibl, itrold) {
                     if ibl > 1 {
                         let prev = &rows[ibl - 1];
                         let hm = prev.dstr / prev.theta.max(1e-12);
@@ -873,7 +998,7 @@ fn march_du_side(
                 }
 
                 // Reinitialize CTI for newly turbulent stations (xbl.f:1118-1126)
-                if ibl < itrold {
+                if is_laminar_interval(ibl, itrold) {
                     if tran {
                         cti = 0.03;
                     }
@@ -934,7 +1059,7 @@ fn march_du_side(
                 .abs()
                 .max((rhs[2] / dsi.max(1e-12)).abs())
                 .max((rhs[3] / uei.abs().max(1e-6)).abs());
-            if ibl >= itran {
+            if is_transition_or_turbulent(ibl, itran) {
                 dmax = dmax.max((rhs[0] / (10.0 * cti.max(1e-12))).abs());
             }
             let rlx = if dmax > 0.3 { 0.3 / dmax } else { 1.0 };
@@ -979,10 +1104,10 @@ fn march_du_side(
             }
 
             // ---- Updates (xbl.f:1193-1197) ----
-            if ibl < itran {
+            if is_laminar_interval(ibl, itran) {
                 ami += rlx * rhs[0];
             }
-            if ibl >= itran {
+            if is_transition_or_turbulent(ibl, itran) {
                 cti += rlx * rhs[0];
             }
             thi += rlx * rhs[1];
@@ -990,7 +1115,7 @@ fn march_du_side(
             uei += rlx * rhs[3];
 
             // ---- Clamp CTI ----
-            if ibl >= itran {
+            if is_transition_or_turbulent(ibl, itran) {
                 cti = cti.clamp(1e-7, 0.30);
             }
 
@@ -1035,10 +1160,10 @@ fn march_du_side(
                 dsi = (rows[ibl - 1].dstr + thi * ratlen) / (1.0 + ratlen);
                 uei = rows[ibl - 1].uedg;
             }
-            if ibl == itran {
+            if is_transition_interval(ibl, itran) {
                 cti = 0.05;
             }
-            if ibl > itran {
+            if xfoil_ibl(ibl) > itran {
                 cti = rows[ibl - 1].ctau;
             }
 
@@ -1077,6 +1202,33 @@ fn march_du_side(
                     msq,
                     re,
                 );
+                if rustfoil_bl::is_debug_active() {
+                    rustfoil_bl::add_event(rustfoil_bl::DebugEvent::trchek2_final(
+                        iteration,
+                        side,
+                        ibl + 1,
+                        tr.iterations,
+                        tr.converged,
+                        station_1.x,
+                        fallback_station.x,
+                        station_1.ampl,
+                        tr.ampl2,
+                        tr.ax,
+                        tr.xt,
+                        ncrit,
+                        tr.transition,
+                        tr.forced,
+                        Some(tr.wf1),
+                        Some(tr.wf2),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ));
+                }
                 if std::env::var("RUSTFOIL_TRCHEK_DEBUG").is_ok() {
                     eprintln!(
                         "[TRCHEK DU FALLBACK] side={} ibl={} itran={} itrold={} x1={:.12e} x2={:.12e} th1={:.12e} th2={:.12e} ds1={:.12e} ds2={:.12e} u1={:.12e} u2={:.12e} hk1={:.12e} hk2={:.12e} rt1={:.12e} rt2={:.12e} ampl1={:.12e} ampl2={:.12e} transition={} xt={:.12e} xforced={:?}",
@@ -1105,16 +1257,15 @@ fn march_du_side(
                 }
                 ami = tr.ampl2;
                 if tr.transition {
-                    itran = ibl;
+                    itran = xfoil_ibl(ibl);
                     tran = true;
                     xt = tr.xt;
                     tr_result = Some(tr);
                 } else {
-                    itran = ibl + 2;
+                    itran = xfoil_ibl(ibl) + 2;
                     tran = false;
                     tr_result = None;
                 }
-                transitions[ibl - 1] = Some(tr);
                 fallback_station = build_and_fill_station(
                     xsi,
                     uei,
@@ -1165,6 +1316,18 @@ fn march_du_side(
             );
         }
         store_to_row(&station_final, &mut rows[ibl], dsi, uei, cti, ami, ibl, itran, wake);
+        if rustfoil_bl::is_debug_active() {
+            rustfoil_bl::add_event(rustfoil_bl::DebugEvent::mrchue(
+                side,
+                ibl + 1,
+                station_final.x,
+                station_final.u,
+                station_final.theta,
+                station_final.delta_star,
+                station_final.hk,
+                station_final.cf,
+            ));
+        }
 
         // Set station_1 for next station
         station_1 = station_final;
@@ -1178,5 +1341,5 @@ fn march_du_side(
         }
     }
 
-    (itran, xssitr, transitions)
+    (itran, xssitr)
 }

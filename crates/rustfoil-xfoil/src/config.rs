@@ -27,7 +27,7 @@ impl Default for XfoilOptions {
             reynolds: 1.0e6,
             mach: 0.0,
             ncrit: 9.0,
-            max_iterations: 30,
+            max_iterations: 100,
             tolerance: 1.0e-4,
             wake_length_chords: 1.0,
             operating_mode: OperatingMode::PrescribedAlpha,
