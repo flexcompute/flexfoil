@@ -6,9 +6,10 @@
  * - Alpha polar generation
  */
 
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
 import { analyzeAirfoil, isWasmReady, type AnalysisResult } from '../../lib/wasm';
+import { NumericInput } from '../NumericInput';
 import type { PolarPoint } from '../../types';
 
 type RunMode = 'alpha' | 'cl';
@@ -20,54 +21,35 @@ export function SolvePanel() {
     polarData,
     displayAlpha,
     reynolds,
+    mach,
+    ncrit,
+    maxIterations,
     setDisplayAlpha,
     setReynolds,
+    setMach,
+    setNcrit,
+    setMaxIterations,
     setPolarData,
     clearPolar
   } = useAirfoilStore();
   
   const [runMode, setRunMode] = useState<RunMode>('alpha');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   
-  // Single-point inputs - initialize from store's displayAlpha
+  // Single-point inputs - keep in sync with store
   const [targetAlpha, setTargetAlphaLocal] = useState(displayAlpha);
   const [targetCl, setTargetCl] = useState(0.5);
   
-  // Debounce timer ref
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
-  // Sync local targetAlpha with store on mount (respect store's initial value)
-  const initializedRef = useRef(false);
+  // Sync local targetAlpha when store changes externally (e.g. URL load)
   useEffect(() => {
-    if (!initializedRef.current) {
-      initializedRef.current = true;
-      // On first load, update store to match initial targetAlpha if different
-      if (displayAlpha !== targetAlpha) {
-        setDisplayAlpha(targetAlpha);
-      }
-    }
-  }, [displayAlpha, targetAlpha, setDisplayAlpha]);
+    setTargetAlphaLocal(displayAlpha);
+  }, [displayAlpha]);
   
-  // Wrapper to update both local state and store displayAlpha (debounced)
+  // Commit alpha: updates both local state and the store (called on Enter/blur/arrows)
   const setTargetAlpha = useCallback((alpha: number) => {
     setTargetAlphaLocal(alpha);
-    
-    // Debounce the store update to avoid excessive recomputation while typing
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-    }
-    debounceRef.current = setTimeout(() => {
-      setDisplayAlpha(alpha);
-    }, 300); // 300ms debounce
+    setDisplayAlpha(alpha);
   }, [setDisplayAlpha]);
-  
-  // Cleanup debounce timer on unmount
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-      }
-    };
-  }, []);
   
   // Polar settings
   const [alphaStart, setAlphaStart] = useState(-5);
@@ -96,8 +78,7 @@ export function SolvePanel() {
     
     try {
       if (runMode === 'alpha') {
-        // Direct alpha analysis
-        const res = analyzeAirfoil(panels, targetAlpha, reynolds);
+        const res = analyzeAirfoil(panels, targetAlpha, reynolds, mach, ncrit, maxIterations);
         setResult(res);
         setResultAlpha(targetAlpha);
         if (!res.success) {
@@ -106,14 +87,13 @@ export function SolvePanel() {
           setError(`Faithful viscous solver did not converge (residual ${res.residual.toExponential(2)})`);
         }
       } else {
-        // Iterate to find alpha for target CL
         let alpha = 0;
         let cl = 0;
         const maxIter = 20;
         const tol = 0.001;
         
         for (let i = 0; i < maxIter; i++) {
-          const res = analyzeAirfoil(panels, alpha, reynolds);
+          const res = analyzeAirfoil(panels, alpha, reynolds, mach, ncrit, maxIterations);
           if (!res.success) {
             setError(res.error || 'Analysis failed during CL iteration');
             setIsRunning(false);
@@ -126,24 +106,18 @@ export function SolvePanel() {
           if (Math.abs(clError) < tol) {
             setResult(res);
             setResultAlpha(alpha);
-            // Update display alpha to show the found alpha
             setDisplayAlpha(alpha);
             break;
           }
           
-          // Estimate cl_alpha (thin airfoil: ~2π per radian ≈ 0.11 per degree)
           const clAlpha = 0.11;
           alpha += clError / clAlpha;
-          
-          // Clamp to reasonable range
           alpha = Math.max(-20, Math.min(25, alpha));
           
           if (i === maxIter - 1) {
-            // Last iteration - use whatever we got
-            const finalRes = analyzeAirfoil(panels, alpha, reynolds);
+            const finalRes = analyzeAirfoil(panels, alpha, reynolds, mach, ncrit, maxIterations);
             setResult(finalRes);
             setResultAlpha(alpha);
-            // Update display alpha even if not fully converged
             setDisplayAlpha(alpha);
             if (Math.abs(targetCl - finalRes.cl) > 0.01) {
               setError(`Could not converge to CL=${targetCl.toFixed(3)}. Got CL=${finalRes.cl.toFixed(3)} at α=${alpha.toFixed(2)}°`);
@@ -156,7 +130,7 @@ export function SolvePanel() {
     }
     
     setIsRunning(false);
-  }, [panels, runMode, targetAlpha, targetCl, reynolds, setDisplayAlpha]);
+  }, [panels, runMode, targetAlpha, targetCl, reynolds, mach, ncrit, maxIterations, setDisplayAlpha]);
 
   // Run polar sweep
   const runPolar = useCallback(() => {
@@ -173,7 +147,7 @@ export function SolvePanel() {
       const points: PolarPoint[] = [];
       
       for (let alpha = alphaStart; alpha <= alphaEnd; alpha += alphaStep) {
-        const res = analyzeAirfoil(panels, alpha, reynolds);
+        const res = analyzeAirfoil(panels, alpha, reynolds, mach, ncrit, maxIterations);
         if (res.success) {
           points.push({
             alpha,
@@ -194,7 +168,7 @@ export function SolvePanel() {
     }
     
     setIsRunning(false);
-  }, [panels, alphaStart, alphaEnd, alphaStep, reynolds, clearPolar, setPolarData]);
+  }, [panels, alphaStart, alphaEnd, alphaStep, reynolds, mach, ncrit, maxIterations, clearPolar, setPolarData]);
 
   // Compute cl_alpha from polar
   const clAlpha = useMemo(() => {
@@ -230,12 +204,72 @@ export function SolvePanel() {
 
         <div className="form-group">
           <div className="form-label">Reynolds Number</div>
-          <input
-            type="number"
+          <NumericInput
             value={reynolds}
-            onChange={(e) => setReynolds(Math.max(1, Number(e.target.value) || 1))}
+            onChange={(v) => setReynolds(Math.max(1, v))}
             step={100000}
+            min={1}
+            format={(v) => v.toExponential().replace(/\.?0+e/, 'e').replace('e+', 'e')}
           />
+        </div>
+
+        {/* Advanced Solver Settings */}
+        <div className="form-group">
+          <button
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            style={{
+              width: '100%',
+              padding: '4px 8px',
+              fontSize: '11px',
+              background: 'transparent',
+              border: '1px solid var(--border-color)',
+              borderRadius: '4px',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}
+          >
+            <span>Advanced Settings</span>
+            <span style={{ fontSize: '10px' }}>{showAdvanced ? '▲' : '▼'}</span>
+          </button>
+          {showAdvanced && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+              <div>
+                <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Mach Number</label>
+                <NumericInput
+                  value={mach}
+                  onChange={setMach}
+                  step={0.01}
+                  min={0}
+                  max={0.8}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                  Ncrit (e<sup>N</sup> transition)
+                </label>
+                <NumericInput
+                  value={ncrit}
+                  onChange={setNcrit}
+                  step={0.5}
+                  min={1}
+                  max={14}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Max Iterations</label>
+                <NumericInput
+                  value={maxIterations}
+                  onChange={setMaxIterations}
+                  step={10}
+                  min={10}
+                  max={500}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Single Point Analysis */}
@@ -265,15 +299,13 @@ export function SolvePanel() {
             <label style={{ fontSize: '12px', minWidth: '60px' }}>
               {runMode === 'alpha' ? 'Alpha (°):' : 'Target CL:'}
             </label>
-            <input
-              type="number"
+            <NumericInput
               value={runMode === 'alpha' ? targetAlpha : targetCl}
-              onChange={(e) => {
-                const val = parseFloat(e.target.value);
+              onChange={(v) => {
                 if (runMode === 'alpha') {
-                  setTargetAlpha(val);
+                  setTargetAlpha(v);
                 } else {
-                  setTargetCl(val);
+                  setTargetCl(v);
                 }
               }}
               step={runMode === 'alpha' ? 0.5 : 0.1}
@@ -321,28 +353,25 @@ export function SolvePanel() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
             <div>
               <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Start (°)</label>
-              <input
-                type="number"
+              <NumericInput
                 value={alphaStart}
-                onChange={(e) => setAlphaStart(parseFloat(e.target.value))}
+                onChange={setAlphaStart}
                 step={1}
               />
             </div>
             <div>
               <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>End (°)</label>
-              <input
-                type="number"
+              <NumericInput
                 value={alphaEnd}
-                onChange={(e) => setAlphaEnd(parseFloat(e.target.value))}
+                onChange={setAlphaEnd}
                 step={1}
               />
             </div>
             <div>
               <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Step (°)</label>
-              <input
-                type="number"
+              <NumericInput
                 value={alphaStep}
-                onChange={(e) => setAlphaStep(parseFloat(e.target.value))}
+                onChange={setAlphaStep}
                 step={0.5}
                 min={0.1}
               />
