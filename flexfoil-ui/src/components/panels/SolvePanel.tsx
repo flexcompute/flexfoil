@@ -10,7 +10,7 @@ import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
 import { useRunStore } from '../../stores/runStore';
 import { analyzeAirfoil, analyzeAirfoilInviscid, isWasmReady, type AnalysisResult } from '../../lib/wasm';
-import type { PolarPoint, SolverMode } from '../../types';
+import type { PolarPoint, PolarSeries, SolverMode } from '../../types';
 import type { RunInsert } from '../../lib/runDatabase';
 
 type RunMode = 'alpha' | 'cl';
@@ -26,8 +26,8 @@ export function SolvePanel() {
     setDisplayAlpha,
     setReynolds,
     setSolverMode,
-    setPolarData,
-    clearPolar,
+    upsertPolar,
+    clearAllPolars,
   } = useAirfoilStore();
 
   const { lookup, addRun, hashPanels } = useRunStore();
@@ -76,7 +76,8 @@ export function SolvePanel() {
   const [error, setError] = useState<string | null>(null);
   const [cacheStats, setCacheStats] = useState<{ hits: number; misses: number } | null>(null);
 
-  const polar = polarData;
+  const lastSeries = polarData.length > 0 ? polarData[polarData.length - 1] : null;
+  const polar = lastSeries?.points ?? [];
 
   const isViscous = solverMode === 'viscous';
 
@@ -227,12 +228,17 @@ export function SolvePanel() {
 
     setIsRunning(true);
     setError(null);
-    clearPolar();
     setCacheStats(null);
 
     try {
       const airfoilHash = await hashPanels(panels);
       const nPanels = panels.length - 1;
+
+      const polarKey = `${airfoilHash.slice(0, 12)}_${cacheRe}_${cacheMach}_${cacheNcrit}_${nPanels}_${cacheMaxIter}`;
+      const polarLabel = isViscous
+        ? `${name} Re=${cacheRe.toExponential(1)} Nc=${cacheNcrit}`
+        : `${name} (inviscid)`;
+
       const points: PolarPoint[] = [];
       let hits = 0;
       let misses = 0;
@@ -280,7 +286,7 @@ export function SolvePanel() {
         }
       }
 
-      setPolarData(points);
+      upsertPolar({ key: polarKey, label: polarLabel, points });
       setCacheStats({ hits, misses });
 
       if (points.length === 0) {
@@ -292,7 +298,7 @@ export function SolvePanel() {
 
     setIsRunning(false);
   }, [panels, name, alphaStart, alphaEnd, alphaStep, cacheRe, cacheMach, cacheNcrit, cacheMaxIter,
-      clearPolar, setPolarData, hashPanels, lookup, addRun, runSolver]);
+      isViscous, upsertPolar, hashPanels, lookup, addRun, runSolver]);
 
   // --------------- derived ---------------
 
@@ -506,13 +512,30 @@ export function SolvePanel() {
             </div>
           </div>
 
-          <button
-            onClick={runPolar}
-            disabled={isRunning || !isWasmReady()}
-            style={{ width: '100%' }}
-          >
-            {isRunning ? 'Running...' : 'Generate Polar'}
-          </button>
+          <div style={{ display: 'flex', gap: '4px' }}>
+            <button
+              onClick={runPolar}
+              disabled={isRunning || !isWasmReady()}
+              style={{ flex: 1 }}
+            >
+              {isRunning ? 'Running...' : 'Generate Polar'}
+            </button>
+            {polarData.length > 0 && (
+              <button
+                onClick={clearAllPolars}
+                disabled={isRunning}
+                title="Clear all polar series"
+                style={{ padding: '4px 8px', fontSize: '11px' }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          {polarData.length > 1 && (
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+              {polarData.length} polar series overlaid — see Polar panel
+            </div>
+          )}
         </div>
 
         {/* Cache stats */}
@@ -579,8 +602,8 @@ export function SolvePanel() {
             <button
               onClick={() => {
                 const header = isViscous
-                  ? `# ${name} - Viscous Polar (Re=${reynolds})\n# Alpha(deg)  CL        CD         CM\n`
-                  : `# ${name} - Inviscid Polar\n# Alpha(deg)  CL        CM\n`;
+                  ? `# ${lastSeries?.label ?? name} - Viscous Polar (Re=${reynolds})\n# Alpha(deg)  CL        CD         CM\n`
+                  : `# ${lastSeries?.label ?? name} - Inviscid Polar\n# Alpha(deg)  CL        CM\n`;
                 const data = polar.map(p =>
                   isViscous
                     ? `${p.alpha.toFixed(2).padStart(8)} ${p.cl.toFixed(6).padStart(10)} ${(p.cd ?? 0).toFixed(6).padStart(10)} ${p.cm.toFixed(6).padStart(10)}`

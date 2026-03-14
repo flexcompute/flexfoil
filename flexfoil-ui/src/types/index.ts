@@ -121,8 +121,8 @@ export interface AirfoilState {
   maxIterations: number;
   /** Active solver mode */
   solverMode: SolverMode;
-  /** Polar sweep data */
-  polarData: PolarPoint[];
+  /** Polar sweep data — multiple series keyed by solver config */
+  polarData: PolarSeries[];
   /** Spacing panel mode: simple (curvature-based) or advanced (SSP) */
   spacingPanelMode: SpacingPanelMode;
   /** SSP interpolation mode: linear (piecewise) or spline */
@@ -149,6 +149,13 @@ export interface PolarPoint {
   cl: number;
   cd?: number;
   cm: number;
+}
+
+/** A named polar series keyed by solver config (airfoil + Re + Mach + Ncrit + …) */
+export interface PolarSeries {
+  key: string;
+  label: string;
+  points: PolarPoint[];
 }
 
 /** A row from the runs SQLite table — one solver evaluation */
