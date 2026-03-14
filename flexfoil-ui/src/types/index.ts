@@ -18,7 +18,7 @@ export interface AirfoilPoint extends Point {
 
 /** Control modes for airfoil manipulation */
 export type ControlMode = 'parameters' | 'camber-spline' | 'thickness-spline';
-export type SolverMode = 'viscous';
+export type SolverMode = 'viscous' | 'inviscid';
 
 /** Spacing panel modes */
 export type SpacingPanelMode = 'simple' | 'advanced';
