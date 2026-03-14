@@ -116,6 +116,9 @@ interface AirfoilStore extends AirfoilState {
   setName: (name: string) => void;
   setDisplayAlpha: (alpha: number) => void;
   setReynolds: (reynolds: number) => void;
+  setMach: (mach: number) => void;
+  setNcrit: (ncrit: number) => void;
+  setMaxIterations: (maxIterations: number) => void;
   setSolverMode: (mode: SolverMode) => void;
   
   // Point manipulation (legacy, kept for compatibility)
@@ -222,6 +225,9 @@ export const useAirfoilStore = create<AirfoilStore>()(
       curvatureWeight: 0,
       displayAlpha: 0,
       reynolds: 1e6,
+      mach: 0,
+      ncrit: 9,
+      maxIterations: 100,
       solverMode: 'viscous',
       polarData: [],
       spacingPanelMode: 'simple',  // Default to simple curvature-based
@@ -242,6 +248,9 @@ export const useAirfoilStore = create<AirfoilStore>()(
       setName: (name) => set({ name }),
       setDisplayAlpha: (alpha) => set({ displayAlpha: alpha }),
       setReynolds: (reynolds) => set({ reynolds }),
+      setMach: (mach) => set({ mach: Math.max(0, Math.min(0.8, mach)) }),
+      setNcrit: (ncrit) => set({ ncrit: Math.max(1, Math.min(14, ncrit)) }),
+      setMaxIterations: (maxIterations) => set({ maxIterations: Math.max(10, Math.min(500, maxIterations)) }),
       setSolverMode: (solverMode) => set({ solverMode }),
 
       updatePoint: (index, point) => set((state) => {
@@ -810,6 +819,9 @@ export const useAirfoilStore = create<AirfoilStore>()(
         nPanels: 160,  // XFOIL's default NPAN
         curvatureWeight: 0,
         displayAlpha: 0,
+        mach: 0,
+        ncrit: 9,
+        maxIterations: 100,
         polarData: [],
         spacingPanelMode: 'simple',
         sspInterpolation: 'linear',

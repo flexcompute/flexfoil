@@ -113,6 +113,12 @@ export interface AirfoilState {
   displayAlpha: number;
   /** Reynolds number for faithful viscous analysis */
   reynolds: number;
+  /** Freestream Mach number (compressibility correction) */
+  mach: number;
+  /** eN transition criterion (lower = earlier transition) */
+  ncrit: number;
+  /** Maximum viscous solver iterations */
+  maxIterations: number;
   /** Active solver mode */
   solverMode: SolverMode;
   /** Polar sweep data */
@@ -214,6 +220,8 @@ export interface VisualizationState {
   showPsiContours: boolean;
   showCp: boolean;
   showForces: boolean;
+  showBoundaryLayer: boolean;
+  showWake: boolean;
   
   // Animation options
   enableMorphing: boolean;
@@ -240,6 +248,9 @@ export interface VisualizationState {
   
   // Force vector options
   forceScale: number;
+  
+  // Boundary layer overlay options
+  blThicknessScale: number;
   
   // GPU acceleration
   useGPU: boolean;
