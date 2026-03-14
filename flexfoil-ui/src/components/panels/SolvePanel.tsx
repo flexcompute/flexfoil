@@ -6,10 +6,11 @@
  * skip the solver entirely and return the stored result.
  */
 
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
 import { useRunStore } from '../../stores/runStore';
 import { analyzeAirfoil, isWasmReady, type AnalysisResult } from '../../lib/wasm';
+import { NumericInput } from '../NumericInput';
 import type { PolarPoint } from '../../types';
 import type { RunInsert } from '../../lib/runDatabase';
 
@@ -42,25 +43,16 @@ export function SolvePanel() {
   const [targetAlpha, setTargetAlphaLocal] = useState(displayAlpha);
   const [targetCl, setTargetCl] = useState(0.5);
 
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const initializedRef = useRef(false);
-
+  // Sync local targetAlpha when store changes externally (e.g. URL load)
   useEffect(() => {
-    if (!initializedRef.current) {
-      initializedRef.current = true;
-      if (displayAlpha !== targetAlpha) {
-        setDisplayAlpha(targetAlpha);
-      }
-    }
-  }, [displayAlpha, targetAlpha, setDisplayAlpha]);
+    setTargetAlphaLocal(displayAlpha);
+  }, [displayAlpha]);
 
+  // Commit alpha: updates both local state and the store (called on Enter/blur/arrows)
   const setTargetAlpha = useCallback((alpha: number) => {
     setTargetAlphaLocal(alpha);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => setDisplayAlpha(alpha), 300);
+    setDisplayAlpha(alpha);
   }, [setDisplayAlpha]);
-
-  useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
 
   // Polar settings
   const [alphaStart, setAlphaStart] = useState(-5);
@@ -311,11 +303,12 @@ export function SolvePanel() {
 
         <div className="form-group">
           <div className="form-label">Reynolds Number</div>
-          <input
-            type="number"
+          <NumericInput
             value={reynolds}
-            onChange={(e) => setReynolds(Math.max(1, Number(e.target.value) || 1))}
+            onChange={(v) => setReynolds(Math.max(1, v))}
             step={100000}
+            min={1}
+            format={(v) => v.toExponential().replace(/\.?0+e/, 'e').replace('e+', 'e')}
           />
         </div>
 
@@ -344,10 +337,9 @@ export function SolvePanel() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
               <div>
                 <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Mach Number</label>
-                <input
-                  type="number"
+                <NumericInput
                   value={mach}
-                  onChange={(e) => setMach(Math.max(0, Math.min(0.8, parseFloat(e.target.value) || 0)))}
+                  onChange={setMach}
                   step={0.01}
                   min={0}
                   max={0.8}
@@ -357,10 +349,9 @@ export function SolvePanel() {
                 <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
                   Ncrit (e<sup>N</sup> transition)
                 </label>
-                <input
-                  type="number"
+                <NumericInput
                   value={ncrit}
-                  onChange={(e) => setNcrit(Math.max(1, Math.min(14, parseFloat(e.target.value) || 9)))}
+                  onChange={setNcrit}
                   step={0.5}
                   min={1}
                   max={14}
@@ -368,10 +359,9 @@ export function SolvePanel() {
               </div>
               <div>
                 <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Max Iterations</label>
-                <input
-                  type="number"
+                <NumericInput
                   value={maxIterations}
-                  onChange={(e) => setMaxIterations(Math.max(10, Math.min(500, parseInt(e.target.value) || 100)))}
+                  onChange={setMaxIterations}
                   step={10}
                   min={10}
                   max={500}
@@ -406,13 +396,11 @@ export function SolvePanel() {
             <label style={{ fontSize: '12px', minWidth: '60px' }}>
               {runMode === 'alpha' ? 'Alpha (°):' : 'Target CL:'}
             </label>
-            <input
-              type="number"
+            <NumericInput
               value={runMode === 'alpha' ? targetAlpha : targetCl}
-              onChange={(e) => {
-                const val = parseFloat(e.target.value);
-                if (runMode === 'alpha') setTargetAlpha(val);
-                else setTargetCl(val);
+              onChange={(v) => {
+                if (runMode === 'alpha') setTargetAlpha(v);
+                else setTargetCl(v);
               }}
               step={runMode === 'alpha' ? 0.5 : 0.1}
               style={{ flex: 1 }}
@@ -459,15 +447,15 @@ export function SolvePanel() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
             <div>
               <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Start (°)</label>
-              <input type="number" value={alphaStart} onChange={(e) => setAlphaStart(parseFloat(e.target.value))} step={1} />
+              <NumericInput value={alphaStart} onChange={setAlphaStart} step={1} />
             </div>
             <div>
               <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>End (°)</label>
-              <input type="number" value={alphaEnd} onChange={(e) => setAlphaEnd(parseFloat(e.target.value))} step={1} />
+              <NumericInput value={alphaEnd} onChange={setAlphaEnd} step={1} />
             </div>
             <div>
               <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Step (°)</label>
-              <input type="number" value={alphaStep} onChange={(e) => setAlphaStep(parseFloat(e.target.value))} step={0.5} min={0.1} />
+              <NumericInput value={alphaStep} onChange={setAlphaStep} step={0.5} min={0.1} />
             </div>
           </div>
 
