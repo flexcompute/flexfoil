@@ -148,6 +148,7 @@ pub enum DebugData {
     VmBlock(VmBlockEvent),
     Solution(SolutionEvent),
     UpdateSummary(UpdateSummaryEvent),
+    UpdateNewton(UpdateNewtonEvent),
     ForcedChanges(ForcedChangesEvent),
     // Full iteration dump (matches XFOIL DBGFULLITER)
     FullIter(FullIterEvent),
@@ -791,6 +792,9 @@ pub struct SetblSystemEvent {
     pub VM_row25: Option<Vec<[f64; 3]>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub VM_row26: Option<Vec<[f64; 3]>>,
+    /// Optional full VM matrix dump [IV][JV][eq] for targeted solver replay.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub VM_full: Option<Vec<Vec<[f64; 3]>>>,
 }
 
 /// BLSOLV solution event - Newton deltas after solving
@@ -1161,6 +1165,33 @@ pub struct UpdateSummaryEvent {
     pub limiting_reason: Option<String>,
     /// Sample updates (every 10th station)
     pub sample_updates: Vec<SampleUpdateData>,
+}
+
+/// Per-station Newton update limiter data
+#[derive(Serialize, Clone)]
+pub struct UpdateNewtonEvent {
+    /// Surface side (1=upper, 2=lower to match XFOIL)
+    pub is: usize,
+    /// BL station index
+    pub ibl: usize,
+    /// Relaxation after this station's limiting checks
+    pub rlx: f64,
+    /// Normalized change for ctau/ampl
+    pub dn1: f64,
+    /// Normalized change for theta
+    pub dn2: f64,
+    /// Normalized change for delta_star
+    pub dn3: f64,
+    /// Normalized change for Ue
+    pub dn4: f64,
+    /// Raw delta for ctau/ampl
+    pub dctau: f64,
+    /// Raw delta for theta
+    pub dthet: f64,
+    /// Raw delta for delta_star
+    pub ddstr: f64,
+    /// Raw delta for edge velocity
+    pub duedg: f64,
 }
 
 /// Sample update data for a single station
@@ -1853,6 +1884,7 @@ impl DebugEvent {
         VM_row24: Option<Vec<[f64; 3]>>,
         VM_row25: Option<Vec<[f64; 3]>>,
         VM_row26: Option<Vec<[f64; 3]>>,
+        VM_full: Option<Vec<Vec<[f64; 3]>>>,
     ) -> Self {
         Self {
             call_id: 0,
@@ -1868,6 +1900,7 @@ impl DebugEvent {
                 VM_row24,
                 VM_row25,
                 VM_row26,
+                VM_full,
             }),
         }
     }
@@ -2312,6 +2345,42 @@ impl DebugEvent {
                 limiting_station,
                 limiting_reason,
                 sample_updates,
+            }),
+        }
+    }
+
+    /// Create an UPDATE_NEWTON debug event matching XFOIL's per-station limiter dump
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_newton(
+        iter: usize,
+        side: usize,
+        ibl: usize,
+        rlx: f64,
+        dn1: f64,
+        dn2: f64,
+        dn3: f64,
+        dn4: f64,
+        dctau: f64,
+        dthet: f64,
+        ddstr: f64,
+        duedg: f64,
+    ) -> Self {
+        Self {
+            call_id: 0,
+            subroutine: "UPDATE_NEWTON".to_string(),
+            iteration: Some(iter),
+            data: DebugData::UpdateNewton(UpdateNewtonEvent {
+                is: side,
+                ibl,
+                rlx,
+                dn1,
+                dn2,
+                dn3,
+                dn4,
+                dctau,
+                dthet,
+                ddstr,
+                duedg,
             }),
         }
     }

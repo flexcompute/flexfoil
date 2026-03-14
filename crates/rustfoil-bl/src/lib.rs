@@ -24,7 +24,7 @@ pub use debug::{
     FullInviscidEvent, FullNfactorEvent, JacobianEvent, MrchueIterEvent, MrchueModeEvent, 
     MrchueSysEvent, NewtonIterEvent, SampleUpdateData, SetblSystemEvent, SolutionEvent, 
     StationState, SurfaceBlState, TrdifDerivsEvent, TrdifEvent, UpdateDetailedEvent, 
-    UpdateSummaryEvent, UesetEvent, UesetSurfaceData, VmBlockEvent, Vs2BeforeEvent, 
+    UpdateNewtonEvent, UpdateSummaryEvent, UesetEvent, UesetSurfaceData, VmBlockEvent, Vs2BeforeEvent, 
     VsrezAfterEvent,
 };
 pub use equations::{
