@@ -21,20 +21,19 @@ export function SolvePanel() {
     polarData,
     displayAlpha,
     reynolds,
-    mach,
-    ncrit,
-    maxIterations,
     setDisplayAlpha,
     setReynolds,
-    setMach,
-    setNcrit,
-    setMaxIterations,
     setPolarData,
     clearPolar
   } = useAirfoilStore();
   
   const [runMode, setRunMode] = useState<RunMode>('alpha');
   const [showAdvanced, setShowAdvanced] = useState(false);
+  
+  // Advanced solver settings (local state — not yet in the global store)
+  const [mach, setMach] = useState(0);
+  const [ncrit, setNcrit] = useState(9);
+  const [maxIterations, setMaxIterations] = useState(100);
   
   // Single-point inputs - keep in sync with store
   const [targetAlpha, setTargetAlphaLocal] = useState(displayAlpha);
