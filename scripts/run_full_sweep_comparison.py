@@ -329,9 +329,9 @@ def write_plot_html(cases: list[dict[str, Any]], output_path: Path, rust_solver_
       .sub {{ font-size:13px; margin-bottom:16px; }}
       select {{ min-height:44px; font-size:16px; }}
       .controls {{ grid-template-columns:1fr; gap:10px; margin-bottom:12px; }}
-      .summary {{ display:flex; overflow-x:auto; scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch; gap:12px; padding-bottom:4px; margin-bottom:8px; scrollbar-width:none; }}
+      .summary {{ display:grid; grid-template-rows:1fr 1fr; grid-auto-flow:column; grid-auto-columns:100%; overflow-x:auto; scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch; gap:12px; padding-bottom:4px; margin-bottom:8px; scrollbar-width:none; }}
       .summary::-webkit-scrollbar {{ display:none; }}
-      .card {{ min-width:calc(50% - 6px); flex-shrink:0; scroll-snap-align:start; min-height:auto; padding:14px 16px; }}
+      .card {{ scroll-snap-align:start; min-height:auto; padding:14px 16px; }}
       .value {{ font-size:22px; }}
       .dot-row {{ display:flex; }}
       .plot-tabs {{ display:flex; }}
