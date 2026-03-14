@@ -999,22 +999,15 @@ pub fn bldif_full_simi(
     // For similarity, XFOIL uses fixed log values (BLDIF with ITYP=0):
     // XLOG = 1.0, ULOG = BULE = 1.0, TLOG = 0.0, HLOG = 0.0
     let (res, mut jac, _) = bldif_with_terms_internal(s, s, flow_type, msq, re, true, 9.0);
-    
-    // CRITICAL: XFOIL combines VS1 and VS2 for similarity (xblsys.f lines 654-661):
-    //   IF(SIMI) THEN
-    //     DO K=1, 4
-    //       DO L=1, 5
-    //         VS2(K,L) = VS1(K,L) + VS2(K,L)
-    //         VS1(K,L) = 0.
-    // Since s1=s2, BLDIF computes VS1=VS2, so the combined VS2 is 2x original
-    // Note: Our BlJacobian uses 3x5 arrays (3 equations, 5 variables), not 4x5
+
+    // XFOIL xblsys.f combines similarity-station VS1 into VS2 before assembly.
     for k in 0..3 {
         for l in 0..5 {
             jac.vs2[k][l] += jac.vs1[k][l];
             jac.vs1[k][l] = 0.0;
         }
     }
-    
+
     (res, jac)
 }
 
@@ -2092,6 +2085,7 @@ pub fn trdif_full(
     s1: &BlStation,
     s2: &BlStation,
     tr: &crate::closures::Trchek2FullResult,
+    ncrit: f64,
     msq: f64,
     re: f64,
 ) -> (BlResiduals, BlJacobian) {
@@ -2119,7 +2113,7 @@ pub fn trdif_full(
     st_laminar.theta = tt;
     st_laminar.delta_star = dt;
     st_laminar.ctau = 0.0;
-    st_laminar.ampl = 9.0;
+    st_laminar.ampl = ncrit;
     st_laminar.is_laminar = true;
     st_laminar.is_turbulent = false;
     
@@ -2136,7 +2130,7 @@ pub fn trdif_full(
     // XFOIL evaluates CQT at the transition point before ST is applied,
     // using the transition-point laminar state (ctau=0, ampl=Ncrit).
     st_turb_temp.ctau = 0.0;
-    st_turb_temp.ampl = 9.0;
+    st_turb_temp.ampl = ncrit;
     st_turb_temp.is_laminar = false;
     st_turb_temp.is_turbulent = true;
     blvar(&mut st_turb_temp, FlowType::Turbulent, msq, re);
@@ -2378,6 +2372,7 @@ pub fn trdif_turb_terms(
     s1: &BlStation,
     s2: &BlStation,
     tr: &crate::closures::Trchek2FullResult,
+    ncrit: f64,
     msq: f64,
     re: f64,
 ) -> Option<BldifTerms> {
@@ -2404,7 +2399,7 @@ pub fn trdif_turb_terms(
     // XFOIL evaluates CQT at the transition point before ST is applied,
     // using the transition-point laminar state (ctau=0, ampl=Ncrit).
     st_turb_temp.ctau = 0.0;
-    st_turb_temp.ampl = 9.0;
+    st_turb_temp.ampl = ncrit;
     st_turb_temp.is_laminar = false;
     st_turb_temp.is_turbulent = true;
     blvar(&mut st_turb_temp, FlowType::Turbulent, msq, re);
