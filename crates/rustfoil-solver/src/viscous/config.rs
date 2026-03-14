@@ -11,6 +11,21 @@
 //! - max_iterations → VARONE iteration limit
 //! - tolerance → RMSBL convergence threshold
 
+/// XFOIL-style operating-variable mode for the viscous loop.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OperatingMode {
+    /// Angle of attack is prescribed; no live operating-variable correction is applied.
+    PrescribedAlpha,
+    /// Lift coefficient is prescribed; the operating variable is `alpha`.
+    PrescribedCl { target_cl: f64 },
+}
+
+impl Default for OperatingMode {
+    fn default() -> Self {
+        Self::PrescribedAlpha
+    }
+}
+
 /// Configuration for the viscous solver.
 ///
 /// Controls the physical flow conditions and numerical parameters
@@ -36,8 +51,10 @@ pub struct ViscousSolverConfig {
     /// XFOIL typically converges in 10-30 iterations.
     pub max_iterations: usize,
 
-    /// Convergence tolerance on RMS residual.
-    /// Solution is converged when RMS(ΔBL/BL) < tolerance.
+    /// Convergence tolerance for RMSBL (RMS of normalized changes).
+    /// XFOIL uses RMSBL = sqrt(sum(DN1² + DN2² + DN3² + DN4²) / (4*N))
+    /// where DN1-DN4 are normalized changes in ctau/ampl, theta, delta*, Ue.
+    /// Default: 1e-4 (XFOIL's standard tolerance).
     pub tolerance: f64,
 
     /// Under-relaxation factor (0-1).
@@ -56,6 +73,9 @@ pub struct ViscousSolverConfig {
     /// Whether to allow separation bubbles.
     /// If false, solver returns error on separation.
     pub allow_separation: bool,
+
+    /// Global operating-variable mode used by the Newton/update loop.
+    pub operating_mode: OperatingMode,
 }
 
 impl Default for ViscousSolverConfig {
@@ -70,6 +90,7 @@ impl Default for ViscousSolverConfig {
             hk_max_laminar: 3.8,
             hk_max_turbulent: 2.5,
             allow_separation: true,
+            operating_mode: OperatingMode::PrescribedAlpha,
         }
     }
 }
@@ -156,6 +177,18 @@ impl ViscousSolverConfig {
         self
     }
 
+    /// Run in prescribed-alpha mode (XFOIL's `LALFA=.TRUE.` shape).
+    pub fn with_prescribed_alpha(mut self) -> Self {
+        self.operating_mode = OperatingMode::PrescribedAlpha;
+        self
+    }
+
+    /// Run in prescribed-CL mode, solving for the alpha correction.
+    pub fn with_target_cl(mut self, target_cl: f64) -> Self {
+        self.operating_mode = OperatingMode::PrescribedCl { target_cl };
+        self
+    }
+
     /// Compute Mach number squared (cached for closure evaluations).
     #[inline]
     pub fn msq(&self) -> f64 {
@@ -181,6 +214,11 @@ impl ViscousSolverConfig {
         if self.relaxation <= 0.0 || self.relaxation > 1.0 {
             return Err("Relaxation must be in range (0, 1]");
         }
+        if let OperatingMode::PrescribedCl { target_cl } = self.operating_mode {
+            if !target_cl.is_finite() {
+                return Err("Target CL must be finite");
+            }
+        }
         Ok(())
     }
 }
@@ -198,6 +236,7 @@ mod tests {
         assert_eq!(config.max_iterations, 50);
         assert!((config.tolerance - 1e-4).abs() < 1e-10);
         assert_eq!(config.relaxation, 1.0);
+        assert_eq!(config.operating_mode, OperatingMode::PrescribedAlpha);
     }
 
     #[test]
@@ -228,12 +267,17 @@ mod tests {
         let config = ViscousSolverConfig::with_reynolds(1e6)
             .with_relaxation(0.8)
             .with_max_iterations(100)
-            .with_tolerance(1e-5);
+            .with_tolerance(1e-5)
+            .with_target_cl(0.7);
 
         assert_eq!(config.reynolds, 1e6);
         assert_eq!(config.relaxation, 0.8);
         assert_eq!(config.max_iterations, 100);
         assert!((config.tolerance - 1e-5).abs() < 1e-10);
+        assert_eq!(
+            config.operating_mode,
+            OperatingMode::PrescribedCl { target_cl: 0.7 }
+        );
     }
 
     #[test]
@@ -279,6 +323,9 @@ mod tests {
         // Invalid relaxation
         config = ViscousSolverConfig::default();
         config.relaxation = 0.0;
+        assert!(config.validate().is_err());
+
+        config = ViscousSolverConfig::default().with_target_cl(f64::NAN);
         assert!(config.validate().is_err());
     }
 }

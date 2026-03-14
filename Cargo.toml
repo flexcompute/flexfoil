@@ -5,8 +5,12 @@ members = [
     "crates/rustfoil-coupling",
     "crates/rustfoil-core",
     "crates/rustfoil-solver",
+    "crates/rustfoil-bl",
+    "crates/rustfoil-coupling",
+    "crates/rustfoil-testkit",
     "crates/rustfoil-wasm",
     "crates/rustfoil-cli",
+    "crates/rustfoil-inviscid", "crates/rustfoil-xfoil",
 ]
 
 [workspace.package]

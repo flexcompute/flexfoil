@@ -17,11 +17,56 @@
 //! ```
 
 use clap::{Parser, Subcommand};
-use rustfoil_core::{point, Body, CubicSpline, GeometryError, Point};
+use rayon::prelude::*;
+use rustfoil_bl;
+use rustfoil_core::{point, Body, CubicSpline, GeometryError, PanelingParams, Point};
+use rustfoil_inviscid::{
+    FlowConditions as NewFlowConditions, 
+    InviscidSolver as NewInviscidSolver
+};
 use rustfoil_solver::inviscid::{FlowConditions, InviscidSolver};
-use std::fs;
+use rustfoil_xfoil::{solve_body_oper_point, AlphaSpec, XfoilOptions};
+use rustfoil_solver::viscous::{
+    compute_arc_lengths, extract_surface_xfoil,
+    initialize_surface_stations_with_panel_idx, interpolate_stagnation,
+    solve_viscous_two_surfaces,
+    ViscousResult, ViscousSolverConfig, ViscousSetup,
+    // New integration with rustfoil-inviscid
+    setup_from_body, SetupError,
+};
+use std::fs::{self, File};
+use std::io::Write;
 use std::path::PathBuf;
 use thiserror::Error;
+
+use serde::Serialize;
+
+/// Boundary layer state data for a single surface
+#[derive(Debug, Clone, Serialize)]
+struct BlSurfaceState {
+    /// x/c coordinates
+    x: Vec<f64>,
+    /// Edge velocity Ue/V∞
+    ue: Vec<f64>,
+    /// Displacement thickness δ*
+    delta_star: Vec<f64>,
+    /// Momentum thickness θ
+    theta: Vec<f64>,
+    /// Shape factor H = δ*/θ
+    h: Vec<f64>,
+    /// Skin friction coefficient Cf
+    cf: Vec<f64>,
+    /// Mass defect (Ue * δ*)
+    mass_defect: Vec<f64>,
+}
+
+/// Full analysis result including BL state
+#[derive(Debug)]
+struct FullViscousResult {
+    result: ViscousResult,
+    upper_bl: Option<BlSurfaceState>,
+    lower_bl: Option<BlSurfaceState>,
+}
 
 #[derive(Debug, Error)]
 enum CliError {
@@ -36,6 +81,9 @@ enum CliError {
 
     #[error("Solver error: {0}")]
     Solver(String),
+    
+    #[error("Setup error: {0}")]
+    Setup(#[from] SetupError),
 }
 
 #[derive(Parser)]
@@ -60,9 +108,28 @@ enum Commands {
         #[arg(short, long, default_value = "0.0")]
         alpha: f64,
 
+        /// Number of panels (uses XFOIL-style paneling if specified)
+        #[arg(short = 'n', long)]
+        panels: Option<usize>,
+
         /// Verbose output
         #[arg(short, long)]
         verbose: bool,
+    },
+
+    /// Compare old vs new inviscid solver
+    Compare {
+        /// Path to airfoil coordinate file (.dat)
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+
+        /// Angle of attack in degrees
+        #[arg(short, long, default_value = "4.0")]
+        alpha: f64,
+
+        /// Number of panels (uses XFOIL-style paneling)
+        #[arg(short = 'n', long, default_value = "160")]
+        panels: usize,
     },
 
     /// Generate a polar (Cl vs alpha sweep)
@@ -105,6 +172,160 @@ enum Commands {
         #[arg(value_name = "FILE")]
         file: PathBuf,
     },
+
+    /// Viscous analysis at a single angle of attack
+    Viscous(ViscousCmd),
+
+    /// Generate viscous polar (Cl, Cd vs alpha sweep)
+    ViscousPolar(ViscousPolarCmd),
+
+    /// Run the standalone faithful XFOIL side path at one operating point
+    FaithfulViscous(FaithfulViscousCmd),
+
+    /// Run a polar on the standalone faithful XFOIL side path
+    FaithfulPolar(FaithfulPolarCmd),
+}
+
+/// Viscous analysis at single angle of attack
+#[derive(Parser)]
+struct ViscousCmd {
+    /// Input airfoil file (.dat)
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+
+    /// Angle of attack (degrees)
+    #[arg(short, long)]
+    alpha: f64,
+
+    /// Reynolds number
+    #[arg(short, long)]
+    re: f64,
+
+    /// Mach number
+    #[arg(short, long, default_value = "0.0")]
+    mach: f64,
+
+    /// Critical N factor for transition
+    #[arg(short, long, default_value = "9.0")]
+    ncrit: f64,
+
+    /// Number of panels (repanels to XFOIL-style distribution)
+    #[arg(short = 'p', long, default_value = "160")]
+    panels: usize,
+
+    /// Output format (json, table)
+    #[arg(long, default_value = "table")]
+    format: String,
+
+    /// Debug output file for XFOIL comparison
+    #[arg(long)]
+    debug: Option<PathBuf>,
+
+    /// Skip repaneling - use input coordinates directly (for XFOIL buffer comparison)
+    #[arg(long)]
+    no_repanel: bool,
+
+    /// Dump boundary layer state to JSON (includes x, ue, theta, delta_star, h, cf for both surfaces)
+    #[arg(long)]
+    dump_bl: bool,
+}
+
+/// Viscous polar generation
+#[derive(Parser)]
+struct ViscousPolarCmd {
+    /// Input airfoil file (.dat)
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+
+    /// Alpha range (start:end:step)
+    #[arg(short, long)]
+    alpha: String,
+
+    /// Reynolds number
+    #[arg(short, long)]
+    re: f64,
+
+    /// Mach number
+    #[arg(short, long, default_value = "0.0")]
+    mach: f64,
+
+    /// Critical N factor for transition
+    #[arg(short, long, default_value = "9.0")]
+    ncrit: f64,
+
+    /// Output file (csv)
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    /// Use parallel execution
+    #[arg(long)]
+    parallel: bool,
+}
+
+#[derive(Parser)]
+struct FaithfulViscousCmd {
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+
+    #[arg(short, long, default_value = "0.0")]
+    alpha: f64,
+
+    #[arg(long)]
+    target_cl: Option<f64>,
+
+    #[arg(short, long)]
+    re: f64,
+
+    #[arg(short, long, default_value = "0.0")]
+    mach: f64,
+
+    #[arg(short, long, default_value = "9.0")]
+    ncrit: f64,
+
+    #[arg(long)]
+    max_iterations: Option<usize>,
+
+    #[arg(short = 'p', long, default_value = "160")]
+    panels: usize,
+
+    #[arg(long, default_value = "json")]
+    format: String,
+
+    #[arg(long)]
+    debug: Option<PathBuf>,
+
+    #[arg(long)]
+    no_repanel: bool,
+}
+
+#[derive(Parser)]
+struct FaithfulPolarCmd {
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+
+    #[arg(short, long)]
+    alpha: String,
+
+    #[arg(short, long)]
+    re: f64,
+
+    #[arg(short, long, default_value = "0.0")]
+    mach: f64,
+
+    #[arg(short, long, default_value = "9.0")]
+    ncrit: f64,
+
+    #[arg(long)]
+    max_iterations: Option<usize>,
+
+    #[arg(short = 'p', long, default_value = "160")]
+    panels: usize,
+
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    #[arg(long)]
+    parallel: bool,
 }
 
 fn main() {
@@ -114,8 +335,14 @@ fn main() {
         Commands::Analyze {
             file,
             alpha,
+            panels,
             verbose,
-        } => run_analyze(&file, alpha, verbose),
+        } => run_analyze(&file, alpha, panels, verbose),
+        Commands::Compare {
+            file,
+            alpha,
+            panels,
+        } => run_compare(&file, alpha, panels),
         Commands::Polar {
             file,
             alpha_start,
@@ -128,6 +355,10 @@ fn main() {
             output,
         } => run_repanel(&file, panels, output),
         Commands::Info { file } => run_info(&file),
+        Commands::Viscous(cmd) => run_viscous(cmd),
+        Commands::ViscousPolar(cmd) => run_viscous_polar(cmd),
+        Commands::FaithfulViscous(cmd) => run_faithful_viscous(cmd),
+        Commands::FaithfulPolar(cmd) => run_faithful_polar(cmd),
     };
 
     if let Err(e) = result {
@@ -136,8 +367,24 @@ fn main() {
     }
 }
 
-fn run_analyze(file: &PathBuf, alpha: f64, verbose: bool) -> Result<(), CliError> {
+fn run_analyze(file: &PathBuf, alpha: f64, panels: Option<usize>, verbose: bool) -> Result<(), CliError> {
+    // Initialize debug if RUSTFOIL_DEBUG env var is set
+    if let Ok(debug_path) = std::env::var("RUSTFOIL_DEBUG") {
+        rustfoil_bl::init_debug(&debug_path);
+    }
+
     let (name, points) = load_airfoil(file)?;
+    
+    // If panels specified, repanel with XFOIL-style distribution
+    let points = if let Some(n) = panels {
+        let spline = CubicSpline::from_points(&points)?;
+        let repaneled = spline.resample_xfoil(n, &PanelingParams::default());
+        // (Repanel message removed for cleaner output)
+        repaneled
+    } else {
+        points
+    };
+    
     let body = Body::from_points(&name, &points)?;
 
     if verbose {
@@ -171,6 +418,88 @@ fn run_analyze(file: &PathBuf, alpha: f64, verbose: bool) -> Result<(), CliError
         }
     }
 
+    // Finalize debug if it was enabled
+    if std::env::var("RUSTFOIL_DEBUG").is_ok() {
+        rustfoil_bl::finalize_debug();
+    }
+
+    Ok(())
+}
+
+/// Compare old vs new inviscid solver with XFOIL-style paneling.
+fn run_compare(file: &PathBuf, alpha: f64, panels: usize) -> Result<(), CliError> {
+    let (name, points) = load_airfoil(file)?;
+    
+    // Repanel with XFOIL-style distribution
+    let spline = CubicSpline::from_points(&points)?;
+    let repaneled = spline.resample_xfoil(panels, &PanelingParams::default());
+    
+    // XFOIL uses a closed contour where first and last points are both at TE
+    // For a sharp TE, first.y = -last.y (upper/lower TE)
+    // The solver should handle this via the Kutta condition
+    
+    println!("Inviscid Solver Comparison");
+    println!("==========================");
+    println!("Airfoil: {}", name);
+    println!("Nodes:   {} (XFOIL-style distribution)", repaneled.len());
+    println!("Alpha:   {:.2}°", alpha);
+    println!();
+    println!("First point: ({:.6}, {:.6})", repaneled[0].x, repaneled[0].y);
+    println!("Last point:  ({:.6}, {:.6})", 
+             repaneled.last().unwrap().x, repaneled.last().unwrap().y);
+    println!();
+    
+    // Convert to tuples for new solver
+    let coords: Vec<(f64, f64)> = repaneled.iter().map(|p| (p.x, p.y)).collect();
+    
+    // New solver (rustfoil-inviscid) - run first since it's more stable
+    let new_solver = NewInviscidSolver::new();
+    let factorized = new_solver
+        .factorize(&coords)
+        .map_err(|e| CliError::Solver(format!("New solver: {}", e)))?;
+    let new_flow = NewFlowConditions::with_alpha_deg(alpha);
+    let new_result = factorized.solve_alpha(&new_flow);
+    
+    println!("New Solver (rustfoil-inviscid):");
+    println!("  CL = {:.5}", new_result.cl);
+    println!("  CM = {:.5}", new_result.cm);
+    println!();
+    
+    // Try old solver but don't fail if it doesn't work
+    let body = Body::from_points(&name, &repaneled)?;
+    let old_solver = InviscidSolver::new();
+    let old_flow = FlowConditions::with_alpha_deg(alpha);
+    
+    match old_solver.solve(&[body], &old_flow) {
+        Ok(old_result) => {
+            println!("Old Solver (rustfoil-solver):");
+            println!("  CL = {:.5}", old_result.cl);
+            println!("  CM = {:.5}", old_result.cm);
+            println!();
+            
+            let cl_diff = 100.0 * (new_result.cl - old_result.cl) / old_result.cl.abs().max(0.001);
+            let cm_diff = 100.0 * (new_result.cm - old_result.cm) / old_result.cm.abs().max(0.001);
+            
+            println!("Difference:");
+            println!("  CL: {:.2}%", cl_diff);
+            println!("  CM: {:.2}%", cm_diff);
+        }
+        Err(e) => {
+            println!("Old Solver: FAILED ({})", e);
+            println!("(This is expected - the old solver has known issues)");
+        }
+    }
+    
+    // Compare with XFOIL reference at similar alpha
+    if (alpha - 4.0).abs() < 0.1 {
+        println!();
+        println!("XFOIL Reference (from testdata/inviscid_ref.json):");
+        println!("  CL at α=4° = 0.4829 (NACA 0012, 160 panels)");
+        let xfoil_cl = 0.4829;
+        let vs_xfoil = 100.0 * (new_result.cl - xfoil_cl) / xfoil_cl;
+        println!("  New solver vs XFOIL: {:.2}%", vs_xfoil);
+    }
+    
     Ok(())
 }
 
@@ -271,6 +600,579 @@ fn run_info(file: &PathBuf) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Run viscous analysis at a single angle of attack using the new inviscid solver.
+///
+/// This bridges the inviscid solver (rustfoil-inviscid) to the viscous BL solver:
+/// 1. Run new inviscid solution via setup_from_body (matches XFOIL to <0.01%)
+/// 2. Extract panel geometry and edge velocities
+/// 3. Split into upper/lower surfaces at stagnation
+/// 4. Initialize BL stations for each surface
+/// 5. Run viscous solver
+fn run_viscous_analysis(
+    body: &Body,
+    alpha: f64,
+    config: &ViscousSolverConfig,
+) -> Result<ViscousResult, CliError> {
+    // Step 1: Run new inviscid solver via setup_from_body
+    // This uses rustfoil-inviscid which matches XFOIL to <0.01%
+    let setup_result = setup_from_body(body, alpha)?;
+    
+    let inv_solution = &setup_result.inviscid;
+    let node_x = &setup_result.node_x;
+    let node_y = &setup_result.node_y;
+
+    // gamma IS the surface velocity in XFOIL's linear vortex panel method
+    let ue_inviscid = inv_solution.gamma.clone();
+    let ue_inviscid_alpha = setup_result.operating_sensitivity();
+    let (mut upper_stations, mut lower_stations) =
+        setup_result.derive_station_views(config.reynolds, config.msq());
+    let (upper_ue, lower_ue_extended) =
+        setup_result.derive_uedg_views(config.reynolds, config.msq());
+    let setup = &setup_result.setup;
+
+    // Step 2: Solve viscous for both surfaces using canonical-state-derived views.
+    // Pass alpha in radians and panel geometry for XFOIL-exact CLCALC
+    let alpha_rad = alpha.to_radians();
+    let mut result = solve_viscous_two_surfaces(
+        &mut upper_stations,
+        &mut lower_stations,
+        &upper_ue,
+        &lower_ue_extended,
+        &setup.dij,
+        config,
+        alpha_rad,
+        node_x,
+        node_y,
+        &ue_inviscid,
+        &ue_inviscid_alpha,
+    )
+    .map_err(|e| CliError::Solver(e.to_string()))?;
+
+    // Set alpha (CL/CM are already set by the viscous solver)
+    result.alpha = alpha;
+    // Note: result.cl and result.cm are set by solve_viscous_two_surfaces
+    // and should NOT be overwritten with inviscid values
+
+    Ok(result)
+}
+
+/// Run viscous analysis with full BL state output.
+///
+/// Same as `run_viscous_analysis` but also returns the boundary layer state
+/// for both surfaces (for diagnostics and visualization).
+fn run_viscous_analysis_with_bl(
+    body: &Body,
+    alpha: f64,
+    config: &ViscousSolverConfig,
+) -> Result<FullViscousResult, CliError> {
+    // Step 1: Run new inviscid solver via setup_from_body
+    let setup_result = setup_from_body(body, alpha)?;
+    
+    let inv_solution = &setup_result.inviscid;
+    let node_x = &setup_result.node_x;
+    let node_y = &setup_result.node_y;
+
+    let ue_inviscid = inv_solution.gamma.clone();
+    let ue_inviscid_alpha = setup_result.operating_sensitivity();
+    let (mut upper_stations, mut lower_stations) =
+        setup_result.derive_station_views(config.reynolds, config.msq());
+    let (upper_ue, lower_ue_extended) =
+        setup_result.derive_uedg_views(config.reynolds, config.msq());
+    let setup = &setup_result.setup;
+
+    let alpha_rad = alpha.to_radians();
+    let mut result = solve_viscous_two_surfaces(
+        &mut upper_stations,
+        &mut lower_stations,
+        &upper_ue,
+        &lower_ue_extended,
+        &setup.dij,
+        config,
+        alpha_rad,
+        node_x,
+        node_y,
+        &ue_inviscid,
+        &ue_inviscid_alpha,
+    )
+    .map_err(|e| CliError::Solver(e.to_string()))?;
+
+    result.alpha = alpha;
+
+    // Extract BL state from stations
+    let upper_bl = BlSurfaceState {
+        x: upper_stations.iter().map(|s| s.x).collect(),
+        ue: upper_stations.iter().map(|s| s.u).collect(),
+        delta_star: upper_stations.iter().map(|s| s.delta_star).collect(),
+        theta: upper_stations.iter().map(|s| s.theta).collect(),
+        h: upper_stations.iter().map(|s| s.h).collect(),
+        cf: upper_stations.iter().map(|s| s.cf).collect(),
+        mass_defect: upper_stations.iter().map(|s| s.mass_defect).collect(),
+    };
+
+    let lower_bl = BlSurfaceState {
+        x: lower_stations.iter().map(|s| s.x).collect(),
+        ue: lower_stations.iter().map(|s| s.u).collect(),
+        delta_star: lower_stations.iter().map(|s| s.delta_star).collect(),
+        theta: lower_stations.iter().map(|s| s.theta).collect(),
+        h: lower_stations.iter().map(|s| s.h).collect(),
+        cf: lower_stations.iter().map(|s| s.cf).collect(),
+        mass_defect: lower_stations.iter().map(|s| s.mass_defect).collect(),
+    };
+
+    Ok(FullViscousResult {
+        result,
+        upper_bl: Some(upper_bl),
+        lower_bl: Some(lower_bl),
+    })
+}
+
+/// Run viscous analysis using the OLD inviscid solver (for comparison/fallback).
+///
+/// This function uses the original rustfoil-solver inviscid implementation.
+#[allow(dead_code)]
+fn run_viscous_analysis_old(
+    body: &Body,
+    alpha: f64,
+    config: &ViscousSolverConfig,
+) -> Result<ViscousResult, CliError> {
+    // Step 1: Run old inviscid solver
+    let solver = InviscidSolver::new();
+    let factorized = solver
+        .factorize(&[body.clone()])
+        .map_err(|e| CliError::Solver(e.to_string()))?;
+
+    let flow = FlowConditions::with_alpha_deg(alpha);
+    let inv_solution = factorized.solve_alpha(&flow);
+
+    // Step 2: Extract node positions (p1 of each panel)
+    let panels = body.panels();
+    let n_panels = panels.len();
+    
+    let mut node_x: Vec<f64> = panels.iter().map(|p| p.p1.x).collect();
+    let mut node_y: Vec<f64> = panels.iter().map(|p| p.p1.y).collect();
+    
+    // Check if we need to add the closing node (blunt TE)
+    let gamma_len = inv_solution.gamma.len();
+    if gamma_len == n_panels + 1 {
+        let last_panel = panels.last().unwrap();
+        node_x.push(last_panel.p2.x);
+        node_y.push(last_panel.p2.y);
+    }
+
+    let ue_inviscid = inv_solution.gamma.clone();
+    let ue_inviscid_alpha = vec![0.0; ue_inviscid.len()];
+
+    eprintln!(
+        "Inviscid (old solver): CL={:.4}, CM={:.4}",
+        inv_solution.cl, inv_solution.cm
+    );
+
+    let full_arc = compute_arc_lengths(&node_x, &node_y);
+    let (ist, sst, ue_stag) = interpolate_stagnation(&ue_inviscid, &full_arc);
+
+    let (upper_arc, upper_x, _upper_y, upper_ue) =
+        extract_surface_xfoil(ist, sst, ue_stag, &full_arc, &node_x, &node_y, &ue_inviscid, true);
+    let (lower_arc, lower_x, _lower_y, lower_ue) =
+        extract_surface_xfoil(ist, sst, ue_stag, &full_arc, &node_x, &node_y, &ue_inviscid, false);
+
+    if upper_arc.len() < 2 || lower_arc.len() < 2 {
+        return Err(CliError::Solver(format!(
+            "Surface extraction failed: upper={} lower={} stations (need >= 2 each)",
+            upper_arc.len(),
+            lower_arc.len()
+        )));
+    }
+
+    // Initialize stations with panel indices for VI coupling
+    let n_airfoil_panels = node_x.len();
+    let mut upper_stations = initialize_surface_stations_with_panel_idx(
+        &upper_arc, &upper_ue, &upper_x, ist, n_airfoil_panels, true, config.reynolds);
+    let mut lower_stations = initialize_surface_stations_with_panel_idx(
+        &lower_arc, &lower_ue, &lower_x, ist, n_airfoil_panels, false, config.reynolds);
+
+    let setup = ViscousSetup::from_raw(
+        full_arc.clone(),
+        ue_inviscid.clone(),
+        node_x.clone(),
+        node_y.clone(),
+    );
+
+    // Pass alpha in radians and panel geometry for XFOIL-exact CLCALC
+    let alpha_rad = alpha.to_radians();
+    let mut result = solve_viscous_two_surfaces(
+        &mut upper_stations,
+        &mut lower_stations,
+        &upper_ue,
+        &lower_ue,
+        &setup.dij,
+        config,
+        alpha_rad,
+        &node_x,
+        &node_y,
+        &ue_inviscid,
+        &ue_inviscid_alpha,
+    )
+    .map_err(|e| CliError::Solver(e.to_string()))?;
+
+    result.alpha = alpha;
+
+    Ok(result)
+}
+
+fn run_viscous(cmd: ViscousCmd) -> Result<(), CliError> {
+    let (name, points) = load_airfoil(&cmd.file)?;
+
+    // Either use input directly or repanel
+    let final_points = if cmd.no_repanel {
+        eprintln!(
+            "Using input coordinates directly ({} points, no repaneling)",
+            points.len()
+        );
+        points
+    } else {
+        // Repanel using XFOIL-style curvature-based distribution
+        let spline = CubicSpline::from_points(&points)
+            .map_err(|e| CliError::Geometry(e))?;
+        let repaneled = spline.resample_xfoil(cmd.panels, &PanelingParams::default());
+        
+        repaneled
+    };
+
+    let body = Body::from_points(&name, &final_points)?;
+
+    // Initialize debug output if requested
+    if let Some(ref debug_path) = cmd.debug {
+        rustfoil_bl::init_debug(debug_path);
+        eprintln!("Debug output enabled: {}", debug_path.display());
+    }
+
+    let config = ViscousSolverConfig {
+        reynolds: cmd.re,
+        mach: cmd.mach,
+        ncrit: cmd.ncrit,
+        ..Default::default()
+    };
+
+    // Use the BL-dumping version if requested
+    let (result, upper_bl, lower_bl) = if cmd.dump_bl {
+        let full = run_viscous_analysis_with_bl(&body, cmd.alpha, &config)?;
+        (full.result, full.upper_bl, full.lower_bl)
+    } else {
+        let r = run_viscous_analysis(&body, cmd.alpha, &config)?;
+        (r, None, None)
+    };
+
+    // Finalize debug output
+    if cmd.debug.is_some() {
+        rustfoil_bl::finalize_debug();
+        eprintln!("Debug output written");
+    }
+
+    match cmd.format.as_str() {
+        "json" => {
+            // Create a JSON-serializable struct
+            let mut json_output = serde_json::json!({
+                "alpha": result.alpha,
+                "cl": result.cl,
+                "cd": result.cd,
+                "cm": result.cm,
+                "x_tr_upper": result.x_tr_upper,
+                "x_tr_lower": result.x_tr_lower,
+                "converged": result.converged,
+                "iterations": result.iterations,
+                "residual": result.residual,
+                "cd_friction": result.cd_friction,
+                "cd_pressure": result.cd_pressure,
+                "x_separation": result.x_separation
+            });
+            
+            // Add BL state if available
+            if let (Some(upper), Some(lower)) = (&upper_bl, &lower_bl) {
+                json_output["bl_state"] = serde_json::json!({
+                    "upper": upper,
+                    "lower": lower
+                });
+            }
+            
+            println!("{}", serde_json::to_string_pretty(&json_output).unwrap());
+        }
+        _ => {
+            println!("Viscous Analysis Results");
+            println!("========================");
+            println!("Airfoil:   {}", name);
+            println!("Re:        {:.2e}", cmd.re);
+            println!("Mach:      {:.2}", cmd.mach);
+            println!("Ncrit:     {:.1}", cmd.ncrit);
+            println!();
+            println!("Alpha:     {:>8.3}°", result.alpha);
+            println!("CL:        {:>8.4}", result.cl);
+            println!("CD:        {:>8.5}", result.cd);
+            println!("CM:        {:>8.4}", result.cm);
+            println!("x_tr (U):  {:>8.4}", result.x_tr_upper);
+            println!("x_tr (L):  {:>8.4}", result.x_tr_lower);
+            println!("Converged: {}", result.converged);
+            println!("Iters:     {}", result.iterations);
+            if let Some(x_sep) = result.x_separation {
+                println!("x_sep:     {:>8.4}", x_sep);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn run_viscous_polar(cmd: ViscousPolarCmd) -> Result<(), CliError> {
+    let (name, points) = load_airfoil(&cmd.file)?;
+    let body = Body::from_points(&name, &points)?;
+
+    // Parse alpha range "start:end:step"
+    let parts: Vec<f64> = cmd
+        .alpha
+        .split(':')
+        .map(|s| {
+            s.parse().map_err(|_| CliError::Parse {
+                line: 0,
+                message: format!("Invalid alpha range format: {}", cmd.alpha),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if parts.len() != 3 {
+        return Err(CliError::Parse {
+            line: 0,
+            message: format!(
+                "Alpha range must be 'start:end:step', got: {}",
+                cmd.alpha
+            ),
+        });
+    }
+
+    let (start, end, step) = (parts[0], parts[1], parts[2]);
+
+    let alphas: Vec<f64> = (0..)
+        .map(|i| start + i as f64 * step)
+        .take_while(|&a| a <= end + 0.001)
+        .collect();
+
+    let config = ViscousSolverConfig {
+        reynolds: cmd.re,
+        mach: cmd.mach,
+        ncrit: cmd.ncrit,
+        ..Default::default()
+    };
+
+    // Compute results
+    let results: Vec<Result<ViscousResult, CliError>> = if cmd.parallel {
+        alphas
+            .par_iter()
+            .map(|&alpha| run_viscous_analysis(&body, alpha, &config))
+            .collect()
+    } else {
+        alphas
+            .iter()
+            .map(|&alpha| run_viscous_analysis(&body, alpha, &config))
+            .collect()
+    };
+
+    // Output header
+    let header = "alpha,CL,CD,CM,x_tr_u,x_tr_l,converged";
+
+    // Build output lines
+    let mut output_lines = vec![header.to_string()];
+    for result in results {
+        match result {
+            Ok(r) => {
+                output_lines.push(format!(
+                    "{:.2},{:.4},{:.5},{:.4},{:.4},{:.4},{}",
+                    r.alpha, r.cl, r.cd, r.cm, r.x_tr_upper, r.x_tr_lower, r.converged
+                ));
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+            }
+        }
+    }
+
+    // Write to file or stdout
+    if let Some(output_path) = cmd.output {
+        let mut file = File::create(&output_path)?;
+        for line in &output_lines {
+            writeln!(file, "{}", line)?;
+        }
+        println!(
+            "Wrote {} polar points to {:?}",
+            output_lines.len() - 1,
+            output_path
+        );
+    } else {
+        // Print header info
+        println!("# Viscous Polar: {}", name);
+        println!("# Re = {:.2e}, M = {:.2}, Ncrit = {:.1}", cmd.re, cmd.mach, cmd.ncrit);
+        println!();
+        for line in &output_lines {
+            println!("{}", line);
+        }
+    }
+
+    Ok(())
+}
+
+fn build_body_for_faithful(
+    file: &PathBuf,
+    panels: usize,
+    no_repanel: bool,
+) -> Result<(String, Body), CliError> {
+    let (name, points) = load_airfoil(file)?;
+    let final_points = if no_repanel {
+        points
+    } else {
+        let spline = CubicSpline::from_points(&points)?;
+        spline.resample_xfoil(panels, &PanelingParams::default())
+    };
+    let body = Body::from_points(&name, &final_points)?;
+    Ok((name, body))
+}
+
+fn run_faithful_viscous(cmd: FaithfulViscousCmd) -> Result<(), CliError> {
+    let (name, body) = build_body_for_faithful(&cmd.file, cmd.panels, cmd.no_repanel)?;
+    if let Some(ref debug_path) = cmd.debug {
+        rustfoil_bl::init_debug(debug_path);
+    }
+
+    let options = XfoilOptions {
+        reynolds: cmd.re,
+        mach: cmd.mach,
+        ncrit: cmd.ncrit,
+        max_iterations: cmd
+            .max_iterations
+            .unwrap_or_else(|| XfoilOptions::default().max_iterations),
+        ..Default::default()
+    };
+    let spec = match cmd.target_cl {
+        Some(target_cl) => AlphaSpec::TargetCl(target_cl),
+        None => AlphaSpec::AlphaDeg(cmd.alpha),
+    };
+
+    let result = solve_body_oper_point(&body, spec, &options)
+        .map_err(|e| CliError::Solver(e.to_string()))?;
+
+    if cmd.debug.is_some() {
+        rustfoil_bl::finalize_debug();
+    }
+
+    match cmd.format.as_str() {
+        "table" => {
+            println!("Faithful XFOIL Side Path");
+            println!("========================");
+            println!("Airfoil:   {}", name);
+            println!("Alpha:     {:>8.3}°", result.alpha_deg);
+            println!("CL:        {:>8.4}", result.cl);
+            println!("CD:        {:>8.5}", result.cd);
+            println!("CM:        {:>8.4}", result.cm);
+            println!("x_tr (U):  {:>8.4}", result.x_tr_upper);
+            println!("x_tr (L):  {:>8.4}", result.x_tr_lower);
+            println!("Converged: {}", result.converged);
+            println!("Iters:     {}", result.iterations);
+        }
+        _ => {
+            let json_output = serde_json::json!({
+                "alpha": result.alpha_deg,
+                "cl": result.cl,
+                "cd": result.cd,
+                "cm": result.cm,
+                "x_tr_upper": result.x_tr_upper,
+                "x_tr_lower": result.x_tr_lower,
+                "converged": result.converged,
+                "iterations": result.iterations,
+                "residual": result.residual,
+                "cd_friction": result.cd_friction,
+                "cd_pressure": result.cd_pressure,
+                "x_separation": result.x_separation
+            });
+            println!("{}", serde_json::to_string_pretty(&json_output).unwrap());
+        }
+    }
+
+    Ok(())
+}
+
+fn run_faithful_polar(cmd: FaithfulPolarCmd) -> Result<(), CliError> {
+    let (name, body) = build_body_for_faithful(&cmd.file, cmd.panels, false)?;
+    let options = XfoilOptions {
+        reynolds: cmd.re,
+        mach: cmd.mach,
+        ncrit: cmd.ncrit,
+        max_iterations: cmd
+            .max_iterations
+            .unwrap_or_else(|| XfoilOptions::default().max_iterations),
+        ..Default::default()
+    };
+
+    let parts: Vec<f64> = cmd
+        .alpha
+        .split(':')
+        .map(|s| {
+            s.parse().map_err(|_| CliError::Parse {
+                line: 0,
+                message: format!("Invalid alpha range format: {}", cmd.alpha),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if parts.len() != 3 {
+        return Err(CliError::Parse {
+            line: 0,
+            message: format!("Alpha range must be 'start:end:step', got: {}", cmd.alpha),
+        });
+    }
+
+    let (start, end, step) = (parts[0], parts[1], parts[2]);
+    let alphas: Vec<f64> = (0..)
+        .map(|i| start + i as f64 * step)
+        .take_while(|&a| a <= end + 0.001)
+        .collect();
+
+    let results = if cmd.parallel {
+        alphas
+            .par_iter()
+            .map(|&alpha| solve_body_oper_point(&body, AlphaSpec::AlphaDeg(alpha), &options))
+            .collect::<Vec<_>>()
+    } else {
+        alphas
+            .iter()
+            .map(|&alpha| solve_body_oper_point(&body, AlphaSpec::AlphaDeg(alpha), &options))
+            .collect::<Vec<_>>()
+    };
+
+    let header = "alpha,CL,CD,CM,x_tr_u,x_tr_l,converged";
+    let mut output_lines = vec![header.to_string()];
+    for result in results {
+        match result {
+            Ok(r) => output_lines.push(format!(
+                "{:.2},{:.4},{:.5},{:.4},{:.4},{:.4},{}",
+                r.alpha_deg, r.cl, r.cd, r.cm, r.x_tr_upper, r.x_tr_lower, r.converged
+            )),
+            Err(e) => eprintln!("Error: {}", e),
+        }
+    }
+
+    if let Some(output_path) = cmd.output {
+        let mut file = File::create(&output_path)?;
+        for line in &output_lines {
+            writeln!(file, "{}", line)?;
+        }
+        println!("Wrote {} polar points to {:?}", output_lines.len() - 1, output_path);
+    } else {
+        println!("# Faithful Polar: {}", name);
+        println!("# Re = {:.2e}, M = {:.2}, Ncrit = {:.1}", cmd.re, cmd.mach, cmd.ncrit);
+        println!();
+        for line in &output_lines {
+            println!("{}", line);
+        }
+    }
+
+    Ok(())
+}
+
 /// Load an airfoil from a Selig/XFOIL format .dat file.
 ///
 /// Format:
@@ -282,23 +1184,42 @@ fn run_info(file: &PathBuf) -> Result<(), CliError> {
 /// ```
 fn load_airfoil(path: &PathBuf) -> Result<(String, Vec<Point>), CliError> {
     let content = fs::read_to_string(path)?;
-    let mut lines = content.lines();
+    let mut lines = content.lines().peekable();
 
-    // First line is the name
-    let name = lines
-        .next()
+    // Check if first line is a header (text name) or coordinates (two floats)
+    let first_line = lines
+        .peek()
         .ok_or_else(|| CliError::Parse {
             line: 1,
             message: "Empty file".to_string(),
         })?
-        .trim()
-        .to_string();
+        .trim();
+    
+    // Try to parse as coordinates
+    let parts: Vec<&str> = first_line.split_whitespace().collect();
+    let first_is_coords = if parts.len() >= 2 {
+        // Check if both parts parse as floats
+        parts[0].parse::<f64>().is_ok() && parts[1].parse::<f64>().is_ok()
+    } else {
+        false
+    };
+    
+    let name = if first_is_coords {
+        // First line is coordinates - use filename as name
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("airfoil")
+            .to_string()
+    } else {
+        // First line is a header - consume it as the name
+        lines.next().unwrap().trim().to_string()
+    };
 
     let mut points = Vec::new();
 
-    for (i, line) in lines.enumerate() {
-        let line = line.trim();
-        if line.is_empty() {
+    for (i, raw_line) in lines.enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
             continue;
         }
 

@@ -1,0 +1,430 @@
+{
+  "test": "viscous_solver",
+  "source": "xfoil_instrumented",
+  "n_panels": 160,
+  "reynolds": 3000000.0,
+  "mach": 0.0,
+  "ncrit": 9.0,
+  "airfoil": "NACA0012",
+  "cases": [
+    {
+      "alpha_deg": 4.0,
+      "alpha_rad": 0.06981317,
+      "inviscid": {},
+      "stagnation": {
+        "ist": 86,
+        "sst": 1.031562742,
+        "xst": 0.00406012577,
+        "yst": -0.01100140181
+      },
+      "bl_setup": {},
+      "transitions": [
+        {
+          "side": 1,
+          "itran": 33,
+          "x_transition": 0.1281090507,
+          "forced": false
+        },
+        {
+          "side": 2,
+          "itran": 64,
+          "x_transition": 0.8345671253,
+          "forced": false
+        }
+      ],
+      "iterations": [
+        {
+          "iteration": 1,
+          "rms_residual": 0.094763254,
+          "max_residual": -0.66796149,
+          "cl": 0.46503236,
+          "cd": 0.0060302904,
+          "cm": -0.0034813195
+        }
+      ],
+      "final": {},
+      "mrchue_samples": [
+        {
+          "side": 1,
+          "ibl": 2,
+          "x": 0.0011044013,
+          "ue": 0.060676136,
+          "theta": 2.2684945e-05,
+          "delta_star": 5.057626e-05,
+          "hk": 2.2295078,
+          "cf": 0.17375232,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 3,
+          "x": 0.0033611761,
+          "ue": 0.20762058,
+          "theta": 2.0096268e-05,
+          "delta_star": 4.4475166e-05,
+          "hk": 2.2131054,
+          "cf": 0.058596563,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 4,
+          "x": 0.0054998878,
+          "ue": 0.36774385,
+          "theta": 1.9324899e-05,
+          "delta_star": 4.3139473e-05,
+          "hk": 2.2323299,
+          "cf": 0.03352535,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 5,
+          "x": 0.0075362149,
+          "ue": 0.53595705,
+          "theta": 1.8494321e-05,
+          "delta_star": 4.0850609e-05,
+          "hk": 2.208803,
+          "cf": 0.024808134,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 6,
+          "x": 0.0094857597,
+          "ue": 0.70489767,
+          "theta": 1.8171169e-05,
+          "delta_star": 4.0566142e-05,
+          "hk": 2.2324458,
+          "cf": 0.018597664,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 7,
+          "x": 0.011354282,
+          "ue": 0.86572333,
+          "theta": 1.812636e-05,
+          "delta_star": 4.0359268e-05,
+          "hk": 2.2265512,
+          "cf": 0.015301182,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 8,
+          "x": 0.013165562,
+          "ue": 1.0151151,
+          "theta": 1.8377022e-05,
+          "delta_star": 4.1219432e-05,
+          "hk": 2.2429873,
+          "cf": 0.012589197,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 9,
+          "x": 0.015034084,
+          "ue": 1.1563966,
+          "theta": 1.8876278e-05,
+          "delta_star": 4.2484056e-05,
+          "hk": 2.2506576,
+          "cf": 0.010647757,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 10,
+          "x": 0.016983628,
+          "ue": 1.2811044,
+          "theta": 1.9851555e-05,
+          "delta_star": 4.5237129e-05,
+          "hk": 2.2787701,
+          "cf": 0.0087962991,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 11,
+          "x": 0.019019955,
+          "ue": 1.3832917,
+          "theta": 2.1265659e-05,
+          "delta_star": 4.9005333e-05,
+          "hk": 2.3044352,
+          "cf": 0.0073419593,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 12,
+          "x": 0.021158667,
+          "ue": 1.4615061,
+          "theta": 2.3142808e-05,
+          "delta_star": 5.4137015e-05,
+          "hk": 2.3392587,
+          "cf": 0.006085203,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 13,
+          "x": 0.023415442,
+          "ue": 1.5175132,
+          "theta": 2.5437092e-05,
+          "delta_star": 6.0430735e-05,
+          "hk": 2.3756935,
+          "cf": 0.0050671987,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 14,
+          "x": 0.025809702,
+          "ue": 1.5549417,
+          "theta": 2.8119605e-05,
+          "delta_star": 6.7921435e-05,
+          "hk": 2.4154477,
+          "cf": 0.0042286741,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 15,
+          "x": 0.028364092,
+          "ue": 1.5778193,
+          "theta": 3.1153258e-05,
+          "delta_star": 7.6529289e-05,
+          "hk": 2.4565421,
+          "cf": 0.0035461036,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 16,
+          "x": 0.031105576,
+          "ue": 1.5897713,
+          "theta": 3.4512782e-05,
+          "delta_star": 8.6232233e-05,
+          "hk": 2.4985593,
+          "cf": 0.0029882222,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 17,
+          "x": 0.03406639,
+          "ue": 1.593717,
+          "theta": 3.8182292e-05,
+          "delta_star": 9.701645e-05,
+          "hk": 2.5408755,
+          "cf": 0.0025307523,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 18,
+          "x": 0.037285434,
+          "ue": 1.5918647,
+          "theta": 4.2157369e-05,
+          "delta_star": 0.0001088963,
+          "hk": 2.5830906,
+          "cf": 0.0021534839,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 19,
+          "x": 0.040809998,
+          "ue": 1.5858237,
+          "theta": 4.6444716e-05,
+          "delta_star": 0.00012191264,
+          "hk": 2.6248979,
+          "cf": 0.0018403778,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 20,
+          "x": 0.044697872,
+          "ue": 1.576741,
+          "theta": 5.1061923e-05,
+          "delta_star": 0.00013613451,
+          "hk": 2.666067,
+          "cf": 0.0015788189,
+          "transitional": false
+        },
+        {
+          "side": 1,
+          "ibl": 21,
+          "x": 0.049019764,
+          "ue": 1.5654264,
+          "theta": 5.6036549e-05,
+          "delta_star": 0.00015165545,
+          "hk": 2.7063667,
+          "cf": 0.0013590637,
+          "transitional": false
+        }
+      ]
+    },
+    {
+      "alpha_deg": 4.0,
+      "alpha_rad": 0.06981317,
+      "inviscid": {},
+      "stagnation": {
+        "ist": 86,
+        "sst": 1.03134063,
+        "xst": 0.003923641093,
+        "yst": -0.01082617196
+      },
+      "bl_setup": {},
+      "transitions": [
+        {
+          "side": 1,
+          "itran": 33,
+          "x_transition": 0.1365569798,
+          "forced": false
+        },
+        {
+          "side": 2,
+          "itran": 66,
+          "x_transition": 0.8651303558,
+          "forced": false
+        }
+      ],
+      "iterations": [
+        {
+          "iteration": 2,
+          "rms_residual": 0.041552733,
+          "max_residual": -0.40426832,
+          "cl": 0.45040826,
+          "cd": 0.0062264952,
+          "cm": -0.00047775903
+        }
+      ],
+      "final": {}
+    },
+    {
+      "alpha_deg": 4.0,
+      "alpha_rad": 0.06981317,
+      "inviscid": {},
+      "stagnation": {
+        "ist": 86,
+        "sst": 1.031236819,
+        "xst": 0.003859850201,
+        "yst": -0.01074427216
+      },
+      "bl_setup": {},
+      "transitions": [
+        {
+          "side": 1,
+          "itran": 34,
+          "x_transition": 0.1468297182,
+          "forced": false
+        },
+        {
+          "side": 2,
+          "itran": 66,
+          "x_transition": 0.8689761236,
+          "forced": false
+        }
+      ],
+      "iterations": [
+        {
+          "iteration": 3,
+          "rms_residual": 0.011741158,
+          "max_residual": -0.13252524,
+          "cl": 0.44333248,
+          "cd": 0.0061807373,
+          "cm": 0.001190743
+        }
+      ],
+      "final": {}
+    },
+    {
+      "alpha_deg": 4.0,
+      "alpha_rad": 0.06981317,
+      "inviscid": {},
+      "stagnation": {
+        "ist": 86,
+        "sst": 1.031223352,
+        "xst": 0.003851575225,
+        "yst": -0.01073364809
+      },
+      "bl_setup": {},
+      "transitions": [
+        {
+          "side": 1,
+          "itran": 34,
+          "x_transition": 0.147276045,
+          "forced": false
+        },
+        {
+          "side": 2,
+          "itran": 66,
+          "x_transition": 0.8702985619,
+          "forced": false
+        }
+      ],
+      "iterations": [
+        {
+          "iteration": 4,
+          "rms_residual": 0.0012040467,
+          "max_residual": -0.013190392,
+          "cl": 0.44243094,
+          "cd": 0.0061828343,
+          "cm": 0.0013978422
+        }
+      ],
+      "final": {}
+    },
+    {
+      "alpha_deg": 4.0,
+      "alpha_rad": 0.06981317,
+      "inviscid": {},
+      "stagnation": {
+        "ist": 86,
+        "sst": 1.031223273,
+        "xst": 0.003851526295,
+        "yst": -0.01073358527
+      },
+      "bl_setup": {},
+      "transitions": [
+        {
+          "side": 1,
+          "itran": 34,
+          "x_transition": 0.1474921918,
+          "forced": false
+        },
+        {
+          "side": 2,
+          "itran": 66,
+          "x_transition": 0.8704123352,
+          "forced": false
+        }
+      ],
+      "iterations": [
+        {
+          "iteration": 5,
+          "rms_residual": 9.7603254e-06,
+          "max_residual": -0.00017651546,
+          "cl": 0.44242566,
+          "cd": 0.0061829085,
+          "cm": 0.0013990193
+        }
+      ],
+      "final": {
+        "cl": 0.4424256574,
+        "cd": 0.006182908501,
+        "cm": 0.001399019309,
+        "cd_form": 0.0008449590978,
+        "cd_friction": 0.004579366261,
+        "x_tr_upper": 0.1474921918,
+        "x_tr_lower": 0.8704123352,
+        "x_sep_upper": 0.0,
+        "x_sep_lower": 0.0,
+        "iterations": 5,
+        "converged": true
+      }
+    }
+  ]
+}

@@ -476,6 +476,26 @@ impl InviscidSolver {
         rhs_0[n] = 0.0;
         rhs_90[n] = 0.0;
 
+        // Debug output: dump AIJ matrix before LU factorization
+        if rustfoil_bl::is_debug_active() {
+            let aij_diagonal: Vec<f64> = (0..20.min(n + 1))
+                .map(|i| a_matrix[(i, i)])
+                .collect();
+            let aij_row0: Vec<f64> = (0..20.min(n + 1))
+                .map(|j| a_matrix[(0, j)])
+                .collect();
+            let rhs_0_sample: Vec<f64> = rhs_0.iter().take(10).copied().collect();
+            let rhs_90_sample: Vec<f64> = rhs_90.iter().take(10).copied().collect();
+            
+            rustfoil_bl::add_event(rustfoil_bl::DebugEvent::aij_matrix(
+                n + 1,
+                aij_diagonal,
+                aij_row0,
+                rhs_0_sample,
+                rhs_90_sample,
+            ));
+        }
+
         // LU factorization and solve for both RHS vectors
         let lu = a_matrix.clone().lu();
         
@@ -487,6 +507,15 @@ impl InviscidSolver {
         // Extract γ and ψ₀ from solutions
         let gamu_0: Vec<f64> = solution_0.iter().take(n).copied().collect();
         let gamu_90: Vec<f64> = solution_90.iter().take(n).copied().collect();
+
+        // Debug output: dump GAMU solutions
+        if rustfoil_bl::is_debug_active() {
+            rustfoil_bl::add_event(rustfoil_bl::DebugEvent::full_aic(
+                n,
+                gamu_0.clone(),
+                gamu_90.clone(),
+            ));
+        }
         let psi0_0 = solution_0[n];
         let psi0_90 = solution_90[n];
 

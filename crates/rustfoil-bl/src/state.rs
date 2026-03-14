@@ -48,6 +48,42 @@ pub struct BlDerivatives {
     pub cd_hk: f64,
     /// ∂CD/∂Rθ
     pub cd_rt: f64,
+    /// ∂CD/∂θ
+    pub cd_t: f64,
+    /// ∂CD/∂δ*
+    pub cd_d: f64,
+    /// ∂CD/∂Ue
+    pub cd_u: f64,
+    /// ∂CD/∂S (ctau)
+    pub cd_s: f64,
+
+    // === Hc (density shape factor) derivatives ===
+    /// ∂Hc/∂Hk
+    pub hc_hk: f64,
+    /// ∂Hc/∂M²
+    pub hc_msq: f64,
+
+    // === Us (slip velocity) derivatives ===
+    /// ∂Us/∂θ
+    pub us_t: f64,
+    /// ∂Us/∂δ*
+    pub us_d: f64,
+    /// ∂Us/∂Ue
+    pub us_u: f64,
+
+    // === CQ (equilibrium shear) derivatives ===
+    /// ∂CQ/∂θ
+    pub cq_t: f64,
+    /// ∂CQ/∂δ*
+    pub cq_d: f64,
+    /// ∂CQ/∂Ue
+    pub cq_u: f64,
+
+    // === DE (energy thickness) derivatives ===
+    /// ∂DE/∂θ
+    pub de_t: f64,
+    /// ∂DE/∂δ*
+    pub de_d: f64,
 
     // === Edge velocity derivative ===
     /// dUe/dx (velocity gradient)
@@ -74,8 +110,13 @@ pub struct BlDerivatives {
 #[derive(Debug, Clone)]
 pub struct BlStation {
     // === Primary Variables (Newton unknowns) ===
-    /// Arc length position along surface
+    /// Arc length position along surface (used in BL equations)
     pub x: f64,
+    /// Panel x-coordinate for reporting x/c transition location (not arc length)
+    pub x_coord: f64,
+    /// Panel index in the global DIJ matrix (for VI coupling)
+    /// Maps this BL station to the corresponding panel in the inviscid solution.
+    pub panel_idx: usize,
     /// Edge velocity Ue (normalized by freestream)
     pub u: f64,
     /// Momentum thickness θ
@@ -102,8 +143,18 @@ pub struct BlStation {
     pub cf: f64,
     /// Dissipation coefficient CD
     pub cd: f64,
+    /// Normalized slip velocity Us (XFOIL US)
+    pub us: f64,
+    /// Equilibrium shear stress coefficient CQ (√Cτ_eq)
+    pub cq: f64,
+    /// Energy thickness DE from Green's correlation
+    pub de: f64,
     /// Mass defect Ue·δ* (used in viscous-inviscid coupling)
     pub mass_defect: f64,
+
+    /// Wake gap thickness DW (XFOIL's DSWAKI from WGAP array).
+    /// For non-wake stations this is 0. BLPRV sets D2 = DSI - DSWAKI, DW2 = DSWAKI.
+    pub dw: f64,
 
     // === Mode Flags ===
     /// True if boundary layer is laminar
@@ -130,6 +181,8 @@ impl BlStation {
     pub fn new() -> Self {
         Self {
             x: 0.0,
+            x_coord: 0.0,
+            panel_idx: 0,
             u: 1.0,
             theta: 0.001,
             delta_star: 0.002,
@@ -142,7 +195,11 @@ impl BlStation {
             r_theta: 1000.0,
             cf: 0.003,
             cd: 0.001,
+            us: 0.5,
+            cq: 0.03,
+            de: 0.006,
             mass_defect: 0.002,
+            dw: 0.0,
             is_laminar: true,
             is_wake: false,
             is_turbulent: false,
@@ -150,50 +207,83 @@ impl BlStation {
         }
     }
 
-    /// Initialize for stagnation point using Hiemenz flow solution
+    /// Total displacement thickness used for wake mass defect.
+    pub fn total_delta_star(&self) -> f64 {
+        if self.is_wake {
+            self.delta_star + self.dw.max(0.0)
+        } else {
+            self.delta_star
+        }
+    }
+
+    /// Recompute the stored mass defect from the current station state.
+    pub fn refresh_mass_defect(&mut self) {
+        self.mass_defect = self.u * self.total_delta_star();
+    }
+
+    /// Initialize for stagnation point using Thwaites' method (XFOIL-compatible)
     ///
-    /// The Hiemenz solution describes the boundary layer at a stagnation point
-    /// where flow impinges on a surface. This provides an exact similarity
-    /// solution that serves as the starting point for boundary layer marching.
+    /// Uses Thwaites' formula for stagnation point initialization, matching XFOIL's
+    /// approach in xbl.f lines 590-598. This is critical for correct early boundary
+    /// layer thickness.
     ///
     /// # Arguments
-    /// * `ue` - Edge velocity at the stagnation point (typically small but non-zero)
+    /// * `x` - Arc length from stagnation (must be > 0, typically ~0.001)
+    /// * `ue` - Edge velocity at the station (typically small but non-zero)
     /// * `re` - Reynolds number (Ue·L/ν where L is reference length)
     ///
-    /// # Hiemenz Solution
-    /// - θ = 0.29234·√(ν/Ue) = 0.29234·√(Ue/Re) (scaling with velocity gradient)
-    /// - H = 2.216 (exact Hiemenz shape factor)
-    /// - δ* = θ·H
+    /// # Thwaites Formula (XFOIL xbl.f:597)
+    /// With BULE = 1.0 (stagnation flow):
+    /// - TSQ = 0.45 / (UCON * (5.0*BULE+1.0) * REYBL) * XSI^(1.0-BULE)
+    /// - Where UCON = Ue/x and REYBL = REINF for incompressible flow
+    /// - θ = √(TSQ)
+    /// - δ* = 2.2·θ
+    /// - H = δ*/θ = 2.2
+    ///
+    /// # Note on REYBL
+    /// XFOIL computes REYBL = REINF * SQRT(HERAT³) * (1+HVRAT)/(HERAT+HVRAT),
+    /// which reduces to REINF for incompressible flow, so the stagnation seed uses
+    /// the same Reynolds scaling as the marched boundary-layer stations.
     ///
     /// # Example
     /// ```
     /// use rustfoil_bl::state::BlStation;
-    /// let station = BlStation::stagnation(0.1, 1e6);
-    /// assert!((station.h - 2.216).abs() < 1e-10);
+    /// let station = BlStation::stagnation(0.001104, 0.060676, 3e6);
+    /// // theta should be ~3.69e-5 (matches XFOIL)
     /// ```
-    pub fn stagnation(ue: f64, re: f64) -> Self {
+    pub fn stagnation(x: f64, ue: f64, re: f64) -> Self {
         let mut station = Self::new();
-        station.u = ue;
+        station.x = x.max(1e-12); // Ensure x > 0
+        station.u = ue.abs().max(1e-6); // Ensure Ue > 0
+        // x_coord will be set by the caller (typically near LE, so ~0)
+        station.x_coord = 0.0;
 
-        // Hiemenz stagnation point solution
-        // theta = 0.29234 * sqrt(nu/Ue) where nu = Ue*L/Re, so nu/Ue = L/Re
-        // In non-dimensional form with L=1: theta = 0.29234 * sqrt(Ue/Re)
-        station.theta = 0.29234 * (ue.abs() / re).sqrt();
+        // Thwaites' formula for stagnation point (XFOIL xbl.f:597)
+        // BULE = 1.0 (stagnation flow: Ue = K*x)
+        // TSQ = 0.45 / (UCON * (5.0*BULE+1.0) * REYBL) * XSI^(1.0-BULE)
+        // With BULE=1.0: TSQ = 0.45 / ((Ue/x) * 6 * REYBL) * x^0 = 0.45*x / (6*Ue*REYBL)
+        // 
+        let bule = 1.0;
+        let ucon = station.u / station.x.powf(bule);
+        let reybl = re;
+        let tsq = 0.45 / (ucon * (5.0 * bule + 1.0) * reybl) * station.x.powf(1.0 - bule);
+        
+        station.theta = tsq.sqrt().max(1e-12);
 
-        // Exact Hiemenz shape factor
-        station.h = 2.216;
+        // Displacement thickness: DSI = 2.2*THI (XFOIL xbl.f:578)
+        station.delta_star = 2.2 * station.theta;
 
-        // Displacement thickness from shape factor definition
-        station.delta_star = station.theta * station.h;
+        // Shape factor from displacement/momentum ratio
+        station.h = station.delta_star / station.theta;
 
         // Kinematic shape factor equals H at incompressible (M=0) stagnation
         station.hk = station.h;
 
         // Mass defect
-        station.mass_defect = station.u * station.delta_star;
+        station.refresh_mass_defect();
 
         // Reynolds number based on momentum thickness
-        station.r_theta = ue * station.theta * re;
+        station.r_theta = station.u * station.theta * re;
 
         // Stagnation point is always laminar
         station.is_laminar = true;
@@ -246,29 +336,30 @@ mod tests {
 
     #[test]
     fn test_blstation_stagnation() {
+        let x = 0.001;
         let ue = 0.1;
         let re = 1e6;
-        let station = BlStation::stagnation(ue, re);
+        let station = BlStation::stagnation(x, ue, re);
 
-        // Hiemenz shape factor is exactly 2.216
+        // Thwaites shape factor for stagnation (BULE=1.0): H = 2.2
         assert!(
-            (station.h - 2.216).abs() < 1e-10,
-            "Hiemenz H should be 2.216, got {}",
+            (station.h - 2.2).abs() < 1e-10,
+            "Thwaites H should be 2.2, got {}",
             station.h
         );
 
-        // Verify theta scaling: theta = 0.29234 * sqrt(Ue/Re)
-        let expected_theta = 0.29234 * (ue / re).sqrt();
+        // Verify theta scaling: theta = sqrt(0.45 * x / (6 * Ue * Re))
+        let expected_theta = (0.45 * x / (6.0 * ue * re)).sqrt();
         assert!(
             (station.theta - expected_theta).abs() < 1e-15,
-            "theta should match Hiemenz scaling"
+            "theta should match Thwaites scaling"
         );
 
-        // Verify delta_star = theta * H
-        let expected_delta_star = station.theta * 2.216;
+        // Verify delta_star = 2.2 * theta
+        let expected_delta_star = 2.2 * station.theta;
         assert!(
             (station.delta_star - expected_delta_star).abs() < 1e-15,
-            "delta_star = theta * H"
+            "delta_star = 2.2 * theta"
         );
 
         // Stagnation is always laminar
@@ -279,18 +370,19 @@ mod tests {
     #[test]
     fn test_blstation_stagnation_physics() {
         // Test at different Reynolds numbers to verify scaling
+        let x = 0.001;
         let ue = 0.5;
 
-        let station_low_re = BlStation::stagnation(ue, 1e5);
-        let station_high_re = BlStation::stagnation(ue, 1e7);
+        let station_low_re = BlStation::stagnation(x, ue, 1e5);
+        let station_high_re = BlStation::stagnation(x, ue, 1e7);
 
-        // Higher Re should give thinner BL (theta ~ 1/sqrt(Re))
+        // Higher Re should give thinner BL (Thwaites: theta ~ 1/sqrt(Re))
         assert!(
             station_high_re.theta < station_low_re.theta,
             "Higher Re should give smaller theta"
         );
 
-        // The ratio should be sqrt(Re_low/Re_high) = sqrt(1e5/1e7) = 0.1
+        // With Thwaites: theta = sqrt(0.45*x/(6*Ue*Re)), so ratio = sqrt(Re_low/Re_high) = sqrt(1e5/1e7) = 0.1
         let theta_ratio = station_high_re.theta / station_low_re.theta;
         let expected_ratio = (1e5_f64 / 1e7_f64).sqrt();
         assert!(
@@ -322,6 +414,18 @@ mod tests {
         assert_eq!(derivs.cf_msq, 0.0);
         assert_eq!(derivs.cd_hk, 0.0);
         assert_eq!(derivs.cd_rt, 0.0);
+        assert_eq!(derivs.cd_t, 0.0);
+        assert_eq!(derivs.cd_d, 0.0);
+        assert_eq!(derivs.cd_u, 0.0);
+        assert_eq!(derivs.cd_s, 0.0);
+        assert_eq!(derivs.us_t, 0.0);
+        assert_eq!(derivs.us_d, 0.0);
+        assert_eq!(derivs.us_u, 0.0);
+        assert_eq!(derivs.cq_t, 0.0);
+        assert_eq!(derivs.cq_d, 0.0);
+        assert_eq!(derivs.cq_u, 0.0);
+        assert_eq!(derivs.de_t, 0.0);
+        assert_eq!(derivs.de_d, 0.0);
         assert_eq!(derivs.u_x, 0.0);
     }
 

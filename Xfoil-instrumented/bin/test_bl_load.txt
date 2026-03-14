@@ -1,0 +1,9 @@
+LOAD naca0012_xfoil.dat
+PANE
+OPER
+V 1000000
+ALFA 4
+BL
+ 
+ 
+QUIT

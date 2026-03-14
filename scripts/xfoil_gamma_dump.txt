@@ -1,0 +1,8 @@
+NACA 0012
+PANE
+OPER
+ALFA 4
+DUMP
+xfoil_dump_a4.dat
+
+QUIT

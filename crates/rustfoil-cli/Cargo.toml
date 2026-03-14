@@ -13,5 +13,12 @@ path = "src/main.rs"
 [dependencies]
 rustfoil-core = { path = "../rustfoil-core" }
 rustfoil-solver = { path = "../rustfoil-solver" }
+rustfoil-bl = { path = "../rustfoil-bl" }
+rustfoil-inviscid = { path = "../rustfoil-inviscid" }
+rustfoil-xfoil = { path = "../rustfoil-xfoil" }
 clap = { version = "4.4", features = ["derive"] }
 thiserror.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+nalgebra = "0.33"
+rayon = "1.10"

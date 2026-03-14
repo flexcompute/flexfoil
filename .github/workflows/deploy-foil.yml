@@ -1,0 +1,117 @@
+name: Deploy FlexFoil to foil.flexcompute.com
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "flexfoil-ui/**"
+      - "crates/rustfoil-wasm/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/deploy-foil.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AWS_REGION: us-east-1
+      AWS_ROLE: arn:aws:iam::625554095313:role/github-frontend-assume-role
+      STACK_NAME: flight-sciences-cdn-prod
+      S3_BUCKET: flight-sciences-website-prod
+      S3_DEPLOY_PATH: /flexfoil
+      BASE_URL: /flexfoil/
+      PUBLIC_URL: https://foil.flexcompute.com/flexfoil/
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM package
+        run: |
+          cd crates/rustfoil-wasm
+          wasm-pack build --target web --release --out-dir ../../pkg
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: flexfoil-ui/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ./flexfoil-ui
+        run: npm ci
+
+      - name: Build FlexFoil frontend
+        working-directory: ./flexfoil-ui
+        run: npm run build
+        env:
+          BASE_URL: ${{ env.BASE_URL }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_ROLE }}
+          role-session-name: FlexFoilDeploy
+
+      - name: Resolve CloudFront distribution
+        id: stack
+        run: |
+          DISTRIBUTION_ID=$(aws cloudformation describe-stacks \
+            --stack-name "${STACK_NAME}" \
+            --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" \
+            --output text)
+
+          if [ -z "${DISTRIBUTION_ID}" ] || [ "${DISTRIBUTION_ID}" = "None" ]; then
+            echo "Could not resolve CloudFront distribution for ${STACK_NAME}" >&2
+            exit 1
+          fi
+
+          echo "distribution_id=${DISTRIBUTION_ID}" >> "${GITHUB_OUTPUT}"
+
+      - name: Deploy FlexFoil to S3
+        working-directory: ./flexfoil-ui/dist
+        run: |
+          echo "Deploying to s3://${S3_BUCKET}${S3_DEPLOY_PATH}"
+
+          aws s3 rm "s3://${S3_BUCKET}${S3_DEPLOY_PATH}" --recursive
+
+          aws s3 cp . "s3://${S3_BUCKET}${S3_DEPLOY_PATH}" \
+            --recursive --exclude "*" --include "*.html" \
+            --metadata-directive REPLACE \
+            --cache-control 'max-age=0, no-cache, no-store, must-revalidate' \
+            --metadata "deploy-sha1=${GITHUB_SHA},x-frame-options=SAMEORIGIN"
+
+          aws s3 cp . "s3://${S3_BUCKET}${S3_DEPLOY_PATH}" \
+            --recursive --exclude "*" --include "*.json" \
+            --metadata-directive REPLACE \
+            --cache-control 'max-age=300, must-revalidate' \
+            --metadata "deploy-sha1=${GITHUB_SHA},x-frame-options=SAMEORIGIN"
+
+          aws s3 cp . "s3://${S3_BUCKET}${S3_DEPLOY_PATH}" \
+            --recursive --exclude "*.html" --exclude "*.json" --exclude "*.map" \
+            --cache-control 'max-age=31536000, immutable' \
+            --metadata "deploy-sha1=${GITHUB_SHA},x-frame-options=SAMEORIGIN"
+
+      - name: Invalidate CloudFront
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.stack.outputs.distribution_id }}" \
+            --paths "/" "/flexfoil/*"
+
+      - name: Deployment Summary
+        run: |
+          echo "FlexFoil deployed to ${PUBLIC_URL}"
+          echo "CloudFront distribution: ${{ steps.stack.outputs.distribution_id }}"

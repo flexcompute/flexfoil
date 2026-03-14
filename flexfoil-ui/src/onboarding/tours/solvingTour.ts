@@ -12,7 +12,7 @@ export const solvingTour: TourStep[] = [
     focusPanel: 'solve',
     popover: {
       title: 'Solver Mode',
-      description: 'Currently using the inviscid panel method for fast, accurate potential flow analysis. Viscous solver coming in a future update!',
+      description: 'FlexFoil now uses the faithful Rust reproduction of XFOIL\'s viscous solver path for aerodynamic analysis.',
       side: 'left',
       align: 'start',
     },

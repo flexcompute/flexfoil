@@ -1,0 +1,14 @@
+{
+  "foil": "naca4412",
+  "reynolds": 3000000.0,
+  "results": [
+    {
+      "alpha": 4.0,
+      "reynolds": 3000000.0,
+      "cl": 0.9278,
+      "cd": null,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/xfoil_test/naca4412/re3e06/alpha_+004.0.json"
+    }
+  ]
+}

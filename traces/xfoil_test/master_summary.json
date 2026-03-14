@@ -1,0 +1,34 @@
+{
+  "test_matrix": [
+    {
+      "foil": "naca0012",
+      "reynolds": 1000000.0,
+      "n_alphas": 1
+    },
+    {
+      "foil": "naca0012",
+      "reynolds": 3000000.0,
+      "n_alphas": 1
+    },
+    {
+      "foil": "naca0012",
+      "reynolds": 6000000.0,
+      "n_alphas": 1
+    },
+    {
+      "foil": "naca2412",
+      "reynolds": 3000000.0,
+      "n_alphas": 1
+    },
+    {
+      "foil": "naca4412",
+      "reynolds": 3000000.0,
+      "n_alphas": 1
+    }
+  ],
+  "alphas": [
+    4.0
+  ],
+  "total_traces": 5,
+  "converged": 5
+}

@@ -1,0 +1,7 @@
+{
+  "test": "inviscid_solver",
+  "source": "xfoil_instrumented",
+  "n_panels": 160,
+  "airfoil": "NACA0012",
+  "data": []
+}

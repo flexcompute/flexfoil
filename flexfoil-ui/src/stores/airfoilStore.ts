@@ -10,6 +10,7 @@ import type {
   AirfoilState, 
   AirfoilPoint, 
   ControlMode, 
+  SolverMode,
   BezierHandle, 
   BSplineControlPoint,
   SpacingKnot,
@@ -114,6 +115,8 @@ interface AirfoilStore extends AirfoilState {
   setControlMode: (mode: ControlMode) => void;
   setName: (name: string) => void;
   setDisplayAlpha: (alpha: number) => void;
+  setReynolds: (reynolds: number) => void;
+  setSolverMode: (mode: SolverMode) => void;
   
   // Point manipulation (legacy, kept for compatibility)
   updatePoint: (index: number, point: AirfoilPoint) => void;
@@ -218,6 +221,8 @@ export const useAirfoilStore = create<AirfoilStore>()(
       nPanels: 160,  // XFOIL's default NPAN
       curvatureWeight: 0,
       displayAlpha: 0,
+      reynolds: 1e6,
+      solverMode: 'viscous',
       polarData: [],
       spacingPanelMode: 'simple',  // Default to simple curvature-based
       sspInterpolation: 'linear',  // Default to linear (Mark Drela's original)
@@ -236,6 +241,8 @@ export const useAirfoilStore = create<AirfoilStore>()(
       setControlMode: (mode) => set({ controlMode: mode }),
       setName: (name) => set({ name }),
       setDisplayAlpha: (alpha) => set({ displayAlpha: alpha }),
+      setReynolds: (reynolds) => set({ reynolds }),
+      setSolverMode: (solverMode) => set({ solverMode }),
 
       updatePoint: (index, point) => set((state) => {
         const newCoords = [...state.coordinates];

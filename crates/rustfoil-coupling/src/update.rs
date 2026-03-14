@@ -236,6 +236,18 @@ pub fn update_stations(
     for i in 0..n {
         let (dctau, dthet, ddstr, duedg) = changes[i];
 
+        // Capture before state for debug
+        let ctau_before = if stations[i].is_laminar { stations[i].ampl } else { stations[i].ctau };
+        let theta_before = stations[i].theta;
+        let delta_star_before = stations[i].delta_star;
+        let ue_before = stations[i].u;
+        let mass_before = stations[i].mass_defect;
+        let h_before = if theta_before.abs() > 1e-12 { delta_star_before / theta_before } else { 2.5 };
+        let hk_before = hkin(h_before, 0.0).hk;
+
+        // Compute mass defect change for debug output
+        let dmass = ddstr * stations[i].u + stations[i].delta_star * duedg;
+
         // Apply relaxed updates
         if stations[i].is_laminar {
             stations[i].ampl += rlx * dctau;
@@ -265,6 +277,58 @@ pub fn update_stations(
         // Update shape factor
         if stations[i].theta.abs() > 1e-12 {
             stations[i].h = stations[i].delta_star / stations[i].theta;
+        }
+
+        // Emit detailed debug event after applying updates
+        if rustfoil_bl::is_debug_active() {
+            let ctau_after = if stations[i].is_laminar { stations[i].ampl } else { stations[i].ctau };
+            let h_after = stations[i].h;
+            let hk_after = hkin(h_after, 0.0).hk;
+
+            // Emit basic UPDATE event for compatibility
+            rustfoil_bl::add_event(rustfoil_bl::DebugEvent::update(
+                0, // iteration set by caller
+                1, // side (TODO: track properly)
+                i,
+                rlx * dctau,
+                rlx * dthet,
+                rlx * dmass,
+                rlx * duedg,
+                rlx,
+            ));
+
+            // Emit detailed UPDATE_DETAILED event with full before/after state
+            // Only emit for first 30 stations to match XFOIL behavior
+            if i < 30 {
+                rustfoil_bl::add_event(rustfoil_bl::DebugEvent::update_detailed(
+                    0, // iteration set by caller
+                    1, // side (TODO: track properly)
+                    i,
+                    // Before state
+                    ctau_before,
+                    theta_before,
+                    delta_star_before,
+                    ue_before,
+                    mass_before,
+                    h_before,
+                    hk_before,
+                    // Deltas (before relaxation)
+                    dctau,
+                    dthet,
+                    dmass,
+                    duedg,
+                    // Relaxation factor
+                    rlx,
+                    // After state
+                    ctau_after,
+                    stations[i].theta,
+                    stations[i].delta_star,
+                    stations[i].u,
+                    stations[i].mass_defect,
+                    h_after,
+                    hk_after,
+                ));
+            }
         }
     }
 
@@ -363,6 +427,10 @@ pub fn set_edge_velocities(
     let default_vti = vec![1.0; n];
     let vti = vti.unwrap_or(&default_vti);
 
+    // Capture before state for debug
+    let ue_before: Vec<f64> = stations.iter().map(|s| s.u).collect();
+    let mass_defect: Vec<f64> = stations.iter().map(|s| s.mass_defect).collect();
+
     // XFOIL formula:
     // UE_M = -VTI(i) * VTI(j) * DIJ(i,j)
     // DUI = sum_j UE_M * MASS(j)
@@ -387,6 +455,38 @@ pub fn set_edge_velocities(
     // Update mass defect after Ue change
     for station in stations.iter_mut() {
         station.mass_defect = station.u * station.delta_star;
+    }
+
+    // Emit UESET debug event
+    if rustfoil_bl::is_debug_active() {
+        let ue_after: Vec<f64> = stations.iter().map(|s| s.u).collect();
+        
+        // Limit to first 20 stations to match XFOIL behavior
+        let limit = 20.min(n);
+        
+        // For now, treat all as single surface (upper)
+        // TODO: Support separate upper/lower surfaces when surface info is available
+        let upper_surface = rustfoil_bl::UesetSurfaceData {
+            ue_inviscid: ue_inviscid[..limit].to_vec(),
+            mass_defect: mass_defect[..limit].to_vec(),
+            ue_before: ue_before[..limit].to_vec(),
+            ue_after: ue_after[..limit].to_vec(),
+        };
+        
+        let lower_surface = rustfoil_bl::UesetSurfaceData {
+            ue_inviscid: vec![],
+            mass_defect: vec![],
+            ue_before: vec![],
+            ue_after: vec![],
+        };
+
+        rustfoil_bl::add_event(rustfoil_bl::DebugEvent::ueset(
+            0, // iteration set by caller
+            limit,
+            0,
+            upper_surface,
+            lower_surface,
+        ));
     }
 }
 
@@ -440,6 +540,241 @@ pub fn compute_new_edge_velocities(
     }
 
     ue_new
+}
+
+/// Apply Newton updates using XFOIL's mass-first approach
+///
+/// This implements XFOIL's UPDATE subroutine (xbl.f lines 1253-1470) which:
+/// 1. Computes new Ue from proposed mass changes FIRST
+/// 2. Determines global relaxation factor from ALL changes
+/// 3. Applies ALL updates with common relaxation factor
+///
+/// The key difference from `update_stations()` is that Ue is computed from
+/// mass defect changes before applying any updates, matching XFOIL's approach
+/// where viscous-inviscid coupling is handled within UPDATE.
+///
+/// # Arguments
+/// * `stations` - BL stations to update
+/// * `deltas` - Newton solution `[Δcτ/Δn, Δθ, Δmass]` at each station
+/// * `ue_inviscid` - Inviscid edge velocities (UINV in XFOIL)
+/// * `dij` - Mass defect influence matrix
+/// * `vti` - Surface direction signs (+1 or -1)
+/// * `config` - Update limiting configuration
+///
+/// # Returns
+/// Update metrics for convergence checking
+///
+/// # Reference
+/// XFOIL xbl.f UPDATE (lines 1253-1470)
+pub fn update_xfoil_style(
+    stations: &mut [BlStation],
+    deltas: &[[f64; 3]],
+    ue_inviscid: &[f64],
+    dij: &DMatrix<f64>,
+    vti: &[f64],
+    config: &UpdateConfig,
+) -> UpdateResult {
+    let n = stations.len();
+    if n == 0 || deltas.len() != n || ue_inviscid.len() != n {
+        return UpdateResult {
+            rms_change: 0.0,
+            max_change: 0.0,
+            max_change_var: ' ',
+            max_change_station: 0,
+            relaxation_used: 1.0,
+        };
+    }
+
+    let dhi = config.max_relative_increase;
+    let dlo = config.max_relative_decrease;
+
+    // === Step 1: Compute new Ue from proposed mass changes (XFOIL lines 1284-1311) ===
+    // UNEW(IBL,IS) = UINV(IBL,IS) + sum_j(UE_M * (MASS + VDEL(3,1,JV)))
+    let mut new_ue = vec![0.0; n];
+    for i in 0..n {
+        let mut dui = 0.0;
+        for j in 0..n {
+            // Proposed total mass at station j
+            let proposed_mass = stations[j].mass_defect + deltas[j][2];
+            // Ue influence coefficient with VTI signs
+            let ue_m = if i < dij.nrows() && j < dij.ncols() {
+                -vti[i] * vti[j] * dij[(i, j)]
+            } else {
+                0.0
+            };
+            dui += ue_m * proposed_mass;
+        }
+        new_ue[i] = ue_inviscid[i] + dui;
+    }
+
+    // === Step 2: Compute relaxation factor from ALL changes (XFOIL lines 1396-1428) ===
+    let mut rlx = config.relaxation;
+    let mut rms_sum = 0.0;
+    let mut max_change = 0.0_f64;
+    let mut max_change_var = ' ';
+    let mut max_change_station = 0;
+
+    for i in 0..n {
+        let station = &stations[i];
+        let delta = &deltas[i];
+
+        // Compute normalized changes
+        // DN1 = change in ctau/ampl normalized
+        let dn1 = if station.is_laminar {
+            delta[0] / 10.0 // Amplification factor change scaled
+        } else if station.ctau.abs() > 1e-12 {
+            delta[0] / station.ctau
+        } else {
+            delta[0] / 0.01
+        };
+
+        // DN2 = change in theta normalized
+        let dn2 = if station.theta.abs() > 1e-12 {
+            delta[1] / station.theta
+        } else {
+            0.0
+        };
+
+        // DN3 = change in mass defect normalized
+        let dn3 = if station.mass_defect.abs() > 1e-12 {
+            delta[2] / station.mass_defect
+        } else {
+            0.0
+        };
+
+        // DN4 = change in Ue normalized
+        let due = new_ue[i] - station.u;
+        let dn4 = due.abs() / config.max_ue_change;
+
+        // Accumulate RMS
+        rms_sum += dn1 * dn1 + dn2 * dn2 + dn3 * dn3 + dn4 * dn4;
+
+        // Track maximum change
+        if dn1.abs() > max_change.abs() {
+            max_change = dn1;
+            max_change_var = if station.is_laminar { 'n' } else { 'C' };
+            max_change_station = i;
+        }
+        if dn2.abs() > max_change.abs() {
+            max_change = dn2;
+            max_change_var = 'T';
+            max_change_station = i;
+        }
+        if dn3.abs() > max_change.abs() {
+            max_change = dn3;
+            max_change_var = 'M';
+            max_change_station = i;
+        }
+        if dn4.abs() > max_change.abs() {
+            max_change = dn4;
+            max_change_var = 'U';
+            max_change_station = i;
+        }
+
+        // Compute relaxation limits for each variable
+        let rdn1 = rlx * dn1;
+        if rdn1 > dhi && dn1.abs() > 1e-12 {
+            rlx = dhi / dn1;
+        }
+        if rdn1 < dlo && dn1.abs() > 1e-12 {
+            rlx = dlo / dn1;
+        }
+
+        let rdn2 = rlx * dn2;
+        if rdn2 > dhi && dn2.abs() > 1e-12 {
+            rlx = dhi / dn2;
+        }
+        if rdn2 < dlo && dn2.abs() > 1e-12 {
+            rlx = dlo / dn2;
+        }
+
+        let rdn3 = rlx * dn3;
+        if rdn3 > dhi && dn3.abs() > 1e-12 {
+            rlx = dhi / dn3;
+        }
+        if rdn3 < dlo && dn3.abs() > 1e-12 {
+            rlx = dlo / dn3;
+        }
+
+        let rdn4 = rlx * dn4;
+        if rdn4 > dhi && dn4.abs() > 1e-12 {
+            rlx = dhi / dn4;
+        }
+        if rdn4 < dlo && dn4.abs() > 1e-12 {
+            rlx = dlo / dn4;
+        }
+    }
+
+    // Ensure relaxation stays positive and bounded
+    rlx = rlx.clamp(0.01, config.relaxation);
+
+    // Compute RMS change
+    let rms_change = (rms_sum / (4.0 * n as f64)).sqrt();
+
+    // === Step 3: Apply ALL updates with common relaxation (XFOIL lines 1429-1470) ===
+    for i in 0..n {
+        let delta = &deltas[i];
+        let due = new_ue[i] - stations[i].u;
+
+        // Apply relaxed updates
+        if stations[i].is_laminar {
+            stations[i].ampl += rlx * delta[0];
+            stations[i].ampl = stations[i].ampl.max(0.0);
+        } else {
+            stations[i].ctau += rlx * delta[0];
+            stations[i].ctau = stations[i].ctau.clamp(0.0, config.ctau_max);
+        }
+
+        stations[i].theta += rlx * delta[1];
+        stations[i].theta = stations[i].theta.max(1e-12);
+
+        // Update mass defect (the coupling variable)
+        stations[i].mass_defect += rlx * delta[2];
+        stations[i].mass_defect = stations[i].mass_defect.max(1e-12);
+
+        // Update Ue with relaxation
+        stations[i].u += rlx * due;
+
+        // Derive delta_star from mass defect and Ue
+        // delta_star = mass_defect / Ue
+        if stations[i].u.abs() > 1e-12 {
+            stations[i].delta_star = stations[i].mass_defect / stations[i].u;
+        }
+
+        // Limit δ* to prevent Hk from dropping below physical minimum
+        let hk_limit = if stations[i].is_wake {
+            config.hk_min_wake
+        } else {
+            config.hk_min_attached
+        };
+
+        // Use msq = 0 for now (incompressible limit for Hk check)
+        limit_delta_star_for_hk(&mut stations[i], hk_limit, 0.0);
+
+        // Update mass defect after potential δ* limiting
+        stations[i].mass_defect = stations[i].delta_star * stations[i].u;
+
+        // Update shape factor
+        if stations[i].theta.abs() > 1e-12 {
+            stations[i].h = stations[i].delta_star / stations[i].theta;
+        }
+    }
+
+    // Ensure no negative Ue "islands"
+    for i in 1..n {
+        if stations[i - 1].u > 0.0 && stations[i].u <= 0.0 {
+            stations[i].u = stations[i - 1].u;
+            stations[i].mass_defect = stations[i].delta_star * stations[i].u;
+        }
+    }
+
+    UpdateResult {
+        rms_change,
+        max_change,
+        max_change_var,
+        max_change_station,
+        relaxation_used: rlx,
+    }
 }
 
 #[cfg(test)]

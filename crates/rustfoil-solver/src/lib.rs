@@ -1,55 +1,77 @@
-//! RustFoil Solver - Aerodynamic analysis solvers.
+//! RustFoil Solver - Inviscid and Viscous Flow Analysis
 //!
-//! This crate provides the core aerodynamic solvers for RustFoil:
+//! This crate provides the complete flow analysis capability for RustFoil,
+//! combining the inviscid panel method with viscous boundary layer analysis.
 //!
-//! # Solver Hierarchy
+//! # Architecture
 //!
-//! ## Phase 2: Inviscid Solver (Linear Vorticity Panel Method)
-//! - Fast linear system solve (O(N²) assembly, O(N³) solve for dense)
-//! - Real-time capable for geometry manipulation
-//! - Returns pressure coefficient (Cp) distribution
-//! - Multi-body support built-in
-//!
-//! ## Phase 3: Boundary Layer Solver (Coming Soon)
-//! - Integral boundary layer equations
-//! - Thwaites (laminar) + Head/Green (turbulent)
-//! - Transition prediction (eN method)
-//!
-//! ## Phase 4: Viscous-Inviscid Interaction (Coming Soon)
-//! - Global Newton-Raphson coupling
-//! - Transpiration velocity model
-//! - Full polar generation
-//!
-//! # Mathematical Background
-//!
-//! ## Linear Vorticity Panel Method
-//!
-//! The inviscid solver uses a vortex panel method where:
-//! - Each panel carries a linearly-varying vorticity distribution
-//! - Boundary condition: no flow through surface (V·n = 0)
-//! - Kutta condition: smooth flow departure at trailing edge
-//!
-//! The resulting linear system is:
 //! ```text
-//! [A]{γ} = {b}
+//! ┌─────────────────────────────────────────────────────────────────────────┐
+//! │                          rustfoil-solver                                │
+//! ├─────────────────────────────────────────────────────────────────────────┤
+//! │                                                                         │
+//! │  ┌─────────────┐                    ┌─────────────────────────────────┐ │
+//! │  │  inviscid/  │ ──── gamma ────►  │           viscous/              │ │
+//! │  │             │                    │                                 │ │
+//! │  │  Panel      │                    │  VISCAL iteration:             │ │
+//! │  │  Method     │ ◄── mass defect ── │  • march BL                    │ │
+//! │  │             │                    │  • Newton update               │ │
+//! │  │  CL, CM     │                    │  • Ue coupling                 │ │
+//! │  │             │                    │  • forces (CD)                 │ │
+//! │  └─────────────┘                    └─────────────────────────────────┘ │
+//! │         │                                        │                      │
+//! │         └────────────────┬───────────────────────┘                      │
+//! │                          │                                              │
+//! │                          ▼                                              │
+//! │                   ViscousResult                                         │
+//! │                   (CL, CD, CM, transition, separation)                  │
+//! └─────────────────────────────────────────────────────────────────────────┘
 //! ```
-//! where:
-//! - A_ij = influence of panel j's vorticity on panel i's normal velocity
-//! - γ = vorticity strengths at panel nodes
-//! - b = -V∞·n (freestream normal velocity at each panel)
 //!
-//! ## Kutta Condition
+//! # Modules
 //!
-//! For a sharp trailing edge, the vorticity must satisfy:
-//! ```text
-//! γ_upper(TE) + γ_lower(TE) = 0
+//! - [`inviscid`] - Inviscid panel method (Linear Vorticity)
+//! - [`viscous`] - Viscous boundary layer solver (VISCAL)
+//!
+//! # Example
+//!
+//! ```ignore
+//! use rustfoil_core::Body;
+//! use rustfoil_solver::{
+//!     inviscid::{InviscidSolver, FlowConditions},
+//!     viscous::{ViscousSolverConfig, solve_viscous},
+//! };
+//!
+//! // 1. Create airfoil and solve inviscid
+//! let body = Body::from_naca("0012", 160)?;
+//! let solver = InviscidSolver::new();
+//! let factorized = solver.factorize(&[body.clone()])?;
+//! let inv_sol = factorized.solve_alpha(&FlowConditions::with_alpha_deg(4.0));
+//!
+//! // 2. Setup viscous from inviscid
+//! let setup = ViscousSetup::from_inviscid(&body, &inv_sol);
+//! let config = ViscousSolverConfig::with_reynolds(1e6);
+//!
+//! // 3. Initialize BL and solve  
+//! let mut stations = setup.initialize_bl_stations();
+//! let result = solve_viscous(&mut stations, &setup.ue_inviscid, &setup.dij, &config)?;
+//!
+//! println!("CL = {:.4}, CD = {:.5}", result.cl, result.cd);
 //! ```
-//! This ensures finite velocity at the trailing edge and determines
-//! the circulation (and hence lift) around the airfoil.
-
-#![warn(missing_docs)]
-#![warn(clippy::all)]
 
 pub mod inviscid;
+pub mod viscous;
 
-// Re-exports will be added as modules are implemented
+// Re-export main types for convenience
+pub use inviscid::{SolverError, SolverResult};
+
+// Re-export inviscid types
+pub use inviscid::{FlowConditions, InviscidSolution, InviscidSolver, FactorizedSolution};
+
+// Re-export viscous types
+pub use viscous::{
+    compute_forces, solve_viscous, solve_viscous_polar_parallel, AeroForces, ViscousResult,
+    ViscousSolverConfig, ViscousSetup,
+    // New integration with rustfoil-inviscid
+    setup_from_body, setup_from_coords, SetupError, ViscousSetupResult,
+};

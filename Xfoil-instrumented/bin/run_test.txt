@@ -1,0 +1,5 @@
+load naca0012_xfoil.dat
+oper
+visc 1e6
+alfa 5
+quit

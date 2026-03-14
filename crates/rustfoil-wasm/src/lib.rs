@@ -23,13 +23,18 @@
 //! ```
 
 use rustfoil_core::{naca, point, Body, CubicSpline, Point};
+use rustfoil_inviscid::{FlowConditions as FaithfulFlowConditions, InviscidSolver as FaithfulInviscidSolver};
 use rustfoil_solver::inviscid::{
-    FlowConditions, InviscidSolver, 
+    FlowConditions, InviscidSolver,
     build_streamlines, StreamlineOptions, SmokeSystem
 };
+use rustfoil_solver::inviscid::{compute_psi_grid_with_interior, psi_at};
+use rustfoil_xfoil::{AlphaSpec, XfoilOptions};
+use rustfoil_xfoil::oper::solve_operating_point_from_state;
+use rustfoil_xfoil::state::XfoilState;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::prelude::*;
 use std::f64::consts::PI;
+use wasm_bindgen::prelude::*;
 
 // When the `console_error_panic_hook` feature is enabled, we can call the
 // `set_panic_hook` function at least once during initialization, and then
@@ -580,6 +585,8 @@ pub struct JsPoint {
 pub struct AnalysisResult {
     /// Lift coefficient
     pub cl: f64,
+    /// Drag coefficient
+    pub cd: f64,
     /// Moment coefficient (about quarter-chord)
     pub cm: f64,
     /// Pressure coefficient at each panel midpoint
@@ -590,10 +597,241 @@ pub struct AnalysisResult {
     pub gamma: Vec<f64>,
     /// Dividing streamline value (psi_0)
     pub psi_0: f64,
+    /// Whether the viscous solve converged
+    pub converged: bool,
+    /// Newton iterations used by the faithful solver
+    pub iterations: usize,
+    /// Final residual from the faithful solver
+    pub residual: f64,
+    /// Transition location on upper surface
+    pub x_tr_upper: f64,
+    /// Transition location on lower surface
+    pub x_tr_lower: f64,
     /// Whether the analysis succeeded
     pub success: bool,
     /// Error message (if any)
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BLDistribution {
+    pub x_upper: Vec<f64>,
+    pub x_lower: Vec<f64>,
+    pub theta_upper: Vec<f64>,
+    pub theta_lower: Vec<f64>,
+    pub delta_star_upper: Vec<f64>,
+    pub delta_star_lower: Vec<f64>,
+    pub h_upper: Vec<f64>,
+    pub h_lower: Vec<f64>,
+    pub cf_upper: Vec<f64>,
+    pub cf_lower: Vec<f64>,
+    pub x_tr_upper: f64,
+    pub x_tr_lower: f64,
+    pub converged: bool,
+    pub iterations: usize,
+    pub residual: f64,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+struct FaithfulSnapshot {
+    nodes: Vec<Point>,
+    gamma: Vec<f64>,
+    psi_0: f64,
+    cp_x: Vec<f64>,
+    result: AnalysisResult,
+    upper_rows: Vec<rustfoil_xfoil::XfoilBlRow>,
+    lower_rows: Vec<rustfoil_xfoil::XfoilBlRow>,
+    iblte_upper: usize,
+    iblte_lower: usize,
+}
+
+fn analysis_error(message: impl Into<String>) -> AnalysisResult {
+    AnalysisResult {
+        cl: 0.0,
+        cd: 0.0,
+        cm: 0.0,
+        cp: vec![],
+        cp_x: vec![],
+        gamma: vec![],
+        psi_0: 0.0,
+        converged: false,
+        iterations: 0,
+        residual: 0.0,
+        x_tr_upper: 1.0,
+        x_tr_lower: 1.0,
+        success: false,
+        error: Some(message.into()),
+    }
+}
+
+fn bl_error(message: impl Into<String>) -> BLDistribution {
+    BLDistribution {
+        x_upper: vec![],
+        x_lower: vec![],
+        theta_upper: vec![],
+        theta_lower: vec![],
+        delta_star_upper: vec![],
+        delta_star_lower: vec![],
+        h_upper: vec![],
+        h_lower: vec![],
+        cf_upper: vec![],
+        cf_lower: vec![],
+        x_tr_upper: 1.0,
+        x_tr_lower: 1.0,
+        converged: false,
+        iterations: 0,
+        residual: 0.0,
+        success: false,
+        error: Some(message.into()),
+    }
+}
+
+fn faithful_snapshot(
+    coords: &[f64],
+    alpha_deg: f64,
+    reynolds: f64,
+    mach: f64,
+    ncrit: f64,
+    max_iterations: usize,
+) -> Result<FaithfulSnapshot, String> {
+    if coords.len() < 6 || coords.len() % 2 != 0 {
+        return Err("Invalid coordinates: need at least 3 points (6 values)".to_string());
+    }
+
+    let points: Vec<Point> = coords.chunks(2).map(|c| point(c[0], c[1])).collect();
+    let body = Body::from_points("airfoil", &points).map_err(|e| format!("Geometry error: {e}"))?;
+
+    let panels = body.panels();
+    let mut node_x: Vec<f64> = panels.iter().map(|panel| panel.p1.x).collect();
+    let mut node_y: Vec<f64> = panels.iter().map(|panel| panel.p1.y).collect();
+    if let Some(last) = panels.last() {
+        if (last.p2.x - panels[0].p1.x).abs() > 1.0e-10 || (last.p2.y - panels[0].p1.y).abs() > 1.0e-10 {
+            node_x.push(last.p2.x);
+            node_y.push(last.p2.y);
+        }
+    }
+    let nodes: Vec<Point> = node_x.iter().zip(node_y.iter()).map(|(&x, &y)| point(x, y)).collect();
+    let coords_pairs: Vec<(f64, f64)> = node_x.iter().zip(node_y.iter()).map(|(&x, &y)| (x, y)).collect();
+
+    let solver = FaithfulInviscidSolver::new();
+    let factorized = solver.factorize(&coords_pairs).map_err(|e| format!("Factorization error: {e}"))?;
+    let inviscid = factorized.solve_alpha(&FaithfulFlowConditions::with_alpha_deg(alpha_deg));
+    let panel_s = {
+        let mut s = Vec::with_capacity(node_x.len());
+        let mut acc = 0.0;
+        s.push(0.0);
+        for i in 1..node_x.len() {
+            let dx = node_x[i] - node_x[i - 1];
+            let dy = node_y[i] - node_y[i - 1];
+            acc += (dx * dx + dy * dy).sqrt();
+            s.push(acc);
+        }
+        s
+    };
+
+    let mut state = XfoilState::new(
+        body.name.clone(),
+        alpha_deg.to_radians(),
+        rustfoil_xfoil::OperatingMode::PrescribedAlpha,
+        node_x,
+        node_y,
+        panel_s,
+        factorized.surface_qinvu_basis().0,
+        factorized.surface_qinvu_basis().1,
+        factorized.gamu_0.clone(),
+        factorized.gamu_90.clone(),
+        factorized.build_dij_with_default_wake().map_err(|e| format!("DIJ error: {e}"))?,
+    );
+    state.panel_xp = factorized.geometry().xp.clone();
+    state.panel_yp = factorized.geometry().yp.clone();
+    state.xle = factorized.geometry().xle;
+    state.yle = factorized.geometry().yle;
+    state.xte = factorized.geometry().xte;
+    state.yte = factorized.geometry().yte;
+    state.chord = factorized.geometry().chord;
+    state.sharp = factorized.geometry().sharp;
+    state.ante = factorized.geometry().ante;
+
+    let options = XfoilOptions {
+        reynolds,
+        mach,
+        ncrit,
+        max_iterations,
+        ..Default::default()
+    };
+    let oper_result = solve_operating_point_from_state(&mut state, &factorized, &options)
+        .map_err(|e| format!("Faithful solver error: {e}"))?;
+
+    let gamma = state.gam.clone();
+    let cp: Vec<f64> = gamma.iter().map(|g| 1.0 - g * g).collect();
+    let cp_x = state.panel_x.clone();
+
+    let result = AnalysisResult {
+        cl: oper_result.cl,
+        cd: oper_result.cd,
+        cm: oper_result.cm,
+        cp,
+        cp_x,
+        gamma: gamma.clone(),
+        psi_0: inviscid.psi_0,
+        converged: oper_result.converged,
+        iterations: oper_result.iterations,
+        residual: oper_result.residual,
+        x_tr_upper: oper_result.x_tr_upper,
+        x_tr_lower: oper_result.x_tr_lower,
+        success: true,
+        error: None,
+    };
+
+    Ok(FaithfulSnapshot {
+        nodes,
+        gamma,
+        psi_0: inviscid.psi_0,
+        cp_x: state.panel_x.clone(),
+        result,
+        upper_rows: state.upper_rows.clone(),
+        lower_rows: state.lower_rows.clone(),
+        iblte_upper: state.iblte_upper,
+        iblte_lower: state.iblte_lower,
+    })
+}
+
+fn rows_to_bl_distribution(
+    upper_rows: &[rustfoil_xfoil::XfoilBlRow],
+    lower_rows: &[rustfoil_xfoil::XfoilBlRow],
+    iblte_upper: usize,
+    iblte_lower: usize,
+    x_tr_upper: f64,
+    x_tr_lower: f64,
+    converged: bool,
+    iterations: usize,
+    residual: f64,
+) -> BLDistribution {
+    let upper_end = iblte_upper.min(upper_rows.len().saturating_sub(1));
+    let lower_end = iblte_lower.min(lower_rows.len().saturating_sub(1));
+    let upper = &upper_rows[..=upper_end];
+    let lower = &lower_rows[..=lower_end];
+
+    BLDistribution {
+        x_upper: upper.iter().map(|row| row.x_coord).collect(),
+        x_lower: lower.iter().map(|row| row.x_coord).collect(),
+        theta_upper: upper.iter().map(|row| row.theta).collect(),
+        theta_lower: lower.iter().map(|row| row.theta).collect(),
+        delta_star_upper: upper.iter().map(|row| row.dstr).collect(),
+        delta_star_lower: lower.iter().map(|row| row.dstr).collect(),
+        h_upper: upper.iter().map(|row| row.h).collect(),
+        h_lower: lower.iter().map(|row| row.h).collect(),
+        cf_upper: upper.iter().map(|row| row.cf).collect(),
+        cf_lower: lower.iter().map(|row| row.cf).collect(),
+        x_tr_upper,
+        x_tr_lower,
+        converged,
+        iterations,
+        residual,
+        success: true,
+        error: None,
+    }
 }
 
 /// Quick analysis function for simple use cases.
@@ -613,16 +851,7 @@ pub fn analyze_airfoil(coords: &[f64], alpha_deg: f64) -> JsValue {
 fn analyze_airfoil_impl(coords: &[f64], alpha_deg: f64) -> AnalysisResult {
     // Parse coordinates
     if coords.len() < 6 || coords.len() % 2 != 0 {
-        return AnalysisResult {
-            cl: 0.0,
-            cm: 0.0,
-            cp: vec![],
-            cp_x: vec![],
-            gamma: vec![],
-            psi_0: 0.0,
-            success: false,
-            error: Some("Invalid coordinates: need at least 3 points (6 values)".to_string()),
-        };
+        return analysis_error("Invalid coordinates: need at least 3 points (6 values)");
     }
 
     let points: Vec<_> = coords.chunks(2).map(|c| point(c[0], c[1])).collect();
@@ -631,16 +860,7 @@ fn analyze_airfoil_impl(coords: &[f64], alpha_deg: f64) -> AnalysisResult {
     let body = match Body::from_points("airfoil", &points) {
         Ok(b) => b,
         Err(e) => {
-            return AnalysisResult {
-                cl: 0.0,
-                cm: 0.0,
-                cp: vec![],
-                cp_x: vec![],
-                gamma: vec![],
-                psi_0: 0.0,
-                success: false,
-                error: Some(format!("Geometry error: {}", e)),
-            }
+            return analysis_error(format!("Geometry error: {}", e))
         }
     };
 
@@ -654,26 +874,65 @@ fn analyze_airfoil_impl(coords: &[f64], alpha_deg: f64) -> AnalysisResult {
 
             AnalysisResult {
                 cl: solution.cl,
+                cd: 0.0,
                 cm: solution.cm,
                 cp: solution.cp,
                 cp_x,
                 gamma: solution.gamma,
                 psi_0: solution.psi_0,
+                converged: true,
+                iterations: 0,
+                residual: 0.0,
+                x_tr_upper: 1.0,
+                x_tr_lower: 1.0,
                 success: true,
                 error: None,
             }
         }
-        Err(e) => AnalysisResult {
-            cl: 0.0,
-            cm: 0.0,
-            cp: vec![],
-            cp_x: vec![],
-            gamma: vec![],
-            psi_0: 0.0,
-            success: false,
-            error: Some(format!("Solver error: {}", e)),
-        },
+        Err(e) => analysis_error(format!("Solver error: {}", e)),
     }
+}
+
+#[wasm_bindgen]
+pub fn analyze_airfoil_faithful(
+    coords: &[f64],
+    alpha_deg: f64,
+    reynolds: f64,
+    mach: f64,
+    ncrit: f64,
+    max_iterations: usize,
+) -> JsValue {
+    let result = match faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations) {
+        Ok(snapshot) => snapshot.result,
+        Err(message) => analysis_error(message),
+    };
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+#[wasm_bindgen]
+pub fn get_bl_distribution_faithful(
+    coords: &[f64],
+    alpha_deg: f64,
+    reynolds: f64,
+    mach: f64,
+    ncrit: f64,
+    max_iterations: usize,
+) -> JsValue {
+    let result = match faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations) {
+        Ok(snapshot) => rows_to_bl_distribution(
+            &snapshot.upper_rows,
+            &snapshot.lower_rows,
+            snapshot.iblte_upper,
+            snapshot.iblte_lower,
+            snapshot.result.x_tr_upper,
+            snapshot.result.x_tr_lower,
+            snapshot.result.converged,
+            snapshot.result.iterations,
+            snapshot.result.residual,
+        ),
+        Err(message) => bl_error(message),
+    };
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
 }
 
 // ============================================================================
@@ -797,6 +1056,63 @@ fn compute_streamlines_impl(
         success: true,
         error: None,
     }
+}
+
+#[wasm_bindgen]
+pub fn compute_streamlines_faithful(
+    coords: &[f64],
+    alpha_deg: f64,
+    reynolds: f64,
+    mach: f64,
+    ncrit: f64,
+    max_iterations: usize,
+    seed_count: u32,
+    bounds: &[f64],
+) -> JsValue {
+    let result = match faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations) {
+        Ok(snapshot) => {
+            if bounds.len() != 4 {
+                StreamlineResult {
+                    streamlines: vec![],
+                    success: false,
+                    error: Some("bounds must have 4 values: [x_min, x_max, y_min, y_max]".to_string()),
+                }
+            } else {
+                let options = StreamlineOptions {
+                    seed_count: seed_count as usize,
+                    seed_x: bounds[0],
+                    y_min: bounds[2],
+                    y_max: bounds[3],
+                    step_size: 0.01,
+                    max_steps: 2000,
+                    x_min: bounds[0] - 0.5,
+                    x_max: bounds[1],
+                };
+                let streamlines_raw = build_streamlines(
+                    &snapshot.nodes,
+                    &snapshot.gamma,
+                    alpha_deg.to_radians(),
+                    1.0,
+                    &options,
+                );
+                let streamlines = streamlines_raw
+                    .into_iter()
+                    .map(|line| line.into_iter().map(|(x, y)| [x, y]).collect())
+                    .collect();
+                StreamlineResult {
+                    streamlines,
+                    success: true,
+                    error: None,
+                }
+            }
+        }
+        Err(message) => StreamlineResult {
+            streamlines: vec![],
+            success: false,
+            error: Some(message),
+        },
+    };
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
 }
 
 // ============================================================================
@@ -963,6 +1279,89 @@ fn compute_psi_grid_impl(
         success: true,
         error: None,
     }
+}
+
+#[wasm_bindgen]
+pub fn compute_psi_grid_faithful(
+    coords: &[f64],
+    alpha_deg: f64,
+    reynolds: f64,
+    mach: f64,
+    ncrit: f64,
+    max_iterations: usize,
+    bounds: &[f64],
+    resolution: &[u32],
+) -> JsValue {
+    let result = match faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations) {
+        Ok(snapshot) => {
+            if bounds.len() != 4 {
+                PsiGridResult {
+                    grid: vec![],
+                    psi_0: 0.0,
+                    nx: 0,
+                    ny: 0,
+                    psi_min: 0.0,
+                    psi_max: 0.0,
+                    success: false,
+                    error: Some("bounds must have 4 values: [x_min, x_max, y_min, y_max]".to_string()),
+                }
+            } else if resolution.len() != 2 {
+                PsiGridResult {
+                    grid: vec![],
+                    psi_0: 0.0,
+                    nx: 0,
+                    ny: 0,
+                    psi_min: 0.0,
+                    psi_max: 0.0,
+                    success: false,
+                    error: Some("resolution must have 2 values: [nx, ny]".to_string()),
+                }
+            } else {
+                let nx = resolution[0] as usize;
+                let ny = resolution[1] as usize;
+                let grid = compute_psi_grid_with_interior(
+                    &snapshot.nodes,
+                    &snapshot.gamma,
+                    alpha_deg.to_radians(),
+                    1.0,
+                    bounds[0],
+                    bounds[1],
+                    bounds[2],
+                    bounds[3],
+                    nx,
+                    ny,
+                    Some(snapshot.psi_0),
+                );
+                let (psi_min, psi_max) = grid
+                    .iter()
+                    .filter(|v| v.is_finite())
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), &v| {
+                        (min.min(v), max.max(v))
+                    });
+                PsiGridResult {
+                    grid,
+                    psi_0: snapshot.psi_0,
+                    nx,
+                    ny,
+                    psi_min,
+                    psi_max,
+                    success: true,
+                    error: None,
+                }
+            }
+        }
+        Err(message) => PsiGridResult {
+            grid: vec![],
+            psi_0: 0.0,
+            nx: 0,
+            ny: 0,
+            psi_min: 0.0,
+            psi_max: 0.0,
+            success: false,
+            error: Some(message),
+        },
+    };
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
 }
 
 // ============================================================================
@@ -1540,16 +1939,7 @@ impl RustFoil {
         let body = match &self.body {
             Some(b) => b,
             None => {
-                return AnalysisResult {
-                    cl: 0.0,
-                    cm: 0.0,
-                    cp: vec![],
-                    cp_x: vec![],
-                    gamma: vec![],
-                    psi_0: 0.0,
-                    success: false,
-                    error: Some("No geometry set".to_string()),
-                }
+                return analysis_error("No geometry set");
             }
         };
 
@@ -1561,25 +1951,22 @@ impl RustFoil {
 
                 AnalysisResult {
                     cl: solution.cl,
+                    cd: 0.0,
                     cm: solution.cm,
                     cp: solution.cp,
                     cp_x,
                     gamma: solution.gamma,
                     psi_0: solution.psi_0,
+                    converged: true,
+                    iterations: 0,
+                    residual: 0.0,
+                    x_tr_upper: 1.0,
+                    x_tr_lower: 1.0,
                     success: true,
                     error: None,
                 }
             }
-            Err(e) => AnalysisResult {
-                cl: 0.0,
-                cm: 0.0,
-                cp: vec![],
-                cp_x: vec![],
-                gamma: vec![],
-                psi_0: 0.0,
-                success: false,
-                error: Some(format!("Solver error: {}", e)),
-            },
+            Err(e) => analysis_error(format!("Solver error: {}", e)),
         }
     }
 }

@@ -202,7 +202,7 @@ export const welcomeTour: TourStep[] = [
     focusPanel: 'solve',
     popover: {
       title: 'Solver Panel',
-      description: 'Run aerodynamic analysis to compute lift (Cl) and moment (Cm) coefficients. Set the angle of attack and click Run.',
+      description: 'Run aerodynamic analysis to compute lift (Cl), drag (Cd), and moment (Cm) coefficients. Set the angle of attack and click Run.',
       side: 'left',
       align: 'start',
     },
@@ -234,7 +234,7 @@ export const welcomeTour: TourStep[] = [
     focusPanel: 'polar',
     popover: {
       title: 'Polar Plot',
-      description: 'View your polar data here! You can change the X and Y axes to see Cl vs Alpha, Cl vs Cm, or other combinations. The data can be exported from the Solve panel.',
+      description: 'View your polar data here! You can change the X and Y axes to see Cl vs Alpha, Cd vs Alpha, Cl vs Cm, or other combinations. The data can be exported from the Solve panel.',
       side: 'left',
       align: 'center',
     },

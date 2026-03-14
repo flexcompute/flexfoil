@@ -223,10 +223,15 @@ impl XfoilSpline {
         Some(Self { s, x, y, xs, ys })
     }
 
-    /// XFOIL's SPLINE routine - computes first derivative coefficients.
+    /// XFOIL's SEGSPL-style spline - computes first derivative coefficients.
     /// 
-    /// Reference: spline.f lines 21-60
-    /// Zero second derivative end conditions.
+    /// Reference: spline.f SEGSPL which calls SPLIND with XS1=XS2=-999.0
+    /// This uses zero THIRD derivative end conditions, which is what XFOIL's
+    /// PANGEN uses for geometry splines (xfoil.f lines 1662-1663).
+    /// 
+    /// NOTE: This differs from XFOIL's plain SPLINE routine which uses zero
+    /// SECOND derivative end conditions. Using SEGSPL-style end conditions
+    /// is critical for matching XFOIL's curvature computation in PANGEN.
     fn spline_coeffs(s: &[f64], x: &[f64]) -> Vec<f64> {
         let n = s.len();
         if n < 2 {
@@ -237,7 +242,7 @@ impl XfoilSpline {
             return vec![dx, dx];
         }
 
-        // Build tridiagonal system (XFOIL lines 39-46)
+        // Build tridiagonal system (XFOIL lines 87-94 in SPLIND)
         // A[i]*XS[i-1] + B[i]*XS[i] + C[i]*XS[i+1] = RHS[i]
         // But XFOIL uses: B[i]=dsp, A[i]=2*(dsm+dsp), C[i]=dsm
         let mut a = vec![0.0; n];  // Main diagonal
@@ -254,14 +259,16 @@ impl XfoilSpline {
             xs[i] = 3.0 * ((x[i + 1] - x[i]) * dsm / dsp + (x[i] - x[i - 1]) * dsp / dsm);
         }
 
-        // Zero second derivative end conditions (XFOIL lines 48-54)
-        a[0] = 2.0;
+        // Zero THIRD derivative end conditions (XFOIL SPLIND lines 101-105, 117-120)
+        // This is what SEGSPL uses with XS1 = XS2 = -999.0
+        // This is CRITICAL for matching XFOIL's PANGEN curvature computation
+        a[0] = 1.0;
         c[0] = 1.0;
-        xs[0] = 3.0 * (x[1] - x[0]) / (s[1] - s[0]);
+        xs[0] = 2.0 * (x[1] - x[0]) / (s[1] - s[0]);
 
         b[n - 1] = 1.0;
-        a[n - 1] = 2.0;
-        xs[n - 1] = 3.0 * (x[n - 1] - x[n - 2]) / (s[n - 1] - s[n - 2]);
+        a[n - 1] = 1.0;
+        xs[n - 1] = 2.0 * (x[n - 1] - x[n - 2]) / (s[n - 1] - s[n - 2]);
 
         // Solve tridiagonal system (XFOIL's TRISOL)
         Self::trisol(&a, &b, &c, &mut xs);
@@ -486,8 +493,9 @@ impl XfoilSpline {
 
             let mut ds_le = -res / ress;
 
-            // Limit step size
-            let chord_scale = (x_chord.abs() + y_chord.abs()).max(0.01);
+            // Limit step size - XFOIL uses ABS(XCHORD+YCHORD), not sum of absolutes
+            // This matches XFOIL xgeom.f lines 79-80 exactly
+            let chord_scale = (x_chord + y_chord).abs();
             ds_le = ds_le.max(-0.02 * chord_scale).min(0.02 * chord_scale);
             s_le += ds_le;
 

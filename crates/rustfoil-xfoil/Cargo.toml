@@ -1,0 +1,23 @@
+[package]
+name = "rustfoil-xfoil"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Standalone XFOIL-faithful side-path solver"
+
+[dependencies]
+rustfoil-core = { path = "../rustfoil-core" }
+rustfoil-bl = { path = "../rustfoil-bl" }
+rustfoil-coupling = { path = "../rustfoil-coupling" }
+rustfoil-inviscid = { path = "../rustfoil-inviscid" }
+rustfoil-solver = { path = "../rustfoil-solver" }
+nalgebra.workspace = true
+serde = { version = "1", features = ["derive"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+rustfoil-testkit = { path = "../rustfoil-testkit" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"

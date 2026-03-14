@@ -2,9 +2,8 @@
  * SolvePanel - Aerodynamic analysis controls
  * 
  * Provides:
- * - Single-point analysis (run at alpha or CL)
+ * - Single-point faithful viscous analysis
  * - Alpha polar generation
- * - Inviscid/Viscous mode switch (viscous disabled for now)
  */
 
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
@@ -12,14 +11,21 @@ import { useAirfoilStore } from '../../stores/airfoilStore';
 import { analyzeAirfoil, isWasmReady, type AnalysisResult } from '../../lib/wasm';
 import type { PolarPoint } from '../../types';
 
-type SolverMode = 'inviscid' | 'viscous';
 type RunMode = 'alpha' | 'cl';
 
 export function SolvePanel() {
-  const { panels, name, polarData, displayAlpha, setDisplayAlpha, setPolarData, clearPolar } = useAirfoilStore();
+  const {
+    panels,
+    name,
+    polarData,
+    displayAlpha,
+    reynolds,
+    setDisplayAlpha,
+    setReynolds,
+    setPolarData,
+    clearPolar
+  } = useAirfoilStore();
   
-  // Solver settings
-  const [solverMode, setSolverMode] = useState<SolverMode>('inviscid');
   const [runMode, setRunMode] = useState<RunMode>('alpha');
   
   // Single-point inputs - initialize from store's displayAlpha
@@ -91,11 +97,13 @@ export function SolvePanel() {
     try {
       if (runMode === 'alpha') {
         // Direct alpha analysis
-        const res = analyzeAirfoil(panels, targetAlpha);
+        const res = analyzeAirfoil(panels, targetAlpha, reynolds);
         setResult(res);
         setResultAlpha(targetAlpha);
         if (!res.success) {
           setError(res.error || 'Analysis failed');
+        } else if (!res.converged) {
+          setError(`Faithful viscous solver did not converge (residual ${res.residual.toExponential(2)})`);
         }
       } else {
         // Iterate to find alpha for target CL
@@ -105,7 +113,7 @@ export function SolvePanel() {
         const tol = 0.001;
         
         for (let i = 0; i < maxIter; i++) {
-          const res = analyzeAirfoil(panels, alpha);
+          const res = analyzeAirfoil(panels, alpha, reynolds);
           if (!res.success) {
             setError(res.error || 'Analysis failed during CL iteration');
             setIsRunning(false);
@@ -132,7 +140,7 @@ export function SolvePanel() {
           
           if (i === maxIter - 1) {
             // Last iteration - use whatever we got
-            const finalRes = analyzeAirfoil(panels, alpha);
+            const finalRes = analyzeAirfoil(panels, alpha, reynolds);
             setResult(finalRes);
             setResultAlpha(alpha);
             // Update display alpha even if not fully converged
@@ -148,7 +156,7 @@ export function SolvePanel() {
     }
     
     setIsRunning(false);
-  }, [panels, runMode, targetAlpha, targetCl, setDisplayAlpha]);
+  }, [panels, runMode, targetAlpha, targetCl, reynolds, setDisplayAlpha]);
 
   // Run polar sweep
   const runPolar = useCallback(() => {
@@ -165,11 +173,12 @@ export function SolvePanel() {
       const points: PolarPoint[] = [];
       
       for (let alpha = alphaStart; alpha <= alphaEnd; alpha += alphaStep) {
-        const res = analyzeAirfoil(panels, alpha);
+        const res = analyzeAirfoil(panels, alpha, reynolds);
         if (res.success) {
           points.push({
             alpha,
             cl: res.cl,
+            cd: res.cd,
             cm: res.cm,
           });
         }
@@ -185,7 +194,7 @@ export function SolvePanel() {
     }
     
     setIsRunning(false);
-  }, [panels, alphaStart, alphaEnd, alphaStep, clearPolar, setPolarData]);
+  }, [panels, alphaStart, alphaEnd, alphaStep, reynolds, clearPolar, setPolarData]);
 
   // Compute cl_alpha from polar
   const clAlpha = useMemo(() => {
@@ -209,32 +218,24 @@ export function SolvePanel() {
     <div className="panel">
       <div className="panel-header">Solve</div>
       <div className="panel-content">
-        {/* Solver Mode */}
         <div className="form-group" data-tour="solve-mode">
-          <div className="form-label">Solver Mode</div>
-          <div style={{ display: 'flex', gap: '4px' }}>
-            <button
-              onClick={() => setSolverMode('inviscid')}
-              className={solverMode === 'inviscid' ? 'active' : ''}
-              style={{ flex: 1 }}
-            >
-              Inviscid
-            </button>
-            <button
-              onClick={() => setSolverMode('viscous')}
-              className={solverMode === 'viscous' ? 'active' : ''}
-              style={{ flex: 1, opacity: 0.5 }}
-              disabled
-              title="Viscous solver not yet implemented"
-            >
-              Viscous
-            </button>
+          <div className="form-label">Solver</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
+            Faithful XFOIL viscous solver
           </div>
-          {solverMode === 'viscous' && (
-            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
-              Viscous solver coming in Phase 3
-            </div>
-          )}
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+            Frontend flow analysis now uses the faithful Rust reproduction path.
+          </div>
+        </div>
+
+        <div className="form-group">
+          <div className="form-label">Reynolds Number</div>
+          <input
+            type="number"
+            value={reynolds}
+            onChange={(e) => setReynolds(Math.max(1, Number(e.target.value) || 1))}
+            step={100000}
+          />
         </div>
 
         {/* Single Point Analysis */}
@@ -295,14 +296,20 @@ export function SolvePanel() {
             <div className="form-label">Results</div>
             <div style={{
               display: 'grid',
-              gridTemplateColumns: runMode === 'cl' ? '1fr 1fr 1fr' : '1fr 1fr',
+              gridTemplateColumns: runMode === 'cl' ? 'repeat(4, 1fr)' : 'repeat(3, 1fr)',
               gap: '8px',
             }}>
               {runMode === 'cl' && resultAlpha !== null && (
                 <ResultCard label="α (°)" value={resultAlpha.toFixed(2)} highlight />
               )}
               <ResultCard label="CL" value={result.cl.toFixed(4)} />
+              <ResultCard label="CD" value={result.cd.toFixed(5)} />
               <ResultCard label="CM" value={result.cm.toFixed(4)} />
+            </div>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '8px' }}>
+              {result.converged
+                ? `Converged in ${result.iterations} iterations`
+                : `Not converged after ${result.iterations} iterations (residual ${result.residual.toExponential(2)})`}
             </div>
           </div>
         )}
@@ -457,7 +464,7 @@ export function SolvePanel() {
           color: 'var(--text-muted)',
         }}>
           <div>Panels: {panels.length - 1}</div>
-          <div>Solver: {solverMode === 'inviscid' ? 'Linear Vorticity Panel Method' : 'N/A'}</div>
+          <div>Solver: Faithful XFOIL viscous</div>
           <div>WASM: {isWasmReady() ? '✓ Ready' : '⏳ Loading...'}</div>
         </div>
       </div>

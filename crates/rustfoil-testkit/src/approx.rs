@@ -49,7 +49,9 @@ mod tests {
     #[test]
     fn test_relative_error_small_diff() {
         let err = relative_error(1.0, 1.001);
-        assert!((err - 0.001).abs() < 1e-10);
+        // err = |1.0 - 1.001| / max(1.0, 1.001) = 0.001 / 1.001 ≈ 0.000999
+        let expected = 0.001 / 1.001;
+        assert!((err - expected).abs() < 1e-10);
     }
 
     #[test]

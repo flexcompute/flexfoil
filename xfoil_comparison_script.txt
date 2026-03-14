@@ -1,0 +1,8 @@
+LOAD /Users/harry/flexfoil-boundary-layer/testdata/naca0012.dat
+PANE
+OPER
+VISC 1000000
+ITER 50
+ALFA 4.0
+
+QUIT

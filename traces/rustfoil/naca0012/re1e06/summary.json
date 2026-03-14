@@ -1,0 +1,316 @@
+{
+  "foil": "naca0012",
+  "reynolds": 1000000.0,
+  "results": [
+    {
+      "alpha": -15.0,
+      "reynolds": 1000000.0,
+      "cl": -2.8006,
+      "cd": 0.06281,
+      "x_tr_upper": 0.9917,
+      "x_tr_lower": 0.0137,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_-015.0.json"
+    },
+    {
+      "alpha": -14.0,
+      "reynolds": 1000000.0,
+      "cl": -1.721,
+      "cd": 0.07922,
+      "x_tr_upper": 0.9917,
+      "x_tr_lower": 0.0137,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_-014.0.json"
+    },
+    {
+      "alpha": -13.0,
+      "reynolds": 1000000.0,
+      "cl": -1.6535,
+      "cd": 0.04542,
+      "x_tr_upper": 0.9917,
+      "x_tr_lower": 0.0167,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_-013.0.json"
+    },
+    {
+      "alpha": -12.0,
+      "reynolds": 1000000.0,
+      "cl": -1.5791,
+      "cd": 0.02116,
+      "x_tr_upper": 0.9917,
+      "x_tr_lower": 0.0167,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_-012.0.json"
+    },
+    {
+      "alpha": -11.0,
+      "reynolds": 1000000.0,
+      "cl": -1.4218,
+      "cd": 0.02,
+      "x_tr_upper": 0.9917,
+      "x_tr_lower": 0.02,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_-011.0.json"
+    },
+    {
+      "alpha": -10.0,
+      "reynolds": 1000000.0,
+      "cl": -1.0734,
+      "cd": 0.01326,
+      "x_tr_upper": 0.9917,
+      "x_tr_lower": 0.0239,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_-010.0.json"
+    },
+    {
+      "alpha": -9.0,
+      "reynolds": 1000000.0,
+      "cl": -1.1516,
+      "cd": 0.01259,
+      "x_tr_upper": 0.9917,
+      "x_tr_lower": 0.0239,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_-009.0.json"
+    },
+    {
+      "alpha": -8.0,
+      "reynolds": 1000000.0,
+      "cl": -1.003,
+      "cd": 0.01038,
+      "x_tr_upper": 0.9917,
+      "x_tr_lower": 0.0333,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_-008.0.json"
+    },
+    {
+      "alpha": -7.0,
+      "reynolds": 1000000.0,
+      "cl": -0.7575,
+      "cd": 0.00897,
+      "x_tr_upper": 0.9917,
+      "x_tr_lower": 0.0391,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_-007.0.json"
+    },
+    {
+      "alpha": -6.0,
+      "reynolds": 1000000.0,
+      "cl": -0.6545,
+      "cd": 0.00835,
+      "x_tr_upper": 0.9917,
+      "x_tr_lower": 0.0535,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_-006.0.json"
+    },
+    {
+      "alpha": -5.0,
+      "reynolds": 1000000.0,
+      "cl": -0.5705,
+      "cd": 0.00692,
+      "x_tr_upper": 0.9673,
+      "x_tr_lower": 0.1088,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_-005.0.json"
+    },
+    {
+      "alpha": -4.0,
+      "reynolds": 1000000.0,
+      "cl": -0.4888,
+      "cd": 0.00687,
+      "x_tr_upper": 0.9211,
+      "x_tr_lower": 0.2122,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_-004.0.json"
+    },
+    {
+      "alpha": -3.0,
+      "reynolds": 1000000.0,
+      "cl": -0.3675,
+      "cd": 0.00602,
+      "x_tr_upper": 0.8716,
+      "x_tr_lower": 0.3238,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_-003.0.json"
+    },
+    {
+      "alpha": -2.0,
+      "reynolds": 1000000.0,
+      "cl": -0.2459,
+      "cd": 0.0058,
+      "x_tr_upper": 0.8049,
+      "x_tr_lower": 0.4384,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_-002.0.json"
+    },
+    {
+      "alpha": -1.0,
+      "reynolds": 1000000.0,
+      "cl": -0.1543,
+      "cd": 0.00497,
+      "x_tr_upper": 0.7213,
+      "x_tr_lower": 0.5378,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_-001.0.json"
+    },
+    {
+      "alpha": 0.0,
+      "reynolds": 1000000.0,
+      "cl": -0.0475,
+      "cd": 0.00462,
+      "x_tr_upper": 0.6378,
+      "x_tr_lower": 0.6378,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_+000.0.json"
+    },
+    {
+      "alpha": 1.0,
+      "reynolds": 1000000.0,
+      "cl": 0.058,
+      "cd": 0.00422,
+      "x_tr_upper": 0.5378,
+      "x_tr_lower": 0.7213,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_+001.0.json"
+    },
+    {
+      "alpha": 2.0,
+      "reynolds": 1000000.0,
+      "cl": 0.1557,
+      "cd": 0.00457,
+      "x_tr_upper": 0.4384,
+      "x_tr_lower": 0.8049,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_+002.0.json"
+    },
+    {
+      "alpha": 3.0,
+      "reynolds": 1000000.0,
+      "cl": 0.267,
+      "cd": 0.00525,
+      "x_tr_upper": 0.3238,
+      "x_tr_lower": 0.8716,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_+003.0.json"
+    },
+    {
+      "alpha": 4.0,
+      "reynolds": 1000000.0,
+      "cl": 0.396,
+      "cd": 0.00575,
+      "x_tr_upper": 0.2122,
+      "x_tr_lower": 0.9211,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_+004.0.json"
+    },
+    {
+      "alpha": 5.0,
+      "reynolds": 1000000.0,
+      "cl": 0.5627,
+      "cd": 0.00676,
+      "x_tr_upper": 0.1088,
+      "x_tr_lower": 0.9673,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_+005.0.json"
+    },
+    {
+      "alpha": 6.0,
+      "reynolds": 1000000.0,
+      "cl": 0.6292,
+      "cd": 0.00805,
+      "x_tr_upper": 0.0535,
+      "x_tr_lower": 0.9917,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_+006.0.json"
+    },
+    {
+      "alpha": 7.0,
+      "reynolds": 1000000.0,
+      "cl": 0.8707,
+      "cd": 0.00979,
+      "x_tr_upper": 0.0391,
+      "x_tr_lower": 0.9917,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_+007.0.json"
+    },
+    {
+      "alpha": 8.0,
+      "reynolds": 1000000.0,
+      "cl": 1.003,
+      "cd": 0.01038,
+      "x_tr_upper": 0.0333,
+      "x_tr_lower": 0.9917,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_+008.0.json"
+    },
+    {
+      "alpha": 9.0,
+      "reynolds": 1000000.0,
+      "cl": 1.1516,
+      "cd": 0.01259,
+      "x_tr_upper": 0.0239,
+      "x_tr_lower": 0.9917,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_+009.0.json"
+    },
+    {
+      "alpha": 10.0,
+      "reynolds": 1000000.0,
+      "cl": 1.2772,
+      "cd": 0.01195,
+      "x_tr_upper": 0.0239,
+      "x_tr_lower": 0.9917,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_+010.0.json"
+    },
+    {
+      "alpha": 11.0,
+      "reynolds": 1000000.0,
+      "cl": 1.002,
+      "cd": 0.87911,
+      "x_tr_upper": 0.02,
+      "x_tr_lower": 0.9917,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_+011.0.json"
+    },
+    {
+      "alpha": 12.0,
+      "reynolds": 1000000.0,
+      "cl": 1.3088,
+      "cd": 0.01925,
+      "x_tr_upper": 0.0167,
+      "x_tr_lower": 0.9917,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_+012.0.json"
+    },
+    {
+      "alpha": 13.0,
+      "reynolds": 1000000.0,
+      "cl": 1.7187,
+      "cd": 0.02178,
+      "x_tr_upper": 0.0167,
+      "x_tr_lower": 0.9917,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_+013.0.json"
+    },
+    {
+      "alpha": 14.0,
+      "reynolds": 1000000.0,
+      "cl": 1.893,
+      "cd": 0.02324,
+      "x_tr_upper": 0.0137,
+      "x_tr_lower": 0.9917,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_+014.0.json"
+    },
+    {
+      "alpha": 15.0,
+      "reynolds": 1000000.0,
+      "cl": 1.9035,
+      "cd": 0.02141,
+      "x_tr_upper": 0.0137,
+      "x_tr_lower": 0.9917,
+      "converged": true,
+      "output_file": "/Users/harry/flexfoil-boundary-layer/traces/rustfoil/naca0012/re1e06/alpha_+015.0.json"
+    }
+  ]
+}

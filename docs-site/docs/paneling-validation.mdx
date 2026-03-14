@@ -1,0 +1,166 @@
+---
+sidebar_position: 5
+title: Paneling Validation
+description: Comparison of XFOIL and RustFoil curvature-based paneling (PANGEN)
+---
+
+# Paneling Validation: XFOIL vs RustFoil
+
+This document compares the paneling algorithms between XFOIL's `PANGEN` subroutine and RustFoil's `resample_xfoil()` implementation.
+
+## Algorithm Overview
+
+Both implementations use **curvature-based panel distribution** with identical parameters:
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `CVPAR` | 1.0 | Curvature attraction (CC = 6 × CVPAR) |
+| `CTERAT` | 0.15 | TE/LE panel density ratio |
+| `RDSTE` | 0.667 | TE panel spacing ratio (RTF = 0.334) |
+| `IPFAC` | 5 | Newton refinement factor |
+
+### PANGEN Algorithm Steps
+
+1. Compute arc-length parameterization of buffer airfoil
+2. Calculate curvature at each buffer point: κ(s) = |d²r/ds²|
+3. **Find leading edge via Newton iteration** (tangent ⊥ to chord)
+4. Average curvature over 7 points near LE → κ_avg
+5. Set artificial TE curvature: κ_TE = κ_avg × CTERAT
+6. Smooth curvature with tridiagonal diffusion
+7. Normalize by max curvature
+8. Newton iteration: (1 + CC×κ)×ds = const across panels
+9. Apply TE ratio constraint
+10. Subsample to get final N nodes
+
+## Validation Results
+
+### Symmetric Airfoils (NACA 0012)
+
+**Perfect match achieved:**
+
+| Metric | Value |
+|--------|-------|
+| RMS Position Error | 4.05e-7 |
+| Max Position Error | 5.92e-7 |
+| LE Index Match | ✓ (idx=79) |
+
+```
+First 5 points comparison:
+idx       xfoil_x      xfoil_y    rustfoil_x   rustfoil_y       error
+  0    1.00000000   0.00126000    1.00000000   0.00126000      0.00e0
+  1    0.99167960   0.00242145    0.99167973   0.00242143     1.36e-7
+  2    0.98036920   0.00398137    0.98036941   0.00398134     2.14e-7
+```
+
+### Cambered Airfoils
+
+**LE detection mismatch identified:**
+
+| Foil | XFOIL LE | RustFoil LE | LE Diff | RMS Error |
+|------|----------|-------------|---------|-----------|
+| NACA 0012 | idx 79 | idx 79 | 0 | 4.05e-7 ✓ |
+| NACA 2412 | idx 81 | idx 83 | +2 | 7.29e-3 |
+| NACA 4412 | idx 82 | idx 85 | +3 | 1.13e-2 |
+
+## Root Cause Analysis
+
+The discrepancy for cambered airfoils originates in the **leading edge detection** (`lefind` function).
+
+### XFOIL's LEFIND Algorithm
+
+From `xgeom.f`:
+
+```fortran
+C---- Find leading edge location (SBLE) using Newton iteration
+C     to find where tangent is perpendicular to chord line
+      XCHORD = X(N) - X(1)
+      YCHORD = Y(N) - Y(1)
+      
+C---- Newton iteration
+      DO 10 I=1, 50
+        XPRIME = DEVAL(SBLE,X,XP,S,N)
+        YPRIME = DEVAL(SBLE,Y,YP,S,N)
+        
+C------ Dot product of tangent with chord should be zero at LE
+        RES = XCHORD*XPRIME + YCHORD*YPRIME
+        DSLE = -RES / (XCHORD*X2 + YCHORD*Y2)
+        SBLE = SBLE + DSLE
+        
+        IF(ABS(DSLE) .LT. 1.0E-6) GO TO 11
+   10 CONTINUE
+```
+
+The key is finding where:
+$$\vec{t}(s_{LE}) \cdot \vec{chord} = 0$$
+
+where $\vec{t}$ is the tangent vector and $\vec{chord}$ connects TE upper to TE lower.
+
+### Issue in RustFoil
+
+RustFoil's `lefind` implementation may have subtle differences in:
+1. Initial guess for Newton iteration
+2. Convergence tolerance
+3. Spline derivative evaluation
+
+## Interactive Comparison
+
+An interactive comparison plot is available at:
+```
+scripts/paneling_comparison_actual.html
+```
+
+Run the comparison script:
+```bash
+python3 scripts/interactive_paneling_comparison.py
+```
+
+## Files
+
+- `scripts/compare_paneling.py` - Paneling methodology comparison
+- `scripts/interactive_paneling_comparison.py` - Interactive Plotly visualization
+- `crates/rustfoil-core/examples/dump_paneling.rs` - Dump actual coordinates
+- `naca*_buffer_xfoil.dat` - XFOIL buffer coordinates (245 points)
+- `naca*_paneled_xfoil.dat` - XFOIL paneled output (160 points)
+- `naca*_rustfoil_paneled.dat` - RustFoil paneled output (160 points)
+
+## Fix Applied
+
+The original RustFoil implementation had **incorrect symmetry enforcement** in the final node positions (lines 484-492 of `spline.rs`). This worked for symmetric airfoils but caused LE drift for cambered airfoils.
+
+**Fix**: Removed the symmetry enforcement, matching XFOIL's behavior which relies purely on curvature-based distribution without post-processing symmetry.
+
+## Final Results (All Fixed!)
+
+| Foil | XFOIL LE | RustFoil LE | RMS Error | Status |
+|------|----------|-------------|-----------|--------|
+| NACA 0012 | idx 79 | idx 79 | 4.05e-7 | ✓ Perfect |
+| NACA 2412 | idx 81 | idx 81 | 3.97e-7 | ✓ Perfect |
+| NACA 4412 | idx 82 | idx 82 | 4.42e-7 | ✓ Perfect |
+
+**All three airfoils now match XFOIL to numerical precision (~4e-7)!**
+
+## Root Cause & Fix
+
+The bug was **forced curvature symmetry** in `resample_xfoil()`:
+
+```rust
+// THIS WAS THE BUG (lines 241-247)
+for i in 0..n_buffer / 2 {
+    let avg = (curv_buffer[i] + curv_buffer[j]) / 2.0;
+    curv_buffer[i] = avg;  // WRONG for cambered airfoils!
+}
+```
+
+**Why it mattered:** For cambered airfoils, the curvature is naturally asymmetric:
+- NACA 2412: 26% higher curvature on lower surface near LE
+- NACA 4412: 59% higher curvature on lower surface near LE
+
+By forcing symmetry, we were averaging out this natural asymmetry, which caused the Newton iteration to place panels incorrectly.
+
+**XFOIL does NOT force curvature symmetry** - it uses the natural asymmetric curvature for cambered airfoils.
+
+## Conclusion
+
+1. **All airfoils now match**: ~4e-7 RMS error (numerical precision)
+2. **Root cause**: Incorrect forced curvature symmetry
+3. **Fix**: Removed two forced symmetry operations in `spline.rs`

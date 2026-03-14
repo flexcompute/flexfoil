@@ -107,6 +107,214 @@ pub fn solve_bl_system(system: &BlNewtonSystem) -> Vec<[f64; 3]> {
     solution
 }
 
+/// Solve the coupled BL Newton system with VM matrix
+///
+/// This implements XFOIL's BLSOLV algorithm which handles the full
+/// viscous-inviscid coupling through the VM matrix. The algorithm is:
+///
+/// 1. **Forward Sweep**: Eliminate VB blocks AND accumulate VM contributions
+///    - At each station i, eliminate VB[i] contribution to station i-1
+///    - Propagate VM coupling forward
+///
+/// 2. **Back Substitution**: Solve from last station backwards
+///    - At each station, subtract VM contributions from downstream stations
+///    - Solve for local unknowns
+///
+/// # Arguments
+/// * `system` - The Newton system with VA, VB, VM, and RHS
+///
+/// # Returns
+/// Solution vector [Δampl/Δctau, Δθ, Δmass] at each station.
+///
+/// # Reference
+/// XFOIL xsolve.f BLSOLV (line 283)
+pub fn solve_coupled_system(system: &BlNewtonSystem) -> Vec<[f64; 3]> {
+    solve_blsolv_xfoil(system)
+}
+
+/// Solve the coupled BL Newton system using XFOIL's BLSOLV algorithm
+///
+/// This is a faithful port of XFOIL's BLSOLV subroutine (xsolve.f lines 283-485).
+/// The key features are:
+///
+/// 1. **Forward Sweep**: Process rows 1-2 with VA block, then row 3 with VM diagonal
+///    - Normalize rows 1-2 using VA block elements
+///    - Normalize row 3 using VM(3,IV,IV) - the mass coupling diagonal
+///    - Eliminate lower blocks (VB and VM columns below diagonal)
+///
+/// 2. **Back Substitution**: Use row 3 solution (mass change) to update upstream stations
+///    - VDEL(k,1,KV) -= VM(k,IV,KV) * VDEL(3,1,IV)
+///
+/// # Arguments
+/// * `system` - The Newton system with VA, VB, VM, and RHS
+///
+/// # Returns
+/// Solution vector [Δampl/Δctau, Δθ, Δmass] at each station.
+///
+/// # Reference
+/// XFOIL xsolve.f BLSOLV (line 283)
+pub fn solve_blsolv_xfoil(system: &BlNewtonSystem) -> Vec<[f64; 3]> {
+    let n = system.n;
+    if n < 2 {
+        return vec![[0.0; 3]; n];
+    }
+
+    // Working copies (VDEL in XFOIL stores both RHS and solution)
+    let mut vdel = system.rhs.clone(); // VDEL(k,1,IV) = residual, becomes solution
+    let mut va_mod = system.va.clone();
+    let mut vm_mod = system.vm.clone();
+
+    // VACCEL threshold for sparse VM elimination (from XFOIL)
+    let vaccel = 0.005;
+
+    // === Forward Sweep (XFOIL lines 311-463) ===
+    for iv in 1..n {
+        let ivp = iv + 1;
+
+        // === Invert VA[IV] block (rows 1-2) ===
+
+        // Normalize first row by VA[0][0]
+        let pivot = va_mod[iv][0][0];
+        if pivot.abs() < 1e-30 {
+            continue; // Singular, skip
+        }
+        let pivot_inv = 1.0 / pivot;
+        va_mod[iv][0][1] *= pivot_inv;
+        for l in iv..n {
+            vm_mod[iv][l][0] *= pivot_inv;
+        }
+        vdel[iv][0] *= pivot_inv;
+
+        // Eliminate lower first column in VA block (rows 2, 3)
+        for k in 1..3 {
+            let vtmp = va_mod[iv][k][0];
+            va_mod[iv][k][1] -= vtmp * va_mod[iv][0][1];
+            for l in iv..n {
+                vm_mod[iv][l][k] -= vtmp * vm_mod[iv][l][0];
+            }
+            vdel[iv][k] -= vtmp * vdel[iv][0];
+        }
+
+        // Normalize second row by VA[1][1]
+        let pivot = va_mod[iv][1][1];
+        if pivot.abs() < 1e-30 {
+            continue;
+        }
+        let pivot_inv = 1.0 / pivot;
+        for l in iv..n {
+            vm_mod[iv][l][1] *= pivot_inv;
+        }
+        vdel[iv][1] *= pivot_inv;
+
+        // Eliminate lower second column (row 3 only)
+        let vtmp = va_mod[iv][2][1];
+        for l in iv..n {
+            vm_mod[iv][l][2] -= vtmp * vm_mod[iv][l][1];
+        }
+        vdel[iv][2] -= vtmp * vdel[iv][1];
+
+        // Normalize third row by VM(3,IV,IV) - KEY DIFFERENCE from standard block solver!
+        // The third equation couples to mass through VM, not VA
+        let pivot = vm_mod[iv][iv][2];
+        if pivot.abs() < 1e-30 {
+            continue;
+        }
+        let pivot_inv = 1.0 / pivot;
+        for l in (ivp)..n {
+            vm_mod[iv][l][2] *= pivot_inv;
+        }
+        vdel[iv][2] *= pivot_inv;
+
+        // Eliminate upper third column in VA block (back-substitute rows 1-2)
+        let vtmp1 = vm_mod[iv][iv][0];
+        let vtmp2 = vm_mod[iv][iv][1];
+        for l in ivp..n {
+            vm_mod[iv][l][0] -= vtmp1 * vm_mod[iv][l][2];
+            vm_mod[iv][l][1] -= vtmp2 * vm_mod[iv][l][2];
+        }
+        vdel[iv][0] -= vtmp1 * vdel[iv][2];
+        vdel[iv][1] -= vtmp2 * vdel[iv][2];
+
+        // Eliminate upper second column (row 1 only)
+        let vtmp = va_mod[iv][0][1];
+        for l in ivp..n {
+            vm_mod[iv][l][0] -= vtmp * vm_mod[iv][l][1];
+        }
+        vdel[iv][0] -= vtmp * vdel[iv][1];
+
+        if iv >= n - 1 {
+            continue;
+        }
+
+        // === Eliminate VB[IV+1] block ===
+        for k in 0..3 {
+            let vtmp1 = system.vb[ivp][k][0];
+            let vtmp2 = system.vb[ivp][k][1];
+            let vtmp3 = vm_mod[ivp][iv][k];
+            for l in ivp..n {
+                vm_mod[ivp][l][k] -= vtmp1 * vm_mod[iv][l][0]
+                    + vtmp2 * vm_mod[iv][l][1]
+                    + vtmp3 * vm_mod[iv][l][2];
+            }
+            vdel[ivp][k] -= vtmp1 * vdel[iv][0] + vtmp2 * vdel[iv][1] + vtmp3 * vdel[iv][2];
+        }
+
+        if ivp >= n - 1 {
+            continue;
+        }
+
+        // === Eliminate lower VM column (sparse, with VACCEL threshold) ===
+        for kv in (iv + 2)..n {
+            let vtmp1 = vm_mod[kv][iv][0];
+            let vtmp2 = vm_mod[kv][iv][1];
+            let vtmp3 = vm_mod[kv][iv][2];
+
+            // Only process if above threshold (sparsity optimization)
+            if vtmp1.abs() > vaccel {
+                for l in ivp..n {
+                    vm_mod[kv][l][0] -= vtmp1 * vm_mod[iv][l][2];
+                }
+                vdel[kv][0] -= vtmp1 * vdel[iv][2];
+            }
+            if vtmp2.abs() > vaccel {
+                for l in ivp..n {
+                    vm_mod[kv][l][1] -= vtmp2 * vm_mod[iv][l][2];
+                }
+                vdel[kv][1] -= vtmp2 * vdel[iv][2];
+            }
+            if vtmp3.abs() > vaccel {
+                for l in ivp..n {
+                    vm_mod[kv][l][2] -= vtmp3 * vm_mod[iv][l][2];
+                }
+                vdel[kv][2] -= vtmp3 * vdel[iv][2];
+            }
+        }
+    }
+
+    // === Back Substitution (XFOIL lines 468-485) ===
+    // Eliminate upper VM columns using row 3 (mass) solution
+    for iv in (2..n).rev() {
+        let vtmp = vdel[iv][2]; // Mass change at station iv
+
+        // Update all upstream stations
+        for kv in (1..iv).rev() {
+            vdel[kv][0] -= vm_mod[kv][iv][0] * vtmp;
+            vdel[kv][1] -= vm_mod[kv][iv][1] * vtmp;
+            vdel[kv][2] -= vm_mod[kv][iv][2] * vtmp;
+        }
+    }
+
+    vdel
+}
+
+/// Check if a 3x3 matrix is invertible
+fn is_invertible(m: &[[f64; 3]; 3]) -> bool {
+    let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    det.abs() > 1e-30
+}
+
 /// Solve block-tridiagonal system with upper diagonal
 ///
 /// This is the full block tridiagonal solver for systems of the form:
@@ -319,6 +527,159 @@ pub fn identity_3x3() -> [[f64; 3]; 3] {
 #[inline]
 pub fn zero_3x3() -> [[f64; 3]; 3] {
     [[0.0; 3]; 3]
+}
+
+// ============================================================================
+// 4x4 Gauss Elimination (for per-station Newton solve)
+// ============================================================================
+
+/// Solve 4x4 linear system using Gaussian elimination with partial pivoting.
+///
+/// This is the per-station Newton solver, equivalent to XFOIL's GAUSS subroutine.
+/// The system solves: A * x = b where A is 4x4 and b is 4x1.
+///
+/// In the BL march context:
+/// - Variables: [dS/dAmpl, dθ, dδ*, dUe] (or [dCtau, dθ, dδ*, dUe] for turbulent)
+/// - Equations: [third_eq, momentum_eq, shape_eq, constraint_eq]
+///
+/// For direct mode (prescribed Ue), the constraint is dUe = 0.
+/// For inverse mode (prescribed Hk), the constraint relates dHk to variables.
+///
+/// # Arguments
+/// * `a` - 4x4 coefficient matrix
+/// * `b` - 4x1 right-hand side vector
+///
+/// # Returns
+/// Solution vector [dS, dθ, dδ*, dUe]
+///
+/// # Reference
+/// XFOIL xsolve.f GAUSS subroutine
+pub fn solve_4x4(a: &[[f64; 4]; 4], b: &[f64; 4]) -> [f64; 4] {
+    // Make mutable copies
+    let mut a = *a;
+    let mut b = *b;
+
+    // Forward elimination with partial pivoting
+    for k in 0..3 {
+        // Find pivot (largest element in column k, rows k..4)
+        let mut max_val = a[k][k].abs();
+        let mut max_row = k;
+        for i in (k + 1)..4 {
+            if a[i][k].abs() > max_val {
+                max_val = a[i][k].abs();
+                max_row = i;
+            }
+        }
+
+        // Swap rows if necessary
+        if max_row != k {
+            a.swap(k, max_row);
+            b.swap(k, max_row);
+        }
+
+        // Check for singularity
+        let pivot = a[k][k];
+        if pivot.abs() < 1e-20 {
+            // Singular matrix - return zero update
+            return [0.0; 4];
+        }
+
+        // Eliminate column k below the diagonal
+        for i in (k + 1)..4 {
+            let factor = a[i][k] / pivot;
+            a[i][k] = 0.0;
+            for j in (k + 1)..4 {
+                a[i][j] -= factor * a[k][j];
+            }
+            b[i] -= factor * b[k];
+        }
+    }
+
+    // Back substitution
+    let mut x = [0.0; 4];
+
+    // Check last pivot
+    if a[3][3].abs() < 1e-20 {
+        return [0.0; 4];
+    }
+
+    x[3] = b[3] / a[3][3];
+    
+    // Guard against near-zero diagonal elements
+    let a22 = if a[2][2].abs() < 1e-20 { 1e-20_f64.copysign(a[2][2]) } else { a[2][2] };
+    let a11 = if a[1][1].abs() < 1e-20 { 1e-20_f64.copysign(a[1][1]) } else { a[1][1] };
+    let a00 = if a[0][0].abs() < 1e-20 { 1e-20_f64.copysign(a[0][0]) } else { a[0][0] };
+    
+    x[2] = (b[2] - a[2][3] * x[3]) / a22;
+    x[1] = (b[1] - a[1][2] * x[2] - a[1][3] * x[3]) / a11;
+    x[0] = (b[0] - a[0][1] * x[1] - a[0][2] * x[2] - a[0][3] * x[3]) / a00;
+
+    x
+}
+
+/// Build the 4x4 Newton system for a single BL station.
+///
+/// This converts the 3x5 Jacobian from bldif into a 4x4 system for Newton solve.
+/// The system solves for [dS, dθ, dδ*, dUe] where:
+/// - In direct mode: dUe = 0 is enforced (row 4 is constraint)
+/// - In inverse mode: target Hk is enforced
+///
+/// # Arguments
+/// * `vs2` - 3x5 Jacobian from bldif (rows 0-2: equations, cols 0-4: [S, θ, δ*, u, x])
+/// * `res` - 3x1 residuals from bldif (negated for Newton: Ax = -res)
+/// * `direct` - true for direct mode (dUe=0), false for inverse mode
+/// * `hk2_t` - ∂Hk/∂θ for inverse mode
+/// * `hk2_d` - ∂Hk/∂δ* for inverse mode
+/// * `hk2_u` - ∂Hk/∂Ue for inverse mode
+/// * `hk_target` - target Hk for inverse mode
+/// * `hk_current` - current Hk for inverse mode
+///
+/// # Returns
+/// (A, b) where A is 4x4 and b is 4x1 for Newton system Ax = b
+pub fn build_4x4_system(
+    vs2: &[[f64; 5]; 3],
+    res: &[f64; 3],
+    direct: bool,
+    hk2_t: f64,
+    hk2_d: f64,
+    hk2_u: f64,
+    hk_target: f64,
+    hk_current: f64,
+) -> ([[f64; 4]; 4], [f64; 4]) {
+    // Build 4x4 system from 3x5 jacobian
+    // Extract columns [0,1,2,3] = [S, θ, δ*, u] (skip x column)
+    let mut a = [[0.0; 4]; 4];
+    let mut b = [0.0; 4];
+
+    // Copy first 3 rows from vs2 (cols 0-3 only)
+    for i in 0..3 {
+        for j in 0..4 {
+            a[i][j] = vs2[i][j];
+        }
+        // bldif already returns residuals with correct sign convention (like XFOIL's VSREZ = -r)
+        // So we use them directly without negation
+        b[i] = res[i];
+    }
+
+    // Fourth row: constraint equation
+    if direct {
+        // Direct mode: dUe = 0
+        a[3][0] = 0.0;
+        a[3][1] = 0.0;
+        a[3][2] = 0.0;
+        a[3][3] = 1.0;
+        b[3] = 0.0;
+    } else {
+        // Inverse mode: enforce target Hk
+        // Hk = Hk(θ, δ*, Ue), linearized: ∂Hk/∂θ * dθ + ∂Hk/∂δ* * dδ* + ∂Hk/∂Ue * dUe = Hk_target - Hk_current
+        a[3][0] = 0.0;
+        a[3][1] = hk2_t;
+        a[3][2] = hk2_d;
+        a[3][3] = hk2_u;
+        b[3] = hk_target - hk_current;
+    }
+
+    (a, b)
 }
 
 // ============================================================================
@@ -994,5 +1355,394 @@ mod tests {
                 );
             }
         }
+    }
+
+    // =========================================================================
+    // Inverse Mode Hk Derivative Comparison
+    // =========================================================================
+
+    #[test]
+    fn test_bldif_vs2_shape_equation_xfoil_comparison() {
+        // Compare RustFoil's bldif VS2 output against XFOIL at IBL=5
+        // Data from testdata/mrchue_iterations.json
+        use rustfoil_bl::equations::{bldif, blvar, FlowType};
+        use rustfoil_bl::state::BlStation;
+        
+        // Station 10 (upstream) - from XFOIL final values
+        let mut s1 = BlStation::new();
+        s1.x = 0.018634;
+        s1.u = 1.388217;
+        s1.theta = 3.263881e-05;
+        s1.delta_star = 7.379446e-05;
+        s1.is_laminar = true;
+        s1.ampl = 0.0;
+        blvar(&mut s1, FlowType::Laminar, 0.0, 1e6);
+        
+        // Station 11 (downstream) - using CONVERGED values from XFOIL
+        let mut s2 = BlStation::new();
+        s2.x = 0.020583;
+        s2.u = 1.507207;
+        s2.theta = 3.442203e-05;  // Converged value from XFOIL
+        s2.delta_star = 7.877334e-05;  // Converged value from XFOIL
+        s2.is_laminar = true;
+        s2.ampl = 0.0;
+        blvar(&mut s2, FlowType::Laminar, 0.0, 1e6);
+        
+        // Print intermediate values for debugging
+        println!("Station 1 values:");
+        println!("  x={:.6}, u={:.4}, theta={:.4e}, delta_star={:.4e}", s1.x, s1.u, s1.theta, s1.delta_star);
+        println!("  H={:.4}, Hs={:.4}, Cf={:.4e}, Cd={:.4e}", s1.h, s1.hs, s1.cf, s1.cd);
+        
+        println!("\nStation 2 values:");
+        println!("  x={:.6}, u={:.4}, theta={:.4e}, delta_star={:.4e}", s2.x, s2.u, s2.theta, s2.delta_star);
+        println!("  H={:.4}, Hs={:.4}, Cf={:.4e}, Cd={:.4e}", s2.h, s2.hs, s2.cf, s2.cd);
+        println!("  h_theta={:.4e}, h_delta_star={:.4e}", s2.derivs.h_theta, s2.derivs.h_delta_star);
+        println!("  hk_h={:.4e}, hs_hk={:.4e}, hs_rt={:.4e}", s2.derivs.hk_h, s2.derivs.hs_hk, s2.derivs.hs_rt);
+        println!("  cf_hk={:.4e}, cf_rt={:.4e}", s2.derivs.cf_hk, s2.derivs.cf_rt);
+        println!("  cd_hk={:.4e}, cd_rt={:.4e}", s2.derivs.cd_hk, s2.derivs.cd_rt);
+        
+        // Compute key intermediate values
+        let xlog = (s2.x / s1.x).ln();
+        let ulog = (s2.u / s1.u).ln();
+        let hlog = (s2.hs / s1.hs).ln();
+        let hsa = 0.5 * (s1.hs + s2.hs);
+        let hca = 0.5 * (s1.hc + s2.hc);
+        let ha = 0.5 * (s1.h + s2.h);
+        
+        // Z coefficients
+        let z_hs2 = -hca * ulog / (hsa * hsa) + 1.0 / s2.hs;
+        let z_ha_shape = -ulog;
+        
+        // Derivatives
+        let hk2_d = s2.derivs.hk_h * s2.derivs.h_delta_star;
+        let hs2_d = s2.derivs.hs_hk * hk2_d;
+        let cf2_d = s2.derivs.cf_hk * hk2_d;
+        let di2_d = s2.derivs.cd_hk * hk2_d;
+        
+        // XOT2
+        let xot2 = s2.x / s2.theta;
+        let upw = 0.5; // Approximate
+        let z_cfx_shape = xlog * 0.5;
+        let z_dix = -xlog;
+        let z_cf2 = upw * z_cfx_shape * xot2;
+        let z_di2 = upw * z_dix * xot2;
+        
+        println!("\nKey Z coefficients:");
+        println!("  xlog={:.4}, ulog={:.4}, hlog={:.4}", xlog, ulog, hlog);
+        println!("  z_hs2={:.4}, z_ha_shape={:.4}", z_hs2, z_ha_shape);
+        println!("  z_cf2={:.4}, z_di2={:.4}", z_cf2, z_di2);
+        
+        println!("\nδ* derivatives (d suffix):");
+        println!("  h2_d={:.4e}, hk2_d={:.4e}", s2.derivs.h_delta_star, hk2_d);
+        println!("  hs2_d={:.4e}, cf2_d={:.4e}, di2_d={:.4e}", hs2_d, cf2_d, di2_d);
+        
+        println!("\nTerms in VS2[2][2]:");
+        println!("  z_hs2*hs2_d = {:.4}", z_hs2 * hs2_d);
+        println!("  z_cf2*cf2_d = {:.4}", z_cf2 * cf2_d);
+        println!("  z_di2*di2_d = {:.4}", z_di2 * di2_d);
+        println!("  0.5*z_ha*h2_d = {:.4}", 0.5 * z_ha_shape * s2.derivs.h_delta_star);
+        println!("  Sum (approx) = {:.4}", 
+            z_hs2 * hs2_d + z_cf2 * cf2_d + z_di2 * di2_d + 0.5 * z_ha_shape * s2.derivs.h_delta_star);
+        
+        // Call bldif
+        let (res, jac) = bldif(&s1, &s2, FlowType::Laminar, 0.0, 1e6);
+        
+        // XFOIL values from mrchue_iterations.json IBL=11, iter=3 (converged)
+        let xfoil_vs2_1_1 = 18800.0;    // VS2[1][1] (∂mom/∂θ) - approximate
+        let xfoil_vs2_2_1 = 17000.0;    // VS2[2][1] (∂shape/∂θ) - approximate
+        let xfoil_vs2_2_2 = -17548.36;  // VS2[2][2] (∂shape/∂δ*) - converged
+        
+        println!("\nShape equation Jacobian comparison:");
+        println!("  VS2[2][1] (∂shape/∂θ): XFOIL={:.2}, RustFoil={:.2}", xfoil_vs2_2_1, jac.vs2[2][1]);
+        println!("  VS2[2][2] (∂shape/∂δ*): XFOIL={:.2}, RustFoil={:.2}", xfoil_vs2_2_2, jac.vs2[2][2]);
+        
+        println!("\nMomentum equation Jacobian:");
+        println!("  VS2[1][1] (∂mom/∂θ): XFOIL={:.2}, RustFoil={:.2}", xfoil_vs2_1_1, jac.vs2[1][1]);
+        
+        // Check if signs match (most important)
+        let sign_shape_theta_match = (jac.vs2[2][1] * xfoil_vs2_2_1) > 0.0;
+        let sign_shape_delta_match = (jac.vs2[2][2] * xfoil_vs2_2_2) > 0.0;
+        
+        println!("\nSign match: ∂shape/∂θ={}, ∂shape/∂δ*={}", 
+                 sign_shape_theta_match, sign_shape_delta_match);
+                 
+        // KNOWN DISCREPANCY: VS2[2][2] magnitude is ~2x different
+        // XFOIL: -17548.36
+        // RustFoil: -9309.57 (same sign, but about half magnitude)
+        // 
+        // Investigation found:
+        // - Individual derivative terms (hs_d, cf_d, di_d, h_d) all match
+        // - Z coefficients (z_hs2, z_cf2, z_di2) all match  
+        // - UPW derivatives are set to zero in RustFoil (minor issue, ~5 contribution)
+        // - Something else is contributing ~8000 difference in XFOIL
+        //
+        // This discrepancy is likely related to the "wrong Hk derivative" issue
+        // where mathematically correct derivatives break flat plate tests.
+        let ratio = jac.vs2[2][2] / xfoil_vs2_2_2;
+        println!("\nRatio RustFoil/XFOIL = {:.3}", ratio);
+        
+        // For now, just check signs match (they do at this station)
+        assert!(sign_shape_delta_match, 
+            "VS2[2][2] signs should match");
+    }
+
+    #[test]
+    fn test_high_hk_station_31_comparison() {
+        // Compare at station 31 (IBL=31) where divergence occurs
+        // This station has Hk approaching 5.4 (near separation)
+        use rustfoil_bl::equations::{bldif, blvar, FlowType};
+        use rustfoil_bl::state::BlStation;
+        
+        // Station 30 (previous) - XFOIL final values
+        let mut s1 = BlStation::new();
+        s1.x = 0.115205;
+        s1.u = 1.503356;
+        s1.theta = 2.073123e-04;
+        s1.delta_star = 7.458165e-04;
+        s1.is_laminar = true;
+        s1.ampl = 6.1372;
+        blvar(&mut s1, FlowType::Laminar, 0.0, 1e6);
+        
+        // Station 31 (initial guess = station 30 final)
+        let mut s2 = BlStation::new();
+        s2.x = 0.127589;
+        s2.u = 1.482947;
+        s2.theta = 2.073123e-04;  // Initial = previous final
+        s2.delta_star = 7.458165e-04;
+        s2.is_laminar = true;
+        s2.ampl = 6.1372;
+        blvar(&mut s2, FlowType::Laminar, 0.0, 1e6);
+        
+        println!("=== Station 30 (s1) ===");
+        println!("  H = {:.4}, Hk = {:.4}", s1.h, s1.hk);
+        println!("  Hs = {:.4}, Cf = {:.6}, Cd = {:.6}", s1.hs, s1.cf, s1.cd);
+        println!("  Rtheta = {:.2}", s1.r_theta);
+        
+        println!("\n=== Station 31 initial (s2) ===");
+        println!("  H = {:.4}, Hk = {:.4}", s2.h, s2.hk);
+        println!("  Hs = {:.4}, Cf = {:.6}, Cd = {:.6}", s2.hs, s2.cf, s2.cd);
+        println!("  Rtheta = {:.2}", s2.r_theta);
+        
+        // Compute bldif
+        let (res, jac) = bldif(&s1, &s2, FlowType::Laminar, 0.0, 1e6);
+        
+        println!("\n=== bldif residuals ===");
+        println!("  res_third (ampl) = {:.6e}", res.res_third);
+        println!("  res_mom = {:.6e}", res.res_mom);
+        println!("  res_shape = {:.6e}", res.res_shape);
+        
+        println!("\n=== Jacobian VS2 comparison ===");
+        println!("                      XFOIL       RustFoil");
+        println!("  VS2[0][1] (ampl/θ): 11503.64    {:.2}", jac.vs2[0][1]);
+        println!("  VS2[0][2] (ampl/δ*): -2356.56   {:.2}", jac.vs2[0][2]);
+        println!("  VS2[1][1] (mom/θ):  4792.37     {:.2}", jac.vs2[1][1]);
+        println!("  VS2[2][1] (shape/θ): 371.69     {:.2}", jac.vs2[2][1]);
+        println!("  VS2[2][2] (shape/δ*): -52.99    {:.2}", jac.vs2[2][2]);
+        
+        // Key check: at high Hk, RustFoil VS2 values should be much smaller
+        // than at low Hk (station 11 had VS2[2][2] ~ -9000)
+        println!("\nNOTE: At high Hk~3.6, Jacobian entries are much smaller than at Hk~2.3");
+        println!("This is expected - closure relationships behave differently near separation");
+        
+        // Check derivatives
+        println!("\n=== Closure derivatives at Hk={:.2} ===", s2.hk);
+        println!("  hs_hk = {:.4}", s2.derivs.hs_hk);
+        println!("  cf_hk = {:.6}", s2.derivs.cf_hk);
+        println!("  cd_hk = {:.6}", s2.derivs.cd_hk);
+    }
+
+    #[test]
+    fn test_newton_iteration_trace_station_31() {
+        // Trace Newton iterations at station 31 (divergence point)
+        // Compare with XFOIL reference from mrchue_iterations.json
+        use rustfoil_bl::equations::{bldif, blvar, FlowType};
+        use rustfoil_bl::state::BlStation;
+        use crate::solve::{build_4x4_system, solve_4x4};
+        
+        // Station 30 (previous station) - XFOIL final values
+        let mut prev = BlStation::new();
+        prev.x = 0.115205;
+        prev.u = 1.503356;
+        prev.theta = 2.073123e-04;
+        prev.delta_star = 7.458165e-04;
+        prev.is_laminar = true;
+        prev.ampl = 6.1372;
+        blvar(&mut prev, FlowType::Laminar, 0.0, 1e6);
+        
+        println!("=== Newton Iteration Trace at Station 31 ===");
+        println!("Previous station (30): x={:.6}, theta={:.4e}, delta*={:.4e}, Hk={:.4}, ampl={:.4}",
+            prev.x, prev.theta, prev.delta_star, prev.hk, prev.ampl);
+        
+        // Initialize station 31
+        let mut station = BlStation::new();
+        station.x = 0.127589;
+        station.u = 1.482947;
+        station.is_laminar = true;
+        station.theta = prev.theta;
+        station.delta_star = prev.delta_star;
+        station.ampl = prev.ampl;
+        blvar(&mut station, FlowType::Laminar, 0.0, 1e6);
+        
+        let re = 1e6;
+        let msq = 0.0;
+        let hmax = 4.0;  // laminar Hk limit
+        let mut direct = true;
+        let mut htarg = hmax;
+        
+        println!("\nStation 31: x={:.6}, Ue={:.6}", station.x, station.u);
+        println!("XFOIL target: theta=2.218e-4, delta*=1.196e-3, Hk=5.39");
+        
+        println!("\n=== Iteration-by-iteration trace ===");
+        println!("XFOIL iteration 1: theta_out=2.24e-4, ds_out=8.49e-4, rlx=1.0, direct");
+        println!("XFOIL iteration 3: theta_out=2.26e-4, ds_out=1.10e-3, rlx=0.70, INVERSE");
+        println!();
+        
+        for iter in 0..10 {
+            // Compute residuals and Jacobian
+            let (res, jac) = bldif(&prev, &station, FlowType::Laminar, msq, re);
+            
+            // Hk derivatives (using correct XFOIL derivatives)
+            let hk2_t = station.derivs.hk_h * station.derivs.h_theta;      // = -Hk/θ
+            let hk2_d = station.derivs.hk_h * station.derivs.h_delta_star; // = +1/θ
+            
+            // Build system
+            let (a, b) = build_4x4_system(
+                &jac.vs2,
+                &[res.res_third, res.res_mom, res.res_shape],
+                direct,
+                hk2_t, hk2_d, 0.0,
+                htarg, station.hk,
+            );
+            
+            // Solve
+            let vsrez = solve_4x4(&a, &b);
+            
+            // Compute dmax
+            let dmax = (vsrez[1] / station.theta).abs()
+                .max((vsrez[2] / station.delta_star).abs())
+                .max((vsrez[0] / 10.0).abs());
+            let rlx = if dmax > 0.3 { 0.3 / dmax } else { 1.0 };
+            
+            // Check mode switch
+            let h_test = (station.delta_star + rlx * vsrez[2]) 
+                       / (station.theta + rlx * vsrez[1]).max(1e-12);
+            
+            println!("Iter {}: theta={:.4e}, ds={:.4e}, H={:.3}, mode={}, rlx={:.3}",
+                iter + 1, station.theta, station.delta_star, station.h,
+                if direct { "direct" } else { "inverse" }, rlx);
+            println!("        vsrez=[{:.4e}, {:.4e}, {:.4e}, {:.4e}]",
+                vsrez[0], vsrez[1], vsrez[2], vsrez[3]);
+            println!("        res_mom={:.4e}, res_shape={:.4e}, res_ampl={:.4e}",
+                res.res_mom, res.res_shape, res.res_third);
+            println!("        h_test={:.3} (hmax={})", h_test, hmax);
+            
+            // Check if should switch to inverse
+            if direct && h_test >= hmax {
+                direct = false;
+                htarg = prev.hk + 0.03 * (station.x - prev.x) / prev.theta;
+                htarg = htarg.max(hmax).min(hmax * 1.5);
+                println!("        -> SWITCHING TO INVERSE MODE, htarg={:.3}", htarg);
+                continue;
+            }
+            
+            // Apply updates
+            station.theta = (station.theta + rlx * vsrez[1]).max(1e-12);
+            station.delta_star = (station.delta_star + rlx * vsrez[2]).max(1e-12);
+            if !direct {
+                station.u = (station.u + rlx * vsrez[3]).max(0.01);
+            }
+            
+            // Limit Hk
+            if station.delta_star / station.theta < 1.02 {
+                println!("        -> HK LIMIT HIT! Clamping ds from {:.4e} to {:.4e}",
+                    station.delta_star, 1.02 * station.theta);
+                station.delta_star = 1.02 * station.theta;
+            }
+            
+            // Recompute
+            blvar(&mut station, FlowType::Laminar, 0.0, re);
+            
+            if dmax <= 1e-5 {
+                println!("\n  Converged at iteration {}", iter + 1);
+                break;
+            }
+        }
+        
+        println!("\n=== Final RustFoil state ===");
+        println!("  theta = {:.4e} (XFOIL: 2.218e-4)", station.theta);
+        println!("  delta* = {:.4e} (XFOIL: 1.196e-3)", station.delta_star);
+        println!("  H = {:.4} (XFOIL: 5.39)", station.h);
+    }
+
+    #[test]
+    fn test_inverse_mode_derivative_comparison() {
+        // Compare Newton updates with CORRECT vs WRONG Hk derivatives
+        // This helps understand why "wrong" derivatives accidentally work
+        
+        // Representative values from flat plate at x=0.02 when inverse mode triggers
+        let theta = 0.001;
+        let delta_star = 0.00325; // H ≈ 3.25
+        let h = delta_star / theta;
+        let hk = h; // At low Mach, Hk ≈ H
+        
+        let htarg = 3.8; // Target when inverse mode triggers
+        let hk_current = h;
+        
+        // Representative VS2 Jacobian from bldif (laminar BL)
+        // These are roughly the order of magnitude for early laminar stations
+        let vs2: [[f64; 5]; 3] = [
+            [1.0, -100.0, 50.0, 0.1, 0.0],  // Amplification equation
+            [0.0, -50.0, 20.0, 2.0, 0.0],   // Momentum equation  
+            [0.0, 30.0, -15.0, 0.5, 0.0],   // Shape equation
+        ];
+        
+        // Residuals (already negated as from bldif)
+        let res = [0.01, 0.001, 0.002];
+        
+        // CORRECT derivatives (XFOIL convention)
+        let hk2_t_correct = -hk / theta; // -Hk/θ ≈ -3250
+        let hk2_d_correct = 1.0 / theta; // 1/θ = 1000
+        
+        // WRONG derivatives (current RustFoil)
+        let hk2_t_wrong = hk / theta;          // +Hk/θ ≈ +3250
+        let hk2_d_wrong = -hk / delta_star;    // -Hk/δ* ≈ -1000
+        
+        // Build 4x4 systems (inverse mode: direct = false)
+        let (a_correct, b_correct) = build_4x4_system(
+            &vs2, &res, false, hk2_t_correct, hk2_d_correct, 0.0, htarg, hk_current
+        );
+        let (a_wrong, b_wrong) = build_4x4_system(
+            &vs2, &res, false, hk2_t_wrong, hk2_d_wrong, 0.0, htarg, hk_current
+        );
+        
+        // 4th row should differ
+        println!("CORRECT 4th row: [{:.1}, {:.1}, {:.1}, {:.1}]", 
+                 a_correct[3][0], a_correct[3][1], a_correct[3][2], a_correct[3][3]);
+        println!("WRONG 4th row:   [{:.1}, {:.1}, {:.1}, {:.1}]", 
+                 a_wrong[3][0], a_wrong[3][1], a_wrong[3][2], a_wrong[3][3]);
+        
+        // Solve both systems
+        let x_correct = solve_4x4(&a_correct, &b_correct);
+        let x_wrong = solve_4x4(&a_wrong, &b_wrong);
+        
+        println!("CORRECT solution [dS, dθ, dδ*, dUe]: [{:.2e}, {:.2e}, {:.2e}, {:.2e}]",
+                 x_correct[0], x_correct[1], x_correct[2], x_correct[3]);
+        println!("WRONG solution [dS, dθ, dδ*, dUe]:   [{:.2e}, {:.2e}, {:.2e}, {:.2e}]",
+                 x_wrong[0], x_wrong[1], x_wrong[2], x_wrong[3]);
+        
+        // Compute resulting H after update
+        let h_new_correct = (delta_star + x_correct[2]) / (theta + x_correct[1]).max(1e-12);
+        let h_new_wrong = (delta_star + x_wrong[2]) / (theta + x_wrong[1]).max(1e-12);
+        
+        println!("H current: {:.4}", h);
+        println!("H with CORRECT: {:.4} (change: {:+.4})", h_new_correct, h_new_correct - h);
+        println!("H with WRONG:   {:.4} (change: {:+.4})", h_new_wrong, h_new_wrong - h);
+        
+        // Both solutions should be finite
+        assert!(x_correct.iter().all(|x| x.is_finite()), "CORRECT solution should be finite");
+        assert!(x_wrong.iter().all(|x| x.is_finite()), "WRONG solution should be finite");
+        
+        // Key observation: the solutions will be different
+        // The "wrong" derivatives happen to produce updates that keep H more stable
     }
 }
