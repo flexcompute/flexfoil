@@ -177,7 +177,7 @@ fn test_xfoil_transition_comparison() {
         println!("  shape = {:.6e}", res_simple.res_shape);
         
         // Full trdif
-        let (res_full, jac_full) = trdif_full(&s37, &s38, &trchek_full, msq, re);
+        let (res_full, jac_full) = trdif_full(&s37, &s38, &trchek_full, 9.0, msq, re);
         println!("\nFull TRDIF residuals:");
         println!("  third = {:.6e}", res_full.res_third);
         println!("  mom   = {:.6e}", res_full.res_mom);

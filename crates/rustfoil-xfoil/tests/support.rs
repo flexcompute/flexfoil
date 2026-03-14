@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 use nalgebra::DMatrix;
 use rustfoil_bl::{finalize_debug, init_debug};
 use rustfoil_testkit::fortran_runner::{
-    compile_driver, run_fortran_json, run_fortran_json_with_args, run_fortran_test,
+    compile_driver, run_fortran_json, run_fortran_json_with_args, run_fortran_test, run_fortran_with_args,
     run_xfoil_instrumented, FortranDriverSpec, XFOIL_STATE_OBJS, XFOIL_WORKFLOW_OBJS,
 };
 use rustfoil_xfoil::{
@@ -218,6 +218,30 @@ pub struct XfoilBinaryReference {
     pub iterations: usize,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct FortranQdesOutput {
+    pub alpha_deg: f64,
+    pub perturb: f64,
+    pub iterations: usize,
+    pub base_x: Vec<f64>,
+    pub base_y: Vec<f64>,
+    pub target_upper_x: Vec<f64>,
+    pub target_upper_q: Vec<f64>,
+    pub target_lower_x: Vec<f64>,
+    pub target_lower_q: Vec<f64>,
+    pub output_x: Vec<f64>,
+    pub output_y: Vec<f64>,
+    pub cl: f64,
+    pub cm: f64,
+    pub cdp: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FortranSurfaceDistribution {
+    pub x: Vec<f64>,
+    pub values: Vec<f64>,
+}
+
 pub fn state_topology_fortran() -> &'static FortranStateTopologyOutput {
     static OUTPUT: OnceLock<FortranStateTopologyOutput> = OnceLock::new();
     OUTPUT.get_or_init(|| {
@@ -292,6 +316,106 @@ pub fn xfoil_binary_oper_point(alpha_deg: f64) -> XfoilBinaryReference {
     build_xfoil_binary_reference(alpha_deg)
 }
 
+pub fn qdes_fortran(perturb: f64, iterations: usize) -> FortranQdesOutput {
+    let exe = compile_driver(&FortranDriverSpec {
+        driver_source: &fortran_driver_path("qdes_driver.f90"),
+        executable_name: "qdes_driver",
+        object_names: XFOIL_WORKFLOW_OBJS,
+    })
+    .expect("compile qdes driver");
+    let stdout = run_fortran_with_args(
+        exe,
+        [
+            format!("{:.3}", 4.0_f64),
+            format!("{perturb:.6}"),
+            iterations.to_string(),
+        ],
+        None,
+    )
+    .expect("run qdes driver");
+    let json_start = stdout.find('{').expect("qdes driver JSON start");
+    serde_json::from_str(&stdout[json_start..]).expect("parse qdes driver JSON")
+}
+
+pub fn xfoil_binary_qdes_distributions(
+    label: &str,
+    coords: &[(f64, f64)],
+    alpha_deg: f64,
+) -> (FortranSurfaceDistribution, FortranSurfaceDistribution) {
+    let workdir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("target")
+        .join(format!(
+            "xfoil-qdes-{}-{}",
+            label,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock after unix epoch")
+                .as_nanos()
+        ));
+    std::fs::create_dir_all(&workdir).expect("create xfoil qdes workdir");
+    let debug_path = workdir.join("xfoil_debug.json");
+    let coords_path = workdir.join("geometry.dat");
+    let _ = std::fs::remove_file(&debug_path);
+    write_dat_coords(&coords_path, coords);
+
+    let commands = format!(
+        "LOAD {}\n\nOPER\nVISC 1000000\nMACH 0\nITER 30\nALFA {alpha_deg:.3}\n\nQUIT\n",
+        coords_path.file_name().expect("geometry filename").to_string_lossy(),
+    );
+    run_xfoil_instrumented(&commands, &workdir).expect("run xfoil qdes distribution resolve");
+    let debug_text = read_debug_text(&debug_path);
+    let debug: serde_json::Value = serde_json::from_str(&debug_text).expect("parse xfoil qdes debug JSON");
+    let events = debug["events"].as_array().expect("xfoil qdes debug events");
+
+    let mut upper = Vec::new();
+    let mut lower = Vec::new();
+    for event in events {
+        if event["subroutine"].as_str() != Some("MRCHUE") {
+            continue;
+        }
+        let side = event["side"].as_u64().expect("MRCHUE side") as usize;
+        let ibl = event["ibl"].as_u64().expect("MRCHUE ibl") as usize;
+        let tuple = (
+            ibl,
+            event["x"].as_f64().expect("MRCHUE x"),
+            event["Ue"].as_f64().expect("MRCHUE Ue"),
+            event["theta"].as_f64().expect("MRCHUE theta"),
+            event["delta_star"].as_f64().expect("MRCHUE delta_star"),
+            event["ctau"].as_f64().expect("MRCHUE ctau"),
+        );
+        if side == 1 {
+            upper.push(tuple);
+        } else if side == 2 {
+            lower.push(tuple);
+        }
+    }
+    let state = mrchue_state_from_events(&upper, &lower);
+    let mut upper_samples = state
+        .upper_x
+        .into_iter()
+        .zip(state.upper_uedg)
+        .collect::<Vec<_>>();
+    upper_samples.sort_by(|lhs, rhs| lhs.0.partial_cmp(&rhs.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut lower_samples = state
+        .lower_x
+        .into_iter()
+        .zip(state.lower_uedg)
+        .collect::<Vec<_>>();
+    lower_samples.sort_by(|lhs, rhs| lhs.0.partial_cmp(&rhs.0).unwrap_or(std::cmp::Ordering::Equal));
+    (
+        FortranSurfaceDistribution {
+            x: upper_samples.iter().map(|(x, _)| *x).collect(),
+            values: upper_samples.iter().map(|(_, value)| *value).collect(),
+        },
+        FortranSurfaceDistribution {
+            x: lower_samples.iter().map(|(x, _)| *x).collect(),
+            values: lower_samples.iter().map(|(_, value)| *value).collect(),
+        },
+    )
+}
+
 pub fn xfoil_iteration_debug(alpha_deg: f64) -> serde_json::Value {
     let source_coords_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -362,7 +486,7 @@ pub fn rust_iteration_debug(alpha_deg: f64) -> serde_json::Value {
     let assembly = setbl(&mut state, 1.0e6, 9.0, 0.0, 1);
     let mut assembly = assembly;
     let solve = blsolv(&mut state, &mut assembly, 1);
-    update(&mut state, &assembly, &solve, 0.0, 1.0e6);
+    update(&mut state, &assembly, &solve, 0.0, 1.0e6, 1);
     finalize_debug();
 
     let debug_text = std::fs::read_to_string(&debug_path).expect("read rust debug JSON");
@@ -584,7 +708,7 @@ pub fn rust_setbl_state(alpha_deg: f64) -> FortranMarchState {
 pub fn rust_mrchue_state(alpha_deg: f64) -> FortranMarchState {
     let (mut state, _) = build_march_state(alpha_deg);
     blpini(&mut state, 1.0e6);
-    mrchue(&mut state, 1.0e6, 9.0);
+    mrchue(&mut state, 1.0e6, 9.0, 1);
     march_state_snapshot(&state)
 }
 
@@ -778,6 +902,14 @@ fn workflow_driver_exe() -> &'static std::path::PathBuf {
         })
         .expect("compile VISCAL driver")
     })
+}
+
+fn write_dat_coords(path: &std::path::Path, coords: &[(f64, f64)]) {
+    let mut text = String::from("QDES parity geometry\n");
+    for (x, y) in coords {
+        text.push_str(&format!("{x:.16} {y:.16}\n"));
+    }
+    std::fs::write(path, text).expect("write dat coordinates");
 }
 
 fn load_dat_coords(path: &std::path::Path) -> Vec<(f64, f64)> {

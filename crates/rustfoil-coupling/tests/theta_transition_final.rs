@@ -71,7 +71,7 @@ fn test_theta_at_transition_matches_xfoil() {
     assert!(tr.transition, "Expected transition to occur");
     
     // Run TRDIF
-    let (res, jac) = trdif_full(&s1, &s2, &tr, msq, re);
+    let (res, jac) = trdif_full(&s1, &s2, &tr, ncrit, msq, re);
     
     // The TRDIF residuals tell us how far from the solution we are
     // For the first Newton iteration, residuals should be non-zero but computable

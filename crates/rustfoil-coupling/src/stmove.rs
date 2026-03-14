@@ -233,7 +233,7 @@ fn interpolate_gap_stations(stations: &mut [BlStation], idif: usize, reference_i
         station.h = ref_h;
 
         // Update mass defect
-        station.mass_defect = station.u * station.delta_star;
+        station.refresh_mass_defect();
     }
 }
 

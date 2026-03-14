@@ -99,7 +99,7 @@ fn test_trdif_jacobian_vs_xfoil() {
         println!("XT error = {:.2}%, WF1 error = {:.2}%", xt_err, wf1_err);
         
         // Run TRDIF
-        let (res, jac) = trdif_full(&s1, &s2, &tr, msq, re);
+        let (res, jac) = trdif_full(&s1, &s2, &tr, 9.0, msq, re);
         
         // XFOIL IBL 37 reference values (call 3148 in xfoil_debug.json)
         // These are for the SAME station conditions as our test!

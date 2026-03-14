@@ -29,7 +29,10 @@ use rustfoil_solver::inviscid::{
     build_streamlines, StreamlineOptions, SmokeSystem
 };
 use rustfoil_solver::inviscid::{compute_psi_grid_with_interior, psi_at};
-use rustfoil_xfoil::{AlphaSpec, XfoilOptions};
+use rustfoil_xfoil::{
+    solve_coords_qdes, AlphaSpec, QdesOptions, QdesSpec, QdesTarget, QdesTargetKind,
+    XfoilOptions,
+};
 use rustfoil_xfoil::oper::solve_operating_point_from_state;
 use rustfoil_xfoil::state::XfoilState;
 use serde::{Deserialize, Serialize};
@@ -646,6 +649,26 @@ struct FaithfulSnapshot {
     iblte_lower: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QdesTargetFile {
+    kind: Option<String>,
+    upper: Option<QdesSurfaceTargetInput>,
+    lower: Option<QdesSurfaceTargetInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QdesSurfaceTargetInput {
+    x: Vec<f64>,
+    values: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QdesWasmResponse {
+    success: bool,
+    result: Option<rustfoil_xfoil::QdesResult>,
+    error: Option<String>,
+}
+
 fn analysis_error(message: impl Into<String>) -> AnalysisResult {
     AnalysisResult {
         cl: 0.0,
@@ -933,6 +956,117 @@ pub fn get_bl_distribution_faithful(
         Err(message) => bl_error(message),
     };
     serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+#[wasm_bindgen]
+pub fn qdes_airfoil_faithful(
+    coords: &[f64],
+    target_json: &str,
+    alpha_deg: f64,
+    reynolds: f64,
+    mach: f64,
+    ncrit: f64,
+    max_iterations: usize,
+    outer_iterations: usize,
+    basis_count_per_side: usize,
+) -> JsValue {
+    let response = qdes_airfoil_faithful_impl(
+        coords,
+        target_json,
+        alpha_deg,
+        reynolds,
+        mach,
+        ncrit,
+        max_iterations,
+        outer_iterations,
+        basis_count_per_side,
+    );
+    serde_wasm_bindgen::to_value(&response).unwrap_or(JsValue::NULL)
+}
+
+fn qdes_airfoil_faithful_impl(
+    coords: &[f64],
+    target_json: &str,
+    alpha_deg: f64,
+    reynolds: f64,
+    mach: f64,
+    ncrit: f64,
+    max_iterations: usize,
+    outer_iterations: usize,
+    basis_count_per_side: usize,
+) -> QdesWasmResponse {
+    let target_file: QdesTargetFile = match serde_json::from_str(target_json) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            return QdesWasmResponse {
+                success: false,
+                result: None,
+                error: Some(format!("Invalid QDES target JSON: {err}")),
+            };
+        }
+    };
+    if coords.len() < 6 || coords.len() % 2 != 0 {
+        return QdesWasmResponse {
+            success: false,
+            result: None,
+            error: Some("Invalid coordinates: need at least 3 points (6 values)".to_string()),
+        };
+    }
+    let coords_pairs: Vec<(f64, f64)> = coords.chunks(2).map(|chunk| (chunk[0], chunk[1])).collect();
+    let target_kind = match target_file
+        .kind
+        .as_deref()
+        .unwrap_or("cp")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "cp" | "pressure_coefficient" => QdesTargetKind::PressureCoefficient,
+        "ue" | "edge_velocity" | "surface_speed" => QdesTargetKind::EdgeVelocity,
+        other => {
+            return QdesWasmResponse {
+                success: false,
+                result: None,
+                error: Some(format!("Unsupported QDES target kind: {other}")),
+            };
+        }
+    };
+    let spec = QdesSpec {
+        operating_point: AlphaSpec::AlphaDeg(alpha_deg),
+        target_kind,
+        upper: target_file.upper.map(|surface| QdesTarget {
+            x: surface.x,
+            values: surface.values,
+        }),
+        lower: target_file.lower.map(|surface| QdesTarget {
+            x: surface.x,
+            values: surface.values,
+        }),
+    };
+    let options = QdesOptions {
+        xfoil_options: XfoilOptions {
+            reynolds,
+            mach,
+            ncrit,
+            max_iterations,
+            ..Default::default()
+        },
+        outer_iterations,
+        basis_count_per_side,
+        panel_count: 160,
+        ..Default::default()
+    };
+    match solve_coords_qdes("airfoil", &coords_pairs, spec, options) {
+        Ok(result) => QdesWasmResponse {
+            success: true,
+            result: Some(result),
+            error: None,
+        },
+        Err(err) => QdesWasmResponse {
+            success: false,
+            result: None,
+            error: Some(err.to_string()),
+        },
+    }
 }
 
 // ============================================================================

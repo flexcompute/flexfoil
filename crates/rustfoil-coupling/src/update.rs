@@ -272,7 +272,7 @@ pub fn update_stations(
         limit_delta_star_for_hk(&mut stations[i], hk_limit, 0.0);
 
         // Update mass defect (nonlinear update)
-        stations[i].mass_defect = stations[i].delta_star * stations[i].u;
+        stations[i].refresh_mass_defect();
 
         // Update shape factor
         if stations[i].theta.abs() > 1e-12 {
@@ -336,7 +336,7 @@ pub fn update_stations(
     for i in 1..n {
         if stations[i - 1].u > 0.0 && stations[i].u <= 0.0 {
             stations[i].u = stations[i - 1].u;
-            stations[i].mass_defect = stations[i].delta_star * stations[i].u;
+            stations[i].refresh_mass_defect();
         }
     }
 
@@ -454,7 +454,7 @@ pub fn set_edge_velocities(
 
     // Update mass defect after Ue change
     for station in stations.iter_mut() {
-        station.mass_defect = station.u * station.delta_star;
+        station.refresh_mass_defect();
     }
 
     // Emit UESET debug event
@@ -617,6 +617,7 @@ pub fn update_xfoil_style(
     for i in 0..n {
         let station = &stations[i];
         let delta = &deltas[i];
+        let due = new_ue[i] - station.u;
 
         // Compute normalized changes
         // DN1 = change in ctau/ampl normalized
@@ -635,15 +636,20 @@ pub fn update_xfoil_style(
             0.0
         };
 
-        // DN3 = change in mass defect normalized
-        let dn3 = if station.mass_defect.abs() > 1e-12 {
-            delta[2] / station.mass_defect
+        // XFOIL normalizes the third primary on implied delta-star change:
+        // DDSTR = (DMASS - DSTR*DUEDG) / UEDG, DN3 = DDSTR / DSTR.
+        let ddstr = if station.u.abs() > 1e-12 {
+            (delta[2] - station.delta_star * due) / station.u
+        } else {
+            0.0
+        };
+        let dn3 = if station.delta_star.abs() > 1e-12 {
+            ddstr / station.delta_star
         } else {
             0.0
         };
 
         // DN4 = change in Ue normalized
-        let due = new_ue[i] - station.u;
         let dn4 = due.abs() / config.max_ue_change;
 
         // Accumulate RMS
@@ -662,7 +668,7 @@ pub fn update_xfoil_style(
         }
         if dn3.abs() > max_change.abs() {
             max_change = dn3;
-            max_change_var = 'M';
+            max_change_var = 'D';
             max_change_station = i;
         }
         if dn4.abs() > max_change.abs() {
@@ -752,7 +758,7 @@ pub fn update_xfoil_style(
         limit_delta_star_for_hk(&mut stations[i], hk_limit, 0.0);
 
         // Update mass defect after potential δ* limiting
-        stations[i].mass_defect = stations[i].delta_star * stations[i].u;
+        stations[i].refresh_mass_defect();
 
         // Update shape factor
         if stations[i].theta.abs() > 1e-12 {
@@ -764,7 +770,7 @@ pub fn update_xfoil_style(
     for i in 1..n {
         if stations[i - 1].u > 0.0 && stations[i].u <= 0.0 {
             stations[i].u = stations[i - 1].u;
-            stations[i].mass_defect = stations[i].delta_star * stations[i].u;
+            stations[i].refresh_mass_defect();
         }
     }
 
@@ -957,7 +963,7 @@ mod tests {
         for (i, station) in stations.iter_mut().enumerate() {
             station.u = 1.0;
             station.delta_star = 0.01;
-            station.mass_defect = station.u * station.delta_star;
+            station.refresh_mass_defect();
             station.x = i as f64 * 0.1;
         }
 

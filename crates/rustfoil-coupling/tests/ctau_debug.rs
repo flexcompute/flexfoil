@@ -406,7 +406,7 @@ fn test_trdif_full_residuals() {
         let (res_simple, jac_simple) = trdif(&s1, &s2, tr.xt, msq, re);
         
         // Test full trdif
-        let (res_full, jac_full) = trdif_full(&s1, &s2, &tr, msq, re);
+        let (res_full, jac_full) = trdif_full(&s1, &s2, &tr, 9.0, msq, re);
         
         println!("\n--- Simple TRDIF ---");
         println!("Residuals: third={:.6e}, mom={:.6e}, shape={:.6e}",

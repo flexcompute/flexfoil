@@ -202,11 +202,7 @@ fn build_canonical_state(
 
 fn build_canonical_newton_view(
     state: &XfoilLikeViscousState,
-    upper_ue_operating: Vec<f64>,
-    lower_ue_operating: Vec<f64>,
     ante: f64,
-    sst_go: f64,
-    sst_gp: f64,
 ) -> CanonicalNewtonStateView {
     let to_row = |row: &super::state::CanonicalBlRow| CanonicalNewtonRow {
         x: row.x,
@@ -238,6 +234,7 @@ fn build_canonical_newton_view(
         derivs: row.derivs.clone(),
     };
 
+    let (upper_ue_operating, lower_ue_operating) = state.operating_ue_views();
     CanonicalNewtonStateView {
         upper_rows: state.upper_rows.iter().map(to_row).collect(),
         lower_rows: state.lower_rows.iter().map(to_row).collect(),
@@ -251,23 +248,9 @@ fn build_canonical_newton_view(
         lower_ue_from_mass: Vec::new(),
         upper_ue_operating,
         lower_ue_operating,
-        sst_go,
-        sst_gp,
+        sst_go: state.sst_go,
+        sst_gp: state.sst_gp,
         ante,
-    }
-}
-
-fn operating_sensitivity_for_mode(
-    mode: OperatingMode,
-    upper_alpha: &[f64],
-    lower_alpha: &[f64],
-) -> (Vec<f64>, Vec<f64>) {
-    match mode {
-        OperatingMode::PrescribedAlpha => (
-            vec![0.0; upper_alpha.len()],
-            vec![0.0; lower_alpha.len()],
-        ),
-        OperatingMode::PrescribedCl { .. } => (upper_alpha.to_vec(), lower_alpha.to_vec()),
     }
 }
 
@@ -862,8 +845,8 @@ fn refresh_transition_state_from_march(stations: &mut [BlStation], march_result:
 pub fn solve_viscous_two_surfaces(
     upper_stations: &mut Vec<BlStation>,
     lower_stations: &mut Vec<BlStation>,
-    upper_ue: &[f64],
-    lower_ue: &[f64],
+    _upper_ue: &[f64],
+    _lower_ue: &[f64],
     dij: &DMatrix<f64>,
     config: &ViscousSolverConfig,
     alpha_rad: f64,
@@ -899,9 +882,6 @@ pub fn solve_viscous_two_surfaces(
         ..Default::default()
     };
 
-    // Extract arc lengths from stations
-    let upper_arc: Vec<f64> = upper_stations.iter().map(|s| s.x).collect();
-    let lower_arc: Vec<f64> = lower_stations.iter().map(|s| s.x).collect();
     let full_arc = compute_arc_lengths(panel_x, panel_y);
     let initial_stagnation = find_stagnation_with_derivs(ue_inviscid_full, &full_arc);
     let mut canonical_state = build_canonical_state(
@@ -913,6 +893,7 @@ pub fn solve_viscous_two_surfaces(
     canonical_state.set_operating_mode(operating_mode);
     canonical_state.set_panel_inviscid_arrays(ue_inviscid_full, ue_inviscid_alpha_full);
     refresh_canonical_panel_arrays(&mut canonical_state);
+    canonical_state.refresh_stagnation_from_panel_gamma(&full_arc);
 
 
     // March upper surface (side 1) through the canonical state.
@@ -971,10 +952,6 @@ pub fn solve_viscous_two_surfaces(
     // Full global Newton coupling using the GlobalNewtonSystem that properly
     // couples both upper and lower surfaces through the DIJ matrix.
 
-    let update_config = UpdateConfig {
-        relaxation: config.relaxation,
-        ..Default::default()
-    };
     let mut iteration = 0;
     let mut converged = true; // Direct march is considered converged
     let mut residual = 0.0;
@@ -994,28 +971,12 @@ pub fn solve_viscous_two_surfaces(
     if can_run_newton {
         converged = false;
 
-        // === Compute stagnation point derivatives (SST_GO, SST_GP) ===
-        // Build a two-point local STFIND proxy around the stagnation panel:
-        //   gamma_upstream   = +Ue on the upper first post-stagnation station
-        //   gamma_downstream = -Ue on the lower first post-stagnation station
-        // and use the actual first-segment arc lengths on each surface. This follows
-        // the STFIND interpolation formulas instead of the previous midpoint heuristic.
-        let (sst_go, sst_gp) = {
-            let ue_upper_1 = upper_ue.get(1).copied().unwrap_or(0.1).abs();
-            let ue_lower_1 = lower_ue.get(1).copied().unwrap_or(0.1).abs();
-            let ds_upper = upper_arc.get(1).copied().unwrap_or(0.01).abs().max(1.0e-8);
-            let ds_lower = lower_arc.get(1).copied().unwrap_or(0.01).abs().max(1.0e-8);
-
-            let gamma_proxy = [ue_upper_1, -ue_lower_1];
-            let s_proxy = [-ds_lower, ds_upper];
-
-            find_stagnation_with_derivs(&gamma_proxy, &s_proxy)
-                .map(|result| (result.sst_go, result.sst_gp))
-                .unwrap_or((0.0, 0.0))
-        };
-
         if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
-            eprintln!("[DEBUG viscal] Stagnation derivatives: SST_GO={:.6e}, SST_GP={:.6e}", sst_go, sst_gp);
+            eprintln!(
+                "[DEBUG viscal] Stagnation derivatives: SST_GO={:.6e}, SST_GP={:.6e}",
+                canonical_state.sst_go,
+                canonical_state.sst_gp
+            );
         }
 
         // Run Newton iteration with full global coupling
@@ -1075,15 +1036,8 @@ pub fn solve_viscous_two_surfaces(
                 }
             }
             canonical_state.refresh_panel_arrays_from_rows();
-            let upper_ue_alpha = canonical_state.operating_sensitivity_view(XfoilSurface::Upper);
-            let lower_ue_alpha = canonical_state.operating_sensitivity_view(XfoilSurface::Lower);
-            let (upper_ue_operating, lower_ue_operating) =
-                operating_sensitivity_for_mode(operating_mode, &upper_ue_alpha, &lower_ue_alpha);
-            let (sst_go_iter, sst_gp_iter) =
-                find_stagnation_with_derivs(canonical_state.panel_gamma(), &full_arc)
-                    .map(|stag| (stag.sst_go, stag.sst_gp))
-                    .unwrap_or((sst_go, sst_gp));
-            global_system.set_stagnation_derivs(sst_go_iter, sst_gp_iter);
+            canonical_state.refresh_stagnation_from_panel_gamma(&full_arc);
+            global_system.set_stagnation_derivs(canonical_state.sst_go, canonical_state.sst_gp);
 
             // Save the current accepted state so a rejected Newton step rolls
             // back to the previous iterate, matching XFOIL's late-iteration
@@ -1175,11 +1129,7 @@ pub fn solve_viscous_two_surfaces(
             // Build the global Newton system with full cross-surface coupling
             let mut newton_view = build_canonical_newton_view(
                 &canonical_state,
-                upper_ue_operating.clone(),
-                lower_ue_operating.clone(),
                 global_system.ante,
-                sst_go_iter,
-                sst_gp_iter,
             );
             global_system.build_global_system_from_view(
                 &newton_view,

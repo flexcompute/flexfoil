@@ -25,7 +25,10 @@ use rustfoil_inviscid::{
     InviscidSolver as NewInviscidSolver
 };
 use rustfoil_solver::inviscid::{FlowConditions, InviscidSolver};
-use rustfoil_xfoil::{solve_body_oper_point, AlphaSpec, XfoilOptions};
+use rustfoil_xfoil::{
+    solve_body_oper_point, solve_body_qdes, AlphaSpec, QdesOptions, QdesSpec, QdesTarget,
+    QdesTargetKind, XfoilOptions,
+};
 use rustfoil_solver::viscous::{
     compute_arc_lengths, extract_surface_xfoil,
     initialize_surface_stations_with_panel_idx, interpolate_stagnation,
@@ -39,7 +42,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use thiserror::Error;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Boundary layer state data for a single surface
 #[derive(Debug, Clone, Serialize)]
@@ -184,6 +187,9 @@ enum Commands {
 
     /// Run a polar on the standalone faithful XFOIL side path
     FaithfulPolar(FaithfulPolarCmd),
+
+    /// Run a QDES-style inverse-design loop on the faithful XFOIL side path
+    FaithfulQdes(FaithfulQdesCmd),
 }
 
 /// Viscous analysis at single angle of attack
@@ -328,6 +334,73 @@ struct FaithfulPolarCmd {
     parallel: bool,
 }
 
+#[derive(Parser)]
+struct FaithfulQdesCmd {
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+
+    #[arg(long, value_name = "FILE")]
+    target_file: PathBuf,
+
+    #[arg(short, long, default_value = "0.0")]
+    alpha: f64,
+
+    #[arg(long)]
+    target_cl: Option<f64>,
+
+    #[arg(short, long)]
+    re: f64,
+
+    #[arg(short, long, default_value = "0.0")]
+    mach: f64,
+
+    #[arg(short, long, default_value = "9.0")]
+    ncrit: f64,
+
+    #[arg(long)]
+    max_iterations: Option<usize>,
+
+    #[arg(long, default_value = "6")]
+    qdes_iterations: usize,
+
+    #[arg(long, default_value = "4")]
+    basis_count: usize,
+
+    #[arg(long, default_value = "0.0025")]
+    fd_step: f64,
+
+    #[arg(long, default_value = "0.6")]
+    damping: f64,
+
+    #[arg(long, default_value = "0.005")]
+    target_tolerance: f64,
+
+    #[arg(short = 'p', long, default_value = "160")]
+    panels: usize,
+
+    #[arg(long, default_value = "json")]
+    format: String,
+
+    #[arg(long)]
+    output: Option<PathBuf>,
+
+    #[arg(long)]
+    no_repanel: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct QdesTargetFile {
+    kind: Option<String>,
+    upper: Option<QdesSurfaceTargetInput>,
+    lower: Option<QdesSurfaceTargetInput>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QdesSurfaceTargetInput {
+    x: Vec<f64>,
+    values: Vec<f64>,
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -359,6 +432,7 @@ fn main() {
         Commands::ViscousPolar(cmd) => run_viscous_polar(cmd),
         Commands::FaithfulViscous(cmd) => run_faithful_viscous(cmd),
         Commands::FaithfulPolar(cmd) => run_faithful_polar(cmd),
+        Commands::FaithfulQdes(cmd) => run_faithful_qdes(cmd),
     };
 
     if let Err(e) = result {
@@ -1167,6 +1241,101 @@ fn run_faithful_polar(cmd: FaithfulPolarCmd) -> Result<(), CliError> {
         println!();
         for line in &output_lines {
             println!("{}", line);
+        }
+    }
+
+    Ok(())
+}
+
+fn load_qdes_spec(path: &PathBuf, operating_point: AlphaSpec) -> Result<QdesSpec, CliError> {
+    let raw = fs::read_to_string(path)?;
+    let parsed: QdesTargetFile = serde_json::from_str(&raw).map_err(|err| CliError::Parse {
+        line: 0,
+        message: format!("Invalid QDES target file '{}': {err}", path.display()),
+    })?;
+    let target_kind = match parsed.kind.as_deref().unwrap_or("cp").to_ascii_lowercase().as_str() {
+        "cp" | "pressure_coefficient" => QdesTargetKind::PressureCoefficient,
+        "ue" | "edge_velocity" | "surface_speed" => QdesTargetKind::EdgeVelocity,
+        other => {
+            return Err(CliError::Parse {
+                line: 0,
+                message: format!("Unsupported QDES target kind: {other}"),
+            });
+        }
+    };
+    Ok(QdesSpec {
+        operating_point,
+        target_kind,
+        upper: parsed.upper.map(|surface| QdesTarget {
+            x: surface.x,
+            values: surface.values,
+        }),
+        lower: parsed.lower.map(|surface| QdesTarget {
+            x: surface.x,
+            values: surface.values,
+        }),
+    })
+}
+
+fn write_coords_dat(path: &PathBuf, coords: &[(f64, f64)]) -> Result<(), CliError> {
+    let mut file = File::create(path)?;
+    for (x, y) in coords {
+        writeln!(file, "{x:.8} {y:.8}")?;
+    }
+    Ok(())
+}
+
+fn run_faithful_qdes(cmd: FaithfulQdesCmd) -> Result<(), CliError> {
+    let (name, body) = build_body_for_faithful(&cmd.file, cmd.panels, cmd.no_repanel)?;
+    let operating_point = match cmd.target_cl {
+        Some(target_cl) => AlphaSpec::TargetCl(target_cl),
+        None => AlphaSpec::AlphaDeg(cmd.alpha),
+    };
+    let spec = load_qdes_spec(&cmd.target_file, operating_point)?;
+    let options = QdesOptions {
+        xfoil_options: XfoilOptions {
+            reynolds: cmd.re,
+            mach: cmd.mach,
+            ncrit: cmd.ncrit,
+            max_iterations: cmd
+                .max_iterations
+                .unwrap_or_else(|| XfoilOptions::default().max_iterations),
+            ..Default::default()
+        },
+        outer_iterations: cmd.qdes_iterations,
+        target_tolerance: cmd.target_tolerance,
+        basis_count_per_side: cmd.basis_count,
+        finite_difference_step: cmd.fd_step,
+        update_damping: cmd.damping,
+        panel_count: cmd.panels,
+        ..Default::default()
+    };
+    let result = solve_body_qdes(&body, spec, options)
+        .map_err(|err| CliError::Solver(err.to_string()))?;
+
+    if let Some(path) = &cmd.output {
+        write_coords_dat(path, &result.output_coords)?;
+    }
+
+    match cmd.format.as_str() {
+        "table" => {
+            println!("Faithful QDES Side Path");
+            println!("=======================");
+            println!("Airfoil:   {}", name);
+            println!("Alpha:     {:>8.3}°", result.oper_result.alpha_deg);
+            println!("CL:        {:>8.4}", result.oper_result.cl);
+            println!("CD:        {:>8.5}", result.oper_result.cd);
+            println!("CM:        {:>8.4}", result.oper_result.cm);
+            println!("RMS err:   {:>8.5}", result.rms_error);
+            println!("Max err:   {:>8.5}", result.max_error);
+            println!("Converged: {}", result.converged);
+            println!("Iters:     {}", result.iterations);
+            if let Some(path) = &cmd.output {
+                println!("Output:    {}", path.display());
+            }
+        }
+        _ => {
+            println!("{}", serde_json::to_string_pretty(&result).unwrap());
         }
     }
 

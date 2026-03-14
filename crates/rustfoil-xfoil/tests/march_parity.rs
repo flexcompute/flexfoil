@@ -111,8 +111,8 @@ fn perf_marching_path_smoke() {
         || {
             state.clone_from(&base);
             blpini(&mut state, 1.0e6);
-            mrchue(&mut state, 1.0e6, 9.0);
-            mrchdu(&mut state, 1.0e6, 9.0);
+            mrchue(&mut state, 1.0e6, 9.0, 1);
+            mrchdu(&mut state, 1.0e6, 9.0, 1);
         },
     );
 

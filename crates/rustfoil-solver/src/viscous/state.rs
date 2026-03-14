@@ -288,6 +288,16 @@ impl XfoilLikeViscousState {
         self.sst_gp = sst_gp;
     }
 
+    pub fn stagnation_from_panel_gamma(&self, full_arc: &[f64]) -> Option<StagnationResult> {
+        find_stagnation_with_derivs(self.panel_gamma(), full_arc)
+    }
+
+    pub fn refresh_stagnation_from_panel_gamma(&mut self, full_arc: &[f64]) -> Option<StagnationResult> {
+        let stag = self.stagnation_from_panel_gamma(full_arc)?;
+        self.set_stagnation_metadata(stag.ist, stag.sst, stag.sst_go, stag.sst_gp);
+        Some(stag)
+    }
+
     pub fn set_transition_metadata(
         &mut self,
         surface: XfoilSurface,
@@ -483,6 +493,20 @@ impl XfoilLikeViscousState {
             .iter()
             .map(|row| row.uinv_a)
             .collect()
+    }
+
+    pub fn operating_ue_view(&self, surface: XfoilSurface) -> Vec<f64> {
+        match self.operating_mode {
+            OperatingMode::PrescribedAlpha => vec![0.0; self.surface_rows(surface).len()],
+            OperatingMode::PrescribedCl { .. } => self.operating_sensitivity_view(surface),
+        }
+    }
+
+    pub fn operating_ue_views(&self) -> (Vec<f64>, Vec<f64>) {
+        (
+            self.operating_ue_view(XfoilSurface::Upper),
+            self.operating_ue_view(XfoilSurface::Lower),
+        )
     }
 
     pub fn upper_uedg_view(&self) -> Vec<f64> {
