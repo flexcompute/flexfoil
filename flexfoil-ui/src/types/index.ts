@@ -145,6 +145,31 @@ export interface PolarPoint {
   cm: number;
 }
 
+/** A row from the runs SQLite table — one solver evaluation */
+export interface RunRow {
+  id: number;
+  airfoil_name: string;
+  airfoil_hash: string;
+  alpha: number;
+  reynolds: number;
+  mach: number;
+  ncrit: number;
+  n_panels: number;
+  max_iter: number;
+  cl: number | null;
+  cd: number | null;
+  cm: number | null;
+  converged: boolean;
+  iterations: number | null;
+  residual: number | null;
+  x_tr_upper: number | null;
+  x_tr_lower: number | null;
+  success: boolean;
+  error: string | null;
+  created_at: string;
+  session_id: string | null;
+}
+
 /** Panel configuration for FlexLayout */
 export interface PanelConfig {
   id: string;
