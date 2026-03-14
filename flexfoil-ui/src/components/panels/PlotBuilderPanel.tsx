@@ -13,7 +13,10 @@ import { useState, useMemo, useCallback } from 'react';
 import Plot from 'react-plotly.js';
 import { useRunStore } from '../../stores/runStore';
 import { useTheme } from '../../contexts/ThemeContext';
+import { detectPolarGroups } from '../../lib/polarDetection';
 import type { RunRow } from '../../types';
+
+const AUTO_GROUP = '__auto__';
 
 type ChartType = 'scatter' | 'line' | 'bar' | 'histogram';
 type DataSource = 'full' | 'filtered';
@@ -70,7 +73,7 @@ export function PlotBuilderPanel() {
   const [chartType, setChartType] = useState<ChartType>('scatter');
   const [xField, setXField] = useState<keyof RunRow>('alpha');
   const [yField, setYField] = useState<keyof RunRow>('cl');
-  const [groupBy, setGroupBy] = useState<keyof RunRow | ''>('');
+  const [groupBy, setGroupBy] = useState<keyof RunRow | '' | typeof AUTO_GROUP>(AUTO_GROUP);
   const [xScale, setXScale] = useState<AxisScale>('linear');
   const [yScale, setYScale] = useState<AxisScale>('linear');
 
@@ -95,6 +98,29 @@ export function PlotBuilderPanel() {
       }];
     }
 
+    // --- Auto (Polars) mode: compound-key grouping with gap detection ---
+    if (groupBy === AUTO_GROUP) {
+      const polarGroups = detectPolarGroups(successOnly, xField);
+
+      return polarGroups.map((pg, i) => {
+        const x = pg.rows.map(r => r[xField]).filter(v => v != null) as number[];
+        const y = pg.rows.map(r => r[yField]).filter(v => v != null) as number[];
+        const mode = pg.isSinglePoint ? 'markers' as const
+          : chartType === 'scatter' ? 'markers' as const
+          : chartType === 'line' ? 'lines+markers' as const
+          : undefined;
+        return {
+          x, y,
+          type: (chartType === 'bar' ? 'bar' : 'scatter') as 'bar' | 'scatter',
+          mode,
+          name: pg.label,
+          marker: { color: COLORS[i % COLORS.length], size: 6 },
+          line: { width: 2 },
+        };
+      });
+    }
+
+    // --- No grouping ---
     if (!groupBy) {
       const x = successOnly.map(r => r[xField]).filter(v => v != null) as number[];
       const y = successOnly.map(r => r[yField]).filter(v => v != null) as number[];
@@ -111,6 +137,7 @@ export function PlotBuilderPanel() {
       }];
     }
 
+    // --- Manual single-field grouping ---
     const groups = new Map<string, RunRow[]>();
     for (const row of successOnly) {
       const key = String(row[groupBy] ?? 'null');
@@ -154,8 +181,8 @@ export function PlotBuilderPanel() {
       zerolinecolor: isDark ? '#555' : '#999',
     },
     legend: { orientation: 'h' as const, y: -0.2 },
-    showlegend: !!groupBy,
-  }), [xField, yField, xScale, yScale, chartType, groupBy, getLabel, isDark]);
+    showlegend: groupBy === AUTO_GROUP ? traces.length > 1 : !!groupBy,
+  }), [xField, yField, xScale, yScale, chartType, groupBy, traces.length, getLabel, isDark]);
 
   const config = useMemo(() => ({
     responsive: true,
@@ -223,7 +250,8 @@ export function PlotBuilderPanel() {
 
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           <span style={labelStyle}>Group By</span>
-          <select value={groupBy as string} onChange={e => setGroupBy((e.target.value || '') as keyof RunRow | '')} style={selectStyle}>
+          <select value={groupBy as string} onChange={e => setGroupBy((e.target.value || '') as keyof RunRow | '' | typeof AUTO_GROUP)} style={selectStyle}>
+            <option value={AUTO_GROUP}>Auto (Polars)</option>
             <option value="">None</option>
             {GROUP_FIELDS.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
           </select>
