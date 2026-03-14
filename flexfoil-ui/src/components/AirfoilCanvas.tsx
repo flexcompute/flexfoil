@@ -22,7 +22,7 @@ import { useVisualizationStore } from '../stores/visualizationStore';
 import { useTheme } from '../contexts/ThemeContext';
 import { useLayout } from '../contexts/LayoutContext';
 import type { Point, ViewportState, AirfoilPoint } from '../types';
-import { computeStreamlines, computePsiGrid, createSmokeSystem, isWasmReady, WasmSmokeSystem, analyzeAirfoil, computeGamma } from '../lib/wasm';
+import { computeStreamlines, computePsiGrid, createSmokeSystem, isWasmReady, WasmSmokeSystem, analyzeAirfoil, computeGamma, getBLVisualizationData, type BLVisualizationData } from '../lib/wasm';
 import { useMorphingAnimation, getCpColor, computeForceVectors } from '../hooks/useMorphingAnimation';
 import { generateCamberSplineCurve } from '../lib/airfoilGeometry';
 import { syncToUrl, getCompleteUrlState } from '../lib/urlState';
@@ -521,6 +521,9 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     controlMode,
     displayAlpha,
     reynolds,
+    mach,
+    ncrit,
+    maxIterations,
     // Camber/thickness control
     camberControlPoints,
     thicknessControlPoints,
@@ -537,6 +540,9 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       controlMode: state.controlMode,
       displayAlpha: state.displayAlpha,
       reynolds: state.reynolds,
+      mach: state.mach,
+      ncrit: state.ncrit,
+      maxIterations: state.maxIterations,
       camberControlPoints: state.camberControlPoints,
       thicknessControlPoints: state.thicknessControlPoints,
       updateCamberControlPoint: state.updateCamberControlPoint,
@@ -589,6 +595,9 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       showPsiContours: state.showPsiContours,
       showCp: state.showCp,
       showForces: state.showForces,
+      showBoundaryLayer: state.showBoundaryLayer,
+      showWake: state.showWake,
+      blThicknessScale: state.blThicknessScale,
       enableMorphing: state.enableMorphing,
       morphDuration: state.morphDuration,
       streamlineDensity: state.streamlineDensity,
@@ -617,6 +626,9 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     showPsiContours,
     showCp,
     showForces,
+    showBoundaryLayer,
+    showWake,
+    blThicknessScale,
     enableMorphing,
     morphDuration,
     streamlineDensity,
@@ -783,14 +795,14 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     }
     
     try {
-      const result = computeStreamlines(panels, displayAlpha, reynolds, adaptiveStreamlineCount, streamlineBounds);
+      const result = computeStreamlines(panels, displayAlpha, reynolds, adaptiveStreamlineCount, streamlineBounds, mach, ncrit, maxIterations);
       if (result.success) {
         setStreamlines(result.streamlines);
       }
     } catch (e) {
       console.error('Streamline computation failed:', e);
     }
-  }, [showStreamlines, panels, displayAlpha, reynolds, adaptiveStreamlineCount, streamlineBounds, isDraggingPoint]);
+  }, [showStreamlines, panels, displayAlpha, reynolds, mach, ncrit, maxIterations, adaptiveStreamlineCount, streamlineBounds, isDraggingPoint]);
   
   // Compute stream function (ψ) contours when enabled
   // Uses marching squares to extract iso-lines from the psi grid
@@ -814,7 +826,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         Math.min(200, Math.round(xRange * 40)),
         Math.min(120, Math.round(yRange * 40))
       ];
-      const result = computePsiGrid(panels, displayAlpha, reynolds, bounds, resolution);
+      const result = computePsiGrid(panels, displayAlpha, reynolds, bounds, resolution, mach, ncrit, maxIterations);
       
       if (!result.success) {
         console.error('Psi grid computation failed:', result.error);
@@ -907,7 +919,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     } catch (e) {
       console.error('Psi contour computation failed:', e);
     }
-  }, [showPsiContours, panels, displayAlpha, reynolds, streamlineBounds, isDraggingPoint]);
+  }, [showPsiContours, panels, displayAlpha, reynolds, mach, ncrit, maxIterations, streamlineBounds, isDraggingPoint]);
   
   // Compute aerodynamic analysis (Cp, Cl, Cm)
   // SKIP during drag to prevent freezing - recalculate on drag end
@@ -917,7 +929,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     }
     
     try {
-      const result = analyzeAirfoil(panels, displayAlpha, reynolds);
+      const result = analyzeAirfoil(panels, displayAlpha, reynolds, mach, ncrit, maxIterations);
       if (result.success) {
         setAnalysisResult({
           cp: result.cp,
@@ -930,7 +942,26 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     } catch (e) {
       console.error('Analysis failed:', e);
     }
-  }, [panels, displayAlpha, reynolds, isDraggingPoint]);
+  }, [panels, displayAlpha, reynolds, mach, ncrit, maxIterations, isDraggingPoint]);
+  
+  // BL visualization data (for boundary layer envelope + wake overlay)
+  const [blVisData, setBlVisData] = useState<BLVisualizationData | null>(null);
+  
+  useEffect(() => {
+    if ((!showBoundaryLayer && !showWake) || !isWasmReady() || panels.length < 10 || isDraggingPoint) {
+      if (!isDraggingPoint) setBlVisData(null);
+      return;
+    }
+    
+    try {
+      const data = getBLVisualizationData(panels, displayAlpha, reynolds, mach, ncrit, maxIterations);
+      if (data.success) {
+        setBlVisData(data);
+      }
+    } catch (e) {
+      console.error('BL visualization data failed:', e);
+    }
+  }, [showBoundaryLayer, showWake, panels, displayAlpha, reynolds, mach, ncrit, maxIterations, isDraggingPoint]);
   
   // Morphing animation integration
   const morphTarget = useMemo(() => ({
@@ -1686,19 +1717,120 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       ctx.globalAlpha = 0.5;
       ctx.lineWidth = 1;
       
+      // Build "effective body" polygon for streamline clipping when BL overlay is on.
+      // The polygon traces: upper envelope (LE→TE) → wake upper edge → wake lower edge
+      // (reversed) → lower envelope (TE→LE) → close. Any streamline point inside this
+      // polygon is clipped so streamlines flow around the outside of the BL.
+      let effectiveBodyPoly: { x: number; y: number }[] | null = null;
+
+      if (showBoundaryLayer && blVisData && blVisData.success) {
+        const sc = blThicknessScale;
+        const poly: { x: number; y: number }[] = [];
+
+        // Helper: compute outward normal for envelope offset
+        const envNormal = (pts: { x: number[]; y: number[] }, i: number, sign: number) => {
+          let tx: number, ty: number;
+          if (pts.x.length < 2) return { nx: 0, ny: sign };
+          if (i === 0) { tx = pts.x[1] - pts.x[0]; ty = pts.y[1] - pts.y[0]; }
+          else if (i === pts.x.length - 1) { tx = pts.x[i] - pts.x[i - 1]; ty = pts.y[i] - pts.y[i - 1]; }
+          else { tx = pts.x[i + 1] - pts.x[i - 1]; ty = pts.y[i + 1] - pts.y[i - 1]; }
+          const len = Math.sqrt(tx * tx + ty * ty) || 1e-10;
+          return { nx: -ty / len * sign, ny: tx / len * sign };
+        };
+
+        // 1. Upper envelope LE → TE
+        const uData = blVisData.upper;
+        for (let i = 0; i < uData.x.length; i++) {
+          const n = envNormal(uData, i, 1);
+          const ds = uData.delta_star[i] * sc;
+          poly.push({ x: uData.x[i] + n.nx * ds, y: uData.y[i] + n.ny * ds });
+        }
+
+        // 2. Wake edges with fraction-based splitting and normal blending
+        const wk = blVisData.wake;
+        const fU = blVisData.wake_upper_fraction;
+        const fL = 1 - fU;
+        if (showWake && wk.x.length > 0) {
+          const blendN = Math.min(5, wk.x.length);
+          const teNU = uData.x.length > 1 ? envNormal(uData, uData.x.length - 1, 1) : { nx: 0, ny: 1 };
+          for (let i = 0; i < wk.x.length; i++) {
+            const wn = envNormal(wk, i, 1);
+            const t = i < blendN ? i / blendN : 1;
+            const nx = teNU.nx * (1 - t) + wn.nx * t;
+            const ny = teNU.ny * (1 - t) + wn.ny * t;
+            const len = Math.sqrt(nx * nx + ny * ny) || 1;
+            const ds = wk.delta_star[i] * sc * fU;
+            poly.push({ x: wk.x[i] + (nx / len) * ds, y: wk.y[i] + (ny / len) * ds });
+          }
+          // 3. Wake lower edge (downstream → back to TE, reversed)
+          const lData2 = blVisData.lower;
+          const teNL = lData2.x.length > 1 ? envNormal(lData2, lData2.x.length - 1, -1) : { nx: 0, ny: -1 };
+          for (let i = wk.x.length - 1; i >= 0; i--) {
+            const wn = envNormal(wk, i, 1);
+            const t = i < blendN ? i / blendN : 1;
+            const nx = teNL.nx * (1 - t) + (-wn.nx) * t;
+            const ny = teNL.ny * (1 - t) + (-wn.ny) * t;
+            const len = Math.sqrt(nx * nx + ny * ny) || 1;
+            const ds = wk.delta_star[i] * sc * fL;
+            poly.push({ x: wk.x[i] + (nx / len) * ds, y: wk.y[i] + (ny / len) * ds });
+          }
+        }
+
+        // 4. Lower envelope TE → LE (reversed so polygon winds correctly)
+        const lData = blVisData.lower;
+        for (let i = lData.x.length - 1; i >= 0; i--) {
+          const n = envNormal(lData, i, -1);
+          const ds = lData.delta_star[i] * sc;
+          poly.push({ x: lData.x[i] + n.nx * ds, y: lData.y[i] + n.ny * ds });
+        }
+
+        if (poly.length > 4) effectiveBodyPoly = poly;
+      }
+
+      // Ray-casting point-in-polygon test
+      const insideEffectiveBody = effectiveBodyPoly ? (px: number, py: number): boolean => {
+        const poly = effectiveBodyPoly!;
+        let inside = false;
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+          const yi = poly[i].y, yj = poly[j].y;
+          if ((yi > py) !== (yj > py)) {
+            const xi = poly[i].x, xj = poly[j].x;
+            const xIntersect = xi + (py - yi) / (yj - yi) * (xj - xi);
+            if (px < xIntersect) inside = !inside;
+          }
+        }
+        return inside;
+      } : null;
+
       for (const line of morphState.streamlines) {
         if (line.length < 2) continue;
-        ctx.beginPath();
-        const first = toCanvas(rotatePoint({ x: line[0][0], y: line[0][1] }));
-        ctx.moveTo(first.x, first.y);
+        let drawing = false;
         
-        for (let i = 1; i < line.length; i++) {
-          const p = toCanvas(rotatePoint({ x: line[i][0], y: line[i][1] }));
-          ctx.lineTo(p.x, p.y);
+        for (let i = 0; i < line.length; i++) {
+          const px = line[i][0];
+          const py = line[i][1];
+          const inside = insideEffectiveBody ? insideEffectiveBody(px, py) : false;
+
+          if (inside) {
+            if (drawing) {
+              ctx.stroke();
+              drawing = false;
+            }
+            continue;
+          }
+
+          const p = toCanvas(rotatePoint({ x: px, y: py }));
+          if (!drawing) {
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            drawing = true;
+          } else {
+            ctx.lineTo(p.x, p.y);
+          }
         }
-        ctx.stroke();
+        if (drawing) ctx.stroke();
       }
-      ctx.globalAlpha = 1; // Reset alpha
+      ctx.globalAlpha = 1;
     }
     
     // NOTE: Smoke is drawn on a separate overlay canvas (smokeCanvasRef) for performance
@@ -2007,9 +2139,250 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       ctx.globalAlpha = 1;
     }
 
+    // Draw boundary layer displacement thickness envelope + wake as one continuous shape
+    if ((showBoundaryLayer || showWake) && blVisData && blVisData.success) {
+      const scale = blThicknessScale;
+      const laminarColor = isDark ? 'rgba(0, 180, 255, 0.25)' : 'rgba(0, 120, 220, 0.2)';
+      const turbulentColor = isDark ? 'rgba(255, 100, 60, 0.25)' : 'rgba(220, 60, 30, 0.2)';
+      const laminarStroke = isDark ? 'rgba(0, 180, 255, 0.6)' : 'rgba(0, 120, 220, 0.5)';
+      const turbulentStroke = isDark ? 'rgba(255, 100, 60, 0.6)' : 'rgba(220, 60, 30, 0.5)';
+      const wakeColor = isDark ? 'rgba(255, 200, 50, 0.2)' : 'rgba(180, 140, 30, 0.15)';
+      const wakeStroke = isDark ? 'rgba(255, 200, 50, 0.5)' : 'rgba(180, 140, 30, 0.4)';
+
+      // Helper: compute outward normal for a point in a polyline
+      const computeNormal = (pts: { x: number[]; y: number[] }, i: number, sign: number) => {
+        let tx: number, ty: number;
+        if (pts.x.length < 2) return { nx: 0, ny: sign };
+        if (i === 0) {
+          tx = pts.x[1] - pts.x[0]; ty = pts.y[1] - pts.y[0];
+        } else if (i === pts.x.length - 1) {
+          tx = pts.x[i] - pts.x[i - 1]; ty = pts.y[i] - pts.y[i - 1];
+        } else {
+          tx = pts.x[i + 1] - pts.x[i - 1]; ty = pts.y[i + 1] - pts.y[i - 1];
+        }
+        const len = Math.sqrt(tx * tx + ty * ty) || 1e-10;
+        return { nx: -ty / len * sign, ny: tx / len * sign };
+      };
+
+      // Build surface envelope + surface points for each side
+      if (showBoundaryLayer) {
+        for (const surface of ['upper', 'lower'] as const) {
+          const data = blVisData[surface];
+          if (data.x.length < 2) continue;
+          const sign = surface === 'upper' ? 1 : -1;
+
+          const surfacePoints: Point[] = [];
+          const envelopePoints: Point[] = [];
+          for (let i = 0; i < data.x.length; i++) {
+            const n = computeNormal(data, i, sign);
+            const ds = data.delta_star[i] * scale;
+            surfacePoints.push({ x: data.x[i], y: data.y[i] });
+            envelopePoints.push({ x: data.x[i] + n.nx * ds, y: data.y[i] + n.ny * ds });
+          }
+
+          // Draw laminar/turbulent segments as filled regions
+          let segStart = 0;
+          for (let i = 0; i <= data.x.length; i++) {
+            const isLam = i < data.x.length ? data.is_laminar[i] : !data.is_laminar[data.x.length - 1];
+            const prevLam = i > 0 ? data.is_laminar[i - 1] : data.is_laminar[0];
+            
+            if (i === data.x.length || isLam !== prevLam) {
+              const segEnd = Math.min(i, data.x.length - 1);
+              if (segEnd > segStart) {
+                const segLaminar = data.is_laminar[segStart];
+                ctx.beginPath();
+                ctx.fillStyle = segLaminar ? laminarColor : turbulentColor;
+                const firstSurf = toCanvas(rotatePoint(surfacePoints[segStart]));
+                ctx.moveTo(firstSurf.x, firstSurf.y);
+                for (let j = segStart + 1; j <= segEnd; j++) {
+                  const p = toCanvas(rotatePoint(surfacePoints[j]));
+                  ctx.lineTo(p.x, p.y);
+                }
+                for (let j = segEnd; j >= segStart; j--) {
+                  const p = toCanvas(rotatePoint(envelopePoints[j]));
+                  ctx.lineTo(p.x, p.y);
+                }
+                ctx.closePath();
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.strokeStyle = segLaminar ? laminarStroke : turbulentStroke;
+                ctx.lineWidth = 1.5;
+                const firstEnv = toCanvas(rotatePoint(envelopePoints[segStart]));
+                ctx.moveTo(firstEnv.x, firstEnv.y);
+                for (let j = segStart + 1; j <= segEnd; j++) {
+                  const p = toCanvas(rotatePoint(envelopePoints[j]));
+                  ctx.lineTo(p.x, p.y);
+                }
+                ctx.stroke();
+              }
+              segStart = i;
+            }
+          }
+        }
+
+        // Transition markers
+        for (const [xTr, label, color] of [
+          [blVisData.x_tr_upper, 'Tr', isDark ? '#00b4ff' : '#0078dc'],
+          [blVisData.x_tr_lower, 'Tr', isDark ? '#ff643c' : '#dc3c1e'],
+        ] as [number, string, string][]) {
+          if (xTr < 1 && xTr > 0) {
+            const p = toCanvas(rotatePoint({ x: xTr, y: 0 }));
+            ctx.beginPath();
+            ctx.fillStyle = color;
+            ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = isDark ? '#fff' : '#000';
+            ctx.font = '10px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(label, p.x, p.y - 8);
+          }
+        }
+      }
+
+      // Draw wake: continuous from upper TE → downstream → lower TE
+      if (showWake) {
+        const wk = blVisData.wake;
+        const fU = blVisData.wake_upper_fraction;
+        const fL = 1 - fU;
+        const wakeGeoX = blVisData.wake_geometry_x;
+        const wakeGeoY = blVisData.wake_geometry_y;
+
+        if (wakeGeoX.length > 1) {
+          ctx.beginPath();
+          ctx.strokeStyle = wakeStroke;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([6, 4]);
+          const first = toCanvas(rotatePoint({ x: wakeGeoX[0], y: wakeGeoY[0] }));
+          ctx.moveTo(first.x, first.y);
+          for (let i = 1; i < wakeGeoX.length; i++) {
+            const p = toCanvas(rotatePoint({ x: wakeGeoX[i], y: wakeGeoY[i] }));
+            ctx.lineTo(p.x, p.y);
+          }
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+
+        if (wk.x.length > 1) {
+          const blendStations = Math.min(5, wk.x.length);
+          let teNormalUpper = { nx: 0, ny: 1 };
+          let teNormalLower = { nx: 0, ny: -1 };
+          if (showBoundaryLayer && blVisData.upper.x.length > 1) {
+            const uD = blVisData.upper;
+            teNormalUpper = computeNormal(uD, uD.x.length - 1, 1);
+          }
+          if (showBoundaryLayer && blVisData.lower.x.length > 1) {
+            const lD = blVisData.lower;
+            teNormalLower = computeNormal(lD, lD.x.length - 1, -1);
+          }
+
+          // Upper edge: fraction fU of total wake δ*, blended normal
+          const upperEnv: Point[] = [];
+          for (let i = 0; i < wk.x.length; i++) {
+            const wakeN = computeNormal(wk, i, 1);
+            const t = i < blendStations ? i / blendStations : 1;
+            const nx = teNormalUpper.nx * (1 - t) + wakeN.nx * t;
+            const ny = teNormalUpper.ny * (1 - t) + wakeN.ny * t;
+            const len = Math.sqrt(nx * nx + ny * ny) || 1;
+            const ds = wk.delta_star[i] * scale * fU;
+            upperEnv.push({ x: wk.x[i] + (nx / len) * ds, y: wk.y[i] + (ny / len) * ds });
+          }
+
+          // Lower edge: fraction fL of total wake δ*, blended normal
+          const lowerEnv: Point[] = [];
+          for (let i = 0; i < wk.x.length; i++) {
+            const wakeN = computeNormal(wk, i, 1);
+            const t = i < blendStations ? i / blendStations : 1;
+            const nx = teNormalLower.nx * (1 - t) + (-wakeN.nx) * t;
+            const ny = teNormalLower.ny * (1 - t) + (-wakeN.ny) * t;
+            const len = Math.sqrt(nx * nx + ny * ny) || 1;
+            const ds = wk.delta_star[i] * scale * fL;
+            lowerEnv.push({ x: wk.x[i] + (nx / len) * ds, y: wk.y[i] + (ny / len) * ds });
+          }
+
+          // Fill: bridge from upper BL TE → wake upper → wake lower → lower BL TE
+          ctx.beginPath();
+          ctx.fillStyle = wakeColor;
+
+          if (showBoundaryLayer && blVisData.upper.x.length > 0) {
+            const uData = blVisData.upper;
+            const li = uData.x.length - 1;
+            const nU = computeNormal(uData, li, 1);
+            const dsU = uData.delta_star[li] * scale;
+            const p = toCanvas(rotatePoint({ x: uData.x[li] + nU.nx * dsU, y: uData.y[li] + nU.ny * dsU }));
+            ctx.moveTo(p.x, p.y);
+          } else {
+            const p = toCanvas(rotatePoint(upperEnv[0]));
+            ctx.moveTo(p.x, p.y);
+          }
+
+          for (let i = 0; i < upperEnv.length; i++) {
+            const p = toCanvas(rotatePoint(upperEnv[i]));
+            ctx.lineTo(p.x, p.y);
+          }
+          for (let i = lowerEnv.length - 1; i >= 0; i--) {
+            const p = toCanvas(rotatePoint(lowerEnv[i]));
+            ctx.lineTo(p.x, p.y);
+          }
+
+          if (showBoundaryLayer && blVisData.lower.x.length > 0) {
+            const lData = blVisData.lower;
+            const li = lData.x.length - 1;
+            const nL = computeNormal(lData, li, -1);
+            const dsL = lData.delta_star[li] * scale;
+            const p = toCanvas(rotatePoint({ x: lData.x[li] + nL.nx * dsL, y: lData.y[li] + nL.ny * dsL }));
+            ctx.lineTo(p.x, p.y);
+          }
+
+          ctx.closePath();
+          ctx.fill();
+
+          // Stroke edges, bridging from BL TE points
+          ctx.strokeStyle = wakeStroke;
+          ctx.lineWidth = 1;
+
+          ctx.beginPath();
+          if (showBoundaryLayer && blVisData.upper.x.length > 0) {
+            const uData = blVisData.upper;
+            const li = uData.x.length - 1;
+            const nU = computeNormal(uData, li, 1);
+            const dsU = uData.delta_star[li] * scale;
+            const p = toCanvas(rotatePoint({ x: uData.x[li] + nU.nx * dsU, y: uData.y[li] + nU.ny * dsU }));
+            ctx.moveTo(p.x, p.y);
+          } else {
+            const p = toCanvas(rotatePoint(upperEnv[0]));
+            ctx.moveTo(p.x, p.y);
+          }
+          for (const pt of upperEnv) {
+            const p = toCanvas(rotatePoint(pt));
+            ctx.lineTo(p.x, p.y);
+          }
+          ctx.stroke();
+
+          ctx.beginPath();
+          if (showBoundaryLayer && blVisData.lower.x.length > 0) {
+            const lData = blVisData.lower;
+            const li = lData.x.length - 1;
+            const nL = computeNormal(lData, li, -1);
+            const dsL = lData.delta_star[li] * scale;
+            const p = toCanvas(rotatePoint({ x: lData.x[li] + nL.nx * dsL, y: lData.y[li] + nL.ny * dsL }));
+            ctx.moveTo(p.x, p.y);
+          } else {
+            const p = toCanvas(rotatePoint(lowerEnv[0]));
+            ctx.moveTo(p.x, p.y);
+          }
+          for (const pt of lowerEnv) {
+            const p = toCanvas(rotatePoint(pt));
+            ctx.lineTo(p.x, p.y);
+          }
+          ctx.stroke();
+        }
+      }
+    }
+
   // NOTE: Smoke state (smokePositions, etc.) intentionally NOT in dependencies
   // Smoke is drawn on separate overlay canvas to avoid expensive redraws
-  }, [viewport, morphState, splineCurve, controlMode, camberControlPoints, thicknessControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showPsiContours, psiContours, displayAlpha, toCanvas, isDark, showCp, showForces, cpDisplayMode, cpBarScale, forceScale]);
+  }, [viewport, morphState, splineCurve, controlMode, camberControlPoints, thicknessControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showPsiContours, psiContours, displayAlpha, toCanvas, isDark, showCp, showForces, cpDisplayMode, cpBarScale, forceScale, showBoundaryLayer, showWake, blVisData, blThicknessScale]);
 
   // Draw grid
   const drawGrid = useCallback((ctx: CanvasRenderingContext2D) => {
