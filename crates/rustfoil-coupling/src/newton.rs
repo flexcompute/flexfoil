@@ -250,7 +250,7 @@ impl BlNewtonSystem {
             let (residuals, jacobian) = if let Some(tr) = transition {
                 if tr.transition {
                     // Use full TRDIF with chain rule through XT derivatives
-                    trdif_full(s1, s2, tr, msq, re)
+                    trdif_full(s1, s2, tr, 9.0, msq, re)
                 } else {
                     // No transition occurred in this interval, use regular BLDIF
                     bldif(s1, s2, flow_type, msq, re)
@@ -364,7 +364,7 @@ impl BlNewtonSystem {
 
                 if tr.transition {
                     // Use full TRDIF with chain rule
-                    trdif_full(s1, s2, &tr, msq, re)
+                    trdif_full(s1, s2, &tr, ncrit, msq, re)
                 } else {
                     // No transition, use regular BLDIF
                     bldif(s1, s2, flow_type, msq, re)
