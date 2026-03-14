@@ -106,10 +106,6 @@ function getDb(): Database {
   return db;
 }
 
-function isReady(): boolean {
-  return db !== null;
-}
-
 export interface RunInsert {
   airfoil_name: string;
   airfoil_hash: string;
@@ -192,7 +188,7 @@ export function queryAllRuns(): RunRow[] {
   const d = getDb();
   const rows = d.exec('SELECT * FROM runs ORDER BY id DESC');
   if (!rows.length) return [];
-  return rows[0].values.map(v => rowToRunRow(rows[0].columns, v));
+  return rows[0].values.map((v: (string | number | null | Uint8Array)[]) => rowToRunRow(rows[0].columns, v));
 }
 
 export function getRowCount(): number {
