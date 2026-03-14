@@ -49,7 +49,9 @@ jobs:
           cd flexfoil-ui
           npm run build
         env:
+          NODE_OPTIONS: --max-old-space-size=4096
           BASE_URL: /flexfoil/
+          VITE_AG_GRID_LICENSE_KEY: ${{ secrets.AG_GRID_LICENSE_KEY }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
