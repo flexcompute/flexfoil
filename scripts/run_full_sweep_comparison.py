@@ -316,7 +316,30 @@ def write_plot_html(cases: list[dict[str, Any]], output_path: Path, rust_solver_
     .plot-grid {{ grid-template-columns:1fr 1fr; }}
     .plot-card {{ padding:12px 12px 6px; }}
     .plot {{ height:360px; }}
+    .dot-row {{ display:none; justify-content:center; gap:8px; margin:-8px 0 16px; }}
+    .dot {{ width:8px; height:8px; border-radius:50%; background:rgba(155,172,223,.25); transition:background .2s, transform .2s; }}
+    .dot.active {{ background:#7dd3fc; transform:scale(1.3); }}
+    .plot-tabs {{ display:none; gap:8px; margin-bottom:12px; overflow-x:auto; -webkit-overflow-scrolling:touch; }}
+    .plot-tab {{ padding:10px 18px; border-radius:10px; font-size:13px; font-weight:600; letter-spacing:.02em; background:rgba(24,37,74,.6); border:1px solid rgba(155,172,223,.14); color:var(--muted); cursor:pointer; white-space:nowrap; transition:all .2s; }}
+    .plot-tab.active {{ background:rgba(125,211,252,.15); border-color:rgba(125,211,252,.4); color:var(--text); }}
     @media (max-width:1100px) {{ .summary,.plot-grid,.controls {{ grid-template-columns:1fr; }} }}
+    @media (max-width:600px) {{
+      .wrap {{ padding:16px 12px 32px; }}
+      h1 {{ font-size:22px; }}
+      .sub {{ font-size:13px; margin-bottom:16px; }}
+      select {{ min-height:44px; font-size:16px; }}
+      .controls {{ grid-template-columns:1fr; gap:10px; margin-bottom:12px; }}
+      .summary {{ display:flex; overflow-x:auto; scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch; gap:12px; padding-bottom:4px; margin-bottom:8px; scrollbar-width:none; }}
+      .summary::-webkit-scrollbar {{ display:none; }}
+      .card {{ min-width:78vw; flex-shrink:0; scroll-snap-align:start; min-height:auto; padding:14px 16px; }}
+      .value {{ font-size:22px; }}
+      .dot-row {{ display:flex; }}
+      .plot-tabs {{ display:flex; }}
+      .plot-grid {{ display:block; }}
+      .plot-card {{ display:none; }}
+      .plot-card.active {{ display:block; }}
+      .plot {{ height:300px; }}
+    }}
   </style>
 </head>
 <body>
@@ -341,21 +364,31 @@ def write_plot_html(cases: list[dict[str, Any]], output_path: Path, rust_solver_
       <div class="card"><div class="eyebrow">CD Ratio Range</div><div class="value" id="cdRange">-</div><div class="detail" id="cdRangeDetail"></div></div>
       <div class="card"><div class="eyebrow">Convergence</div><div class="value" id="pointCount">-</div><div class="detail" id="pointCountDetail"></div></div>
     </div>
+    <div class="dot-row">
+      <div class="dot active"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
+    </div>
+    <nav class="plot-tabs">
+      <div class="plot-tab active" data-target="clPlot">CL vs Alpha</div>
+      <div class="plot-tab" data-target="cdPlot">CD vs Alpha</div>
+      <div class="plot-tab" data-target="clErrPlot">CL Error %</div>
+      <div class="plot-tab" data-target="cdRatioPlot">CD Ratio</div>
+    </nav>
     <div class="plot-grid">
-      <div class="plot-card"><div id="clPlot" class="plot"></div></div>
-      <div class="plot-card"><div id="cdPlot" class="plot"></div></div>
-      <div class="plot-card"><div id="clErrPlot" class="plot"></div></div>
-      <div class="plot-card"><div id="cdRatioPlot" class="plot"></div></div>
+      <div class="plot-card active" data-plot="clPlot"><div id="clPlot" class="plot"></div></div>
+      <div class="plot-card" data-plot="cdPlot"><div id="cdPlot" class="plot"></div></div>
+      <div class="plot-card" data-plot="clErrPlot"><div id="clErrPlot" class="plot"></div></div>
+      <div class="plot-card" data-plot="cdRatioPlot"><div id="cdRatioPlot" class="plot"></div></div>
     </div>
   </div>
   <script>
     const DATA = {json.dumps(plot_cases, separators=(",", ":"))};
     const caseSelect = document.getElementById("caseSelect");
     const caseNote = document.getElementById("caseNote");
+    const isMobile = () => window.matchMedia("(max-width:600px)").matches;
     const plotLayoutBase = {{
       paper_bgcolor: "rgba(0,0,0,0)",
       plot_bgcolor: "rgba(0,0,0,0)",
-      margin: {{ l: 58, r: 20, t: 48, b: 48 }},
+      margin: isMobile() ? {{ l: 44, r: 12, t: 36, b: 40 }} : {{ l: 58, r: 20, t: 48, b: 48 }},
       font: {{ color: "#edf2ff", size: 13 }},
       xaxis: {{ gridcolor: "rgba(155,172,223,.16)", zerolinecolor: "rgba(155,172,223,.2)", title: "Alpha (deg)" }},
       yaxis: {{ gridcolor: "rgba(155,172,223,.16)", zerolinecolor: "rgba(155,172,223,.2)" }},
@@ -424,6 +457,29 @@ def write_plot_html(cases: list[dict[str, Any]], output_path: Path, rust_solver_
     if (DATA.length > 0) {{
       renderCase(0);
     }}
+    if (isMobile()) {{
+      const dots = document.querySelectorAll(".dot-row .dot");
+      const cards = document.querySelectorAll(".summary .card");
+      const observer = new IntersectionObserver((entries) => {{
+        entries.forEach(entry => {{
+          if (entry.isIntersecting) {{
+            const idx = [...cards].indexOf(entry.target);
+            dots.forEach((d, i) => d.classList.toggle("active", i === idx));
+          }}
+        }});
+      }}, {{ root: document.querySelector(".summary"), threshold: 0.6 }});
+      cards.forEach(card => observer.observe(card));
+    }}
+    document.querySelectorAll(".plot-tab").forEach(tab => {{
+      tab.addEventListener("click", () => {{
+        document.querySelectorAll(".plot-tab").forEach(t => t.classList.remove("active"));
+        document.querySelectorAll(".plot-card").forEach(c => c.classList.remove("active"));
+        tab.classList.add("active");
+        const target = tab.dataset.target;
+        document.querySelector(`.plot-card[data-plot="${{target}}"]`).classList.add("active");
+        Plotly.Plots.resize(document.getElementById(target));
+      }});
+    }});
   </script>
 </body>
 </html>
