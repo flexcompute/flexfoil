@@ -7,6 +7,7 @@
 import initSqlJs, { type Database } from 'sql.js';
 import { openDB, type IDBPDatabase } from 'idb';
 import type { RunRow } from '../types';
+import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 
 const DB_NAME = 'flexfoil-runs';
 const IDB_STORE = 'sqlite';
@@ -77,7 +78,7 @@ export async function initRunDatabase(): Promise<void> {
   if (db) return;
 
   const SQL = await initSqlJs({
-    locateFile: () => '/sql-wasm.wasm',
+    locateFile: () => sqlWasmUrl,
   });
 
   const store = await getIdb();
@@ -222,7 +223,7 @@ export function exportDatabase(): Uint8Array {
 
 export async function importDatabase(data: Uint8Array): Promise<void> {
   const SQL = await initSqlJs({
-    locateFile: (file: string) => `https://sql.js.org/dist/${file}`,
+    locateFile: () => sqlWasmUrl,
   });
   if (db) db.close();
   db = new SQL.Database(data);
