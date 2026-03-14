@@ -16,7 +16,7 @@ export const welcomeTour: TourStep[] = [
       title: 'Welcome to FlexFoil',
       description: `Interactive airfoil analysis in your browser. Let's take a quick tour of the interface!
         <div style="margin-top: 12px; padding: 10px; background: var(--bg-tertiary); border-radius: 6px; border-left: 3px solid var(--accent-secondary);">
-          <strong>Tip:</strong> You can restart this tutorial anytime from the <strong>Help → Tutorial</strong> menu.
+          <strong>Tip:</strong> If you accidentally dismiss this tutorial, look for the <strong>Tutorial</strong> button in the top-right corner of the screen.
         </div>`,
       side: 'over',
       align: 'center',
@@ -262,7 +262,7 @@ export const welcomeTour: TourStep[] = [
     element: '[data-tour="menu-help"]',
     popover: {
       title: 'Need Help?',
-      description: 'Access this tutorial anytime from Help → Tutorial. You can also find guides for specific features like editing and solving.',
+      description: 'The Help menu has additional tutorials for specific features like editing and solving. You can also reset your tutorial progress here if you want to start fresh.',
       side: 'bottom',
       align: 'end',
     },

@@ -240,6 +240,9 @@ export function MenuBar({
       {/* Spacer */}
       <div style={{ flex: 1 }} />
 
+      {/* Restore Tutorial Button - shows after tutorial has been dismissed */}
+      <RestoreTutorialButton />
+
       {/* WASM Status */}
       <div
         style={{
@@ -407,5 +410,46 @@ function MenuDivider() {
         margin: '4px 0',
       }}
     />
+  );
+}
+
+// Restore Tutorial button - appears after tutorial is dismissed
+function RestoreTutorialButton() {
+  const [isHovered, setIsHovered] = useState(false);
+  const { hasStartedTour, startTour, isActive } = useOnboarding();
+  
+  // Only show if welcome tour has been started (dismissed or completed) and no tour is active
+  if (!hasStartedTour('welcome') || isActive) {
+    return null;
+  }
+
+  return (
+    <button
+      onClick={() => startTour('welcome')}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      title="Restart the welcome tutorial"
+      style={{
+        padding: '0 10px',
+        height: '24px',
+        marginRight: '8px',
+        background: isHovered 
+          ? 'var(--accent-primary)' 
+          : 'transparent',
+        border: '1px solid var(--accent-primary)',
+        borderRadius: '4px',
+        color: isHovered ? 'white' : 'var(--accent-primary)',
+        fontSize: '11px',
+        fontWeight: 500,
+        cursor: 'pointer',
+        transition: 'all 0.15s ease',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '4px',
+      }}
+    >
+      <span style={{ fontSize: '12px' }}>?</span>
+      Tutorial
+    </button>
   );
 }

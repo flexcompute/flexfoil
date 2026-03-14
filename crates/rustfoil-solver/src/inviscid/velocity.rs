@@ -437,6 +437,11 @@ impl Default for StreamlineOptions {
 }
 
 /// Build streamlines from seed points.
+/// 
+/// Seeds are placed along boundaries where flow enters the domain:
+/// - Left boundary: always (flow generally goes left-to-right)
+/// - Top boundary: when alpha > 0 (flow enters from top-left)
+/// - Bottom boundary: when alpha < 0 (flow enters from bottom-left)
 pub fn build_streamlines(
     nodes: &[Point],
     gamma: &[f64],
@@ -444,22 +449,24 @@ pub fn build_streamlines(
     v_inf: f64,
     options: &StreamlineOptions,
 ) -> Vec<Vec<(f64, f64)>> {
-    let mut streamlines = Vec::with_capacity(options.seed_count);
-    
     // Create velocity field closure
     let field = |x: f64, y: f64| velocity_at(x, y, nodes, gamma, alpha, v_inf);
     
     let bounds = (options.x_min, options.x_max, options.y_min, options.y_max);
     
-    // Generate seed points
-    for i in 0..options.seed_count {
-        let t = i as f64 / (options.seed_count - 1).max(1) as f64;
-        let y = options.y_min + t * (options.y_max - options.y_min);
-        let x = options.seed_x;
-        
-        // Skip seeds that start inside the airfoil
+    // Calculate how many seeds to allocate to each boundary based on alpha
+    // At alpha=0, all seeds go to left boundary
+    // As |alpha| increases, more seeds go to top/bottom boundaries
+    let alpha_factor = alpha.abs().sin().min(0.8); // Cap at 80% to keep some left-edge seeds
+    let left_count = ((1.0 - alpha_factor) * options.seed_count as f64).round() as usize;
+    let edge_count = options.seed_count.saturating_sub(left_count);
+    
+    let mut streamlines = Vec::with_capacity(options.seed_count + edge_count);
+    
+    // Helper to add a streamline from a seed point
+    let mut add_streamline = |x: f64, y: f64| {
         if is_inside_airfoil(x, y, nodes) {
-            continue;
+            return;
         }
         
         let streamline = integrate_streamline(
@@ -474,6 +481,45 @@ pub fn build_streamlines(
         
         if streamline.len() >= 2 {
             streamlines.push(streamline);
+        }
+    };
+    
+    // 1. Seeds along left boundary (primary - always active)
+    let left_seed_count = left_count.max(5); // At least 5 seeds on left
+    for i in 0..left_seed_count {
+        let t = i as f64 / (left_seed_count - 1).max(1) as f64;
+        let y = options.y_min + t * (options.y_max - options.y_min);
+        let x = options.seed_x;
+        add_streamline(x, y);
+    }
+    
+    // 2. Seeds along top/bottom boundaries based on flow direction
+    if edge_count > 0 {
+        // Freestream direction components
+        let v_y = alpha.sin();
+        
+        if v_y > 0.01 {
+            // Alpha > 0: flow enters from top boundary (y = y_max)
+            // Seed along top edge, from left to somewhere past the airfoil
+            let x_start = options.x_min;
+            let x_end = 0.5; // Cover area around the airfoil
+            for i in 0..edge_count {
+                let t = i as f64 / edge_count.max(1) as f64;
+                let x = x_start + t * (x_end - x_start);
+                let y = options.y_max - 0.01; // Slightly inside the boundary
+                add_streamline(x, y);
+            }
+        } else if v_y < -0.01 {
+            // Alpha < 0: flow enters from bottom boundary (y = y_min)
+            // Seed along bottom edge
+            let x_start = options.x_min;
+            let x_end = 0.5;
+            for i in 0..edge_count {
+                let t = i as f64 / edge_count.max(1) as f64;
+                let x = x_start + t * (x_end - x_start);
+                let y = options.y_min + 0.01; // Slightly inside the boundary
+                add_streamline(x, y);
+            }
         }
     }
     
