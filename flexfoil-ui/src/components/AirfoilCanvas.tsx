@@ -520,6 +520,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     panels, 
     controlMode,
     displayAlpha,
+    reynolds,
     // Camber/thickness control
     camberControlPoints,
     thicknessControlPoints,
@@ -535,6 +536,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       panels: state.panels,
       controlMode: state.controlMode,
       displayAlpha: state.displayAlpha,
+      reynolds: state.reynolds,
       camberControlPoints: state.camberControlPoints,
       thicknessControlPoints: state.thicknessControlPoints,
       updateCamberControlPoint: state.updateCamberControlPoint,
@@ -674,13 +676,14 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     psi0Lines: [number, number][][];  // Dividing streamline (ψ = ψ₀), extrapolated to airfoil
   }>({ grid: [], bounds: [0, 0, 0, 0], nx: 0, ny: 0, psiMin: 0, psiMax: 0, psi0: 0, lines: [], psi0Lines: [] });
   
-  // Analysis results (Cp, Cl, Cm)
+  // Analysis results (Cp, Cl, Cd, Cm)
   const [analysisResult, setAnalysisResult] = useState<{
     cp: number[];
     cpX: number[];
     cl: number;
+    cd: number;
     cm: number;
-  }>({ cp: [], cpX: [], cl: 0, cm: 0 });
+  }>({ cp: [], cpX: [], cl: 0, cd: 0, cm: 0 });
   
   // Stable viewport for adaptive streamlines - only updates after zooming settles
   // This prevents expensive streamline recalculation on every scroll tick
@@ -780,14 +783,14 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     }
     
     try {
-      const result = computeStreamlines(panels, displayAlpha, adaptiveStreamlineCount, streamlineBounds);
+      const result = computeStreamlines(panels, displayAlpha, reynolds, adaptiveStreamlineCount, streamlineBounds);
       if (result.success) {
         setStreamlines(result.streamlines);
       }
     } catch (e) {
       console.error('Streamline computation failed:', e);
     }
-  }, [showStreamlines, panels, displayAlpha, adaptiveStreamlineCount, streamlineBounds, isDraggingPoint]);
+  }, [showStreamlines, panels, displayAlpha, reynolds, adaptiveStreamlineCount, streamlineBounds, isDraggingPoint]);
   
   // Compute stream function (ψ) contours when enabled
   // Uses marching squares to extract iso-lines from the psi grid
@@ -811,7 +814,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         Math.min(200, Math.round(xRange * 40)),
         Math.min(120, Math.round(yRange * 40))
       ];
-      const result = computePsiGrid(panels, displayAlpha, bounds, resolution);
+      const result = computePsiGrid(panels, displayAlpha, reynolds, bounds, resolution);
       
       if (!result.success) {
         console.error('Psi grid computation failed:', result.error);
@@ -904,7 +907,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     } catch (e) {
       console.error('Psi contour computation failed:', e);
     }
-  }, [showPsiContours, panels, displayAlpha, streamlineBounds, isDraggingPoint]);
+  }, [showPsiContours, panels, displayAlpha, reynolds, streamlineBounds, isDraggingPoint]);
   
   // Compute aerodynamic analysis (Cp, Cl, Cm)
   // SKIP during drag to prevent freezing - recalculate on drag end
@@ -914,19 +917,20 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     }
     
     try {
-      const result = analyzeAirfoil(panels, displayAlpha);
+      const result = analyzeAirfoil(panels, displayAlpha, reynolds);
       if (result.success) {
         setAnalysisResult({
           cp: result.cp,
           cpX: result.cp_x,
           cl: result.cl,
+          cd: result.cd,
           cm: result.cm,
         });
       }
     } catch (e) {
       console.error('Analysis failed:', e);
     }
-  }, [panels, displayAlpha, isDraggingPoint]);
+  }, [panels, displayAlpha, reynolds, isDraggingPoint]);
   
   // Morphing animation integration
   const morphTarget = useMemo(() => ({
@@ -936,6 +940,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     cp: analysisResult.cp,
     cpX: analysisResult.cpX,
     cl: analysisResult.cl,
+    cd: analysisResult.cd,
     cm: analysisResult.cm,
   }), [coordinates, panels, streamlines, analysisResult]);
   
@@ -2143,7 +2148,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     
     try {
       // Compute gamma values from WASM solver (real values, not approximations)
-      const gammaResult = computeGamma(panels, displayAlpha);
+      const gammaResult = computeGamma(panels, displayAlpha, reynolds);
       if (!gammaResult.success || !gammaResult.gamma) {
         console.warn('GPU gamma computation failed:', gammaResult.error);
         return;
@@ -2171,7 +2176,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     } catch (e) {
       console.error('GPU geometry update failed:', e);
     }
-  }, [useGPU, panels, displayAlpha, streamlineBounds, psiContours.psi0, psiContours.psiMin, psiContours.psiMax]);
+  }, [useGPU, panels, displayAlpha, reynolds, streamlineBounds, psiContours.psi0, psiContours.psiMin, psiContours.psiMax]);
 
   // Update GPU smoke spawn points (separate from geometry since spawn doesn't need gamma)
   useEffect(() => {

@@ -8,17 +8,18 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
 import type { PolarPoint } from '../../types';
 
-type AxisVariable = 'alpha' | 'cl' | 'cm';
+type AxisVariable = 'alpha' | 'cl' | 'cd' | 'cm';
 
 const AXIS_LABELS: Record<AxisVariable, string> = {
   alpha: 'α (deg)',
   cl: 'Cl',
+  cd: 'Cd',
   cm: 'Cm',
 };
 
 // Get value from polar point by variable name
 function getValue(point: PolarPoint, variable: AxisVariable): number {
-  return point[variable];
+  return point[variable] ?? 0;
 }
 
 // Auto-scale axis bounds with some padding
@@ -267,6 +268,7 @@ export function PolarPanel() {
           >
             <option value="alpha">Alpha</option>
             <option value="cl">Cl</option>
+            <option value="cd">Cd</option>
             <option value="cm">Cm</option>
           </select>
         </label>
@@ -280,6 +282,7 @@ export function PolarPanel() {
           >
             <option value="alpha">Alpha</option>
             <option value="cl">Cl</option>
+            <option value="cd">Cd</option>
             <option value="cm">Cm</option>
           </select>
         </label>
