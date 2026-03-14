@@ -493,6 +493,7 @@ function extrapolateDividingStreamline(
 const PANEL_POINT_RADIUS = 2.5;
 const CONTROL_RADIUS = 6;
 const HIT_RADIUS = 10;
+const TOUCH_HIT_RADIUS = 24;
 
 interface AirfoilCanvasProps {
   initialViewport?: { centerX: number; centerY: number; zoom: number } | null;
@@ -1186,6 +1187,8 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
   const [dragTarget, setDragTarget] = useState<{ type: string; index: number | string } | null>(null);
   const [hoveredPoint, setHoveredPoint] = useState<{ type: string; index: number | string } | null>(null);
   const lastMousePos = useRef<Point>({ x: 0, y: 0 });
+  const activePointers = useRef<Map<number, Point>>(new Map());
+  const lastPinchDist = useRef<number | null>(null);
 
   // Convert airfoil coordinates to canvas coordinates
   const toCanvas = useCallback((p: Point): Point => {
@@ -1204,7 +1207,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
   }, [viewport]);
 
   // Find point at canvas position
-  const findPointAt = useCallback((canvasPos: Point): { type: string; index: number | string } | null => {
+  const findPointAt = useCallback((canvasPos: Point, hitRadius = HIT_RADIUS): { type: string; index: number | string } | null => {
     // Helper to get camber at x position (same as in draw function)
     const getCamberAt = (x: number): number => {
       if (camberControlPoints.length === 0) return 0;
@@ -1226,7 +1229,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       for (const cp of camberControlPoints) {
         const cpCanvas = toCanvas({ x: cp.x, y: cp.y });
         const dist = Math.hypot(canvasPos.x - cpCanvas.x, canvasPos.y - cpCanvas.y);
-        if (dist < HIT_RADIUS) {
+        if (dist < hitRadius) {
           return { type: 'camber', index: cp.id };
         }
       }
@@ -1239,7 +1242,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         const camber = getCamberAt(cp.x);
         const cpCanvas = toCanvas({ x: cp.x, y: camber + cp.t });
         const dist = Math.hypot(canvasPos.x - cpCanvas.x, canvasPos.y - cpCanvas.y);
-        if (dist < HIT_RADIUS) {
+        if (dist < hitRadius) {
           return { type: 'thickness', index: cp.id };
         }
       }
@@ -2709,32 +2712,76 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     draw();
   }, [draw]);
 
-  // Mouse event handlers
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+  // Pointer event handlers (unified mouse + touch)
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
 
     const canvasPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    activePointers.current.set(e.pointerId, canvasPos);
+    e.currentTarget.setPointerCapture(e.pointerId);
+
+    // 2+ fingers → pinch mode, cancel any single-pointer interaction
+    if (activePointers.current.size > 1) {
+      setIsDragging(false);
+      setIsDraggingPoint(false);
+      setIsPanning(false);
+      setDragTarget(null);
+      lastPinchDist.current = null;
+      return;
+    }
+
     lastMousePos.current = canvasPos;
 
-    // Check for point hit
-    const hit = findPointAt(canvasPos);
+    const radius = e.pointerType === 'touch' ? TOUCH_HIT_RADIUS : HIT_RADIUS;
+    const hit = findPointAt(canvasPos, radius);
     if (hit) {
-      pauseHistory(); // Pause history tracking during drag
+      pauseHistory();
       setIsDragging(true);
-      setIsDraggingPoint(true); // Disable morph animation during drag
+      setIsDraggingPoint(true);
       setDragTarget(hit);
     } else {
-      // Start panning
       setIsPanning(true);
     }
   }, [findPointAt]);
 
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
 
     const canvasPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    activePointers.current.set(e.pointerId, canvasPos);
+
+    // Pinch-to-zoom with 2 fingers
+    if (activePointers.current.size === 2) {
+      const pts = [...activePointers.current.values()];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      const center = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+
+      if (lastPinchDist.current !== null && lastPinchDist.current > 0) {
+        const scale = dist / lastPinchDist.current;
+        const airfoilBefore = toAirfoil(center);
+        const newZoom = Math.max(50, Math.min(5000, viewport.zoom * scale));
+
+        setViewport((v) => {
+          const airfoilAfter = {
+            x: v.center.x + (center.x - v.width / 2) / newZoom,
+            y: v.center.y - (center.y - v.height / 2) / newZoom,
+          };
+          return {
+            ...v,
+            zoom: newZoom,
+            center: {
+              x: v.center.x + (airfoilBefore.x - airfoilAfter.x),
+              y: v.center.y + (airfoilBefore.y - airfoilAfter.y),
+            },
+          };
+        });
+      }
+      lastPinchDist.current = dist;
+      return;
+    }
+
     const airfoilPos = toAirfoil(canvasPos);
 
     if (isDragging && dragTarget) {
@@ -2828,12 +2875,16 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     lastMousePos.current = canvasPos;
   }, [isDragging, isPanning, dragTarget, viewport, toAirfoil, findPointAt, camberControlPoints, thicknessControlPoints, updateCamberControlPoint, updateThicknessControlPoint]);
 
-  const handleMouseUp = useCallback(() => {
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    activePointers.current.delete(e.pointerId);
+    if (activePointers.current.size < 2) {
+      lastPinchDist.current = null;
+    }
     if (isDragging) {
-      resumeHistory(); // Resume history tracking after drag
+      resumeHistory();
     }
     setIsDragging(false);
-    setIsDraggingPoint(false); // Re-enable morph animation
+    setIsDraggingPoint(false);
     setIsPanning(false);
     setDragTarget(null);
   }, [isDragging]);
@@ -2993,13 +3044,14 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         ref={canvasRef}
         width={viewport.width}
         height={viewport.height}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onPointerLeave={handlePointerUp}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
-        style={{ cursor: isDragging ? 'grabbing' : isPanning ? 'grabbing' : hoveredPoint ? 'pointer' : 'crosshair' }}
+        style={{ touchAction: 'none', cursor: isDragging ? 'grabbing' : isPanning ? 'grabbing' : hoveredPoint ? 'pointer' : 'crosshair' }}
       />
       
       {/* Smoke overlay canvas - renders smoke particles without triggering expensive main canvas redraws */}
