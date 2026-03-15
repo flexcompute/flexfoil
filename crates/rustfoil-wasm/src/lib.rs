@@ -26,15 +26,21 @@ use rustfoil_core::{naca, point, Body, CubicSpline, Point};
 use rustfoil_inviscid::{FlowConditions as FaithfulFlowConditions, InviscidSolver as FaithfulInviscidSolver};
 use rustfoil_solver::inviscid::{
     FlowConditions, InviscidSolver,
-    build_streamlines, StreamlineOptions, SmokeSystem
+    build_streamlines, build_streamlines_viscous, StreamlineOptions, SmokeSystem, WakePanels
 };
-use rustfoil_solver::inviscid::{compute_psi_grid_with_interior, psi_at};
+use rustfoil_solver::inviscid::{compute_psi_grid_with_interior, compute_psi_grid_with_sources, psi_at};
 use rustfoil_xfoil::{AlphaSpec, XfoilOptions};
 use rustfoil_xfoil::oper::solve_operating_point_from_state;
 use rustfoil_xfoil::state::XfoilState;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
 use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(s: &str);
+}
 
 // When the `console_error_panic_hook` feature is enabled, we can call the
 // `set_panic_hook` function at least once during initialization, and then
@@ -688,6 +694,181 @@ struct FaithfulSnapshot {
     wake_y: Vec<f64>,
 }
 
+#[derive(Debug, Clone)]
+struct FaithfulFlowField {
+    nodes: Vec<Point>,
+    gamma: Vec<f64>,
+    sigma: Vec<f64>,
+    alpha: f64,
+    v_inf: f64,
+    psi_0: f64,
+    wake_panels: Option<WakePanels>,
+    effective_body: Vec<Point>,
+}
+
+impl FaithfulFlowField {
+    fn from_snapshot(snapshot: &FaithfulSnapshot, alpha_deg: f64) -> Self {
+        Self {
+            nodes: snapshot.nodes.clone(),
+            gamma: snapshot.gamma.clone(),
+            sigma: build_surface_sigma_from_snapshot(snapshot),
+            alpha: alpha_deg.to_radians(),
+            v_inf: 1.0,
+            psi_0: snapshot.psi_0,
+            wake_panels: build_wake_source_panels_from_snapshot(snapshot),
+            effective_body: build_effective_body_polygon_from_snapshot(snapshot),
+        }
+    }
+
+    fn effective_body_ref(&self) -> Option<&[Point]> {
+        if self.effective_body.len() >= 3 {
+            Some(&self.effective_body)
+        } else {
+            None
+        }
+    }
+
+    fn compute_streamlines(&self, options: &StreamlineOptions) -> Vec<Vec<(f64, f64)>> {
+        build_streamlines_viscous(
+            &self.nodes,
+            &self.gamma,
+            &self.sigma,
+            self.alpha,
+            self.v_inf,
+            self.wake_panels.as_ref(),
+            self.effective_body_ref(),
+            options,
+        )
+    }
+
+    fn compute_psi_grid(
+        &self,
+        bounds: &[f64],
+        nx: usize,
+        ny: usize,
+        interior_value: Option<f64>,
+    ) -> Vec<f64> {
+        compute_psi_grid_with_sources(
+            &self.nodes,
+            &self.gamma,
+            &self.sigma,
+            self.alpha,
+            self.v_inf,
+            bounds[0],
+            bounds[1],
+            bounds[2],
+            bounds[3],
+            nx,
+            ny,
+            interior_value,
+            self.wake_panels.as_ref(),
+        )
+    }
+}
+
+fn build_surface_sigma_from_snapshot(snapshot: &FaithfulSnapshot) -> Vec<f64> {
+    let n = snapshot.nodes.len();
+    let mut sigma = vec![0.0f64; n];
+
+    for row in snapshot.upper_rows.iter().take(snapshot.iblte_upper + 1) {
+        if row.panel_idx < n {
+            sigma[row.panel_idx] = row.mass;
+        }
+    }
+    for row in snapshot.lower_rows.iter().take(snapshot.iblte_lower + 1) {
+        if row.panel_idx < n {
+            sigma[row.panel_idx] = row.mass;
+        }
+    }
+
+    sigma
+}
+
+fn build_effective_body_polygon_from_snapshot(snapshot: &FaithfulSnapshot) -> Vec<Point> {
+    let upper_end = snapshot.iblte_upper.min(snapshot.upper_rows.len().saturating_sub(1));
+    let lower_end = snapshot.iblte_lower.min(snapshot.lower_rows.len().saturating_sub(1));
+    let upper_surface = &snapshot.upper_rows[..=upper_end];
+    let lower_surface = &snapshot.lower_rows[..=lower_end];
+    let wake_rows: Vec<_> = snapshot.upper_rows.iter().skip(upper_end + 1).collect();
+
+    let env_normal = |xs: &[f64], ys: &[f64], i: usize, sign: f64| -> (f64, f64) {
+        let (tx, ty) = if xs.len() < 2 {
+            (0.0, sign)
+        } else if i == 0 {
+            (xs[1] - xs[0], ys[1] - ys[0])
+        } else if i == xs.len() - 1 {
+            (xs[i] - xs[i - 1], ys[i] - ys[i - 1])
+        } else {
+            (xs[i + 1] - xs[i - 1], ys[i + 1] - ys[i - 1])
+        };
+        let len = (tx * tx + ty * ty).sqrt().max(1e-10);
+        (-ty / len * sign, tx / len * sign)
+    };
+
+    let mut poly = Vec::new();
+
+    let upper_x: Vec<f64> = upper_surface.iter().map(|r| r.x_coord).collect();
+    let upper_y: Vec<f64> = upper_surface.iter().map(|r| r.y_coord).collect();
+    for i in 0..upper_surface.len() {
+        let (nx, ny) = env_normal(&upper_x, &upper_y, i, 1.0);
+        let ds = upper_surface[i].dstr;
+        poly.push(point(upper_x[i] + nx * ds, upper_y[i] + ny * ds));
+    }
+
+    if !wake_rows.is_empty() {
+        let wake_x: Vec<f64> = wake_rows.iter().map(|r| r.x_coord).collect();
+        let wake_y: Vec<f64> = wake_rows.iter().map(|r| r.y_coord).collect();
+        let wake_d: Vec<f64> = wake_rows.iter().map(|r| r.dstr).collect();
+        let upper_dstr_te = upper_surface.last().map_or(0.0, |r| r.dstr);
+        let lower_dstr_te = lower_surface.last().map_or(0.0, |r| r.dstr);
+        let total_te = (upper_dstr_te + lower_dstr_te).max(1e-12);
+        let f_u = upper_dstr_te / total_te;
+        let f_l = 1.0 - f_u;
+        let blend_n = wake_x.len().min(5);
+        let te_nu = if upper_x.len() > 1 {
+            env_normal(&upper_x, &upper_y, upper_x.len() - 1, 1.0)
+        } else {
+            (0.0, 1.0)
+        };
+        for i in 0..wake_x.len() {
+            let (wnx, wny) = env_normal(&wake_x, &wake_y, i, 1.0);
+            let t = if i < blend_n { i as f64 / blend_n as f64 } else { 1.0 };
+            let nx = te_nu.0 * (1.0 - t) + wnx * t;
+            let ny = te_nu.1 * (1.0 - t) + wny * t;
+            let len = (nx * nx + ny * ny).sqrt().max(1e-10);
+            let ds = wake_d[i] * f_u;
+            poly.push(point(wake_x[i] + nx / len * ds, wake_y[i] + ny / len * ds));
+        }
+
+        let lower_x: Vec<f64> = lower_surface.iter().map(|r| r.x_coord).collect();
+        let lower_y: Vec<f64> = lower_surface.iter().map(|r| r.y_coord).collect();
+        let te_nl = if lower_x.len() > 1 {
+            env_normal(&lower_x, &lower_y, lower_x.len() - 1, -1.0)
+        } else {
+            (0.0, -1.0)
+        };
+        for i in (0..wake_x.len()).rev() {
+            let (wnx, wny) = env_normal(&wake_x, &wake_y, i, 1.0);
+            let t = if i < blend_n { i as f64 / blend_n as f64 } else { 1.0 };
+            let nx = te_nl.0 * (1.0 - t) + (-wnx) * t;
+            let ny = te_nl.1 * (1.0 - t) + (-wny) * t;
+            let len = (nx * nx + ny * ny).sqrt().max(1e-10);
+            let ds = wake_d[i] * f_l;
+            poly.push(point(wake_x[i] + nx / len * ds, wake_y[i] + ny / len * ds));
+        }
+    }
+
+    let lower_x: Vec<f64> = lower_surface.iter().map(|r| r.x_coord).collect();
+    let lower_y: Vec<f64> = lower_surface.iter().map(|r| r.y_coord).collect();
+    for i in (0..lower_surface.len()).rev() {
+        let (nx, ny) = env_normal(&lower_x, &lower_y, i, -1.0);
+        let ds = lower_surface[i].dstr;
+        poly.push(point(lower_x[i] + nx * ds, lower_y[i] + ny * ds));
+    }
+
+    poly
+}
+
 fn analysis_error(message: impl Into<String>) -> AnalysisResult {
     AnalysisResult {
         cl: 0.0,
@@ -1090,6 +1271,32 @@ pub struct StreamlineResult {
     pub error: Option<String>,
 }
 
+/// Extract wake source panels from the snapshot's BL data and wake geometry.
+fn build_wake_source_panels_from_snapshot(snapshot: &FaithfulSnapshot) -> Option<WakePanels> {
+    let nw = snapshot.wake_x.len();
+    if nw < 2 {
+        return None;
+    }
+
+    let wake_rows: Vec<&rustfoil_xfoil::XfoilBlRow> = snapshot.upper_rows
+        .iter()
+        .filter(|r| r.is_wake)
+        .collect();
+
+    let mut wake_sigma = vec![0.0f64; nw];
+    for (i, row) in wake_rows.iter().enumerate() {
+        if i < nw {
+            wake_sigma[i] = row.mass;
+        }
+    }
+
+    Some(WakePanels {
+        x: snapshot.wake_x.clone(),
+        y: snapshot.wake_y.clone(),
+        sigma: wake_sigma,
+    })
+}
+
 /// Compute streamlines for visualization.
 ///
 /// # Arguments
@@ -1218,6 +1425,7 @@ pub fn compute_streamlines_faithful(
                     error: Some("bounds must have 4 values: [x_min, x_max, y_min, y_max]".to_string()),
                 }
             } else {
+                let field = FaithfulFlowField::from_snapshot(&snapshot, alpha_deg);
                 let options = StreamlineOptions {
                     seed_count: seed_count as usize,
                     seed_x: bounds[0],
@@ -1228,13 +1436,7 @@ pub fn compute_streamlines_faithful(
                     x_min: bounds[0] - 0.5,
                     x_max: bounds[1],
                 };
-                let streamlines_raw = build_streamlines(
-                    &snapshot.nodes,
-                    &snapshot.gamma,
-                    alpha_deg.to_radians(),
-                    1.0,
-                    &options,
-                );
+                let streamlines_raw = field.compute_streamlines(&options);
                 let streamlines = streamlines_raw
                     .into_iter()
                     .map(|line| line.into_iter().map(|(x, y)| [x, y]).collect())
@@ -1459,19 +1661,8 @@ pub fn compute_psi_grid_faithful(
             } else {
                 let nx = resolution[0] as usize;
                 let ny = resolution[1] as usize;
-                let grid = compute_psi_grid_with_interior(
-                    &snapshot.nodes,
-                    &snapshot.gamma,
-                    alpha_deg.to_radians(),
-                    1.0,
-                    bounds[0],
-                    bounds[1],
-                    bounds[2],
-                    bounds[3],
-                    nx,
-                    ny,
-                    Some(snapshot.psi_0),
-                );
+                let field = FaithfulFlowField::from_snapshot(&snapshot, alpha_deg);
+                let grid = field.compute_psi_grid(bounds, nx, ny, Some(field.psi_0));
                 let (psi_min, psi_max) = grid
                     .iter()
                     .filter(|v| v.is_finite())
@@ -1521,6 +1712,7 @@ pub struct WasmSmokeSystem {
     v_inf: f64,
     /// Dividing streamline value (psi_0)
     psi_0: f64,
+    faithful_field: Option<FaithfulFlowField>,
 }
 
 #[wasm_bindgen]
@@ -1540,6 +1732,7 @@ impl WasmSmokeSystem {
             alpha: 0.0,
             v_inf: 1.0,
             psi_0: 0.0,
+            faithful_field: None,
         }
     }
 
@@ -1554,6 +1747,7 @@ impl WasmSmokeSystem {
 
         self.coords = coords.chunks(2).map(|c| point(c[0], c[1])).collect();
         self.alpha = alpha_deg.to_radians();
+        self.faithful_field = None;
 
         // Solve to get gamma and psi_0
         let body = match Body::from_points("airfoil", &self.coords) {
@@ -1573,12 +1767,46 @@ impl WasmSmokeSystem {
         self.inner.invalidate_cache();
     }
 
+    /// Set a faithful viscous flow field for smoke advection/coloring.
+    pub fn set_faithful_flow(
+        &mut self,
+        coords: &[f64],
+        alpha_deg: f64,
+        reynolds: f64,
+        mach: f64,
+        ncrit: f64,
+        max_iterations: usize,
+    ) {
+        if let Ok(snapshot) = faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations) {
+            let field = FaithfulFlowField::from_snapshot(&snapshot, alpha_deg);
+            self.coords = field.nodes.clone();
+            self.gamma = field.gamma.clone();
+            self.alpha = field.alpha;
+            self.psi_0 = field.psi_0;
+            self.faithful_field = Some(field);
+            self.inner.invalidate_cache();
+        }
+    }
+
     /// Update particles by one time step.
     ///
     /// # Arguments
     /// * `dt` - Time step in seconds (typically 1/60 for 60 FPS)
     pub fn update(&mut self, dt: f64) {
-        self.inner.update(&self.coords, &self.gamma, self.alpha, self.v_inf, dt);
+        if let Some(field) = &self.faithful_field {
+            self.inner.update_with_sources(
+                &field.nodes,
+                &field.gamma,
+                &field.sigma,
+                field.alpha,
+                self.v_inf,
+                field.wake_panels.as_ref(),
+                field.effective_body_ref(),
+                dt,
+            );
+        } else {
+            self.inner.update(&self.coords, &self.gamma, self.alpha, self.v_inf, dt);
+        }
     }
 
     /// Get particle positions as flat array [x0, y0, x1, y1, ...].
@@ -1642,7 +1870,18 @@ impl WasmSmokeSystem {
     /// This is used to determine which side of the dividing streamline
     /// each particle is on. Compare with get_psi_0() to determine above/below.
     pub fn get_psi_values(&self) -> Vec<f64> {
-        self.inner.get_psi_values(&self.coords, &self.gamma, self.alpha, self.v_inf)
+        if let Some(field) = &self.faithful_field {
+            self.inner.get_psi_values_with_sources(
+                &field.nodes,
+                &field.gamma,
+                &field.sigma,
+                field.alpha,
+                self.v_inf,
+                field.wake_panels.as_ref(),
+            )
+        } else {
+            self.inner.get_psi_values(&self.coords, &self.gamma, self.alpha, self.v_inf)
+        }
     }
 
     /// Get the dividing streamline value (psi_0).
@@ -1650,7 +1889,7 @@ impl WasmSmokeSystem {
     /// Particles with psi > psi_0 go above the dividing streamline (upper surface).
     /// Particles with psi < psi_0 go below the dividing streamline (lower surface).
     pub fn get_psi_0(&self) -> f64 {
-        self.psi_0
+        self.faithful_field.as_ref().map(|f| f.psi_0).unwrap_or(self.psi_0)
     }
 }
 

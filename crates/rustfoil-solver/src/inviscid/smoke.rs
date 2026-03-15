@@ -3,7 +3,10 @@
 //! Spawns blobs of particles at regular intervals. Each particle is
 //! individually advected through the flow field using RK2 integration.
 
-use super::velocity::{velocity_at, is_inside_airfoil, psi_at};
+use super::velocity::{
+    is_inside_airfoil, is_inside_polygon, psi_at, psi_at_with_sources, velocity_at,
+    velocity_at_with_sources, WakePanels,
+};
 use rustfoil_core::Point;
 
 /// A particle in the smoke system.
@@ -151,6 +154,77 @@ impl SmokeSystem {
         self.particles.retain(|p| p.age < self.max_age);
     }
 
+    /// Update particles using a source-inclusive viscous field.
+    pub fn update_with_sources(
+        &mut self,
+        nodes: &[Point],
+        gamma: &[f64],
+        sigma: &[f64],
+        alpha: f64,
+        v_inf: f64,
+        wake_panels: Option<&WakePanels>,
+        effective_body: Option<&[Point]>,
+        dt: f64,
+    ) {
+        self.time_since_spawn += dt;
+
+        if self.time_since_spawn >= self.spawn_interval {
+            self.spawn_blobs();
+            self.time_since_spawn = 0.0;
+        }
+
+        for particle in &mut self.particles {
+            particle.age += dt;
+            if particle.age >= self.max_age {
+                continue;
+            }
+
+            if is_inside_airfoil(particle.x, particle.y, nodes)
+                || effective_body.is_some_and(|poly| is_inside_polygon(particle.x, particle.y, poly))
+            {
+                particle.age = self.max_age;
+                continue;
+            }
+
+            let (u1, v1) = velocity_at_with_sources(
+                particle.x,
+                particle.y,
+                nodes,
+                gamma,
+                sigma,
+                alpha,
+                v_inf,
+                wake_panels,
+            );
+
+            let mid_x = particle.x + 0.5 * dt * u1;
+            let mid_y = particle.y + 0.5 * dt * v1;
+
+            let (u2, v2) = velocity_at_with_sources(
+                mid_x,
+                mid_y,
+                nodes,
+                gamma,
+                sigma,
+                alpha,
+                v_inf,
+                wake_panels,
+            );
+
+            let new_x = particle.x + dt * u2;
+            let new_y = particle.y + dt * v2;
+            if effective_body.is_some_and(|poly| is_inside_polygon(new_x, new_y, poly)) {
+                particle.age = self.max_age;
+                continue;
+            }
+
+            particle.x = new_x;
+            particle.y = new_y;
+        }
+
+        self.particles.retain(|p| p.age < self.max_age);
+    }
+
     /// Get all particle positions as a flat array [x0, y0, x1, y1, ...].
     pub fn get_positions(&self) -> Vec<f64> {
         let mut positions = Vec::with_capacity(self.particles.len() * 2);
@@ -193,6 +267,24 @@ impl SmokeSystem {
         self.particles
             .iter()
             .map(|p| psi_at(p.x, p.y, nodes, gamma, alpha, v_inf))
+            .collect()
+    }
+
+    /// Get stream function values using a source-inclusive viscous field.
+    pub fn get_psi_values_with_sources(
+        &self,
+        nodes: &[Point],
+        gamma: &[f64],
+        sigma: &[f64],
+        alpha: f64,
+        v_inf: f64,
+        wake_panels: Option<&WakePanels>,
+    ) -> Vec<f64> {
+        self.particles
+            .iter()
+            .map(|p| {
+                psi_at_with_sources(p.x, p.y, nodes, gamma, sigma, alpha, v_inf, wake_panels)
+            })
             .collect()
     }
 

@@ -229,6 +229,7 @@ export interface VisualizationState {
   showForces: boolean;
   showBoundaryLayer: boolean;
   showWake: boolean;
+  showDisplacementThickness: boolean;
   
   // Animation options
   enableMorphing: boolean;

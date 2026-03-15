@@ -22,6 +22,7 @@ interface VisualizationStore extends VisualizationState {
   setShowForces: (show: boolean) => void;
   setShowBoundaryLayer: (show: boolean) => void;
   setShowWake: (show: boolean) => void;
+  setShowDisplacementThickness: (show: boolean) => void;
   
   // Animation options actions
   setEnableMorphing: (enable: boolean) => void;
@@ -82,6 +83,7 @@ const DEFAULT_STATE: VisualizationState = {
   showForces: false,
   showBoundaryLayer: false,
   showWake: false,
+  showDisplacementThickness: false,
   
   // Animation options
   enableMorphing: true,
@@ -134,6 +136,7 @@ export const useVisualizationStore = create<VisualizationStore>((set) => ({
   setShowForces: (show) => set({ showForces: show }),
   setShowBoundaryLayer: (show) => set({ showBoundaryLayer: show }),
   setShowWake: (show) => set({ showWake: show }),
+  setShowDisplacementThickness: (show) => set({ showDisplacementThickness: show }),
   
   // Animation options actions
   setEnableMorphing: (enable) => set({ enableMorphing: enable }),
