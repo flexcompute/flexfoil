@@ -1186,6 +1186,15 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
   const [isPanning, setIsPanning] = useState(false);
   const [dragTarget, setDragTarget] = useState<{ type: string; index: number | string } | null>(null);
   const [hoveredPoint, setHoveredPoint] = useState<{ type: string; index: number | string } | null>(null);
+  const [blHoverInfo, setBlHoverInfo] = useState<{
+    surface: 'upper' | 'lower';
+    index: number;
+    canvasX: number;
+    canvasY: number;
+    x: number; y: number;
+    cp: number; cf: number; dstar: number; theta: number;
+    h: number; ue: number; hk: number; laminar: boolean;
+  } | null>(null);
   const lastMousePos = useRef<Point>({ x: 0, y: 0 });
   const activePointers = useRef<Map<number, Point>>(new Map());
   const lastPinchDist = useRef<number | null>(null);
@@ -2381,11 +2390,43 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
           ctx.stroke();
         }
       }
+
+      // Highlight hovered BL station with a crosshair + ring
+      if (blHoverInfo) {
+        const hp = toCanvas(rotatePoint({ x: blHoverInfo.x, y: blHoverInfo.y }));
+        const r = 6;
+        const isUpper = blHoverInfo.surface === 'upper';
+        const markerColor = isUpper
+          ? (isDark ? '#00e5ff' : '#0090d0')
+          : (isDark ? '#ff6eb4' : '#d0306a');
+
+        // Filled ring
+        ctx.beginPath();
+        ctx.arc(hp.x, hp.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = markerColor;
+        ctx.globalAlpha = 0.35;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = markerColor;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Crosshair lines
+        const arm = 12;
+        ctx.beginPath();
+        ctx.moveTo(hp.x - arm, hp.y); ctx.lineTo(hp.x + arm, hp.y);
+        ctx.moveTo(hp.x, hp.y - arm); ctx.lineTo(hp.x, hp.y + arm);
+        ctx.strokeStyle = markerColor;
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.6;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
     }
 
   // NOTE: Smoke state (smokePositions, etc.) intentionally NOT in dependencies
   // Smoke is drawn on separate overlay canvas to avoid expensive redraws
-  }, [viewport, morphState, splineCurve, controlMode, camberControlPoints, thicknessControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showPsiContours, psiContours, displayAlpha, toCanvas, isDark, showCp, showForces, cpDisplayMode, cpBarScale, forceScale, showBoundaryLayer, showWake, blVisData, blThicknessScale]);
+  }, [viewport, morphState, splineCurve, controlMode, camberControlPoints, thicknessControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showPsiContours, psiContours, displayAlpha, toCanvas, isDark, showCp, showForces, cpDisplayMode, cpBarScale, forceScale, showBoundaryLayer, showWake, blVisData, blThicknessScale, blHoverInfo]);
 
   // Draw grid
   const drawGrid = useCallback((ctx: CanvasRenderingContext2D) => {
@@ -2401,6 +2442,9 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     if (zoom < 50) gridSpacing = 1.0;
     if (zoom > 500) gridSpacing = 0.05;
     if (zoom > 1000) gridSpacing = 0.01;
+    if (zoom > 5000) gridSpacing = 0.002;
+    if (zoom > 20000) gridSpacing = 0.0005;
+    if (zoom > 100000) gridSpacing = 0.0001;
 
     // Calculate visible range
     const left = center.x - width / (2 * zoom);
@@ -2870,10 +2914,68 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       // Update hover state
       const hit = findPointAt(canvasPos);
       setHoveredPoint(hit);
+
+      // BL station hover: find nearest surface point when BL envelope is visible.
+      // Compare in canvas-pixel space so the hit zone is zoom-independent.
+      // BL data is in body coords; we rotate + project to canvas, same as rendering.
+      if (showBoundaryLayer && blVisData?.success && !hit) {
+        const HIT_PX = 20; // pixel radius
+        const hitPx2 = HIT_PX * HIT_PX;
+        let best: typeof blHoverInfo = null;
+        let bestDist = hitPx2;
+
+        // Rotate body → visual (same transform used for drawing)
+        const rad = -displayAlpha * Math.PI / 180;
+        const cosA = Math.cos(rad);
+        const sinA = Math.sin(rad);
+        const rcx = 0.25, rcy = 0;
+
+        for (const surface of ['upper', 'lower'] as const) {
+          const data = blVisData[surface];
+          for (let i = 0; i < data.x.length; i++) {
+            // Rotate BL station to visual space, then project to canvas
+            let vx = data.x[i], vy = data.y[i];
+            if (displayAlpha !== 0) {
+              const dx2 = vx - rcx, dy2 = vy - rcy;
+              vx = rcx + dx2 * cosA - dy2 * sinA;
+              vy = rcy + dx2 * sinA + dy2 * cosA;
+            }
+            const cx2 = viewport.width / 2 + (vx - viewport.center.x) * viewport.zoom;
+            const cy2 = viewport.height / 2 - (vy - viewport.center.y) * viewport.zoom;
+            const dpx = cx2 - canvasPos.x;
+            const dpy = cy2 - canvasPos.y;
+            const d2 = dpx * dpx + dpy * dpy;
+            if (d2 < bestDist) {
+              bestDist = d2;
+              const ue = data.ue[i];
+              const dstar = data.delta_star[i];
+              const theta = data.theta[i];
+              best = {
+                surface, index: i,
+                canvasX: canvasPos.x, canvasY: canvasPos.y,
+                x: data.x[i], y: data.y[i],
+                cp: 1 - ue * ue,
+                cf: data.cf[i],
+                dstar, theta,
+                h: theta > 1e-15 ? dstar / theta : 0,
+                ue, hk: data.hk[i],
+                laminar: data.is_laminar[i],
+              };
+            }
+          }
+        }
+        setBlHoverInfo(best);
+      } else {
+        setBlHoverInfo(null);
+      }
     }
 
     lastMousePos.current = canvasPos;
-  }, [isDragging, isPanning, dragTarget, viewport, toAirfoil, findPointAt, camberControlPoints, thicknessControlPoints, updateCamberControlPoint, updateThicknessControlPoint]);
+  }, [isDragging, isPanning, dragTarget, viewport, toAirfoil, findPointAt, camberControlPoints, thicknessControlPoints, updateCamberControlPoint, updateThicknessControlPoint, showBoundaryLayer, blVisData, displayAlpha]);
+
+  const handleMouseLeave = useCallback(() => {
+    setBlHoverInfo(null);
+  }, []);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     activePointers.current.delete(e.pointerId);
@@ -2901,7 +3003,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
 
     // Zoom
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-    const newZoom = Math.max(50, Math.min(5000, viewport.zoom * zoomFactor));
+    const newZoom = Math.max(50, Math.min(500000, viewport.zoom * zoomFactor));
 
     // Adjust center to zoom toward mouse position
     setViewport((v) => {
@@ -3048,10 +3150,10 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
-        onPointerLeave={handlePointerUp}
+        onPointerLeave={() => { handlePointerUp(); handleMouseLeave(); }}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
-        style={{ touchAction: 'none', cursor: isDragging ? 'grabbing' : isPanning ? 'grabbing' : hoveredPoint ? 'pointer' : 'crosshair' }}
+        style={{ touchAction: 'none', cursor: isDragging ? 'grabbing' : isPanning ? 'grabbing' : (hoveredPoint || blHoverInfo) ? 'pointer' : 'crosshair' }}
       />
       
       {/* Smoke overlay canvas - renders smoke particles without triggering expensive main canvas redraws */}
@@ -3082,6 +3184,57 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         }}
       />
       
+      {/* BL hover tooltip - positioned away from the airfoil surface */}
+      {blHoverInfo && (() => {
+        const tooltipW = 195, tooltipH = 185;
+        const pad = 10;
+        // Place tooltip on the outward side of the surface:
+        // upper surface → above the cursor, lower surface → below
+        const above = blHoverInfo.surface === 'upper';
+        let tx = blHoverInfo.canvasX - tooltipW / 2;
+        let ty = above
+          ? blHoverInfo.canvasY - tooltipH - 30
+          : blHoverInfo.canvasY + 30;
+        // Clamp to viewport
+        tx = Math.max(pad, Math.min(viewport.width - tooltipW - pad, tx));
+        ty = Math.max(pad, Math.min(viewport.height - tooltipH - pad, ty));
+        return (
+        <div
+          style={{
+            position: 'absolute',
+            left: tx,
+            top: ty,
+            pointerEvents: 'none',
+            zIndex: 20,
+            background: 'var(--bg-secondary, rgba(15,20,35,0.92))',
+            backdropFilter: 'blur(12px)',
+            border: `1px solid ${blHoverInfo.surface === 'upper' ? 'rgba(0,229,255,0.3)' : 'rgba(255,110,180,0.3)'}`,
+            borderRadius: '8px',
+            padding: '8px 10px',
+            fontSize: '11px',
+            lineHeight: '1.55',
+            color: 'var(--text-primary, #edf2ff)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+            width: tooltipW,
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 4, letterSpacing: '0.03em', color: blHoverInfo.surface === 'upper' ? 'var(--accent-primary, #61dafb)' : 'var(--accent-secondary, #f472b6)' }}>
+            {blHoverInfo.surface === 'upper' ? '▲ Upper' : '▼ Lower'} &nbsp;
+            <span style={{ fontWeight: 400, opacity: 0.7 }}>{blHoverInfo.laminar ? 'laminar' : 'turbulent'}</span>
+          </div>
+          <div>x/c&nbsp;&nbsp;&nbsp;&nbsp;= {blHoverInfo.x.toFixed(4)}</div>
+          <div>Cp&nbsp;&nbsp;&nbsp;&nbsp; = {blHoverInfo.cp.toFixed(4)}</div>
+          <div>Cf&nbsp;&nbsp;&nbsp;&nbsp; = {(blHoverInfo.cf * 1e3).toFixed(3)} <span style={{ opacity: 0.5 }}>×10⁻³</span></div>
+          <div>δ*&nbsp;&nbsp;&nbsp;&nbsp; = {(blHoverInfo.dstar * 1e3).toFixed(3)} <span style={{ opacity: 0.5 }}>×10⁻³</span></div>
+          <div>θ&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; = {(blHoverInfo.theta * 1e3).toFixed(3)} <span style={{ opacity: 0.5 }}>×10⁻³</span></div>
+          <div>H&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; = {blHoverInfo.h.toFixed(2)}</div>
+          <div>Hk&nbsp;&nbsp;&nbsp;&nbsp;= {blHoverInfo.hk.toFixed(2)}</div>
+          <div>Ue/V∞ = {blHoverInfo.ue.toFixed(4)}</div>
+        </div>
+        );
+      })()}
+
       {/* Overlay controls - simplified, full controls in Visualization panel */}
       <div
         style={{
