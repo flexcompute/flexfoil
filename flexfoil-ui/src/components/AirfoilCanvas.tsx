@@ -3150,7 +3150,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
-        onPointerLeave={() => { handlePointerUp(); handleMouseLeave(); }}
+        onPointerLeave={(e) => { handlePointerUp(e); handleMouseLeave(); }}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
         style={{ touchAction: 'none', cursor: isDragging ? 'grabbing' : isPanning ? 'grabbing' : (hoveredPoint || blHoverInfo) ? 'pointer' : 'crosshair' }}
