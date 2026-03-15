@@ -45,7 +45,17 @@ export function SolvePanel() {
   const [targetCl, setTargetCl] = useState(0.5);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reynoldsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initializedRef = useRef(false);
+
+  const [reynoldsText, setReynoldsText] = useState(() => String(reynolds));
+  const reynoldsFocusedRef = useRef(false);
+
+  useEffect(() => {
+    if (!reynoldsFocusedRef.current) {
+      setReynoldsText(String(reynolds));
+    }
+  }, [reynolds]);
 
   useEffect(() => {
     if (!initializedRef.current) {
@@ -62,7 +72,32 @@ export function SolvePanel() {
     debounceRef.current = setTimeout(() => setDisplayAlpha(alpha), 300);
   }, [setDisplayAlpha]);
 
-  useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
+  useEffect(() => () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (reynoldsDebounceRef.current) clearTimeout(reynoldsDebounceRef.current);
+  }, []);
+
+  const handleReynoldsChange = useCallback((raw: string) => {
+    setReynoldsText(raw);
+    if (reynoldsDebounceRef.current) clearTimeout(reynoldsDebounceRef.current);
+    reynoldsDebounceRef.current = setTimeout(() => {
+      const parsed = Number(raw);
+      if (!isNaN(parsed) && parsed >= 1 && isFinite(parsed)) {
+        setReynolds(parsed);
+      }
+    }, 800);
+  }, [setReynolds]);
+
+  const commitReynolds = useCallback(() => {
+    reynoldsFocusedRef.current = false;
+    if (reynoldsDebounceRef.current) clearTimeout(reynoldsDebounceRef.current);
+    const parsed = Number(reynoldsText);
+    if (!isNaN(parsed) && parsed >= 1 && isFinite(parsed)) {
+      setReynolds(parsed);
+    } else {
+      setReynoldsText(String(reynolds));
+    }
+  }, [reynoldsText, reynolds, setReynolds]);
 
   // Polar settings
   const [alphaStart, setAlphaStart] = useState(-5);
@@ -349,10 +384,14 @@ export function SolvePanel() {
           <div className="form-group">
             <div className="form-label">Reynolds Number</div>
             <input
-              type="number"
-              value={reynolds}
-              onChange={(e) => setReynolds(Math.max(1, Number(e.target.value) || 1))}
-              step={100000}
+              type="text"
+              inputMode="numeric"
+              value={reynoldsText}
+              onChange={(e) => handleReynoldsChange(e.target.value)}
+              onFocus={() => { reynoldsFocusedRef.current = true; }}
+              onBlur={commitReynolds}
+              onKeyDown={(e) => { if (e.key === 'Enter') commitReynolds(); }}
+              placeholder="e.g. 6e6, 1000000"
             />
           </div>
         )}
