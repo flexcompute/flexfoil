@@ -12,7 +12,9 @@ import init, {
     compute_curvature_spacing,
     analyze_airfoil as analyze_airfoil_inviscid_wasm,
     analyze_airfoil_faithful,
+    compute_streamlines as compute_streamlines_inviscid_wasm,
     compute_streamlines_faithful,
+    compute_psi_grid as compute_psi_grid_inviscid_wasm,
     compute_psi_grid_faithful,
     get_bl_distribution_faithful,
     get_bl_visualization_faithful,
@@ -517,13 +519,22 @@ export function computeStreamlines(
     bounds: [number, number, number, number] = [-0.5, 2.0, -0.5, 0.5],
     mach: number = 0,
     ncrit: number = 9,
-    maxIterations: number = 100
+    maxIterations: number = 100,
+    solverMode: 'inviscid' | 'viscous' = 'viscous'
 ): StreamlineResult {
     if (!initialized) {
         throw new Error('WASM not initialized. Call initWasm() first.');
     }
     
     const coordsFlat = pointsToFlat(coordinates);
+    if (solverMode === 'inviscid') {
+        return compute_streamlines_inviscid_wasm(
+            coordsFlat,
+            alphaDeg,
+            seedCount,
+            new Float64Array(bounds)
+        ) as StreamlineResult;
+    }
     return compute_streamlines_faithful(
         coordsFlat,
         alphaDeg,
@@ -575,13 +586,22 @@ export function computePsiGrid(
     resolution: [number, number] = [100, 80],
     mach: number = 0,
     ncrit: number = 9,
-    maxIterations: number = 100
+    maxIterations: number = 100,
+    solverMode: 'inviscid' | 'viscous' = 'viscous'
 ): PsiGridResult {
     if (!initialized) {
         throw new Error('WASM not initialized. Call initWasm() first.');
     }
     
     const coordsFlat = pointsToFlat(coordinates);
+    if (solverMode === 'inviscid') {
+        return compute_psi_grid_inviscid_wasm(
+            coordsFlat,
+            alphaDeg,
+            new Float64Array(bounds),
+            new Uint32Array(resolution)
+        ) as PsiGridResult;
+    }
     return compute_psi_grid_faithful(
         coordsFlat, 
         alphaDeg, 

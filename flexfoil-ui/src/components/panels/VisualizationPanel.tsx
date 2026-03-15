@@ -75,9 +75,11 @@ export function VisualizationPanel() {
     // Boundary layer overlay options
     showBoundaryLayer,
     showWake,
+    showDisplacementThickness,
     blThicknessScale,
     setShowBoundaryLayer,
     setShowWake,
+    setShowDisplacementThickness,
     setBlThicknessScale,
     
     // GPU acceleration
@@ -267,6 +269,7 @@ export function VisualizationPanel() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <ToggleItem label="BL Envelope (δ*)" checked={showBoundaryLayer} onChange={setShowBoundaryLayer} />
           <ToggleItem label="Wake" checked={showWake} onChange={setShowWake} />
+          <ToggleItem label="δ* Curve" checked={showDisplacementThickness} onChange={setShowDisplacementThickness} />
         </div>
       </section>
 
