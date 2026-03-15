@@ -6,7 +6,7 @@
  * skip the solver entirely and return the stored result.
  */
 
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
 import { useRunStore } from '../../stores/runStore';
 import { analyzeAirfoil, analyzeAirfoilInviscid, isWasmReady, type AnalysisResult } from '../../lib/wasm';
@@ -44,6 +44,17 @@ export function SolvePanel() {
   const [targetAlpha, setTargetAlphaLocal] = useState(displayAlpha);
   const [targetCl, setTargetCl] = useState(0.5);
 
+  const reynoldsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [reynoldsText, setReynoldsText] = useState(() => String(reynolds));
+  const reynoldsFocusedRef = useRef(false);
+
+  useEffect(() => {
+    if (!reynoldsFocusedRef.current) {
+      setReynoldsText(String(reynolds));
+    }
+  }, [reynolds]);
+
   // Sync local targetAlpha when store changes externally (e.g. URL load)
   useEffect(() => {
     setTargetAlphaLocal(displayAlpha);
@@ -55,6 +66,31 @@ export function SolvePanel() {
     setDisplayAlpha(alpha);
   }, [setDisplayAlpha]);
 
+  useEffect(() => () => {
+    if (reynoldsDebounceRef.current) clearTimeout(reynoldsDebounceRef.current);
+  }, []);
+
+  const handleReynoldsChange = useCallback((raw: string) => {
+    setReynoldsText(raw);
+    if (reynoldsDebounceRef.current) clearTimeout(reynoldsDebounceRef.current);
+    reynoldsDebounceRef.current = setTimeout(() => {
+      const parsed = Number(raw);
+      if (!isNaN(parsed) && parsed >= 1 && isFinite(parsed)) {
+        setReynolds(parsed);
+      }
+    }, 800);
+  }, [setReynolds]);
+
+  const commitReynolds = useCallback(() => {
+    reynoldsFocusedRef.current = false;
+    if (reynoldsDebounceRef.current) clearTimeout(reynoldsDebounceRef.current);
+    const parsed = Number(reynoldsText);
+    if (!isNaN(parsed) && parsed >= 1 && isFinite(parsed)) {
+      setReynolds(parsed);
+    } else {
+      setReynoldsText(String(reynolds));
+    }
+  }, [reynoldsText, reynolds, setReynolds]);
   // Polar settings
   const [alphaStart, setAlphaStart] = useState(-5);
   const [alphaEnd, setAlphaEnd] = useState(15);
@@ -340,10 +376,14 @@ export function SolvePanel() {
           <div className="form-group">
             <div className="form-label">Reynolds Number</div>
             <input
-              type="number"
-              value={reynolds}
-              onChange={(e) => setReynolds(Math.max(1, Number(e.target.value) || 1))}
-              step={100000}
+              type="text"
+              inputMode="numeric"
+              value={reynoldsText}
+              onChange={(e) => handleReynoldsChange(e.target.value)}
+              onFocus={() => { reynoldsFocusedRef.current = true; }}
+              onBlur={commitReynolds}
+              onKeyDown={(e) => { if (e.key === 'Enter') commitReynolds(); }}
+              placeholder="e.g. 6e6, 1000000"
             />
           </div>
         )}

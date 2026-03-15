@@ -9,6 +9,18 @@ use std::f64::consts::PI;
 /// 1/(4π) - used for stream function influence coefficients (matches XFOIL's QOPI)
 const QOPI: f64 = 0.25 / PI;
 
+/// Wake panel geometry and source strengths for viscous streamline computation.
+///
+/// Wake panels are an open polyline extending from the trailing edge downstream.
+/// Each node carries a source strength (mass defect = Ue * delta_star) that
+/// displaces streamlines outward to account for the viscous wake thickness.
+#[derive(Debug, Clone)]
+pub struct WakePanels {
+    pub x: Vec<f64>,
+    pub y: Vec<f64>,
+    pub sigma: Vec<f64>,
+}
+
 /// Evaluate velocity at a point (x, y) given the panel solution.
 ///
 /// Uses K&P VOR2DL linear vorticity panel method (Eq 11.99-11.100).
@@ -98,6 +110,164 @@ pub fn velocity_at(
         // Add weighted by gamma at each node
         u += gamma[j] * u1 + gamma[jp] * u2;
         v += gamma[j] * v1 + gamma[jp] * v2;
+    }
+
+    (u, v)
+}
+
+/// Evaluate velocity including source panel contributions from viscous coupling.
+///
+/// Extends `velocity_at` with:
+/// - `sigma`: source strength (mass defect = Ue * δ*) at each airfoil node.
+///   The source velocity influence is the 90° rotation of the vortex influence.
+/// - `wake_panels`: optional wake geometry with source strengths. Wake panels
+///   are an open polyline (not closed), so panel j goes from node j to j+1.
+pub fn velocity_at_with_sources(
+    x: f64,
+    y: f64,
+    nodes: &[Point],
+    gamma: &[f64],
+    sigma: &[f64],
+    alpha: f64,
+    v_inf: f64,
+    wake_panels: Option<&WakePanels>,
+) -> (f64, f64) {
+    let n = nodes.len();
+    if n < 2 || gamma.len() != n || sigma.len() != n {
+        return (v_inf * alpha.cos(), v_inf * alpha.sin());
+    }
+
+    let mut u = v_inf * alpha.cos();
+    let mut v = v_inf * alpha.sin();
+
+    let two_pi = 2.0 * PI;
+
+    for j in 0..n {
+        let jp = (j + 1) % n;
+
+        let x1 = nodes[j].x;
+        let y1 = nodes[j].y;
+        let x2 = nodes[jp].x;
+        let y2 = nodes[jp].y;
+
+        let dx = x2 - x1;
+        let dy = y2 - y1;
+        let panel_len = (dx * dx + dy * dy).sqrt();
+
+        if panel_len < 1e-12 {
+            continue;
+        }
+
+        let theta = dy.atan2(dx);
+        let cos_t = theta.cos();
+        let sin_t = theta.sin();
+
+        let xp = (x - x1) * cos_t + (y - y1) * sin_t;
+        let yp = -(x - x1) * sin_t + (y - y1) * cos_t;
+        let xp2 = xp - panel_len;
+
+        let r1_sq = xp * xp + yp * yp;
+        let r2_sq = xp2 * xp2 + yp * yp;
+
+        if r1_sq < 1e-10 || r2_sq < 1e-10 {
+            continue;
+        }
+
+        let theta1 = yp.atan2(xp);
+        let theta2 = yp.atan2(xp2);
+        let beta = theta2 - theta1;
+        let logterm = 0.5 * (r2_sq / r1_sq).ln();
+        let inv_2pi_l = 1.0 / (two_pi * panel_len);
+
+        // Vortex influence (K&P VOR2DL)
+        let u1_local = -(yp * logterm + xp * beta - panel_len * beta) * inv_2pi_l;
+        let w1_local = -((panel_len - yp * beta) + xp * logterm - panel_len * logterm) * inv_2pi_l;
+        let u2_local = (yp * logterm + xp * beta) * inv_2pi_l;
+        let w2_local = ((panel_len - yp * beta) + xp * logterm) * inv_2pi_l;
+
+        let uv1 = u1_local * cos_t - w1_local * sin_t;
+        let vv1 = u1_local * sin_t + w1_local * cos_t;
+        let uv2 = u2_local * cos_t - w2_local * sin_t;
+        let vv2 = u2_local * sin_t + w2_local * cos_t;
+
+        u += gamma[j] * uv1 + gamma[jp] * uv2;
+        v += gamma[j] * vv1 + gamma[jp] * vv2;
+
+        // Source influence: 90° rotation of vortex influence
+        let us1_local = w1_local;
+        let ws1_local = -u1_local;
+        let us2_local = w2_local;
+        let ws2_local = -u2_local;
+
+        let us1 = us1_local * cos_t - ws1_local * sin_t;
+        let vs1 = us1_local * sin_t + ws1_local * cos_t;
+        let us2 = us2_local * cos_t - ws2_local * sin_t;
+        let vs2 = us2_local * sin_t + ws2_local * cos_t;
+
+        u += sigma[j] * us1 + sigma[jp] * us2;
+        v += sigma[j] * vs1 + sigma[jp] * vs2;
+    }
+
+    // Wake panels: source-only (open polyline, not closed)
+    if let Some(wake) = wake_panels {
+        let nw = wake.x.len();
+        if nw >= 2 && wake.sigma.len() == nw {
+            for j in 0..(nw - 1) {
+                let jp = j + 1;
+
+                let x1 = wake.x[j];
+                let y1 = wake.y[j];
+                let x2 = wake.x[jp];
+                let y2 = wake.y[jp];
+
+                let dx = x2 - x1;
+                let dy = y2 - y1;
+                let panel_len = (dx * dx + dy * dy).sqrt();
+
+                if panel_len < 1e-12 {
+                    continue;
+                }
+
+                let theta = dy.atan2(dx);
+                let cos_t = theta.cos();
+                let sin_t = theta.sin();
+
+                let xp = (x - x1) * cos_t + (y - y1) * sin_t;
+                let yp = -(x - x1) * sin_t + (y - y1) * cos_t;
+                let xp2 = xp - panel_len;
+
+                let r1_sq = xp * xp + yp * yp;
+                let r2_sq = xp2 * xp2 + yp * yp;
+
+                if r1_sq < 1e-10 || r2_sq < 1e-10 {
+                    continue;
+                }
+
+                let theta1 = yp.atan2(xp);
+                let theta2 = yp.atan2(xp2);
+                let beta = theta2 - theta1;
+                let logterm = 0.5 * (r2_sq / r1_sq).ln();
+                let inv_2pi_l = 1.0 / (two_pi * panel_len);
+
+                let u1_local = -(yp * logterm + xp * beta - panel_len * beta) * inv_2pi_l;
+                let w1_local = -((panel_len - yp * beta) + xp * logterm - panel_len * logterm) * inv_2pi_l;
+                let u2_local = (yp * logterm + xp * beta) * inv_2pi_l;
+                let w2_local = ((panel_len - yp * beta) + xp * logterm) * inv_2pi_l;
+
+                let us1_local = w1_local;
+                let ws1_local = -u1_local;
+                let us2_local = w2_local;
+                let ws2_local = -u2_local;
+
+                let us1 = us1_local * cos_t - ws1_local * sin_t;
+                let vs1 = us1_local * sin_t + ws1_local * cos_t;
+                let us2 = us2_local * cos_t - ws2_local * sin_t;
+                let vs2 = us2_local * sin_t + ws2_local * cos_t;
+
+                u += wake.sigma[j] * us1 + wake.sigma[jp] * us2;
+                v += wake.sigma[j] * vs1 + wake.sigma[jp] * vs2;
+            }
+        }
     }
 
     (u, v)
@@ -210,6 +380,137 @@ pub fn psi_at(
     psi
 }
 
+/// Evaluate the stream function including source panel contributions.
+///
+/// Extends `psi_at` with source panels from viscous coupling.
+/// For each panel, the source stream function for constant strength sigma is:
+///   psi_source = sigma/(2*pi) * [x1*atan2(yy,x1) - x2*atan2(yy,x2) + 0.5*yy*(g1-g2)]
+/// where (x1, x2, yy) are panel-local coordinates and g1, g2 are ln(r^2) terms.
+pub fn psi_at_with_sources(
+    x: f64,
+    y: f64,
+    nodes: &[Point],
+    gamma: &[f64],
+    sigma: &[f64],
+    alpha: f64,
+    v_inf: f64,
+    wake_panels: Option<&WakePanels>,
+) -> f64 {
+    let n = nodes.len();
+    if n < 2 || gamma.len() != n || sigma.len() != n {
+        return v_inf * (alpha.cos() * y - alpha.sin() * x);
+    }
+
+    if is_inside_airfoil(x, y, nodes) {
+        return f64::NAN;
+    }
+
+    let mut psi = 0.0;
+    let two_pi = 2.0 * PI;
+
+    for jo in 0..n {
+        let jp = (jo + 1) % n;
+
+        let x_jo = nodes[jo].x;
+        let y_jo = nodes[jo].y;
+        let x_jp = nodes[jp].x;
+        let y_jp = nodes[jp].y;
+
+        let dx = x_jp - x_jo;
+        let dy = y_jp - y_jo;
+        let ds_sq = dx * dx + dy * dy;
+
+        if ds_sq < 1e-24 {
+            continue;
+        }
+
+        let ds = ds_sq.sqrt();
+        let sx = dx / ds;
+        let sy = dy / ds;
+
+        let rx1 = x - x_jo;
+        let ry1 = y - y_jo;
+
+        let x1 = sx * rx1 + sy * ry1;
+        let x2 = x1 - ds;
+        let yy = sx * ry1 - sy * rx1;
+
+        let rs1 = x1 * x1 + yy * yy;
+        let rs2 = x2 * x2 + yy * yy;
+
+        let sgn = if yy >= 0.0 { 1.0 } else { -1.0 };
+        let pi_offset = (0.5 - 0.5 * sgn) * PI;
+
+        let g1 = if rs1 > 1e-20 { rs1.ln() } else { 0.0 };
+        let g2 = if rs2 > 1e-20 { rs2.ln() } else { 0.0 };
+        let t1 = (sgn * x1).atan2(sgn * yy) + pi_offset;
+        let t2 = (sgn * x2).atan2(sgn * yy) + pi_offset;
+
+        // Vortex contribution (unchanged from psi_at)
+        let dxinv = 1.0 / (x1 - x2);
+        let psis = 0.5 * x1 * g1 - 0.5 * x2 * g2 + x2 - x1 + yy * (t1 - t2);
+        let psid = ((x1 + x2) * psis + 0.5 * (rs2 * g2 - rs1 * g1 + x1 * x1 - x2 * x2)) * dxinv;
+
+        let gsum = gamma[jp] + gamma[jo];
+        let gdif = gamma[jp] - gamma[jo];
+        psi += QOPI * (psis * gsum + psid * gdif);
+
+        // Source contribution: constant-strength approximation per panel
+        let sigma_avg = 0.5 * (sigma[jo] + sigma[jp]);
+        if sigma_avg.abs() > 1e-20 {
+            let at1 = yy.atan2(x1);
+            let at2 = yy.atan2(x2);
+            psi += sigma_avg / two_pi * (x1 * at1 - x2 * at2 + 0.5 * yy * (g1 - g2));
+        }
+    }
+
+    // Wake panels: source-only (open polyline)
+    if let Some(wake) = wake_panels {
+        let nw = wake.x.len();
+        if nw >= 2 && wake.sigma.len() == nw {
+            for j in 0..(nw - 1) {
+                let jp = j + 1;
+
+                let dx = wake.x[jp] - wake.x[j];
+                let dy = wake.y[jp] - wake.y[j];
+                let ds_sq = dx * dx + dy * dy;
+
+                if ds_sq < 1e-24 {
+                    continue;
+                }
+
+                let ds = ds_sq.sqrt();
+                let sx = dx / ds;
+                let sy = dy / ds;
+
+                let rx1 = x - wake.x[j];
+                let ry1 = y - wake.y[j];
+
+                let x1 = sx * rx1 + sy * ry1;
+                let x2 = x1 - ds;
+                let yy = sx * ry1 - sy * rx1;
+
+                let rs1 = x1 * x1 + yy * yy;
+                let rs2 = x2 * x2 + yy * yy;
+
+                let g1 = if rs1 > 1e-20 { rs1.ln() } else { 0.0 };
+                let g2 = if rs2 > 1e-20 { rs2.ln() } else { 0.0 };
+
+                let sigma_avg = 0.5 * (wake.sigma[j] + wake.sigma[jp]);
+                if sigma_avg.abs() > 1e-20 {
+                    let at1 = yy.atan2(x1);
+                    let at2 = yy.atan2(x2);
+                    psi += sigma_avg / two_pi * (x1 * at1 - x2 * at2 + 0.5 * yy * (g1 - g2));
+                }
+            }
+        }
+    }
+
+    psi += v_inf * (alpha.cos() * y - alpha.sin() * x);
+
+    psi
+}
+
 /// Compute stream function values on a rectangular grid.
 ///
 /// # Arguments
@@ -294,6 +595,75 @@ pub fn compute_psi_grid_with_interior(
     grid
 }
 
+/// Compute stream function grid including source panel contributions.
+pub fn compute_psi_grid_with_sources(
+    nodes: &[Point],
+    gamma: &[f64],
+    sigma: &[f64],
+    alpha: f64,
+    v_inf: f64,
+    x_min: f64,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
+    nx: usize,
+    ny: usize,
+    interior_value: Option<f64>,
+    wake_panels: Option<&WakePanels>,
+) -> Vec<f64> {
+    let mut grid = vec![0.0; nx * ny];
+
+    let dx = if nx > 1 {
+        (x_max - x_min) / (nx - 1) as f64
+    } else {
+        0.0
+    };
+    let dy = if ny > 1 {
+        (y_max - y_min) / (ny - 1) as f64
+    } else {
+        0.0
+    };
+
+    for iy in 0..ny {
+        let y = y_min + iy as f64 * dy;
+        for ix in 0..nx {
+            let x = x_min + ix as f64 * dx;
+            let psi = psi_at_with_sources(x, y, nodes, gamma, sigma, alpha, v_inf, wake_panels);
+            grid[iy * nx + ix] = if psi.is_nan() {
+                interior_value.unwrap_or(f64::NAN)
+            } else {
+                psi
+            };
+        }
+    }
+
+    grid
+}
+
+/// Check if a point lies inside a polygon using ray casting.
+pub fn is_inside_polygon(x: f64, y: f64, polygon: &[Point]) -> bool {
+    let n = polygon.len();
+    if n < 3 {
+        return false;
+    }
+
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let xi = polygon[i].x;
+        let yi = polygon[i].y;
+        let xj = polygon[j].x;
+        let yj = polygon[j].y;
+
+        if ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
+            inside = !inside;
+        }
+        j = i;
+    }
+
+    inside
+}
+
 /// Check if a point is inside the airfoil.
 /// Uses ray casting algorithm.
 pub fn is_inside_airfoil(x: f64, y: f64, nodes: &[Point]) -> bool {
@@ -375,6 +745,7 @@ fn integrate_streamline<F>(
     max_steps: usize,
     nodes: &[Point],
     bounds: (f64, f64, f64, f64),
+    effective_body: Option<&[Point]>,
 ) -> Vec<(f64, f64)>
 where
     F: Fn(f64, f64) -> (f64, f64),
@@ -389,6 +760,9 @@ where
         if is_inside_airfoil(x, y, nodes) {
             break;
         }
+        if effective_body.is_some_and(|poly| is_inside_polygon(x, y, poly)) {
+            break;
+        }
         
         // Check bounds
         if x < x_min || x > x_max || y < y_min || y > y_max {
@@ -397,6 +771,9 @@ where
         
         match rk4_arc_step(field, x, y, step_size, 1e-4, 0.02) {
             Some((new_x, new_y)) => {
+                if effective_body.is_some_and(|poly| is_inside_polygon(new_x, new_y, poly)) {
+                    break;
+                }
                 x = new_x;
                 y = new_y;
                 points.push((x, y));
@@ -477,6 +854,7 @@ pub fn build_streamlines(
             options.max_steps,
             nodes,
             bounds,
+            None,
         );
         
         if streamline.len() >= 2 {
@@ -523,6 +901,68 @@ pub fn build_streamlines(
         }
     }
     
+    streamlines
+}
+
+/// Build streamlines using the viscous velocity field (vortex + source panels).
+pub fn build_streamlines_viscous(
+    nodes: &[Point],
+    gamma: &[f64],
+    sigma: &[f64],
+    alpha: f64,
+    v_inf: f64,
+    wake_panels: Option<&WakePanels>,
+    effective_body: Option<&[Point]>,
+    options: &StreamlineOptions,
+) -> Vec<Vec<(f64, f64)>> {
+    let field = |x: f64, y: f64| {
+        velocity_at_with_sources(x, y, nodes, gamma, sigma, alpha, v_inf, wake_panels)
+    };
+
+    let bounds = (options.x_min, options.x_max, options.y_min, options.y_max);
+
+    let alpha_factor = alpha.abs().sin().min(0.8);
+    let left_count = ((1.0 - alpha_factor) * options.seed_count as f64).round() as usize;
+    let edge_count = options.seed_count.saturating_sub(left_count);
+
+    let mut streamlines = Vec::with_capacity(options.seed_count + edge_count);
+
+    let mut add_streamline = |x: f64, y: f64| {
+        if is_inside_airfoil(x, y, nodes) {
+            return;
+        }
+        let streamline = integrate_streamline(
+            &field, x, y, options.step_size, options.max_steps, nodes, bounds, effective_body,
+        );
+        if streamline.len() >= 2 {
+            streamlines.push(streamline);
+        }
+    };
+
+    let left_seed_count = left_count.max(5);
+    for i in 0..left_seed_count {
+        let t = i as f64 / (left_seed_count - 1).max(1) as f64;
+        let y = options.y_min + t * (options.y_max - options.y_min);
+        add_streamline(options.seed_x, y);
+    }
+
+    if edge_count > 0 {
+        let v_y = alpha.sin();
+        if v_y > 0.01 {
+            for i in 0..edge_count {
+                let t = i as f64 / edge_count.max(1) as f64;
+                let x = options.x_min + t * (0.5 - options.x_min);
+                add_streamline(x, options.y_max - 0.01);
+            }
+        } else if v_y < -0.01 {
+            for i in 0..edge_count {
+                let t = i as f64 / edge_count.max(1) as f64;
+                let x = options.x_min + t * (0.5 - options.x_min);
+                add_streamline(x, options.y_min + 0.01);
+            }
+        }
+    }
+
     streamlines
 }
 

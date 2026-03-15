@@ -360,9 +360,11 @@ function connectSegments(
 }
 
 /**
- * Extrapolate the dividing streamline (ψ = ψ₀) to hit the airfoil surface.
- * Uses quadratic curve fitting to match the curvature of the streamline
- * near the stagnation point, providing a smooth approach to the body.
+ * Clean up the dividing streamline (ψ = ψ₀) near the airfoil surface.
+ *
+ * Marching squares leaves the streamline terminating about one cell off the body.
+ * We keep only the main exterior branch and snap any endpoint already near the
+ * airfoil to the exact surface projection instead of free-form extrapolating it.
  */
 function extrapolateDividingStreamline(
   psi0Lines: [number, number][][],
@@ -371,122 +373,87 @@ function extrapolateDividingStreamline(
   if (psi0Lines.length === 0 || airfoilPoints.length < 3) {
     return psi0Lines;
   }
-  
-  // Find closest point on airfoil to a given point
+
+  const distance = (a: [number, number], b: [number, number]): number => {
+    const dx = a[0] - b[0];
+    const dy = a[1] - b[1];
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  const polylineLength = (line: [number, number][]): number => {
+    let total = 0;
+    for (let i = 1; i < line.length; i++) {
+      total += distance(line[i - 1], line[i]);
+    }
+    return total;
+  };
+
+  // Find the closest projected point on the airfoil boundary.
   const closestPointOnAirfoil = (px: number, py: number): { x: number; y: number; dist: number } => {
     let minDist = Infinity;
     let closest = { x: airfoilPoints[0].x, y: airfoilPoints[0].y };
-    
+
     for (let i = 0; i < airfoilPoints.length; i++) {
       const p1 = airfoilPoints[i];
       const p2 = airfoilPoints[(i + 1) % airfoilPoints.length];
-      
+
       const dx = p2.x - p1.x;
       const dy = p2.y - p1.y;
       const lenSq = dx * dx + dy * dy;
-      
+
       if (lenSq < 1e-10) continue;
-      
+
       const t = Math.max(0, Math.min(1, ((px - p1.x) * dx + (py - p1.y) * dy) / lenSq));
       const projX = p1.x + t * dx;
       const projY = p1.y + t * dy;
-      
+
       const dist = Math.sqrt((px - projX) ** 2 + (py - projY) ** 2);
       if (dist < minDist) {
         minDist = dist;
         closest = { x: projX, y: projY };
       }
     }
-    
+
     return { ...closest, dist: minDist };
   };
-  
-  // Quadratic extrapolation using last N points for curvature matching
-  const extrapolateWithCurvature = (
-    points: [number, number][],
-    fromEnd: boolean
-  ): [number, number][] => {
-    const n = points.length;
-    if (n < 3) return [];
-    
-    // Get the last 3-5 points to estimate curvature
-    const numFit = Math.min(5, n);
-    const fitPoints: [number, number][] = fromEnd
-      ? points.slice(-numFit)
-      : points.slice(0, numFit).reverse();
-    
-    // Parameterize by arc length
-    const arcLengths = [0];
-    for (let i = 1; i < fitPoints.length; i++) {
-      const dx = fitPoints[i][0] - fitPoints[i-1][0];
-      const dy = fitPoints[i][1] - fitPoints[i-1][1];
-      arcLengths.push(arcLengths[i-1] + Math.sqrt(dx*dx + dy*dy));
+
+  // The physical dividing streamline should be the dominant exterior branch.
+  const sortedLines = [...psi0Lines].sort((a, b) => polylineLength(b) - polylineLength(a));
+  const mainLine = sortedLines[0];
+  if (!mainLine || mainLine.length < 2) {
+    return psi0Lines;
+  }
+
+  const result: [number, number][] = [...mainLine];
+  const start = result[0];
+  const end = result[result.length - 1];
+  const startSurface = closestPointOnAirfoil(start[0], start[1]);
+  const endSurface = closestPointOnAirfoil(end[0], end[1]);
+
+  // Use local contour spacing to decide whether an endpoint should snap to the body.
+  const startSpacing = result.length > 1 ? distance(result[0], result[1]) : 0;
+  const endSpacing = result.length > 1 ? distance(result[result.length - 2], result[result.length - 1]) : 0;
+  const snapThreshold = Math.min(0.08, Math.max(0.015, 4 * Math.max(startSpacing, endSpacing)));
+
+  if (startSurface.dist <= snapThreshold) {
+    const snappedStart: [number, number] = [startSurface.x, startSurface.y];
+    if (distance(snappedStart, start) > 1e-8) {
+      result.unshift(snappedStart);
+    } else {
+      result[0] = snappedStart;
     }
-    const totalLen = arcLengths[arcLengths.length - 1];
-    if (totalLen < 1e-8) return [];
-    
-    // Fit quadratic using velocity and acceleration at endpoint
-    const endPt = fitPoints[fitPoints.length - 1];
-    const prevPt = fitPoints[fitPoints.length - 2];
-    const prev2Pt = fitPoints.length > 2 ? fitPoints[fitPoints.length - 3] : prevPt;
-    
-    // Compute velocity and acceleration at end
-    const v1x = endPt[0] - prevPt[0];
-    const v1y = endPt[1] - prevPt[1];
-    const v0x = prevPt[0] - prev2Pt[0];
-    const v0y = prevPt[1] - prev2Pt[1];
-    
-    // Acceleration (change in velocity) gives curvature info
-    const ax = v1x - v0x;
-    const ay = v1y - v0y;
-    
-    // Generate extrapolation points
-    const extraPoints: [number, number][] = [];
-    const stepSize = 0.01;
-    const maxSteps = 200;
-    
-    for (let step = 1; step <= maxSteps; step++) {
-      const dt = step * stepSize / totalLen;
-      // Quadratic extrapolation with curvature
-      const x = endPt[0] + v1x * dt + 0.5 * ax * dt * dt;
-      const y = endPt[1] + v1y * dt + 0.5 * ay * dt * dt;
-      
-      const { dist, x: closestX, y: closestY } = closestPointOnAirfoil(x, y);
-      
-      if (dist < 0.015) {
-        extraPoints.push([closestX, closestY]);
-        break;
-      }
-      
-      if (x < -2 || x > 3 || y < -2 || y > 2) break;
-      
-      // Add intermediate points for smooth curve
-      if (step % 3 === 0) {
-        extraPoints.push([x, y]);
-      }
+  }
+
+  if (endSurface.dist <= snapThreshold) {
+    const snappedEnd: [number, number] = [endSurface.x, endSurface.y];
+    if (distance(snappedEnd, end) > 1e-8) {
+      result.push(snappedEnd);
+    } else {
+      result[result.length - 1] = snappedEnd;
     }
-    
-    return extraPoints;
-  };
-  
-  // Extrapolate each polyline
-  return psi0Lines.map(line => {
-    if (line.length < 3) return line;
-    
-    const result: [number, number][] = [...line];
-    
-    // Extrapolate from the end with curvature matching
-    const endExtrap = extrapolateWithCurvature(line, true);
-    result.push(...endExtrap);
-    
-    // Extrapolate from the start with curvature matching
-    const startExtrap = extrapolateWithCurvature(line, false);
-    for (let i = startExtrap.length - 1; i >= 0; i--) {
-      result.unshift(startExtrap[i]);
-    }
-    
-    return result;
-  });
+  }
+
+  return [result];
 }
 
 // Constants
@@ -525,6 +492,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     mach,
     ncrit,
     maxIterations,
+    solverMode,
     // Camber/thickness control
     camberControlPoints,
     thicknessControlPoints,
@@ -544,6 +512,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       mach: state.mach,
       ncrit: state.ncrit,
       maxIterations: state.maxIterations,
+      solverMode: state.solverMode,
       camberControlPoints: state.camberControlPoints,
       thicknessControlPoints: state.thicknessControlPoints,
       updateCamberControlPoint: state.updateCamberControlPoint,
@@ -598,6 +567,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       showForces: state.showForces,
       showBoundaryLayer: state.showBoundaryLayer,
       showWake: state.showWake,
+      showDisplacementThickness: state.showDisplacementThickness,
       blThicknessScale: state.blThicknessScale,
       enableMorphing: state.enableMorphing,
       morphDuration: state.morphDuration,
@@ -629,6 +599,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     showForces,
     showBoundaryLayer,
     showWake,
+    showDisplacementThickness,
     blThicknessScale,
     enableMorphing,
     morphDuration,
@@ -775,13 +746,43 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     const minHalfWidth = 1.5;
     const minHalfHeight = 1.0;
     
-    return [
-      center.x - Math.max(halfWidth, minHalfWidth),
-      center.x + Math.max(halfWidth, minHalfWidth),
-      center.y - Math.max(halfHeight, minHalfHeight),
-      center.y + Math.max(halfHeight, minHalfHeight),
+    const displayMinX = center.x - Math.max(halfWidth, minHalfWidth);
+    const displayMaxX = center.x + Math.max(halfWidth, minHalfWidth);
+    const displayMinY = center.y - Math.max(halfHeight, minHalfHeight);
+    const displayMaxY = center.y + Math.max(halfHeight, minHalfHeight);
+
+    // The solver operates in body coordinates, but the viewport bounds are in
+    // display coordinates after the airfoil has been rotated by -alpha for
+    // presentation. Rotate the visible rectangle back into body coordinates so
+    // the sampled psi/streamline domain matches what is actually on screen.
+    const cx = 0.25;
+    const cy = 0;
+    const rad = displayAlpha * Math.PI / 180;
+    const cosA = Math.cos(rad);
+    const sinA = Math.sin(rad);
+    const rotateDisplayToBody = (x: number, y: number) => {
+      const dx = x - cx;
+      const dy = y - cy;
+      return {
+        x: cx + dx * cosA - dy * sinA,
+        y: cy + dx * sinA + dy * cosA,
+      };
+    };
+
+    const corners = [
+      rotateDisplayToBody(displayMinX, displayMinY),
+      rotateDisplayToBody(displayMinX, displayMaxY),
+      rotateDisplayToBody(displayMaxX, displayMinY),
+      rotateDisplayToBody(displayMaxX, displayMaxY),
     ];
-  }, [adaptiveStreamlines, stableViewport]);
+
+    return [
+      Math.min(...corners.map(p => p.x)),
+      Math.max(...corners.map(p => p.x)),
+      Math.min(...corners.map(p => p.y)),
+      Math.max(...corners.map(p => p.y)),
+    ];
+  }, [adaptiveStreamlines, stableViewport, displayAlpha]);
 
   // Compute streamlines when enabled and alpha/panels change
   // SKIP during drag to prevent freezing
@@ -796,14 +797,14 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     }
     
     try {
-      const result = computeStreamlines(panels, displayAlpha, reynolds, adaptiveStreamlineCount, streamlineBounds, mach, ncrit, maxIterations);
+      const result = computeStreamlines(panels, displayAlpha, reynolds, adaptiveStreamlineCount, streamlineBounds, mach, ncrit, maxIterations, solverMode);
       if (result.success) {
         setStreamlines(result.streamlines);
       }
     } catch (e) {
       console.error('Streamline computation failed:', e);
     }
-  }, [showStreamlines, panels, displayAlpha, reynolds, mach, ncrit, maxIterations, adaptiveStreamlineCount, streamlineBounds, isDraggingPoint]);
+  }, [showStreamlines, panels, displayAlpha, reynolds, mach, ncrit, maxIterations, solverMode, adaptiveStreamlineCount, streamlineBounds, isDraggingPoint]);
   
   // Compute stream function (ψ) contours when enabled
   // Uses marching squares to extract iso-lines from the psi grid
@@ -827,7 +828,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         Math.min(200, Math.round(xRange * 40)),
         Math.min(120, Math.round(yRange * 40))
       ];
-      const result = computePsiGrid(panels, displayAlpha, reynolds, bounds, resolution, mach, ncrit, maxIterations);
+      const result = computePsiGrid(panels, displayAlpha, reynolds, bounds, resolution, mach, ncrit, maxIterations, solverMode);
       
       if (!result.success) {
         console.error('Psi grid computation failed:', result.error);
@@ -853,12 +854,16 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         return inside;
       };
       
-      // Choose contour levels - evenly spaced
-      const nLevels = 20;
-      const range = psi_max - psi_min;
+      // Choose contour levels split around psi0 so both sides of the dividing
+      // streamline get comparable line density even when the psi range is
+      // strongly asymmetric.
+      const nLevels = 12;
       const levels: number[] = [];
       for (let i = 0; i <= nLevels; i++) {
-        levels.push(psi_min + (range * i) / nLevels);
+        levels.push(psi_min + (psi_0 - psi_min) * (i / nLevels));
+      }
+      for (let i = 1; i <= nLevels; i++) {
+        levels.push(psi_0 + (psi_max - psi_0) * (i / nLevels));
       }
       
       // Marching squares for regular contour lines
@@ -920,7 +925,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     } catch (e) {
       console.error('Psi contour computation failed:', e);
     }
-  }, [showPsiContours, panels, displayAlpha, reynolds, mach, ncrit, maxIterations, streamlineBounds, isDraggingPoint]);
+  }, [showPsiContours, panels, displayAlpha, reynolds, mach, ncrit, maxIterations, solverMode, streamlineBounds, isDraggingPoint]);
   
   // Compute aerodynamic analysis (Cp, Cl, Cm)
   // SKIP during drag to prevent freezing - recalculate on drag end
@@ -949,7 +954,9 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
   const [blVisData, setBlVisData] = useState<BLVisualizationData | null>(null);
   
   useEffect(() => {
-    if ((!showBoundaryLayer && !showWake) || !isWasmReady() || panels.length < 10 || isDraggingPoint) {
+    const needsBLData = showBoundaryLayer || showWake || showDisplacementThickness
+      || ((showStreamlines || showPsiContours) && solverMode === 'viscous');
+    if (!needsBLData || !isWasmReady() || panels.length < 10 || isDraggingPoint) {
       if (!isDraggingPoint) setBlVisData(null);
       return;
     }
@@ -962,7 +969,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     } catch (e) {
       console.error('BL visualization data failed:', e);
     }
-  }, [showBoundaryLayer, showWake, panels, displayAlpha, reynolds, mach, ncrit, maxIterations, isDraggingPoint]);
+  }, [showBoundaryLayer, showWake, showDisplacementThickness, showStreamlines, showPsiContours, solverMode, panels, displayAlpha, reynolds, mach, ncrit, maxIterations, isDraggingPoint]);
   
   // Morphing animation integration
   const morphTarget = useMemo(() => ({
@@ -1085,10 +1092,21 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     smokeSystemRef.current.set_max_age(dynamicMaxAge);
     
     // Set initial flow using cached panels
-    smokeSystemRef.current.set_flow(
-      new Float64Array(smokePanelsRef.current.flatMap(p => [p.x, p.y])),
-      displayAlpha
-    );
+    const smokeCoords = new Float64Array(smokePanelsRef.current.flatMap(p => [p.x, p.y]));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const smokeSystemAny = smokeSystemRef.current as any;
+    if (solverMode === 'viscous' && typeof smokeSystemAny.set_faithful_flow === 'function') {
+      smokeSystemAny.set_faithful_flow(
+        smokeCoords,
+        displayAlpha,
+        reynolds,
+        mach,
+        ncrit,
+        maxIterations,
+      );
+    } else {
+      smokeSystemRef.current.set_flow(smokeCoords, displayAlpha);
+    }
     
     // Set initial flow speed
     if (typeof smokeSystemRef.current.set_v_inf === 'function') {
@@ -1168,18 +1186,29 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       }
     };
   // Note: smokeSpawnInterval and smokeMaxAge removed - now computed dynamically from domain/flowSpeed
-  }, [showSmoke, smokeDensity, smokeParticlesPerBlob, flowSpeed, setSmokeDensity, isDraggingPoint, displayAlpha, smokeBounds]);
+  }, [showSmoke, smokeDensity, smokeParticlesPerBlob, flowSpeed, setSmokeDensity, isDraggingPoint, displayAlpha, smokeBounds, solverMode, reynolds, mach, ncrit, maxIterations]);
   
   // Update flow when alpha changes (without recreating the system)
   // SKIP during drag
   useEffect(() => {
     if (smokeSystemRef.current && smokePanelsRef.current.length >= 10 && !isDraggingPoint) {
-      smokeSystemRef.current.set_flow(
-        new Float64Array(smokePanelsRef.current.flatMap(p => [p.x, p.y])),
-        displayAlpha
-      );
+      const smokeCoords = new Float64Array(smokePanelsRef.current.flatMap(p => [p.x, p.y]));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const smokeSystemAny = smokeSystemRef.current as any;
+      if (solverMode === 'viscous' && typeof smokeSystemAny.set_faithful_flow === 'function') {
+        smokeSystemAny.set_faithful_flow(
+          smokeCoords,
+          displayAlpha,
+          reynolds,
+          mach,
+          ncrit,
+          maxIterations,
+        );
+      } else {
+        smokeSystemRef.current.set_flow(smokeCoords, displayAlpha);
+      }
     }
-  }, [displayAlpha, isDraggingPoint]);
+  }, [displayAlpha, isDraggingPoint, solverMode, reynolds, mach, ncrit, maxIterations]);
 
   // Interaction state
   const [isDragging, setIsDragging] = useState(false);
@@ -1397,6 +1426,83 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     };
     
     // Draw stream function visualization using filled contour bands
+    // Build "effective body" polygon for clipping contour lines and streamlines
+    // at the BL envelope. Shared by psi contours and streamline rendering.
+    let effectiveBodyPoly: { x: number; y: number }[] | null = null;
+
+    if ((showBoundaryLayer || showWake) && blVisData && blVisData.success) {
+      const sc = blThicknessScale;
+      const poly: { x: number; y: number }[] = [];
+
+      const envNormal = (pts: { x: number[]; y: number[] }, i: number, sign: number) => {
+        let tx: number, ty: number;
+        if (pts.x.length < 2) return { nx: 0, ny: sign };
+        if (i === 0) { tx = pts.x[1] - pts.x[0]; ty = pts.y[1] - pts.y[0]; }
+        else if (i === pts.x.length - 1) { tx = pts.x[i] - pts.x[i - 1]; ty = pts.y[i] - pts.y[i - 1]; }
+        else { tx = pts.x[i + 1] - pts.x[i - 1]; ty = pts.y[i + 1] - pts.y[i - 1]; }
+        const len = Math.sqrt(tx * tx + ty * ty) || 1e-10;
+        return { nx: -ty / len * sign, ny: tx / len * sign };
+      };
+
+      const uData = blVisData.upper;
+      for (let i = 0; i < uData.x.length; i++) {
+        const n = envNormal(uData, i, 1);
+        const ds = uData.delta_star[i] * sc;
+        poly.push({ x: uData.x[i] + n.nx * ds, y: uData.y[i] + n.ny * ds });
+      }
+
+      const wk = blVisData.wake;
+      const fU = blVisData.wake_upper_fraction;
+      const fL = 1 - fU;
+      if (showWake && wk.x.length > 0) {
+        const blendN = Math.min(5, wk.x.length);
+        const teNU = uData.x.length > 1 ? envNormal(uData, uData.x.length - 1, 1) : { nx: 0, ny: 1 };
+        for (let i = 0; i < wk.x.length; i++) {
+          const wn = envNormal(wk, i, 1);
+          const t = i < blendN ? i / blendN : 1;
+          const nx = teNU.nx * (1 - t) + wn.nx * t;
+          const ny = teNU.ny * (1 - t) + wn.ny * t;
+          const len = Math.sqrt(nx * nx + ny * ny) || 1;
+          const ds = wk.delta_star[i] * sc * fU;
+          poly.push({ x: wk.x[i] + (nx / len) * ds, y: wk.y[i] + (ny / len) * ds });
+        }
+        const lData2 = blVisData.lower;
+        const teNL = lData2.x.length > 1 ? envNormal(lData2, lData2.x.length - 1, -1) : { nx: 0, ny: -1 };
+        for (let i = wk.x.length - 1; i >= 0; i--) {
+          const wn = envNormal(wk, i, 1);
+          const t = i < blendN ? i / blendN : 1;
+          const nx = teNL.nx * (1 - t) + (-wn.nx) * t;
+          const ny = teNL.ny * (1 - t) + (-wn.ny) * t;
+          const len = Math.sqrt(nx * nx + ny * ny) || 1;
+          const ds = wk.delta_star[i] * sc * fL;
+          poly.push({ x: wk.x[i] + (nx / len) * ds, y: wk.y[i] + (ny / len) * ds });
+        }
+      }
+
+      const lData = blVisData.lower;
+      for (let i = lData.x.length - 1; i >= 0; i--) {
+        const n = envNormal(lData, i, -1);
+        const ds = lData.delta_star[i] * sc;
+        poly.push({ x: lData.x[i] + n.nx * ds, y: lData.y[i] + n.ny * ds });
+      }
+
+      if (poly.length > 4) effectiveBodyPoly = poly;
+    }
+
+    const insideEffectiveBody = effectiveBodyPoly ? (px: number, py: number): boolean => {
+      const poly = effectiveBodyPoly!;
+      let inside = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const yi = poly[i].y, yj = poly[j].y;
+        if ((yi > py) !== (yj > py)) {
+          const xi = poly[i].x, xj = poly[j].x;
+          const xIntersect = xi + (py - yi) / (yj - yi) * (xj - xi);
+          if (px < xIntersect) inside = !inside;
+        }
+      }
+      return inside;
+    } : null;
+
     // Uses marching squares to generate iso-contour polygons at each threshold
     // Open polylines are closed by tracing along the grid boundary
     // - Blue tones: flow going under the airfoil (ψ < ψ₀)
@@ -1668,21 +1774,29 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         ctx.fill();
       }
       
-      // Draw contour lines on top (don't connect interior for line drawing - we mask the foil anyway)
+      // Draw all contour branches, clipping inside the BL envelope.
       ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.2)';
       ctx.lineWidth = 0.8;
-      for (const threshold of allThresholds) {
-        // Don't connect interior for drawing - the foil mask will hide the inside
-        const contour = getPrimaryContour(threshold, false);
-        if (!contour || contour.length < 2) continue;
-        ctx.beginPath();
-        const first = toCanvas(rotatePoint({ x: contour[0][0], y: contour[0][1] }));
-        ctx.moveTo(first.x, first.y);
-        for (let j = 1; j < contour.length; j++) {
-          const p = toCanvas(rotatePoint({ x: contour[j][0], y: contour[j][1] }));
-          ctx.lineTo(p.x, p.y);
+      for (const line of psiContours.lines) {
+        if (line.length < 2) continue;
+        let drawing = false;
+        for (let j = 0; j < line.length; j++) {
+          const px = line[j][0];
+          const py = line[j][1];
+          if (insideEffectiveBody && insideEffectiveBody(px, py)) {
+            if (drawing) { ctx.stroke(); drawing = false; }
+            continue;
+          }
+          const p = toCanvas(rotatePoint({ x: px, y: py }));
+          if (!drawing) {
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            drawing = true;
+          } else {
+            ctx.lineTo(p.x, p.y);
+          }
         }
-        ctx.stroke();
+        if (drawing) ctx.stroke();
       }
       
       // Mask out the airfoil interior
@@ -1699,8 +1813,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         ctx.fill();
       }
       
-      // Draw dividing streamline using separately computed psi0Lines
-      // (computed with proper interior filtering, not affected by fake interior values)
+      // Draw dividing streamline, clipping inside BL envelope
       if (psiContours.psi0Lines.length > 0) {
         ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.95)' : 'rgba(0, 0, 0, 0.9)';
         ctx.lineWidth = 2.5;
@@ -1708,15 +1821,22 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         
         for (const line of psiContours.psi0Lines) {
           if (line.length < 2) continue;
-          ctx.beginPath();
-          const first = toCanvas(rotatePoint({ x: line[0][0], y: line[0][1] }));
-          ctx.moveTo(first.x, first.y);
-          
-          for (let i = 1; i < line.length; i++) {
-            const p = toCanvas(rotatePoint({ x: line[i][0], y: line[i][1] }));
-            ctx.lineTo(p.x, p.y);
+          let drawing = false;
+          for (let i = 0; i < line.length; i++) {
+            const px = line[i][0];
+            const py = line[i][1];
+            if (insideEffectiveBody && insideEffectiveBody(px, py)) {
+              if (drawing) { ctx.stroke(); drawing = false; }
+              continue;
+            }
+            const p = toCanvas(rotatePoint({ x: px, y: py }));
+            if (!drawing) {
+              ctx.beginPath(); ctx.moveTo(p.x, p.y); drawing = true;
+            } else {
+              ctx.lineTo(p.x, p.y);
+            }
           }
-          ctx.stroke();
+          if (drawing) ctx.stroke();
         }
       }
     }
@@ -1728,91 +1848,6 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       ctx.strokeStyle = colors.accentSecondary;
       ctx.globalAlpha = 0.5;
       ctx.lineWidth = 1;
-      
-      // Build "effective body" polygon for streamline clipping when BL overlay is on.
-      // The polygon traces: upper envelope (LE→TE) → wake upper edge → wake lower edge
-      // (reversed) → lower envelope (TE→LE) → close. Any streamline point inside this
-      // polygon is clipped so streamlines flow around the outside of the BL.
-      let effectiveBodyPoly: { x: number; y: number }[] | null = null;
-
-      if (showBoundaryLayer && blVisData && blVisData.success) {
-        const sc = blThicknessScale;
-        const poly: { x: number; y: number }[] = [];
-
-        // Helper: compute outward normal for envelope offset
-        const envNormal = (pts: { x: number[]; y: number[] }, i: number, sign: number) => {
-          let tx: number, ty: number;
-          if (pts.x.length < 2) return { nx: 0, ny: sign };
-          if (i === 0) { tx = pts.x[1] - pts.x[0]; ty = pts.y[1] - pts.y[0]; }
-          else if (i === pts.x.length - 1) { tx = pts.x[i] - pts.x[i - 1]; ty = pts.y[i] - pts.y[i - 1]; }
-          else { tx = pts.x[i + 1] - pts.x[i - 1]; ty = pts.y[i + 1] - pts.y[i - 1]; }
-          const len = Math.sqrt(tx * tx + ty * ty) || 1e-10;
-          return { nx: -ty / len * sign, ny: tx / len * sign };
-        };
-
-        // 1. Upper envelope LE → TE
-        const uData = blVisData.upper;
-        for (let i = 0; i < uData.x.length; i++) {
-          const n = envNormal(uData, i, 1);
-          const ds = uData.delta_star[i] * sc;
-          poly.push({ x: uData.x[i] + n.nx * ds, y: uData.y[i] + n.ny * ds });
-        }
-
-        // 2. Wake edges with fraction-based splitting and normal blending
-        const wk = blVisData.wake;
-        const fU = blVisData.wake_upper_fraction;
-        const fL = 1 - fU;
-        if (showWake && wk.x.length > 0) {
-          const blendN = Math.min(5, wk.x.length);
-          const teNU = uData.x.length > 1 ? envNormal(uData, uData.x.length - 1, 1) : { nx: 0, ny: 1 };
-          for (let i = 0; i < wk.x.length; i++) {
-            const wn = envNormal(wk, i, 1);
-            const t = i < blendN ? i / blendN : 1;
-            const nx = teNU.nx * (1 - t) + wn.nx * t;
-            const ny = teNU.ny * (1 - t) + wn.ny * t;
-            const len = Math.sqrt(nx * nx + ny * ny) || 1;
-            const ds = wk.delta_star[i] * sc * fU;
-            poly.push({ x: wk.x[i] + (nx / len) * ds, y: wk.y[i] + (ny / len) * ds });
-          }
-          // 3. Wake lower edge (downstream → back to TE, reversed)
-          const lData2 = blVisData.lower;
-          const teNL = lData2.x.length > 1 ? envNormal(lData2, lData2.x.length - 1, -1) : { nx: 0, ny: -1 };
-          for (let i = wk.x.length - 1; i >= 0; i--) {
-            const wn = envNormal(wk, i, 1);
-            const t = i < blendN ? i / blendN : 1;
-            const nx = teNL.nx * (1 - t) + (-wn.nx) * t;
-            const ny = teNL.ny * (1 - t) + (-wn.ny) * t;
-            const len = Math.sqrt(nx * nx + ny * ny) || 1;
-            const ds = wk.delta_star[i] * sc * fL;
-            poly.push({ x: wk.x[i] + (nx / len) * ds, y: wk.y[i] + (ny / len) * ds });
-          }
-        }
-
-        // 4. Lower envelope TE → LE (reversed so polygon winds correctly)
-        const lData = blVisData.lower;
-        for (let i = lData.x.length - 1; i >= 0; i--) {
-          const n = envNormal(lData, i, -1);
-          const ds = lData.delta_star[i] * sc;
-          poly.push({ x: lData.x[i] + n.nx * ds, y: lData.y[i] + n.ny * ds });
-        }
-
-        if (poly.length > 4) effectiveBodyPoly = poly;
-      }
-
-      // Ray-casting point-in-polygon test
-      const insideEffectiveBody = effectiveBodyPoly ? (px: number, py: number): boolean => {
-        const poly = effectiveBodyPoly!;
-        let inside = false;
-        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-          const yi = poly[i].y, yj = poly[j].y;
-          if ((yi > py) !== (yj > py)) {
-            const xi = poly[i].x, xj = poly[j].x;
-            const xIntersect = xi + (py - yi) / (yj - yi) * (xj - xi);
-            if (px < xIntersect) inside = !inside;
-          }
-        }
-        return inside;
-      } : null;
 
       for (const line of morphState.streamlines) {
         if (line.length < 2) continue;
@@ -2424,9 +2459,97 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       }
     }
 
+    // Draw displacement thickness (δ*) offset curve -- the "effective inviscid body"
+    if (showDisplacementThickness && blVisData && blVisData.success) {
+      const scale = blThicknessScale;
+      const curveColor = isDark ? 'rgba(0, 255, 200, 0.85)' : 'rgba(0, 160, 120, 0.85)';
+
+      const dsNormal = (pts: { x: number[]; y: number[] }, i: number, sign: number) => {
+        let tx: number, ty: number;
+        if (pts.x.length < 2) return { nx: 0, ny: sign };
+        if (i === 0) { tx = pts.x[1] - pts.x[0]; ty = pts.y[1] - pts.y[0]; }
+        else if (i === pts.x.length - 1) { tx = pts.x[i] - pts.x[i - 1]; ty = pts.y[i] - pts.y[i - 1]; }
+        else { tx = pts.x[i + 1] - pts.x[i - 1]; ty = pts.y[i + 1] - pts.y[i - 1]; }
+        const len = Math.sqrt(tx * tx + ty * ty) || 1e-10;
+        return { nx: -ty / len * sign, ny: tx / len * sign };
+      };
+
+      ctx.strokeStyle = curveColor;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 3]);
+
+      // Upper surface δ* curve
+      const uData = blVisData.upper;
+      if (uData.x.length > 1) {
+        ctx.beginPath();
+        for (let i = 0; i < uData.x.length; i++) {
+          const n = dsNormal(uData, i, 1);
+          const ds = uData.delta_star[i] * scale;
+          const p = toCanvas(rotatePoint({ x: uData.x[i] + n.nx * ds, y: uData.y[i] + n.ny * ds }));
+          if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+      }
+
+      // Lower surface δ* curve
+      const lData = blVisData.lower;
+      if (lData.x.length > 1) {
+        ctx.beginPath();
+        for (let i = 0; i < lData.x.length; i++) {
+          const n = dsNormal(lData, i, -1);
+          const ds = lData.delta_star[i] * scale;
+          const p = toCanvas(rotatePoint({ x: lData.x[i] + n.nx * ds, y: lData.y[i] + n.ny * ds }));
+          if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+      }
+
+      // Wake δ* curves (upper and lower edges)
+      if (showWake) {
+        const wk = blVisData.wake;
+        const fU = blVisData.wake_upper_fraction;
+        const fL = 1 - fU;
+        if (wk.x.length > 1) {
+          const blendN = Math.min(5, wk.x.length);
+          const teNU = uData.x.length > 1 ? dsNormal(uData, uData.x.length - 1, 1) : { nx: 0, ny: 1 };
+          const teNL = lData.x.length > 1 ? dsNormal(lData, lData.x.length - 1, -1) : { nx: 0, ny: -1 };
+
+          // Wake upper edge
+          ctx.beginPath();
+          for (let i = 0; i < wk.x.length; i++) {
+            const wn = dsNormal(wk, i, 1);
+            const t = i < blendN ? i / blendN : 1;
+            const nx = teNU.nx * (1 - t) + wn.nx * t;
+            const ny = teNU.ny * (1 - t) + wn.ny * t;
+            const len = Math.sqrt(nx * nx + ny * ny) || 1;
+            const ds = wk.delta_star[i] * scale * fU;
+            const p = toCanvas(rotatePoint({ x: wk.x[i] + (nx / len) * ds, y: wk.y[i] + (ny / len) * ds }));
+            if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+          }
+          ctx.stroke();
+
+          // Wake lower edge
+          ctx.beginPath();
+          for (let i = 0; i < wk.x.length; i++) {
+            const wn = dsNormal(wk, i, 1);
+            const t = i < blendN ? i / blendN : 1;
+            const nx = teNL.nx * (1 - t) + (-wn.nx) * t;
+            const ny = teNL.ny * (1 - t) + (-wn.ny) * t;
+            const len = Math.sqrt(nx * nx + ny * ny) || 1;
+            const ds = wk.delta_star[i] * scale * fL;
+            const p = toCanvas(rotatePoint({ x: wk.x[i] + (nx / len) * ds, y: wk.y[i] + (ny / len) * ds }));
+            if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+          }
+          ctx.stroke();
+        }
+      }
+
+      ctx.setLineDash([]);
+    }
+
   // NOTE: Smoke state (smokePositions, etc.) intentionally NOT in dependencies
   // Smoke is drawn on separate overlay canvas to avoid expensive redraws
-  }, [viewport, morphState, splineCurve, controlMode, camberControlPoints, thicknessControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showPsiContours, psiContours, displayAlpha, toCanvas, isDark, showCp, showForces, cpDisplayMode, cpBarScale, forceScale, showBoundaryLayer, showWake, blVisData, blThicknessScale, blHoverInfo]);
+  }, [viewport, morphState, splineCurve, controlMode, camberControlPoints, thicknessControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showPsiContours, psiContours, displayAlpha, toCanvas, isDark, showCp, showForces, cpDisplayMode, cpBarScale, forceScale, showBoundaryLayer, showWake, showDisplacementThickness, blVisData, blThicknessScale, blHoverInfo]);
 
   // Draw grid
   const drawGrid = useCallback((ctx: CanvasRenderingContext2D) => {
@@ -2972,7 +3095,6 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
 
     lastMousePos.current = canvasPos;
   }, [isDragging, isPanning, dragTarget, viewport, toAirfoil, findPointAt, camberControlPoints, thicknessControlPoints, updateCamberControlPoint, updateThicknessControlPoint, showBoundaryLayer, blVisData, displayAlpha]);
-
   const handleMouseLeave = useCallback(() => {
     setBlHoverInfo(null);
   }, []);
@@ -3272,7 +3394,6 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
           <span>{morphState.cm.toFixed(4)}</span>
         </div>
       </div>
-
       {/* Overlay controls - simplified, full controls in Visualization panel */}
       <div
         style={{

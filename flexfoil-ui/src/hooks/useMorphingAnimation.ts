@@ -33,6 +33,8 @@ export interface MorphState {
   cpX: number[];
   /** Interpolated lift coefficient */
   cl: number;
+  /** Interpolated drag coefficient */
+  cd: number;
   /** Interpolated moment coefficient */
   cm: number;
   /** Whether animation is in progress */
@@ -48,6 +50,7 @@ interface MorphTarget {
   cp: number[];
   cpX: number[];
   cl: number;
+  cd: number;
   cm: number;
 }
 
@@ -315,6 +318,7 @@ export function useMorphingAnimation(
     cp: target.cp,
     cpX: target.cpX,
     cl: target.cl,
+    cd: target.cd,
     cm: target.cm,
     isAnimating: false,
     progress: 1,
@@ -327,11 +331,12 @@ export function useMorphingAnimation(
     streamLen: target.streamlines.length,
     cpLen: target.cp.length,
     cl: target.cl,
+    cd: target.cd,
     cm: target.cm,
     // Sample a few points for change detection
     firstCoord: target.coordinates[0],
     lastCoord: target.coordinates[target.coordinates.length - 1],
-  }), [target.coordinates, target.panels, target.streamlines, target.cp, target.cl, target.cm]);
+  }), [target.coordinates, target.panels, target.streamlines, target.cp, target.cl, target.cd, target.cm]);
   
   // Check if target has changed significantly
   const hasTargetChanged = useCallback((prev: MorphTarget | null, curr: MorphTarget): boolean => {
@@ -345,6 +350,7 @@ export function useMorphingAnimation(
     
     // Check Cl/Cm change (indicates alpha changed)
     if (Math.abs(prev.cl - curr.cl) > 0.0005) return true;
+    if (Math.abs(prev.cd - curr.cd) > 0.0005) return true;
     if (Math.abs(prev.cm - curr.cm) > 0.0005) return true;
     
     // Check sample points for significant change
@@ -416,6 +422,7 @@ export function useMorphingAnimation(
           cp: morphed.cp,
           cpX: morphed.cpX,
           cl: lerp(prev.cl, target.cl, progress),
+          cd: lerp(prev.cd, target.cd, progress),
           cm: lerp(prev.cm, target.cm, progress),
           isAnimating: !isComplete,
           progress,
@@ -459,6 +466,7 @@ export function useMorphingAnimation(
           cp: [...buffers.cp],
           cpX: [...buffers.cpX],
           cl: lerp(prev.cl, target.cl, progress),
+          cd: lerp(prev.cd, target.cd, progress),
           cm: lerp(prev.cm, target.cm, progress),
           isAnimating: !isComplete,
           progress,
