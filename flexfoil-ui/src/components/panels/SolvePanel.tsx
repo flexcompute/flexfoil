@@ -10,7 +10,7 @@ import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
 import { useRunStore } from '../../stores/runStore';
 import { analyzeAirfoil, analyzeAirfoilInviscid, isWasmReady, type AnalysisResult } from '../../lib/wasm';
-import type { PolarPoint, PolarSeries, SolverMode } from '../../types';
+import type { PolarPoint } from '../../types';
 import type { RunInsert } from '../../lib/runDatabase';
 
 type RunMode = 'alpha' | 'cl';
@@ -436,11 +436,13 @@ export function SolvePanel() {
             <label style={{ fontSize: '12px', minWidth: '60px' }}>
               {runMode === 'alpha' ? 'Alpha (°):' : 'Target CL:'}
             </label>
-            <NumericInput
+            <input
+              type="number"
               value={runMode === 'alpha' ? targetAlpha : targetCl}
-              onChange={(v) => {
-                if (runMode === 'alpha') setTargetAlpha(v);
-                else setTargetCl(v);
+              onChange={(e) => {
+                const val = parseFloat(e.target.value);
+                if (runMode === 'alpha') setTargetAlpha(val);
+                else setTargetCl(val);
               }}
               step={runMode === 'alpha' ? 0.5 : 0.1}
               style={{ flex: 1 }}
@@ -489,15 +491,15 @@ export function SolvePanel() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
             <div>
               <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Start (°)</label>
-              <NumericInput value={alphaStart} onChange={setAlphaStart} step={1} />
+              <input type="number" value={alphaStart} onChange={(e) => setAlphaStart(parseFloat(e.target.value))} step={1} />
             </div>
             <div>
               <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>End (°)</label>
-              <NumericInput value={alphaEnd} onChange={setAlphaEnd} step={1} />
+              <input type="number" value={alphaEnd} onChange={(e) => setAlphaEnd(parseFloat(e.target.value))} step={1} />
             </div>
             <div>
               <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Step (°)</label>
-              <NumericInput value={alphaStep} onChange={setAlphaStep} step={0.5} min={0.1} />
+              <input type="number" value={alphaStep} onChange={(e) => setAlphaStep(parseFloat(e.target.value))} step={0.5} min={0.1} />
             </div>
           </div>
 

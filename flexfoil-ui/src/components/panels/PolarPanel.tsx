@@ -7,7 +7,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
-import type { PolarPoint, PolarSeries } from '../../types';
+import type { PolarPoint } from '../../types';
 
 type AxisVariable = 'alpha' | 'cl' | 'cd' | 'cm';
 
