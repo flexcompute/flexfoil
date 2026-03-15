@@ -3235,6 +3235,44 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         );
       })()}
 
+      {/* Aero coefficients HUD */}
+      <div
+        style={{
+          position: 'absolute',
+          top: '12px',
+          left: '12px',
+          zIndex: 10,
+          pointerEvents: 'none',
+          background: 'var(--bg-secondary, rgba(15,20,35,0.88))',
+          backdropFilter: 'blur(10px)',
+          padding: '8px 12px',
+          borderRadius: '6px',
+          border: '1px solid var(--border-color, rgba(255,255,255,0.08))',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          fontSize: '11px',
+          lineHeight: '1.7',
+          color: 'var(--text-primary, #edf2ff)',
+          minWidth: '120px',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+          <span style={{ opacity: 0.5 }}>α</span>
+          <span>{displayAlpha.toFixed(2)}°</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+          <span style={{ opacity: 0.5 }}>C<sub>L</sub></span>
+          <span style={{ color: 'var(--accent-primary, #61dafb)' }}>{morphState.cl.toFixed(4)}</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+          <span style={{ opacity: 0.5 }}>C<sub>D</sub></span>
+          <span style={{ color: 'var(--accent-secondary, #f472b6)' }}>{morphState.cd.toFixed(5)}</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+          <span style={{ opacity: 0.5 }}>C<sub>M</sub></span>
+          <span>{morphState.cm.toFixed(4)}</span>
+        </div>
+      </div>
+
       {/* Overlay controls - simplified, full controls in Visualization panel */}
       <div
         style={{
