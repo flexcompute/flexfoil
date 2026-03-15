@@ -199,7 +199,7 @@ export const challenges: Record<string, Challenge> = {
     hint: 'Click "Generate Polar" to compute CL across multiple angles',
     validate: () => {
       const { airfoil } = getState();
-      return airfoil.polarData.length > 5;
+      return airfoil.polarData.some(s => s.points.length > 5);
     },
     highlightElement: '[data-tour="solve-polar"]',
     requiredPanel: 'solve',

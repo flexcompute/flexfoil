@@ -10,6 +10,7 @@ import init, {
     repanel_xfoil,
     repanel_xfoil_with_params,
     compute_curvature_spacing,
+    analyze_airfoil as analyze_airfoil_inviscid_wasm,
     analyze_airfoil_faithful,
     compute_streamlines_faithful,
     compute_psi_grid_faithful,
@@ -398,6 +399,22 @@ export function analyzeAirfoil(
         ncrit,
         maxIterations
     ) as AnalysisResult;
+}
+
+/**
+ * Inviscid-only panel method (no boundary layer coupling).
+ * Returns CL, CM, Cp — CD is always 0.
+ */
+export function analyzeAirfoilInviscid(
+    coordinates: { x: number; y: number }[],
+    alphaDeg: number,
+): AnalysisResult {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+
+    const coordsFlat = pointsToFlat(coordinates);
+    return analyze_airfoil_inviscid_wasm(coordsFlat, alphaDeg) as AnalysisResult;
 }
 
 export function getBLDistribution(

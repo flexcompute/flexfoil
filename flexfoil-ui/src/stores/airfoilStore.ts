@@ -15,7 +15,7 @@ import type {
   BSplineControlPoint,
   SpacingKnot,
   Naca4Params,
-  PolarPoint,
+  PolarSeries,
   SpacingPanelMode,
   SSPInterpolation,
   SSPVisualization,
@@ -175,10 +175,10 @@ interface AirfoilStore extends AirfoilState {
   repanel: () => void;
   repanelWithXfoil: () => void;
   
-  // Polar data
-  setPolarData: (data: PolarPoint[]) => void;
-  addPolarPoint: (point: PolarPoint) => void;
-  clearPolar: () => void;
+  // Polar data (multi-series: keyed by solver config hash)
+  upsertPolar: (series: PolarSeries) => void;
+  removePolar: (key: string) => void;
+  clearAllPolars: () => void;
   
   // Reset
   reset: () => void;
@@ -800,12 +800,20 @@ export const useAirfoilStore = create<AirfoilStore>()(
         }
       }),
       
-      // Polar data actions
-      setPolarData: (data) => set({ polarData: data }),
-      addPolarPoint: (point) => set((state) => ({
-        polarData: [...state.polarData, point]
+      // Polar data actions (multi-series)
+      upsertPolar: (series) => set((state) => {
+        const idx = state.polarData.findIndex(s => s.key === series.key);
+        if (idx >= 0) {
+          const updated = [...state.polarData];
+          updated[idx] = series;
+          return { polarData: updated };
+        }
+        return { polarData: [...state.polarData, series] };
+      }),
+      removePolar: (key) => set((state) => ({
+        polarData: state.polarData.filter(s => s.key !== key),
       })),
-      clearPolar: () => set({ polarData: [] }),
+      clearAllPolars: () => set({ polarData: [] }),
 
       reset: () => set({
         name: 'NACA 0012',

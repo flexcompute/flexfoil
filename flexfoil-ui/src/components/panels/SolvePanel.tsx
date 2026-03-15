@@ -9,9 +9,8 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
 import { useRunStore } from '../../stores/runStore';
-import { analyzeAirfoil, isWasmReady, type AnalysisResult } from '../../lib/wasm';
-import { NumericInput } from '../NumericInput';
-import type { PolarPoint } from '../../types';
+import { analyzeAirfoil, analyzeAirfoilInviscid, isWasmReady, type AnalysisResult } from '../../lib/wasm';
+import type { PolarPoint, PolarSeries, SolverMode } from '../../types';
 import type { RunInsert } from '../../lib/runDatabase';
 
 type RunMode = 'alpha' | 'cl';
@@ -23,10 +22,12 @@ export function SolvePanel() {
     polarData,
     displayAlpha,
     reynolds,
+    solverMode,
     setDisplayAlpha,
     setReynolds,
-    setPolarData,
-    clearPolar,
+    setSolverMode,
+    upsertPolar,
+    clearAllPolars,
   } = useAirfoilStore();
 
   const { lookup, addRun, hashPanels } = useRunStore();
@@ -66,9 +67,25 @@ export function SolvePanel() {
   const [error, setError] = useState<string | null>(null);
   const [cacheStats, setCacheStats] = useState<{ hits: number; misses: number } | null>(null);
 
-  const polar = polarData;
+  const lastSeries = polarData.length > 0 ? polarData[polarData.length - 1] : null;
+  const polar = lastSeries?.points ?? [];
+
+  const isViscous = solverMode === 'viscous';
 
   // --------------- helpers ---------------
+
+  const runSolver = useCallback((coords: { x: number; y: number }[], alpha: number) => {
+    if (isViscous) {
+      return analyzeAirfoil(coords, alpha, reynolds, mach, ncrit, maxIterations);
+    }
+    return analyzeAirfoilInviscid(coords, alpha);
+  }, [isViscous, reynolds, mach, ncrit, maxIterations]);
+
+  /** Cache key uses Re=0/Mach=0/Ncrit=0/maxIter=0 for inviscid to separate caches. */
+  const cacheRe = isViscous ? reynolds : 0;
+  const cacheMach = isViscous ? mach : 0;
+  const cacheNcrit = isViscous ? ncrit : 0;
+  const cacheMaxIter = isViscous ? maxIterations : 0;
 
   /** Run a single point — check cache first, fall back to solver. */
   const solveOrCache = useCallback(async (
@@ -76,7 +93,7 @@ export function SolvePanel() {
     airfoilHash: string,
     nPanels: number,
   ): Promise<AnalysisResult | null> => {
-    const cached = lookup(airfoilHash, alpha, reynolds, mach, ncrit, nPanels, maxIterations);
+    const cached = lookup(airfoilHash, alpha, cacheRe, cacheMach, cacheNcrit, nPanels, cacheMaxIter);
     if (cached && cached.success) {
       return {
         cl: cached.cl ?? 0,
@@ -96,17 +113,17 @@ export function SolvePanel() {
       } as AnalysisResult & { _cached?: boolean };
     }
 
-    const res = analyzeAirfoil(panels, alpha, reynolds, mach, ncrit, maxIterations);
+    const res = runSolver(panels, alpha);
 
     const run: RunInsert = {
       airfoil_name: name,
       airfoil_hash: airfoilHash,
       alpha,
-      reynolds,
-      mach,
-      ncrit,
+      reynolds: cacheRe,
+      mach: cacheMach,
+      ncrit: cacheNcrit,
       n_panels: nPanels,
-      max_iter: maxIterations,
+      max_iter: cacheMaxIter,
       cl: res.cl,
       cd: res.cd,
       cm: res.cm,
@@ -121,7 +138,7 @@ export function SolvePanel() {
     await addRun(run);
 
     return res;
-  }, [panels, name, reynolds, mach, ncrit, maxIterations, lookup, addRun]);
+  }, [panels, name, cacheRe, cacheMach, cacheNcrit, cacheMaxIter, runSolver, lookup, addRun]);
 
   // --------------- single-point ---------------
 
@@ -147,7 +164,7 @@ export function SolvePanel() {
         setResultAlpha(targetAlpha);
         if (!res.success) {
           setError(res.error || 'Analysis failed');
-        } else if (!res.converged) {
+        } else if (isViscous && !res.converged) {
           setError(`Viscous solver did not converge (residual ${res.residual.toExponential(2)})`);
         }
       } else {
@@ -190,7 +207,7 @@ export function SolvePanel() {
     }
 
     setIsRunning(false);
-  }, [panels, runMode, targetAlpha, targetCl, reynolds, setDisplayAlpha, hashPanels, solveOrCache]);
+  }, [panels, runMode, targetAlpha, targetCl, isViscous, setDisplayAlpha, hashPanels, solveOrCache]);
 
   // --------------- polar sweep ---------------
 
@@ -202,12 +219,17 @@ export function SolvePanel() {
 
     setIsRunning(true);
     setError(null);
-    clearPolar();
     setCacheStats(null);
 
     try {
       const airfoilHash = await hashPanels(panels);
       const nPanels = panels.length - 1;
+
+      const polarKey = `${airfoilHash.slice(0, 12)}_${cacheRe}_${cacheMach}_${cacheNcrit}_${nPanels}_${cacheMaxIter}`;
+      const polarLabel = isViscous
+        ? `${name} Re=${cacheRe.toExponential(1)} Nc=${cacheNcrit}`
+        : `${name} (inviscid)`;
+
       const points: PolarPoint[] = [];
       let hits = 0;
       let misses = 0;
@@ -215,9 +237,8 @@ export function SolvePanel() {
       for (let alpha = alphaStart; alpha <= alphaEnd + 1e-9; alpha += alphaStep) {
         const roundedAlpha = Math.round(alpha * 1e6) / 1e6;
 
-        // Check cache (returns null if DB not ready yet — no problem)
         let wasCached = false;
-        const cached = lookup(airfoilHash, roundedAlpha, reynolds, mach, ncrit, nPanels, maxIterations);
+        const cached = lookup(airfoilHash, roundedAlpha, cacheRe, cacheMach, cacheNcrit, nPanels, cacheMaxIter);
         if (cached && cached.success) {
           points.push({ alpha: roundedAlpha, cl: cached.cl ?? 0, cd: cached.cd ?? 0, cm: cached.cm ?? 0 });
           hits++;
@@ -225,18 +246,18 @@ export function SolvePanel() {
         }
 
         if (!wasCached) {
-          const res = analyzeAirfoil(panels, roundedAlpha, reynolds, mach, ncrit, maxIterations);
+          const res = runSolver(panels, roundedAlpha);
           misses++;
 
           const run: RunInsert = {
             airfoil_name: name,
             airfoil_hash: airfoilHash,
             alpha: roundedAlpha,
-            reynolds,
-            mach,
-            ncrit,
+            reynolds: cacheRe,
+            mach: cacheMach,
+            ncrit: cacheNcrit,
             n_panels: nPanels,
-            max_iter: maxIterations,
+            max_iter: cacheMaxIter,
             cl: res.cl,
             cd: res.cd,
             cm: res.cm,
@@ -256,7 +277,7 @@ export function SolvePanel() {
         }
       }
 
-      setPolarData(points);
+      upsertPolar({ key: polarKey, label: polarLabel, points });
       setCacheStats({ hits, misses });
 
       if (points.length === 0) {
@@ -267,8 +288,8 @@ export function SolvePanel() {
     }
 
     setIsRunning(false);
-  }, [panels, name, alphaStart, alphaEnd, alphaStep, reynolds, mach, ncrit, maxIterations,
-      clearPolar, setPolarData, hashPanels, lookup, addRun]);
+  }, [panels, name, alphaStart, alphaEnd, alphaStep, cacheRe, cacheMach, cacheNcrit, cacheMaxIter,
+      isViscous, upsertPolar, hashPanels, lookup, addRun, runSolver]);
 
   // --------------- derived ---------------
 
@@ -292,84 +313,103 @@ export function SolvePanel() {
       <div className="panel-content">
         <div className="form-group" data-tour="solve-mode">
           <div className="form-label">Solver</div>
-          <div style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
-            Faithful XFOIL viscous solver
+          <div style={{ display: 'flex', gap: '4px', marginBottom: '4px' }}>
+            <button
+              onClick={() => setSolverMode('inviscid')}
+              className={solverMode === 'inviscid' ? 'active' : ''}
+              style={{ flex: 1 }}
+            >
+              Inviscid
+            </button>
+            <button
+              onClick={() => setSolverMode('viscous')}
+              className={solverMode === 'viscous' ? 'active' : ''}
+              style={{ flex: 1 }}
+            >
+              Viscous
+            </button>
           </div>
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
-            Results are cached in a local SQLite database.
-            Results cached in local SQLite database.
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
+            {isViscous
+              ? 'XFOIL viscous solver with boundary layer coupling'
+              : 'Linear-vorticity panel method (CD = 0)'}
           </div>
         </div>
 
-        <div className="form-group">
-          <div className="form-label">Reynolds Number</div>
-          <NumericInput
-            value={reynolds}
-            onChange={(v) => setReynolds(Math.max(1, v))}
-            step={100000}
-            min={1}
-            format={(v) => v.toExponential().replace(/\.?0+e/, 'e').replace('e+', 'e')}
-          />
-        </div>
+        {isViscous && (
+          <div className="form-group">
+            <div className="form-label">Reynolds Number</div>
+            <input
+              type="number"
+              value={reynolds}
+              onChange={(e) => setReynolds(Math.max(1, Number(e.target.value) || 1))}
+              step={100000}
+            />
+          </div>
+        )}
 
-        {/* Advanced Solver Settings */}
-        <div className="form-group">
-          <button
-            onClick={() => setShowAdvanced(!showAdvanced)}
-            style={{
-              width: '100%',
-              padding: '4px 8px',
-              fontSize: '11px',
-              background: 'transparent',
-              border: '1px solid var(--border-color)',
-              borderRadius: '4px',
-              color: 'var(--text-secondary)',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}
-          >
-            <span>Advanced Settings</span>
-            <span style={{ fontSize: '10px' }}>{showAdvanced ? '▲' : '▼'}</span>
-          </button>
-          {showAdvanced && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
-              <div>
-                <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Mach Number</label>
-                <NumericInput
-                  value={mach}
-                  onChange={setMach}
-                  step={0.01}
-                  min={0}
-                  max={0.8}
-                />
+        {isViscous && (
+          <div className="form-group">
+            <button
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              style={{
+                width: '100%',
+                padding: '4px 8px',
+                fontSize: '11px',
+                background: 'transparent',
+                border: '1px solid var(--border-color)',
+                borderRadius: '4px',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <span>Advanced Settings</span>
+              <span style={{ fontSize: '10px' }}>{showAdvanced ? '▲' : '▼'}</span>
+            </button>
+            {showAdvanced && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+                <div>
+                  <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Mach Number</label>
+                  <input
+                    type="number"
+                    value={mach}
+                    onChange={(e) => setMach(Math.max(0, Math.min(0.8, parseFloat(e.target.value) || 0)))}
+                    step={0.01}
+                    min={0}
+                    max={0.8}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                    Ncrit (e<sup>N</sup> transition)
+                  </label>
+                  <input
+                    type="number"
+                    value={ncrit}
+                    onChange={(e) => setNcrit(Math.max(1, Math.min(14, parseFloat(e.target.value) || 9)))}
+                    step={0.5}
+                    min={1}
+                    max={14}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Max Iterations</label>
+                  <input
+                    type="number"
+                    value={maxIterations}
+                    onChange={(e) => setMaxIterations(Math.max(10, Math.min(500, parseInt(e.target.value) || 100)))}
+                    step={10}
+                    min={10}
+                    max={500}
+                  />
+                </div>
               </div>
-              <div>
-                <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                  Ncrit (e<sup>N</sup> transition)
-                </label>
-                <NumericInput
-                  value={ncrit}
-                  onChange={setNcrit}
-                  step={0.5}
-                  min={1}
-                  max={14}
-                />
-              </div>
-              <div>
-                <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Max Iterations</label>
-                <NumericInput
-                  value={maxIterations}
-                  onChange={setMaxIterations}
-                  step={10}
-                  min={10}
-                  max={500}
-                />
-              </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
         {/* Single Point Analysis */}
         <div className="form-group" data-tour="solve-alpha">
@@ -422,20 +462,22 @@ export function SolvePanel() {
             <div className="form-label">Results</div>
             <div style={{
               display: 'grid',
-              gridTemplateColumns: runMode === 'cl' ? 'repeat(4, 1fr)' : 'repeat(3, 1fr)',
+              gridTemplateColumns: `repeat(${(runMode === 'cl' ? 1 : 0) + (isViscous ? 3 : 2)}, 1fr)`,
               gap: '8px',
             }}>
               {runMode === 'cl' && resultAlpha !== null && (
                 <ResultCard label="α (°)" value={resultAlpha.toFixed(2)} highlight />
               )}
               <ResultCard label="CL" value={result.cl.toFixed(4)} />
-              <ResultCard label="CD" value={result.cd.toFixed(5)} />
+              {isViscous && <ResultCard label="CD" value={result.cd.toFixed(5)} />}
               <ResultCard label="CM" value={result.cm.toFixed(4)} />
             </div>
             <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '8px' }}>
-              {result.converged
-                ? `Converged in ${result.iterations} iterations`
-                : `Not converged after ${result.iterations} iterations (residual ${result.residual.toExponential(2)})`}
+              {isViscous
+                ? (result.converged
+                    ? `Converged in ${result.iterations} iterations`
+                    : `Not converged after ${result.iterations} iterations (residual ${result.residual.toExponential(2)})`)
+                : 'Direct panel solve'}
             </div>
           </div>
         )}
@@ -459,13 +501,30 @@ export function SolvePanel() {
             </div>
           </div>
 
-          <button
-            onClick={runPolar}
-            disabled={isRunning || !isWasmReady()}
-            style={{ width: '100%' }}
-          >
-            {isRunning ? 'Running...' : 'Generate Polar'}
-          </button>
+          <div style={{ display: 'flex', gap: '4px' }}>
+            <button
+              onClick={runPolar}
+              disabled={isRunning || !isWasmReady()}
+              style={{ flex: 1 }}
+            >
+              {isRunning ? 'Running...' : 'Generate Polar'}
+            </button>
+            {polarData.length > 0 && (
+              <button
+                onClick={clearAllPolars}
+                disabled={isRunning}
+                title="Clear all polar series"
+                style={{ padding: '4px 8px', fontSize: '11px' }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          {polarData.length > 1 && (
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+              {polarData.length} polar series overlaid — see Polar panel
+            </div>
+          )}
         </div>
 
         {/* Cache stats */}
@@ -497,7 +556,7 @@ export function SolvePanel() {
             }}>
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: '1fr 1fr 1fr 1fr',
+                gridTemplateColumns: isViscous ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr',
                 gap: '4px',
                 padding: '4px 8px',
                 background: 'var(--bg-tertiary)',
@@ -507,14 +566,14 @@ export function SolvePanel() {
               }}>
                 <span>α (°)</span>
                 <span>CL</span>
-                <span>CD</span>
+                {isViscous && <span>CD</span>}
                 <span>CM</span>
               </div>
 
               {polar.map((p, i) => (
                 <div key={i} style={{
                   display: 'grid',
-                  gridTemplateColumns: '1fr 1fr 1fr 1fr',
+                  gridTemplateColumns: isViscous ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr',
                   gap: '4px',
                   padding: '2px 8px',
                   borderBottom: '1px solid var(--border-color)',
@@ -523,7 +582,7 @@ export function SolvePanel() {
                   <span style={{ color: p.cl >= 0 ? 'var(--accent-primary)' : 'var(--accent-secondary)' }}>
                     {p.cl.toFixed(4)}
                   </span>
-                  <span>{p.cd !== undefined ? p.cd.toFixed(5) : '—'}</span>
+                  {isViscous && <span>{p.cd !== undefined ? p.cd.toFixed(5) : '—'}</span>}
                   <span>{p.cm.toFixed(4)}</span>
                 </div>
               ))}
@@ -531,9 +590,13 @@ export function SolvePanel() {
 
             <button
               onClick={() => {
-                const header = `# ${name} - Viscous Polar (Re=${reynolds})\n# Alpha(deg)  CL        CD         CM\n`;
+                const header = isViscous
+                  ? `# ${lastSeries?.label ?? name} - Viscous Polar (Re=${reynolds})\n# Alpha(deg)  CL        CD         CM\n`
+                  : `# ${lastSeries?.label ?? name} - Inviscid Polar\n# Alpha(deg)  CL        CM\n`;
                 const data = polar.map(p =>
-                  `${p.alpha.toFixed(2).padStart(8)} ${p.cl.toFixed(6).padStart(10)} ${(p.cd ?? 0).toFixed(6).padStart(10)} ${p.cm.toFixed(6).padStart(10)}`
+                  isViscous
+                    ? `${p.alpha.toFixed(2).padStart(8)} ${p.cl.toFixed(6).padStart(10)} ${(p.cd ?? 0).toFixed(6).padStart(10)} ${p.cm.toFixed(6).padStart(10)}`
+                    : `${p.alpha.toFixed(2).padStart(8)} ${p.cl.toFixed(6).padStart(10)} ${p.cm.toFixed(6).padStart(10)}`
                 ).join('\n');
                 const blob = new Blob([header + data], { type: 'text/plain' });
                 const url = URL.createObjectURL(blob);
@@ -576,7 +639,7 @@ export function SolvePanel() {
           color: 'var(--text-muted)',
         }}>
           <div>Panels: {panels.length - 1}</div>
-          <div>Solver: Faithful XFOIL viscous</div>
+          <div>Solver: {isViscous ? 'XFOIL viscous' : 'Inviscid panel method'}</div>
           <div>WASM: {isWasmReady() ? '✓ Ready' : '⏳ Loading...'}</div>
         </div>
       </div>
