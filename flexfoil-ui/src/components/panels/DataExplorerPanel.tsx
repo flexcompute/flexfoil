@@ -444,7 +444,7 @@ export function DataExplorerPanel() {
                 borderRadius: '3px', color: 'var(--text-primary)',
               }}
             >
-              <option value="">None</option>
+              <option value="">Color Auto</option>
               {ENCODING_PLOT_FIELDS.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
             </select>
             <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Size:</span>

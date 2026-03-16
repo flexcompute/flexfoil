@@ -246,7 +246,7 @@ export function PlotBuilderPanel() {
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           <span style={labelStyle}>Color</span>
           <select value={colorBy as string} onChange={e => setColorBy((e.target.value || '') as keyof RunRow | '')} style={selectStyle}>
-            <option value="">None</option>
+            <option value="">Color Auto</option>
             {ENCODING_PLOT_FIELDS.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
           </select>
         </div>
