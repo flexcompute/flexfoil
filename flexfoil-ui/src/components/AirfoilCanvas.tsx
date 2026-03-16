@@ -456,6 +456,155 @@ function extrapolateDividingStreamline(
   return [result];
 }
 
+type FlowSide = 'above' | 'below';
+
+function interpolatePolylineYAtX(line: [number, number][], x: number): number | null {
+  if (line.length === 0) return null;
+
+  let bestY: number | null = null;
+  let bestDx = Infinity;
+
+  for (let i = 0; i < line.length - 1; i++) {
+    const [x1, y1] = line[i];
+    const [x2, y2] = line[i + 1];
+    const minX = Math.min(x1, x2);
+    const maxX = Math.max(x1, x2);
+
+    if (x >= minX && x <= maxX && Math.abs(x2 - x1) > 1e-10) {
+      const t = (x - x1) / (x2 - x1);
+      return y1 + t * (y2 - y1);
+    }
+
+    const dx1 = Math.abs(x - x1);
+    if (dx1 < bestDx) {
+      bestDx = dx1;
+      bestY = y1;
+    }
+
+    const dx2 = Math.abs(x - x2);
+    if (dx2 < bestDx) {
+      bestDx = dx2;
+      bestY = y2;
+    }
+  }
+
+  return bestY;
+}
+
+function verticalAirfoilBandAtX(
+  airfoilPoints: { x: number; y: number }[],
+  x: number
+): { upper: number; lower: number } | null {
+  if (airfoilPoints.length < 3) return null;
+
+  const intersections: number[] = [];
+  for (let i = 0; i < airfoilPoints.length; i++) {
+    const p1 = airfoilPoints[i];
+    const p2 = airfoilPoints[(i + 1) % airfoilPoints.length];
+    const minX = Math.min(p1.x, p2.x);
+    const maxX = Math.max(p1.x, p2.x);
+    if (x < minX || x > maxX) continue;
+
+    if (Math.abs(p2.x - p1.x) < 1e-10) {
+      intersections.push(p1.y, p2.y);
+      continue;
+    }
+
+    const t = (x - p1.x) / (p2.x - p1.x);
+    if (t >= 0 && t <= 1) {
+      intersections.push(p1.y + t * (p2.y - p1.y));
+    }
+  }
+
+  if (intersections.length < 2) return null;
+  intersections.sort((a, b) => a - b);
+  return {
+    lower: intersections[0],
+    upper: intersections[intersections.length - 1],
+  };
+}
+
+function buildFlowSideClassifier(
+  frontDividerLines: [number, number][][],
+  wakeGeometry: [number, number][],
+  airfoilPoints: { x: number; y: number }[]
+): (x: number, y: number) => FlowSide {
+  const frontDivider = frontDividerLines.find(line => line.length >= 2) ?? [];
+  const bodyMidY =
+    airfoilPoints.length > 0
+      ? airfoilPoints.reduce((sum, p) => sum + p.y, 0) / airfoilPoints.length
+      : 0;
+  const bodyMinX = airfoilPoints.length > 0 ? Math.min(...airfoilPoints.map(p => p.x)) : 0;
+  const bodyMaxX = airfoilPoints.length > 0 ? Math.max(...airfoilPoints.map(p => p.x)) : 1;
+  const chord = Math.max(1e-6, bodyMaxX - bodyMinX);
+  const frontEndX = frontDivider.length > 0 ? frontDivider[frontDivider.length - 1][0] : bodyMinX;
+  const wakeStartX = wakeGeometry.length > 0 ? wakeGeometry[0][0] : bodyMaxX;
+  const xBlendMin = frontEndX + 0.1 * chord;
+  const xBlendMax = wakeStartX - 0.05 * chord;
+
+  return (x: number, y: number): FlowSide => {
+    const frontY = frontDivider.length > 0 ? interpolatePolylineYAtX(frontDivider, x) : null;
+    const wakeY = wakeGeometry.length > 1 ? interpolatePolylineYAtX(wakeGeometry, x) : null;
+
+    if (frontY !== null && x <= xBlendMin) {
+      return y >= frontY ? 'above' : 'below';
+    }
+
+    if (wakeY !== null && x >= xBlendMax) {
+      return y >= wakeY ? 'above' : 'below';
+    }
+
+    const band = verticalAirfoilBandAtX(airfoilPoints, x);
+    if (band) {
+      return y >= 0.5 * (band.upper + band.lower) ? 'above' : 'below';
+    }
+
+    if (frontY !== null) {
+      return y >= frontY ? 'above' : 'below';
+    }
+
+    if (wakeY !== null) {
+      return y >= wakeY ? 'above' : 'below';
+    }
+
+    return y >= bodyMidY ? 'above' : 'below';
+  };
+}
+
+function sampleGridBilinear(
+  grid: number[],
+  nx: number,
+  ny: number,
+  bounds: [number, number, number, number],
+  x: number,
+  y: number
+): number | null {
+  if (nx < 2 || ny < 2) return null;
+  const [xMin, xMax, yMin, yMax] = bounds;
+  const tx = (x - xMin) / (xMax - xMin);
+  const ty = (y - yMin) / (yMax - yMin);
+  if (tx < 0 || tx > 1 || ty < 0 || ty > 1) return null;
+
+  const fx = tx * (nx - 1);
+  const fy = ty * (ny - 1);
+  const i0 = Math.max(0, Math.min(nx - 2, Math.floor(fx)));
+  const j0 = Math.max(0, Math.min(ny - 2, Math.floor(fy)));
+  const i1 = i0 + 1;
+  const j1 = j0 + 1;
+  const sx = fx - i0;
+  const sy = fy - j0;
+
+  const v00 = grid[j0 * nx + i0];
+  const v10 = grid[j0 * nx + i1];
+  const v01 = grid[j1 * nx + i0];
+  const v11 = grid[j1 * nx + i1];
+  if (![v00, v10, v01, v11].every(Number.isFinite)) return null;
+
+  const v0 = v00 * (1 - sx) + v10 * sx;
+  const v1 = v01 * (1 - sx) + v11 * sx;
+  return v0 * (1 - sy) + v1 * sy;
+}
+
 // Constants
 const PANEL_POINT_RADIUS = 2.5;
 const CONTROL_RADIUS = 6;
@@ -656,9 +805,10 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     psiMin: number;
     psiMax: number;
     psi0: number;             // Dividing streamline value
+    dividerPsi: number;       // Psi value sampled from computed divider streamline
     lines: [number, number][][];  // All contour lines
     psi0Lines: [number, number][][];  // Dividing streamline (ψ = ψ₀), extrapolated to airfoil
-  }>({ grid: [], bounds: [0, 0, 0, 0], nx: 0, ny: 0, psiMin: 0, psiMax: 0, psi0: 0, lines: [], psi0Lines: [] });
+  }>({ grid: [], bounds: [0, 0, 0, 0], nx: 0, ny: 0, psiMin: 0, psiMax: 0, psi0: 0, dividerPsi: 0, lines: [], psi0Lines: [] });
   
   // Analysis results (Cp, Cl, Cd, Cm)
   const [analysisResult, setAnalysisResult] = useState<{
@@ -813,7 +963,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
   useEffect(() => {
     if (!showPsiContours || !isWasmReady() || panels.length < 10 || isDraggingPoint) {
       if (!isDraggingPoint) {
-        setPsiContours({ grid: [], bounds: [0, 0, 0, 0], nx: 0, ny: 0, psiMin: 0, psiMax: 0, psi0: 0, lines: [], psi0Lines: [] });
+        setPsiContours({ grid: [], bounds: [0, 0, 0, 0], nx: 0, ny: 0, psiMin: 0, psiMax: 0, psi0: 0, dividerPsi: 0, lines: [], psi0Lines: [] });
       }
       return;
     }
@@ -926,15 +1076,32 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         // Only use the contour cleanup path for the marching-squares fallback.
         psi0Lines = extrapolateDividingStreamline(psi0Lines, panels);
       }
+
+      const dividerLineSamples =
+        (psi0Lines[0]?.length ? psi0Lines[0] : dividingResult.streamline) ?? [];
+      const dividerPsiSamples = dividerLineSamples
+        .map(([x, y]) => sampleGridBilinear(grid, nx, ny, bounds, x, y))
+        .filter((value): value is number => value !== null && Number.isFinite(value))
+        .sort((a, b) => a - b);
+      const dividerPsi =
+        dividerPsiSamples.length > 0
+          ? dividerPsiSamples[Math.floor(dividerPsiSamples.length / 2)]
+          : psi_0;
+
+      const shiftedGrid = grid.map(value => (Number.isFinite(value) ? value - dividerPsi : value));
+      const shiftedPsi0 = psi_0 - dividerPsi;
+      const shiftedPsiMin = psi_min - dividerPsi;
+      const shiftedPsiMax = psi_max - dividerPsi;
       
       setPsiContours({ 
-        grid, 
+        grid: shiftedGrid, 
         bounds, 
         nx, 
         ny, 
-        psiMin: psi_min, 
-        psiMax: psi_max, 
-        psi0: psi_0,
+        psiMin: shiftedPsiMin, 
+        psiMax: shiftedPsiMax, 
+        psi0: shiftedPsi0,
+        dividerPsi: 0,
         lines: allLines, 
         psi0Lines 
       });
@@ -986,6 +1153,28 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       console.error('BL visualization data failed:', e);
     }
   }, [showBoundaryLayer, showWake, showDisplacementThickness, showStreamlines, showPsiContours, solverMode, panels, displayAlpha, reynolds, mach, ncrit, maxIterations, isDraggingPoint]);
+
+  const classifyFlowSide = useMemo(() => {
+    const wakeGeometry =
+      blVisData && blVisData.wake_geometry_x.length > 1
+        ? blVisData.wake_geometry_x.map((x, i) => [x, blVisData.wake_geometry_y[i] ?? 0] as [number, number])
+        : [];
+    return buildFlowSideClassifier(psiContours.psi0Lines, wakeGeometry, panels);
+  }, [psiContours.psi0Lines, blVisData, panels]);
+
+  const aftDividerLine = useMemo((): [number, number][] => {
+    if (!blVisData || blVisData.wake_geometry_x.length < 2) {
+      return [];
+    }
+    return blVisData.wake_geometry_x.map(
+      (x, i) => [x, blVisData.wake_geometry_y[i] ?? 0] as [number, number]
+    );
+  }, [blVisData]);
+
+  const visibleDividerLines = useMemo((): [number, number][][] => {
+    const lines = psiContours.psi0Lines.filter(line => line.length >= 2);
+    return aftDividerLine.length >= 2 ? [...lines, aftDividerLine] : lines;
+  }, [psiContours.psi0Lines, aftDividerLine]);
   
   // Morphing animation integration
   const morphTarget = useMemo(() => ({
@@ -1319,13 +1508,10 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     
     const smokePositions = smokePositionsRef.current;
     const smokeAlphas = smokeAlphasRef.current;
-    const smokePsiValues = smokePsiValuesRef.current;
-    const smokePsi0 = smokePsi0Ref.current;
     
     if (!showSmoke || !smokePositions || !smokeAlphas) return;
     
     const count = smokePositions.length / 2;
-    const hasPsiData = smokePsiValues && smokePsiValues.length === count;
     
     // Colors for above/below dividing streamline
     const colorAbove = isDark ? '#ff6b6b' : '#e63946';  // Red for upper surface
@@ -1357,13 +1543,8 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         const pCanvas = toCanvas(rotatePoint({ x, y }));
         ctx.beginPath();
         
-        // Choose color based on psi value relative to psi0
-        if (hasPsiData) {
-          const psi = smokePsiValues[i];
-          ctx.fillStyle = psi > smokePsi0 ? colorAbove : colorBelow;
-        } else {
-          ctx.fillStyle = defaultColor;
-        }
+        const side = classifyFlowSide(x, y);
+        ctx.fillStyle = side === 'above' ? colorAbove : side === 'below' ? colorBelow : defaultColor;
         
         ctx.globalAlpha = alpha * 0.6;
         ctx.arc(pCanvas.x, pCanvas.y, 2, 0, Math.PI * 2);
@@ -1371,7 +1552,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       }
     }
     ctx.globalAlpha = 1;
-  }, [showSmoke, displayAlpha, toCanvas, isDark]);
+  }, [showSmoke, displayAlpha, toCanvas, isDark, classifyFlowSide]);
   
   // Keep ref updated so animation loop can call it
   useEffect(() => {
@@ -1524,44 +1705,26 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     // - Blue tones: flow going under the airfoil (ψ < ψ₀)
     // - Red tones: flow going over the airfoil (ψ > ψ₀)
     if (showPsiContours && psiContours.grid.length > 0) {
-      const { grid, bounds, nx, ny, psiMin, psiMax, psi0 } = psiContours;
-      
-      const [xMin, xMax, yMin, yMax] = bounds;
-      const dx = (xMax - xMin) / (nx - 1);
-      const dy = (yMax - yMin) / (ny - 1);
-      
-      // Generate all thresholds including psi0
-      const nLevels = 12;
-      const allThresholds: number[] = [];
-      
-      // Levels below ψ₀ (from psiMin to psi0)
-      for (let i = 0; i <= nLevels; i++) {
-        allThresholds.push(psiMin + (psi0 - psiMin) * (i / nLevels));
-      }
-      // Levels above ψ₀ (from psi0 to psiMax, skip duplicate psi0)
-      for (let i = 1; i <= nLevels; i++) {
-        allThresholds.push(psi0 + (psiMax - psi0) * (i / nLevels));
-      }
-      allThresholds.sort((a, b) => a - b);
+      const { grid, bounds, nx, ny, psiMin, psiMax, dividerPsi } = psiContours;
       
       const alpha = isDark ? 0.65 : 0.75;
       
-      // Get color based on stream function strength (distance from psi0)
-      // Color intensity increases with distance from dividing streamline
+      // Color directly from the shifted psi field so psi = 0 is the actual
+      // red/blue boundary in the visualization.
       const getColor = (psiValue: number): [number, number, number] => {
-        if (psiValue < psi0) {
-          // Blue gradient: stronger blue for more negative (further from psi0)
-          const t = Math.min(1, Math.max(0, (psi0 - psiValue) / (psi0 - psiMin + 1e-10)));
-          const intensity = Math.pow(t, 0.5); // Square root for more variation in lighter tones
+        if (psiValue < dividerPsi) {
+          const denom = Math.abs(dividerPsi - psiMin) + 1e-10;
+          const t = Math.min(1, Math.max(0, (dividerPsi - psiValue) / denom));
+          const intensity = Math.pow(t, 0.5);
           return [
             Math.round(220 - intensity * 180),  // 220 -> 40
             Math.round(230 - intensity * 160),  // 230 -> 70
             Math.round(255 - intensity * 55)    // 255 -> 200
           ];
         } else {
-          // Red gradient: stronger red for more positive (further from psi0)
-          const t = Math.min(1, Math.max(0, (psiValue - psi0) / (psiMax - psi0 + 1e-10)));
-          const intensity = Math.pow(t, 0.5); // Square root for more variation
+          const denom = Math.abs(psiMax - dividerPsi) + 1e-10;
+          const t = Math.min(1, Math.max(0, (psiValue - dividerPsi) / denom));
+          const intensity = Math.pow(t, 0.5);
           return [
             Math.round(255 - intensity * 55),   // 255 -> 200
             Math.round(220 - intensity * 160),  // 220 -> 60
@@ -1569,250 +1732,46 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
           ];
         }
       };
-      
-      // Orient polyline so it goes left to right (by x-coordinate of start)
-      const orientLeftToRight = (polyline: [number, number][]): [number, number][] => {
-        if (polyline.length < 2) return polyline;
-        const startX = polyline[0][0];
-        const endX = polyline[polyline.length - 1][0];
-        if (startX > endX) {
-          return [...polyline].reverse();
+
+      const isInsideAirfoilAt = (x: number, y: number): boolean => {
+        if (panels.length < 3) return false;
+        let inside = false;
+        for (let i = 0, j = panels.length - 1; i < panels.length; j = i++) {
+          const xi = panels[i].x;
+          const yi = panels[i].y;
+          const xj = panels[j].x;
+          const yj = panels[j].y;
+          if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+            inside = !inside;
+          }
         }
-        return polyline;
+        return inside;
       };
-      
-      // Find closest point on airfoil boundary
-      const closestPointOnAirfoil = (x: number, y: number): { x: number; y: number; idx: number } => {
-        let minDist = Infinity;
-        let closest = { x: panels[0]?.x || 0, y: panels[0]?.y || 0, idx: 0 };
-        for (let i = 0; i < panels.length; i++) {
-          const dx = panels[i].x - x;
-          const dy = panels[i].y - y;
-          const dist = dx * dx + dy * dy;
-          if (dist < minDist) {
-            minDist = dist;
-            closest = { x: panels[i].x, y: panels[i].y, idx: i };
-          }
+      // Paint the shifted psi field directly in screen space so psi = 0 is the
+      // actual color transition. This avoids contour-band polygons spanning both
+      // sides of the divider.
+      const rasterStep = 2;
+      const cx = 0.25;
+      const cy = 0;
+      const invRad = displayAlpha * Math.PI / 180;
+      const cosInv = Math.cos(invRad);
+      const sinInv = Math.sin(invRad);
+      for (let py = 0; py < height; py += rasterStep) {
+        const displayY = viewport.center.y + (height * 0.5 - (py + 0.5 * rasterStep)) / viewport.zoom;
+        for (let px = 0; px < width; px += rasterStep) {
+          const displayX = viewport.center.x + ((px + 0.5 * rasterStep) - width * 0.5) / viewport.zoom;
+          const dxDisp = displayX - cx;
+          const dyDisp = displayY - cy;
+          const bodyX = cx + dxDisp * cosInv - dyDisp * sinInv;
+          const bodyY = cy + dxDisp * sinInv + dyDisp * cosInv;
+          if (isInsideAirfoilAt(bodyX, bodyY)) continue;
+          if (insideEffectiveBody && insideEffectiveBody(bodyX, bodyY)) continue;
+          const psiValue = sampleGridBilinear(grid, nx, ny, bounds, bodyX, bodyY);
+          if (psiValue === null || !Number.isFinite(psiValue)) continue;
+          const [r, g, b] = getColor(psiValue);
+          ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+          ctx.fillRect(px, py, rasterStep, rasterStep);
         }
-        return closest;
-      };
-      
-      // Trace along airfoil from index i1 to i2 (shortest path)
-      const traceAirfoil = (i1: number, i2: number): [number, number][] => {
-        const n = panels.length;
-        const points: [number, number][] = [];
-        
-        // Determine direction (shorter path around the airfoil)
-        const fwdDist = (i2 - i1 + n) % n;
-        const bwdDist = (i1 - i2 + n) % n;
-        
-        if (fwdDist <= bwdDist) {
-          // Go forward
-          let i = i1;
-          while (i !== i2) {
-            points.push([panels[i].x, panels[i].y]);
-            i = (i + 1) % n;
-          }
-          points.push([panels[i2].x, panels[i2].y]);
-        } else {
-          // Go backward
-          let i = i1;
-          while (i !== i2) {
-            points.push([panels[i].x, panels[i].y]);
-            i = (i - 1 + n) % n;
-          }
-          points.push([panels[i2].x, panels[i2].y]);
-        }
-        return points;
-      };
-      
-      // Check if a point is on the grid boundary
-      const isOnGridBoundary = (x: number, y: number): boolean => {
-        const tol = dx * 2;
-        return Math.abs(x - xMin) < tol || Math.abs(x - xMax) < tol ||
-               Math.abs(y - yMin) < tol || Math.abs(y - yMax) < tol;
-      };
-      
-      // Check if a point is in the interior (not on grid boundary) - likely near airfoil
-      const isInInterior = (x: number, y: number): boolean => {
-        return !isOnGridBoundary(x, y);
-      };
-      
-      // Get contour for a threshold, combining and sorting all segments
-      // For contours with interior endpoints (like dividing streamline), connect via airfoil trace
-      const getPrimaryContour = (threshold: number, connectInterior: boolean = false): [number, number][] | null => {
-        const segments = marchingSquares(grid, nx, ny, threshold, xMin, yMin, dx, dy);
-        const polylines = connectSegments(segments);
-        if (polylines.length === 0) return null;
-        
-        // Orient all polylines L→R and sort them by their leftmost x
-        const oriented = polylines.map(pl => orientLeftToRight(pl));
-        oriented.sort((a, b) => a[0][0] - b[0][0]);
-        
-        // Combine all polylines into one, connecting gaps
-        let result: [number, number][] = [];
-        for (const pl of oriented) {
-          if (result.length === 0) {
-            result = [...pl];
-          } else {
-            // Connect previous end to this start
-            result.push(...pl);
-          }
-        }
-        
-        if (result.length < 2) return null;
-        
-        // Final orientation check
-        result = orientLeftToRight(result);
-        
-        // If both endpoints are in interior, connect them by tracing along airfoil
-        if (connectInterior) {
-          const start = result[0];
-          const end = result[result.length - 1];
-          const startInInterior = isInInterior(start[0], start[1]);
-          const endInInterior = isInInterior(end[0], end[1]);
-          
-          if (startInInterior && endInInterior) {
-            // Both endpoints near airfoil - trace along airfoil surface to close the loop
-            const p1 = closestPointOnAirfoil(start[0], start[1]);
-            const p2 = closestPointOnAirfoil(end[0], end[1]);
-            const airfoilPath = traceAirfoil(p2.idx, p1.idx);
-            result = [...result, ...airfoilPath];
-          } else if (startInInterior || endInInterior) {
-            // One end in interior - find closest point on airfoil and add it
-            if (startInInterior) {
-              const closest = closestPointOnAirfoil(start[0], start[1]);
-              result = [[closest.x, closest.y], ...result];
-            }
-            if (endInInterior) {
-              const closest = closestPointOnAirfoil(end[0], end[1]);
-              result = [...result, [closest.x, closest.y]];
-            }
-          }
-        }
-        
-        return result;
-      };
-      
-      
-      // Build filled bands between adjacent contours
-      for (let i = 0; i < allThresholds.length - 1; i++) {
-        const t1 = allThresholds[i];
-        const t2 = allThresholds[i + 1];
-        const tMid = (t1 + t2) / 2;
-        
-        // Connect interior endpoints to complete all contours
-        const contour1 = getPrimaryContour(t1, true);
-        const contour2 = getPrimaryContour(t2, true);
-        
-        if (!contour1 || !contour2 || contour1.length < 2 || contour2.length < 2) {
-          continue;
-        }
-        
-        const polygon: [number, number][] = [];
-        
-        // Add contour1 (already L→R)
-        for (const pt of contour1) {
-          polygon.push(pt);
-        }
-        
-        // Check if we need to trace along airfoil between contour1 end and contour2 end
-        const c1End = contour1[contour1.length - 1];
-        const c2End = contour2[contour2.length - 1];
-        
-        // If either end is in interior (near airfoil), trace along airfoil
-        const c1EndInterior = isInInterior(c1End[0], c1End[1]);
-        const c2EndInterior = isInInterior(c2End[0], c2End[1]);
-        
-        if (c1EndInterior || c2EndInterior) {
-          const p1 = closestPointOnAirfoil(c1End[0], c1End[1]);
-          const p2 = closestPointOnAirfoil(c2End[0], c2End[1]);
-          if (c1EndInterior && c2EndInterior) {
-            // Both in interior - trace along airfoil
-            const airfoilPath = traceAirfoil(p1.idx, p2.idx);
-            for (const pt of airfoilPath) {
-              polygon.push(pt);
-            }
-          } else if (c1EndInterior) {
-            // Only c1 end in interior - add its closest airfoil point
-            polygon.push([p1.x, p1.y]);
-          } else {
-            // Only c2 end in interior - add its closest airfoil point  
-            polygon.push([p2.x, p2.y]);
-          }
-        }
-        
-        // Add contour2 reversed (R→L)
-        for (let j = contour2.length - 1; j >= 0; j--) {
-          polygon.push(contour2[j]);
-        }
-        
-        // Check if we need to trace along airfoil between contour2 start and contour1 start
-        const c2Start = contour2[0];
-        const c1Start = contour1[0];
-        
-        // If either start is in interior (near airfoil), trace along airfoil
-        const c2StartInterior = isInInterior(c2Start[0], c2Start[1]);
-        const c1StartInterior = isInInterior(c1Start[0], c1Start[1]);
-        
-        if (c2StartInterior || c1StartInterior) {
-          const p2 = closestPointOnAirfoil(c2Start[0], c2Start[1]);
-          const p1 = closestPointOnAirfoil(c1Start[0], c1Start[1]);
-          if (c2StartInterior && c1StartInterior) {
-            // Both in interior - trace along airfoil
-            const airfoilPath = traceAirfoil(p2.idx, p1.idx);
-            for (const pt of airfoilPath) {
-              polygon.push(pt);
-            }
-          } else if (c2StartInterior) {
-            // Only c2 start in interior - add its closest airfoil point
-            polygon.push([p2.x, p2.y]);
-          } else {
-            // Only c1 start in interior - add its closest airfoil point
-            polygon.push([p1.x, p1.y]);
-          }
-        }
-        
-        if (polygon.length < 3) continue;
-        
-        // Color based on stream function strength (distance from psi0)
-        const [r, g, b] = getColor(tMid);
-        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
-        
-        ctx.beginPath();
-        const first = toCanvas(rotatePoint({ x: polygon[0][0], y: polygon[0][1] }));
-        ctx.moveTo(first.x, first.y);
-        for (let j = 1; j < polygon.length; j++) {
-          const p = toCanvas(rotatePoint({ x: polygon[j][0], y: polygon[j][1] }));
-          ctx.lineTo(p.x, p.y);
-        }
-        ctx.closePath();
-        ctx.fill();
-      }
-      
-      // Draw all contour branches, clipping inside the BL envelope.
-      ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.2)';
-      ctx.lineWidth = 0.8;
-      for (const line of psiContours.lines) {
-        if (line.length < 2) continue;
-        let drawing = false;
-        for (let j = 0; j < line.length; j++) {
-          const px = line[j][0];
-          const py = line[j][1];
-          if (insideEffectiveBody && insideEffectiveBody(px, py)) {
-            if (drawing) { ctx.stroke(); drawing = false; }
-            continue;
-          }
-          const p = toCanvas(rotatePoint({ x: px, y: py }));
-          if (!drawing) {
-            ctx.beginPath();
-            ctx.moveTo(p.x, p.y);
-            drawing = true;
-          } else {
-            ctx.lineTo(p.x, p.y);
-          }
-        }
-        if (drawing) ctx.stroke();
       }
       
       // Mask out the airfoil interior
@@ -1830,12 +1789,12 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       }
       
       // Draw dividing streamline, clipping inside BL envelope
-      if (psiContours.psi0Lines.length > 0) {
+      if (visibleDividerLines.length > 0) {
         ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.95)' : 'rgba(0, 0, 0, 0.9)';
         ctx.lineWidth = 2.5;
         ctx.setLineDash([]);
         
-        for (const line of psiContours.psi0Lines) {
+        for (const line of visibleDividerLines) {
           if (line.length < 2) continue;
           let drawing = false;
           for (let i = 0; i < line.length; i++) {
@@ -1861,13 +1820,17 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     // Uses morphed streamlines for smooth animation
     // Skip CPU streamlines when GPU mode is enabled - GPU uses same data
     if (showStreamlines && morphState.streamlines.length > 0 && !useGPU) {
-      ctx.strokeStyle = colors.accentSecondary;
       ctx.globalAlpha = 0.5;
       ctx.lineWidth = 1;
+      const streamlineAbove = isDark ? 'rgba(255, 107, 107, 0.7)' : 'rgba(230, 57, 70, 0.7)';
+      const streamlineBelow = isDark ? 'rgba(77, 171, 247, 0.7)' : 'rgba(25, 113, 194, 0.7)';
 
       for (const line of morphState.streamlines) {
         if (line.length < 2) continue;
         let drawing = false;
+        const sample = line[Math.floor(line.length * 0.5)] ?? line[0];
+        const flowSide = classifyFlowSide(sample[0], sample[1]);
+        ctx.strokeStyle = flowSide === 'above' ? streamlineAbove : streamlineBelow;
         
         for (let i = 0; i < line.length; i++) {
           const px = line[i][0];
@@ -2875,6 +2838,8 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     }
     
     let lastTime = performance.now();
+    const gpuShowContours = false;
+    const gpuShowSmoke = false;
     
     const animate = (time: number) => {
       const dt = Math.min((time - lastTime) / 1000, 0.05);
@@ -2883,7 +2848,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       if (!gpuRendererRef.current) return;
       
       // Update smoke if enabled
-      if (showSmoke) {
+      if (gpuShowSmoke && showSmoke) {
         gpuRendererRef.current.updateSmoke(dt * flowSpeed);
       }
       
@@ -2897,8 +2862,10 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
           height: viewport.height,
         },
         {
-          smoke: showSmoke,
-          contours: showPsiContours,
+          // Keep divider-aware contours and smoke on the CPU path until the
+          // GPU shaders are updated to use the composite separatrix geometry.
+          smoke: gpuShowSmoke && showSmoke,
+          contours: gpuShowContours && showPsiContours,
           streamlines: showStreamlines,
           alpha: displayAlpha,
           isDark,
