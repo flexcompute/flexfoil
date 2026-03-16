@@ -20,6 +20,7 @@ function AppContent() {
   const hydrateVisualizationState = useVisualizationStore((s) => s.hydrateVisualizationState);
   const hydrateUiFromRoute = useRouteUiStore((s) => s.hydrateFromRoute);
   const initRunDb = useRunStore((s) => s.init);
+  const restorationRevision = useRunStore((s) => s.restorationRevision);
   const { startTour, hasStartedTour } = useOnboarding();
   const { theme, setTheme } = useTheme();
   const basePathRef = useRef('/');
@@ -27,10 +28,19 @@ function AppContent() {
   const hasHydratedRouteRef = useRef(false);
   const previousPanelRef = useRef<string | null>(null);
   const wasmStatusRef = useRef(wasmStatus);
+  const skipNextRouteWriteRef = useRef(false);
 
   useEffect(() => {
     wasmStatusRef.current = wasmStatus;
   }, [wasmStatus]);
+
+  useEffect(() => {
+    if (!hasHydratedRouteRef.current || restorationRevision === 0) {
+      return;
+    }
+    // Restoring a historical run is an exploratory action, not a route edit.
+    skipNextRouteWriteRef.current = true;
+  }, [restorationRevision]);
 
   const airfoilRouteState = useAirfoilStore(
     useShallow((state) => ({
@@ -222,6 +232,10 @@ function AppContent() {
     }
 
     const timeoutId = window.setTimeout(() => {
+      if (skipNextRouteWriteRef.current) {
+        skipNextRouteWriteRef.current = false;
+        return;
+      }
       const snapshot = buildRouteStateSnapshot({
         theme,
         airfoil: airfoilRouteState,

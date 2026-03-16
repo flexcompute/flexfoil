@@ -20,7 +20,7 @@ import {
   type RunInsert,
 } from '../lib/runDatabase';
 import { computeAirfoilHash } from '../lib/airfoilHash';
-import { useAirfoilStore } from './airfoilStore';
+import { pauseHistory, resumeHistory, useAirfoilStore } from './airfoilStore';
 
 interface RunStoreState {
   /** All rows from the database, newest first */
@@ -29,6 +29,8 @@ interface RunStoreState {
   filteredRuns: RunRow[];
   /** Most recently restored historical run */
   selectedRunId: number | null;
+  /** Increments when a historical run is restored */
+  restorationRevision: number;
   /** Whether the DB has been initialised */
   ready: boolean;
 
@@ -68,6 +70,7 @@ export const useRunStore = create<RunStoreState>()((set, get) => ({
   allRuns: [],
   filteredRuns: [],
   selectedRunId: null,
+  restorationRevision: 0,
   ready: false,
 
   init: async () => {
@@ -107,14 +110,22 @@ export const useRunStore = create<RunStoreState>()((set, get) => ({
   restoreRunById: (id) => {
     const run = get().allRuns.find((row) => row.id === id);
     if (!run?.geometry_snapshot) return false;
-    useAirfoilStore.getState().restoreRunSnapshot(run);
-    set({ selectedRunId: id });
+    pauseHistory();
+    try {
+      useAirfoilStore.getState().restoreRunSnapshot(run);
+    } finally {
+      resumeHistory();
+    }
+    set((state) => ({
+      selectedRunId: id,
+      restorationRevision: state.restorationRevision + 1,
+    }));
     return true;
   },
 
   clearAll: async () => {
     await clearAllRuns();
-    set({ allRuns: [], filteredRuns: [], selectedRunId: null });
+    set({ allRuns: [], filteredRuns: [], selectedRunId: null, restorationRevision: 0 });
   },
 
   exportDb: () => exportDatabase(),
