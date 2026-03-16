@@ -1887,6 +1887,8 @@ pub struct WasmSmokeSystem {
     v_inf: f64,
     /// Dividing streamline value (psi_0)
     psi_0: f64,
+    /// Divider streamfunction used for stable particle-side assignment
+    divider_psi: f64,
     faithful_field: Option<FaithfulFlowField>,
 }
 
@@ -1907,6 +1909,7 @@ impl WasmSmokeSystem {
             alpha: 0.0,
             v_inf: 1.0,
             psi_0: 0.0,
+            divider_psi: 0.0,
             faithful_field: None,
         }
     }
@@ -1936,6 +1939,8 @@ impl WasmSmokeSystem {
         if let Ok(solution) = solver.solve(&[body], &flow) {
             self.gamma = solution.gamma;
             self.psi_0 = solution.psi_0;
+            self.divider_psi = solution.psi_0;
+            self.inner.set_divider_psi(self.divider_psi);
         }
         
         // Invalidate cached streamlines so they're recomputed with new flow
@@ -1958,6 +1963,8 @@ impl WasmSmokeSystem {
             self.gamma = field.gamma.clone();
             self.alpha = field.alpha;
             self.psi_0 = field.psi_0;
+            self.divider_psi = field.psi_0;
+            self.inner.set_divider_psi(self.divider_psi);
             self.faithful_field = Some(field);
             self.inner.invalidate_cache();
         }
@@ -2024,6 +2031,12 @@ impl WasmSmokeSystem {
         self.inner.set_max_age(max_age);
     }
 
+    /// Set divider streamfunction used for stable smoke side coloring.
+    pub fn set_divider_psi(&mut self, divider_psi: f64) {
+        self.divider_psi = divider_psi;
+        self.inner.set_divider_psi(divider_psi);
+    }
+
     /// Set freestream velocity magnitude (flow speed multiplier).
     /// Values are clamped to [0.1, 10.0].
     /// This invalidates cached streamlines since velocity affects the paths.
@@ -2057,6 +2070,11 @@ impl WasmSmokeSystem {
         } else {
             self.inner.get_psi_values(&self.coords, &self.gamma, self.alpha, self.v_inf)
         }
+    }
+
+    /// Get fixed side values for each particle (-1 below, +1 above).
+    pub fn get_side_values(&self) -> Vec<f64> {
+        self.inner.get_side_values()
     }
 
     /// Get the dividing streamline value (psi_0).

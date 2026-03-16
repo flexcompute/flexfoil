@@ -15,6 +15,7 @@ struct Particle {
     x: f64,
     y: f64,
     age: f64,
+    side: i8,
 }
 
 /// Smoke particle system for flow visualization.
@@ -33,6 +34,8 @@ pub struct SmokeSystem {
     spawn_interval: f64,
     /// Time since last spawn
     time_since_spawn: f64,
+    /// Divider streamfunction value used to lock particle color at spawn
+    divider_psi: f64,
 }
 
 impl SmokeSystem {
@@ -56,6 +59,7 @@ impl SmokeSystem {
             max_age: 5.0,
             spawn_interval: 2.0, // Spawn every 2 seconds for clear blob separation
             time_since_spawn: 0.0,
+            divider_psi: 0.0,
         }
     }
 
@@ -81,6 +85,11 @@ impl SmokeSystem {
         self.max_age = max_age.max(0.1);
     }
 
+    /// Set divider streamfunction used to assign particle side at spawn.
+    pub fn set_divider_psi(&mut self, divider_psi: f64) {
+        self.divider_psi = divider_psi;
+    }
+
     /// Spawn new blobs at all spawn points.
     fn spawn_blobs(&mut self) {
         for &(sx, sy) in &self.spawn_points {
@@ -94,7 +103,7 @@ impl SmokeSystem {
                 // Small random age offset for visual spread
                 let age = rand_float() * 0.05;
                 
-                self.particles.push(Particle { x, y, age });
+                self.particles.push(Particle { x, y, age, side: 0 });
             }
         }
     }
@@ -139,6 +148,11 @@ impl SmokeSystem {
             }
             
             // RK2 integration (midpoint method)
+            if particle.side == 0 {
+                let psi = psi_at(particle.x, particle.y, nodes, gamma, alpha, v_inf);
+                particle.side = if psi >= self.divider_psi { 1 } else { -1 };
+            }
+
             let (u1, v1) = velocity_at(particle.x, particle.y, nodes, gamma, alpha, v_inf);
             
             let mid_x = particle.x + 0.5 * dt * u1;
@@ -197,6 +211,20 @@ impl SmokeSystem {
                 wake_panels,
             );
 
+            if particle.side == 0 {
+                let psi = psi_at_with_sources(
+                    particle.x,
+                    particle.y,
+                    nodes,
+                    gamma,
+                    sigma,
+                    alpha,
+                    v_inf,
+                    wake_panels,
+                );
+                particle.side = if psi >= self.divider_psi { 1 } else { -1 };
+            }
+
             let mid_x = particle.x + 0.5 * dt * u1;
             let mid_y = particle.y + 0.5 * dt * v1;
 
@@ -251,6 +279,11 @@ impl SmokeSystem {
                 }
             })
             .collect()
+    }
+
+    /// Get fixed side values for each particle (-1 below, +1 above).
+    pub fn get_side_values(&self) -> Vec<f64> {
+        self.particles.iter().map(|p| p.side as f64).collect()
     }
 
     /// Get stream function (psi) values for each particle.

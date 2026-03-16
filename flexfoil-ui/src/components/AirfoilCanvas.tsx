@@ -806,9 +806,10 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     psiMax: number;
     psi0: number;             // Dividing streamline value
     dividerPsi: number;       // Psi value sampled from computed divider streamline
+    dividerPsiRaw: number;    // Unshifted divider psi value used for smoke coloring
     lines: [number, number][][];  // All contour lines
     psi0Lines: [number, number][][];  // Dividing streamline (ψ = ψ₀), extrapolated to airfoil
-  }>({ grid: [], bounds: [0, 0, 0, 0], nx: 0, ny: 0, psiMin: 0, psiMax: 0, psi0: 0, dividerPsi: 0, lines: [], psi0Lines: [] });
+  }>({ grid: [], bounds: [0, 0, 0, 0], nx: 0, ny: 0, psiMin: 0, psiMax: 0, psi0: 0, dividerPsi: 0, dividerPsiRaw: 0, lines: [], psi0Lines: [] });
   
   // Analysis results (Cp, Cl, Cd, Cm)
   const [analysisResult, setAnalysisResult] = useState<{
@@ -859,8 +860,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
   const smokeAnimationRef = useRef<number | null>(null);
   const smokePositionsRef = useRef<Float64Array | null>(null);
   const smokeAlphasRef = useRef<Float64Array | null>(null);
-  const smokePsiValuesRef = useRef<Float64Array | null>(null);
-  const smokePsi0Ref = useRef<number>(0);
+  const smokeSidesRef = useRef<Float64Array | null>(null);
   const drawSmokeRef = useRef<(() => void) | null>(null);  // Ref to drawSmoke for animation loop
   
   // Compute adaptive streamline count based on stable zoom (not live zoom)
@@ -963,7 +963,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
   useEffect(() => {
     if (!showPsiContours || !isWasmReady() || panels.length < 10 || isDraggingPoint) {
       if (!isDraggingPoint) {
-        setPsiContours({ grid: [], bounds: [0, 0, 0, 0], nx: 0, ny: 0, psiMin: 0, psiMax: 0, psi0: 0, dividerPsi: 0, lines: [], psi0Lines: [] });
+        setPsiContours({ grid: [], bounds: [0, 0, 0, 0], nx: 0, ny: 0, psiMin: 0, psiMax: 0, psi0: 0, dividerPsi: 0, dividerPsiRaw: 0, lines: [], psi0Lines: [] });
       }
       return;
     }
@@ -1102,6 +1102,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         psiMax: shiftedPsiMax, 
         psi0: shiftedPsi0,
         dividerPsi: 0,
+        dividerPsiRaw: dividerPsi,
         lines: allLines, 
         psi0Lines 
       });
@@ -1175,6 +1176,21 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     const lines = psiContours.psi0Lines.filter(line => line.length >= 2);
     return aftDividerLine.length >= 2 ? [...lines, aftDividerLine] : lines;
   }, [psiContours.psi0Lines, aftDividerLine]);
+
+  const getShiftedPsiAt = useCallback((x: number, y: number): number | null => {
+    if (psiContours.grid.length === 0 || psiContours.nx < 2 || psiContours.ny < 2) {
+      return null;
+    }
+    return sampleGridBilinear(psiContours.grid, psiContours.nx, psiContours.ny, psiContours.bounds, x, y);
+  }, [psiContours]);
+
+  const getFlowSideAt = useCallback((x: number, y: number): FlowSide => {
+    const psiValue = getShiftedPsiAt(x, y);
+    if (psiValue !== null && Number.isFinite(psiValue)) {
+      return psiValue >= 0 ? 'above' : 'below';
+    }
+    return classifyFlowSide(x, y);
+  }, [getShiftedPsiAt, classifyFlowSide]);
   
   // Morphing animation integration
   const morphTarget = useMemo(() => ({
@@ -1241,6 +1257,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       smokeSystemRef.current = null;
       smokePositionsRef.current = null;
       smokeAlphasRef.current = null;
+      smokeSidesRef.current = null;
       return;
     }
     
@@ -1312,6 +1329,9 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     } else {
       smokeSystemRef.current.set_flow(smokeCoords, displayAlpha);
     }
+    if (typeof smokeSystemAny.set_divider_psi === 'function') {
+      smokeSystemAny.set_divider_psi(psiContours.dividerPsiRaw ?? 0);
+    }
     
     // Set initial flow speed
     if (typeof smokeSystemRef.current.set_v_inf === 'function') {
@@ -1364,14 +1384,14 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         smokePositionsRef.current = new Float64Array(pos);
         smokeAlphasRef.current = new Float64Array(alphas);
         
-        // Get psi values for coloring particles by dividing streamline
+        // Get stable side values for coloring particles.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const smokeSystem = smokeSystemRef.current as any;
-        if (typeof smokeSystem.get_psi_values === 'function') {
-          const psiVals = smokeSystem.get_psi_values();
-          const psi0Val = smokeSystem.get_psi_0();
-          smokePsiValuesRef.current = new Float64Array(psiVals);
-          smokePsi0Ref.current = psi0Val;
+        if (typeof smokeSystem.get_side_values === 'function') {
+          const sideVals = smokeSystem.get_side_values();
+          smokeSidesRef.current = new Float64Array(sideVals);
+        } else {
+          smokeSidesRef.current = null;
         }
         
         // Draw smoke on overlay canvas (doesn't trigger main canvas redraw)
@@ -1508,10 +1528,12 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     
     const smokePositions = smokePositionsRef.current;
     const smokeAlphas = smokeAlphasRef.current;
+    const smokeSides = smokeSidesRef.current;
     
     if (!showSmoke || !smokePositions || !smokeAlphas) return;
     
     const count = smokePositions.length / 2;
+    const hasSideData = smokeSides && smokeSides.length === count;
     
     // Colors for above/below dividing streamline
     const colorAbove = isDark ? '#ff6b6b' : '#e63946';  // Red for upper surface
@@ -1543,7 +1565,9 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         const pCanvas = toCanvas(rotatePoint({ x, y }));
         ctx.beginPath();
         
-        const side = classifyFlowSide(x, y);
+        const side = hasSideData
+          ? (smokeSides[i] >= 0 ? 'above' : 'below')
+          : getFlowSideAt(x, y);
         ctx.fillStyle = side === 'above' ? colorAbove : side === 'below' ? colorBelow : defaultColor;
         
         ctx.globalAlpha = alpha * 0.6;
@@ -1552,7 +1576,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       }
     }
     ctx.globalAlpha = 1;
-  }, [showSmoke, displayAlpha, toCanvas, isDark, classifyFlowSide]);
+  }, [showSmoke, displayAlpha, toCanvas, isDark, getFlowSideAt]);
   
   // Keep ref updated so animation loop can call it
   useEffect(() => {
@@ -1829,7 +1853,7 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
         if (line.length < 2) continue;
         let drawing = false;
         const sample = line[Math.floor(line.length * 0.5)] ?? line[0];
-        const flowSide = classifyFlowSide(sample[0], sample[1]);
+        const flowSide = getFlowSideAt(sample[0], sample[1]);
         ctx.strokeStyle = flowSide === 'above' ? streamlineAbove : streamlineBelow;
         
         for (let i = 0; i < line.length; i++) {
