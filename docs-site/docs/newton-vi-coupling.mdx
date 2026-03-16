@@ -10,11 +10,11 @@ This document describes the implementation of XFOIL's Newton viscous-inviscid co
 
 The viscous-inviscid coupling is the core of XFOIL's boundary layer solver. It couples the boundary layer equations to the inviscid flow solution through the **mass defect** variable:
 
-$$
-\text{mass\_defect} = U_e \cdot \delta^*
-$$
+```text
+mass_defect = Ue * delta_star
+```
 
-Where $U_e$ is the edge velocity and $\delta^*$ is the displacement thickness.
+Where `Ue` is the edge velocity and `delta_star` is the displacement thickness.
 
 ## Key Components
 
@@ -52,14 +52,14 @@ rhs[i][k] += vs1_delta[k] * dds1 + vs2_delta[k] * dds2
 
 The VM matrix couples mass defect changes at all stations to the boundary layer equations:
 
-$$
-VM_{i,j,k} = VS2_{k,\delta^*} \cdot D_{2,M_j} + VS2_{k,U_e} \cdot U_{2,M_j}
-           + VS1_{k,\delta^*} \cdot D_{1,M_j} + VS1_{k,U_e} \cdot U_{1,M_j}
-$$
+```text
+VM[i,j,k] = VS2[k,delta_star] * D[2,Mj] + VS2[k,Ue] * U[2,Mj]
+          + VS1[k,delta_star] * D[1,Mj] + VS1[k,Ue] * U[1,Mj]
+```
 
 Where:
-- $D_{M_j} = \partial \delta^* / \partial \text{mass}_j = 1/U_e$ for local station
-- $U_{M_j} = \partial U_e / \partial \text{mass}_j = -VTI_i \cdot VTI_j \cdot DIJ_{i,j}$
+- `D_Mj = d(delta_star) / d(mass_j) = 1 / Ue` for the local station
+- `U_Mj = d(Ue) / d(mass_j) = -VTI_i * VTI_j * DIJ_{i,j}`
 
 ### 4. BLSOLV Algorithm
 
@@ -85,7 +85,7 @@ for iv in (2..n).rev() {
 
 The XFOIL-style update computes new edge velocities **before** applying any updates:
 
-1. Compute new $U_e$ from proposed mass changes
+1. Compute new `Ue` from proposed mass changes
 2. Compute global relaxation factor from ALL changes
 3. Apply ALL updates with common relaxation
 

@@ -7,6 +7,8 @@ import { DarkModeToggle } from './DarkModeToggle';
 import { useUndoRedo } from '../hooks/useUndoRedo';
 import { useOnboarding } from '../onboarding';
 
+const DOCUMENTATION_URL = 'https://flexfoil.dev/';
+
 interface PanelInfo {
   id: string;
   name: string;
@@ -68,6 +70,11 @@ export function MenuBar({
 
   const handleResetLayout = () => {
     onResetLayout();
+    setActiveMenu(null);
+  };
+
+  const openDocumentation = () => {
+    window.open(DOCUMENTATION_URL, '_blank', 'noopener,noreferrer');
     setActiveMenu(null);
   };
 
@@ -203,6 +210,8 @@ export function MenuBar({
           >
             Tutorials
           </div>
+          <MenuItem label="Documentation" onClick={openDocumentation} />
+          <MenuDivider />
           <MenuItem
             label="Welcome Tour"
             onClick={() => {
@@ -236,6 +245,12 @@ export function MenuBar({
           <MenuItem label="About FlexFoil" disabled />
         </MenuDropdown>
       )}
+
+      <MenuButton
+        label="Docs"
+        isActive={false}
+        onClick={openDocumentation}
+      />
 
       {/* Spacer */}
       <div style={{ flex: 1 }} />
