@@ -17,6 +17,7 @@ import { PolarPanel } from './panels/PolarPanel';
 import { VisualizationPanel } from './panels/VisualizationPanel';
 import { DataExplorerPanel } from './panels/DataExplorerPanel';
 import { PlotBuilderPanel } from './panels/PlotBuilderPanel';
+import { CaseLogsPanel } from './panels/CaseLogsPanel';
 import { MenuBar } from './MenuBar';
 import { LayoutProvider } from '../contexts/LayoutContext';
 
@@ -35,6 +36,7 @@ export const PANELS = [
   { id: 'visualization', name: 'Visualization', component: 'visualization' },
   { id: 'data-explorer', name: 'Data Explorer', component: 'data-explorer' },
   { id: 'plot-builder', name: 'Plot Builder', component: 'plot-builder' },
+  { id: 'case-logs', name: 'Case Logs', component: 'case-logs' },
 ];
 
 // Default layout configuration
@@ -88,6 +90,7 @@ const defaultLayoutJson: IJsonModel = {
               { type: 'tab', id: 'polar', name: 'Polar Plot', component: 'polar' },
               { type: 'tab', id: 'plot-builder', name: 'Plot Builder', component: 'plot-builder' },
               { type: 'tab', id: 'data-explorer', name: 'Data Explorer', component: 'data-explorer' },
+              { type: 'tab', id: 'case-logs', name: 'Case Logs', component: 'case-logs' },
             ],
           },
         ],
@@ -322,6 +325,12 @@ export function DockingLayout({ wasmStatus, initialViewport }: DockingLayoutProp
         return (
           <div data-tour="panel-plot-builder" style={{ width: '100%', height: '100%' }}>
             <PlotBuilderPanel />
+          </div>
+        );
+      case 'case-logs':
+        return (
+          <div style={{ width: '100%', height: '100%' }}>
+            <CaseLogsPanel />
           </div>
         );
       default:

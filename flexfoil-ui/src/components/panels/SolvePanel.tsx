@@ -9,11 +9,37 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
 import { useRunStore } from '../../stores/runStore';
+import { useCaseLogStore } from '../../stores/caseLogStore';
 import { analyzeAirfoil, analyzeAirfoilInviscid, isWasmReady, type AnalysisResult } from '../../lib/wasm';
 import type { PolarPoint } from '../../types';
 import type { RunInsert } from '../../lib/runDatabase';
 
 type RunMode = 'alpha' | 'cl';
+
+type SolveOrCacheResult = {
+  result: AnalysisResult | null;
+  fromCache: boolean;
+};
+
+function roundLogNumber(value: number | null | undefined, digits = 4): number | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  return Number(value.toFixed(digits));
+}
+
+function buildResultDetails(result: AnalysisResult): Record<string, unknown> {
+  return {
+    success: result.success,
+    converged: result.converged,
+    cl: roundLogNumber(result.cl),
+    cd: roundLogNumber(result.cd, 6),
+    cm: roundLogNumber(result.cm),
+    iterations: result.iterations,
+    residual: roundLogNumber(result.residual, 6),
+    x_tr_upper: roundLogNumber(result.x_tr_upper),
+    x_tr_lower: roundLogNumber(result.x_tr_lower),
+    error: result.error ?? null,
+  };
+}
 
 export function SolvePanel() {
   const {
@@ -31,6 +57,9 @@ export function SolvePanel() {
   } = useAirfoilStore();
 
   const { lookup, addRun, hashPanels } = useRunStore();
+  const startCase = useCaseLogStore((state) => state.startCase);
+  const appendEvent = useCaseLogStore((state) => state.appendEvent);
+  const finishCase = useCaseLogStore((state) => state.finishCase);
 
   const [runMode, setRunMode] = useState<RunMode>('alpha');
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -103,8 +132,11 @@ export function SolvePanel() {
   const [error, setError] = useState<string | null>(null);
   const [cacheStats, setCacheStats] = useState<{ hits: number; misses: number } | null>(null);
 
-  const lastSeries = polarData.length > 0 ? polarData[polarData.length - 1] : null;
-  const polar = lastSeries?.points ?? [];
+  const lastSeries = useMemo(
+    () => (polarData.length > 0 ? polarData[polarData.length - 1] : null),
+    [polarData],
+  );
+  const polar = useMemo(() => lastSeries?.points ?? [], [lastSeries]);
 
   const isViscous = solverMode === 'viscous';
 
@@ -123,15 +155,27 @@ export function SolvePanel() {
   const cacheNcrit = isViscous ? ncrit : 0;
   const cacheMaxIter = isViscous ? maxIterations : 0;
 
+  const buildCaseMetadata = useCallback((overrides: Record<string, unknown> = {}) => ({
+    airfoil: name,
+    solver: isViscous ? 'viscous' : 'inviscid',
+    reynolds: isViscous ? reynolds : 'n/a',
+    mach: isViscous ? mach : 'n/a',
+    ncrit: isViscous ? ncrit : 'n/a',
+    max_iter: isViscous ? maxIterations : 'n/a',
+    panels: panels.length - 1,
+    ...overrides,
+  }), [name, isViscous, reynolds, mach, ncrit, maxIterations, panels.length]);
+
   /** Run a single point — check cache first, fall back to solver. */
   const solveOrCache = useCallback(async (
     alpha: number,
     airfoilHash: string,
     nPanels: number,
-  ): Promise<AnalysisResult | null> => {
+    logContext?: { caseId: string; label: string },
+  ): Promise<SolveOrCacheResult> => {
     const cached = lookup(airfoilHash, alpha, cacheRe, cacheMach, cacheNcrit, nPanels, cacheMaxIter);
     if (cached && cached.success) {
-      return {
+      const result = {
         cl: cached.cl ?? 0,
         cd: cached.cd ?? 0,
         cm: cached.cm ?? 0,
@@ -145,11 +189,46 @@ export function SolvePanel() {
         x_tr_upper: cached.x_tr_upper ?? 0,
         x_tr_lower: cached.x_tr_lower ?? 0,
         success: true,
-        _cached: true,
-      } as AnalysisResult & { _cached?: boolean };
+      } as AnalysisResult;
+
+      if (logContext) {
+        appendEvent(logContext.caseId, {
+          level: 'success',
+          message: `${logContext.label}: cache hit`,
+          details: {
+            alpha: roundLogNumber(alpha),
+            run_id: cached.id,
+            ...buildResultDetails(result),
+          },
+        });
+      }
+
+      return { result, fromCache: true };
+    }
+
+    if (logContext) {
+      appendEvent(logContext.caseId, {
+        message: `${logContext.label}: cache miss`,
+        details: {
+          alpha: roundLogNumber(alpha),
+          airfoil_hash: airfoilHash.slice(0, 12),
+        },
+      });
     }
 
     const res = runSolver(panels, alpha);
+
+    if (logContext) {
+      appendEvent(logContext.caseId, {
+        level: res.success ? (res.converged ? 'success' : 'warning') : 'error',
+        message: `${logContext.label}: solver completed`,
+        details: {
+          alpha: roundLogNumber(alpha),
+          source: 'solver',
+          ...buildResultDetails(res),
+        },
+      });
+    }
 
     const run: RunInsert = {
       airfoil_name: name,
@@ -173,8 +252,19 @@ export function SolvePanel() {
     };
     await addRun(run);
 
-    return res;
-  }, [panels, name, cacheRe, cacheMach, cacheNcrit, cacheMaxIter, runSolver, lookup, addRun]);
+    if (logContext) {
+      appendEvent(logContext.caseId, {
+        message: `${logContext.label}: run stored`,
+        details: {
+          alpha: roundLogNumber(alpha),
+          success: res.success,
+          converged: res.converged,
+        },
+      });
+    }
+
+    return { result: res, fromCache: false };
+  }, [panels, name, cacheRe, cacheMach, cacheNcrit, cacheMaxIter, runSolver, lookup, addRun, appendEvent]);
 
   // --------------- single-point ---------------
 
@@ -189,61 +279,222 @@ export function SolvePanel() {
     setResultAlpha(null);
     setCacheStats(null);
 
+    let caseId: string | null = null;
+
     try {
+      caseId = startCase({
+        kind: runMode === 'alpha' ? 'single-alpha' : 'single-cl',
+        title: runMode === 'alpha'
+          ? `Run to α ${targetAlpha.toFixed(2)}°`
+          : `Run to CL ${targetCl.toFixed(3)}`,
+        metadata: buildCaseMetadata(
+          runMode === 'alpha'
+            ? { target_alpha: roundLogNumber(targetAlpha) }
+            : { target_cl: roundLogNumber(targetCl) },
+        ),
+      });
+
+      appendEvent(caseId, {
+        message: 'Starting analysis',
+        details: {
+          mode: runMode,
+          solver: isViscous ? 'viscous' : 'inviscid',
+        },
+      });
+
       const airfoilHash = await hashPanels(panels);
       const nPanels = panels.length - 1;
 
+      appendEvent(caseId, {
+        message: 'Geometry hashed for cache lookup',
+        details: {
+          airfoil_hash: airfoilHash.slice(0, 12),
+          n_panels: nPanels,
+        },
+      });
+
       if (runMode === 'alpha') {
-        const res = await solveOrCache(targetAlpha, airfoilHash, nPanels);
-        if (!res) { setError('Analysis returned no result'); setIsRunning(false); return; }
+        const { result: res, fromCache } = await solveOrCache(targetAlpha, airfoilHash, nPanels, {
+          caseId,
+          label: `Single-point α=${targetAlpha.toFixed(2)}°`,
+        });
+        if (!res) {
+          setError('Analysis returned no result');
+          finishCase(caseId, {
+            status: 'error',
+            summary: 'Analysis returned no result.',
+          });
+          return;
+        }
         setResult(res);
         setResultAlpha(targetAlpha);
         if (!res.success) {
           setError(res.error || 'Analysis failed');
+          finishCase(caseId, {
+            status: 'error',
+            summary: res.error || 'Single-point analysis failed.',
+            metadata: { source: fromCache ? 'cache' : 'solver' },
+          });
         } else if (isViscous && !res.converged) {
           setError(`Viscous solver did not converge (residual ${res.residual.toExponential(2)})`);
+          finishCase(caseId, {
+            status: 'warning',
+            summary: `Single-point result returned from ${fromCache ? 'cache' : 'solver'}, but the viscous solve did not converge.`,
+            metadata: { source: fromCache ? 'cache' : 'solver' },
+          });
+        } else {
+          finishCase(caseId, {
+            status: 'success',
+            summary: `Single-point analysis completed from ${fromCache ? 'cache' : 'solver'}.`,
+            metadata: { source: fromCache ? 'cache' : 'solver' },
+          });
         }
       } else {
         let alpha = 0;
-        const maxIter = 20;
+        const clMaxIter = 20;
         const tol = 0.001;
 
-        for (let i = 0; i < maxIter; i++) {
-          const res = await solveOrCache(alpha, airfoilHash, nPanels);
+        appendEvent(caseId, {
+          message: 'Starting CL targeting loop',
+          details: {
+            initial_alpha: 0,
+            tolerance: tol,
+            max_iterations: clMaxIter,
+          },
+        });
+
+        for (let i = 0; i < clMaxIter; i++) {
+          const iterationAlpha = alpha;
+          const { result: res, fromCache } = await solveOrCache(iterationAlpha, airfoilHash, nPanels, {
+            caseId,
+            label: `CL iteration ${i + 1} at α=${iterationAlpha.toFixed(2)}°`,
+          });
           if (!res || !res.success) {
             setError(res?.error || 'Analysis failed during CL iteration');
-            setIsRunning(false);
+            finishCase(caseId, {
+              status: 'error',
+              summary: res?.error || 'CL targeting failed during iteration.',
+              metadata: {
+                failed_iteration: i + 1,
+                source: fromCache ? 'cache' : 'solver',
+              },
+            });
             return;
           }
 
           const clError = targetCl - res.cl;
+          appendEvent(caseId, {
+            level: Math.abs(clError) < tol ? 'success' : 'info',
+            message: `CL iteration ${i + 1} residual evaluated`,
+            details: {
+              alpha: roundLogNumber(iterationAlpha),
+              achieved_cl: roundLogNumber(res.cl),
+              target_cl: roundLogNumber(targetCl),
+              cl_error: roundLogNumber(clError, 6),
+              source: fromCache ? 'cache' : 'solver',
+            },
+          });
+
           if (Math.abs(clError) < tol) {
             setResult(res);
-            setResultAlpha(alpha);
-            setDisplayAlpha(alpha);
+            setResultAlpha(iterationAlpha);
+            setDisplayAlpha(iterationAlpha);
+            finishCase(caseId, {
+              status: 'success',
+              summary: `CL targeting converged in ${i + 1} iteration${i === 0 ? '' : 's'}.`,
+              metadata: {
+                converged_alpha: roundLogNumber(iterationAlpha),
+                achieved_cl: roundLogNumber(res.cl),
+              },
+            });
             break;
           }
 
           alpha += clError / 0.11;
           alpha = Math.max(-20, Math.min(25, alpha));
 
-          if (i === maxIter - 1) {
-            const finalRes = await solveOrCache(alpha, airfoilHash, nPanels);
-            setResult(finalRes);
+          appendEvent(caseId, {
+            message: `Adjusting α for iteration ${i + 2}`,
+            details: {
+              previous_alpha: roundLogNumber(iterationAlpha),
+              next_alpha: roundLogNumber(alpha),
+            },
+          });
+
+          if (i === clMaxIter - 1) {
+            const finalRes = await solveOrCache(alpha, airfoilHash, nPanels, {
+              caseId,
+              label: 'Final CL targeting evaluation',
+            });
+            setResult(finalRes.result);
             setResultAlpha(alpha);
             setDisplayAlpha(alpha);
-            if (finalRes && Math.abs(targetCl - finalRes.cl) > 0.01) {
-              setError(`Could not converge to CL=${targetCl.toFixed(3)}. Got CL=${finalRes.cl.toFixed(3)} at α=${alpha.toFixed(2)}°`);
+            if (finalRes.result) {
+              appendEvent(caseId, {
+                level: Math.abs(targetCl - finalRes.result.cl) > 0.01 ? 'warning' : 'success',
+                message: 'Final CL targeting evaluation completed',
+                details: {
+                  alpha: roundLogNumber(alpha),
+                  achieved_cl: roundLogNumber(finalRes.result.cl),
+                  source: finalRes.fromCache ? 'cache' : 'solver',
+                },
+              });
+            }
+
+            if (finalRes.result && Math.abs(targetCl - finalRes.result.cl) > 0.01) {
+              setError(`Could not converge to CL=${targetCl.toFixed(3)}. Got CL=${finalRes.result.cl.toFixed(3)} at α=${alpha.toFixed(2)}°`);
+              finishCase(caseId, {
+                status: 'warning',
+                summary: `CL targeting stopped at α=${alpha.toFixed(2)}° without reaching the requested tolerance.`,
+                metadata: {
+                  final_cl: roundLogNumber(finalRes.result.cl),
+                  final_alpha: roundLogNumber(alpha),
+                },
+              });
+            } else {
+              finishCase(caseId, {
+                status: 'success',
+                summary: `CL targeting completed after ${clMaxIter} iterations.`,
+                metadata: {
+                  final_alpha: roundLogNumber(alpha),
+                  final_cl: roundLogNumber(finalRes.result?.cl ?? null),
+                },
+              });
             }
           }
         }
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Unknown error');
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      setError(message);
+      if (caseId) {
+        appendEvent(caseId, {
+          level: 'error',
+          message: 'Analysis threw an exception',
+          details: { error: message },
+        });
+        finishCase(caseId, {
+          status: 'error',
+          summary: message,
+        });
+      }
+    } finally {
+      setIsRunning(false);
     }
-
-    setIsRunning(false);
-  }, [panels, runMode, targetAlpha, targetCl, isViscous, setDisplayAlpha, hashPanels, solveOrCache]);
+  }, [
+    panels,
+    runMode,
+    targetAlpha,
+    targetCl,
+    isViscous,
+    setDisplayAlpha,
+    hashPanels,
+    solveOrCache,
+    startCase,
+    appendEvent,
+    finishCase,
+    buildCaseMetadata,
+  ]);
 
   // --------------- polar sweep ---------------
 
@@ -257,9 +508,38 @@ export function SolvePanel() {
     setError(null);
     setCacheStats(null);
 
+    let caseId: string | null = null;
+
     try {
+      caseId = startCase({
+        kind: 'polar',
+        title: `Alpha polar ${alphaStart.toFixed(1)}° to ${alphaEnd.toFixed(1)}°`,
+        metadata: buildCaseMetadata({
+          alpha_start: roundLogNumber(alphaStart),
+          alpha_end: roundLogNumber(alphaEnd),
+          alpha_step: roundLogNumber(alphaStep),
+        }),
+      });
+
+      appendEvent(caseId, {
+        message: 'Starting polar sweep',
+        details: {
+          alpha_start: roundLogNumber(alphaStart),
+          alpha_end: roundLogNumber(alphaEnd),
+          alpha_step: roundLogNumber(alphaStep),
+        },
+      });
+
       const airfoilHash = await hashPanels(panels);
       const nPanels = panels.length - 1;
+
+      appendEvent(caseId, {
+        message: 'Geometry hashed for polar sweep',
+        details: {
+          airfoil_hash: airfoilHash.slice(0, 12),
+          n_panels: nPanels,
+        },
+      });
 
       const polarKey = `${airfoilHash.slice(0, 12)}_${cacheRe}_${cacheMach}_${cacheNcrit}_${nPanels}_${cacheMaxIter}`;
       const polarLabel = isViscous
@@ -269,46 +549,37 @@ export function SolvePanel() {
       const points: PolarPoint[] = [];
       let hits = 0;
       let misses = 0;
+      let failures = 0;
+      const totalPoints = Math.max(0, Math.floor(((alphaEnd - alphaStart) / alphaStep) + 1 + 1e-9));
 
-      for (let alpha = alphaStart; alpha <= alphaEnd + 1e-9; alpha += alphaStep) {
+      for (let alpha = alphaStart, pointIndex = 0; alpha <= alphaEnd + 1e-9; alpha += alphaStep, pointIndex++) {
         const roundedAlpha = Math.round(alpha * 1e6) / 1e6;
 
-        let wasCached = false;
-        const cached = lookup(airfoilHash, roundedAlpha, cacheRe, cacheMach, cacheNcrit, nPanels, cacheMaxIter);
-        if (cached && cached.success) {
-          points.push({ alpha: roundedAlpha, cl: cached.cl ?? 0, cd: cached.cd ?? 0, cm: cached.cm ?? 0 });
+        const { result: res, fromCache } = await solveOrCache(roundedAlpha, airfoilHash, nPanels, {
+          caseId,
+          label: `Polar point ${pointIndex + 1}/${totalPoints || '?'}`,
+        });
+
+        if (res && fromCache) {
+          points.push({ alpha: roundedAlpha, cl: res.cl ?? 0, cd: res.cd ?? 0, cm: res.cm ?? 0 });
           hits++;
-          wasCached = true;
+          continue;
         }
 
-        if (!wasCached) {
-          const res = runSolver(panels, roundedAlpha);
+        if (res) {
           misses++;
-
-          const run: RunInsert = {
-            airfoil_name: name,
-            airfoil_hash: airfoilHash,
-            alpha: roundedAlpha,
-            reynolds: cacheRe,
-            mach: cacheMach,
-            ncrit: cacheNcrit,
-            n_panels: nPanels,
-            max_iter: cacheMaxIter,
-            cl: res.cl,
-            cd: res.cd,
-            cm: res.cm,
-            converged: res.converged,
-            iterations: res.iterations,
-            residual: res.residual,
-            x_tr_upper: res.x_tr_upper,
-            x_tr_lower: res.x_tr_lower,
-            success: res.success,
-            error: res.error ?? null,
-          };
-          await addRun(run);
-
           if (res.success) {
             points.push({ alpha: roundedAlpha, cl: res.cl, cd: res.cd, cm: res.cm });
+          } else {
+            failures++;
+            appendEvent(caseId, {
+              level: 'warning',
+              message: `Polar point ${pointIndex + 1}/${totalPoints || '?'} skipped`,
+              details: {
+                alpha: roundLogNumber(roundedAlpha),
+                error: res.error ?? 'Solver returned an unsuccessful result.',
+              },
+            });
           }
         }
       }
@@ -318,14 +589,43 @@ export function SolvePanel() {
 
       if (points.length === 0) {
         setError('No valid points in polar');
+        finishCase(caseId, {
+          status: 'error',
+          summary: 'Polar sweep finished without any valid points.',
+          metadata: { cache_hits: hits, computed_points: misses, failed_points: failures },
+        });
+      } else if (failures > 0) {
+        finishCase(caseId, {
+          status: 'warning',
+          summary: `Polar sweep completed with ${points.length} valid points, ${failures} failed point${failures === 1 ? '' : 's'}, ${hits} cache hit${hits === 1 ? '' : 's'}, and ${misses} computed point${misses === 1 ? '' : 's'}.`,
+          metadata: { cache_hits: hits, computed_points: misses, failed_points: failures },
+        });
+      } else {
+        finishCase(caseId, {
+          status: 'success',
+          summary: `Polar sweep completed with ${points.length} valid points, ${hits} cache hit${hits === 1 ? '' : 's'}, and ${misses} computed point${misses === 1 ? '' : 's'}.`,
+          metadata: { cache_hits: hits, computed_points: misses, failed_points: failures },
+        });
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Unknown error');
+      const message = e instanceof Error ? e.message : 'Unknown error';
+      setError(message);
+      if (caseId) {
+        appendEvent(caseId, {
+          level: 'error',
+          message: 'Polar sweep threw an exception',
+          details: { error: message },
+        });
+        finishCase(caseId, {
+          status: 'error',
+          summary: message,
+        });
+      }
+    } finally {
+      setIsRunning(false);
     }
-
-    setIsRunning(false);
   }, [panels, name, alphaStart, alphaEnd, alphaStep, cacheRe, cacheMach, cacheNcrit, cacheMaxIter,
-      isViscous, upsertPolar, hashPanels, lookup, addRun, runSolver]);
+      isViscous, upsertPolar, hashPanels, solveOrCache, startCase, appendEvent, finishCase, buildCaseMetadata]);
 
   // --------------- derived ---------------
 
