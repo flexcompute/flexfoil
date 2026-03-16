@@ -22,15 +22,16 @@ import {
 } from 'ag-grid-community';
 import Plot from 'react-plotly.js';
 import { useRunStore } from '../../stores/runStore';
-import { useRouteUiStore } from '../../stores/routeUiStore';
+import { AUTO_GROUP_KEY, useRouteUiStore } from '../../stores/routeUiStore';
 import { useTheme } from '../../contexts/ThemeContext';
-import type { RunRow } from '../../types';
+import type { DataSource, RunRow } from '../../types';
 import {
   ENCODING_PLOT_FIELDS,
   NUMERIC_PLOT_FIELDS,
   getPlotFieldLabel,
   isNumericPlotField,
 } from '../../lib/plotFields';
+import { detectSmartRunGroups } from '../../lib/polarDetection';
 import { buildMarkerEncoding, colorForKey } from '../../lib/plotStyling';
 
 // ────────────────────────────────────────────────────────────
@@ -75,6 +76,31 @@ function computeNumericRange(rows: RunRow[], key: keyof RunRow): [number, number
   return [min - pad, max + pad];
 }
 
+function buildRunHoverDetails(run: RunRow): Array<string | number> {
+  return [
+    run.airfoil_name,
+    run.alpha,
+    run.reynolds,
+    run.mach,
+    run.ncrit,
+    run.n_panels,
+    run.max_iter,
+    run.solver_mode,
+  ];
+}
+
+const RUN_HOVER_TEMPLATE = [
+  'Run #%{meta}',
+  'Airfoil=%{customdata[0]}',
+  'Alpha=%{customdata[1]}',
+  'Re=%{customdata[2]}',
+  'Mach=%{customdata[3]}',
+  'Ncrit=%{customdata[4]}',
+  'Panels=%{customdata[5]}',
+  'MaxIter=%{customdata[6]}',
+  'Solver=%{customdata[7]}',
+].join('<br>');
+
 // ────────────────────────────────────────────────────────────
 // AG Grid column definitions
 // ────────────────────────────────────────────────────────────
@@ -115,7 +141,16 @@ type GridFilterModel = ReturnType<GridApi<RunRow>['getFilterModel']>;
 
 export function DataExplorerPanel() {
   const { isDark } = useTheme();
-  const { allRuns, setFilteredRuns, clearAll, exportDb, importDb, restoreRunById, selectedRunId } = useRunStore();
+  const {
+    allRuns,
+    filteredRuns,
+    setFilteredRuns,
+    clearAll,
+    exportDb,
+    importDb,
+    restoreRunById,
+    selectedRunId,
+  } = useRunStore();
 
   const view = useRouteUiStore((state) => state.dataExplorerView);
   const setView = useRouteUiStore((state) => state.setDataExplorerView);
@@ -125,6 +160,8 @@ export function DataExplorerPanel() {
   const setColorBy = useRouteUiStore((state) => state.setDataExplorerColorBy);
   const filterModel = useRouteUiStore((state) => state.dataExplorerFilterModel);
   const setFilterModel = useRouteUiStore((state) => state.setDataExplorerFilterModel);
+  const [dataSource, setDataSource] = useState<DataSource>('full');
+  const [groupBy, setGroupBy] = useState<keyof RunRow | '' | typeof AUTO_GROUP_KEY>(AUTO_GROUP_KEY);
   const [sizeBy, setSizeBy] = useState<keyof RunRow | ''>('');
   const [symbolBy, setSymbolBy] = useState<keyof RunRow | ''>('');
 
@@ -159,7 +196,8 @@ export function DataExplorerPanel() {
   }, [setFilterModel, setFilteredRuns]);
 
   // ── Correlogram ──
-  const successOnly = useMemo(() => allRuns.filter(r => r.success), [allRuns]);
+  const data = dataSource === 'full' ? allRuns : filteredRuns;
+  const successOnly = useMemo(() => data.filter((r) => r.success), [data]);
 
   const toggleSplomKey = useCallback((key: keyof RunRow) => {
     if (splomKeys.includes(key)) {
@@ -173,6 +211,41 @@ export function DataExplorerPanel() {
     if (!apiRef.current) return;
     apiRef.current.setFilterModel((filterModel as GridFilterModel) ?? null);
   }, [filterModel]);
+
+  const groupedRows = useMemo(() => {
+    if (successOnly.length === 0) return [];
+    if (groupBy === AUTO_GROUP_KEY) {
+      return detectSmartRunGroups(successOnly, {
+        sortField: 'alpha',
+        plottedFields: splomKeys,
+        encodingFields: [colorBy, sizeBy, symbolBy],
+      });
+    }
+    if (!groupBy) {
+      return [{
+        key: 'all',
+        label: `All (${successOnly.length})`,
+        rows: successOnly,
+        isSinglePoint: successOnly.length === 1,
+      }];
+    }
+
+    const manualGroups = new Map<string, RunRow[]>();
+    for (const row of successOnly) {
+      const key = String(row[groupBy] ?? 'null');
+      if (!manualGroups.has(key)) manualGroups.set(key, []);
+      manualGroups.get(key)!.push(row);
+    }
+
+    return [...manualGroups.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, rows]) => ({
+        key: `${String(groupBy)}=${key}`,
+        label: `${getLabel(groupBy)}: ${key}`,
+        rows,
+        isSinglePoint: rows.length === 1,
+      }));
+  }, [successOnly, groupBy, splomKeys, colorBy, sizeBy, symbolBy]);
 
   const splomResult = useMemo(() => {
     if (successOnly.length === 0 || splomKeys.length < 2) return null;
@@ -233,50 +306,62 @@ export function DataExplorerPanel() {
         };
 
         if (row === col) {
-          const rows = successOnly.filter((run) => run[xKey] != null);
-          traces.push({
-            type: 'histogram',
-            x: rows.map((run) => run[xKey]) as number[],
-            xaxis: xRef,
-            yaxis: yRef,
-            marker: { color: colorForKey(String(xKey)), opacity: 0.85 },
-            showlegend: false,
-            hovertemplate: `${getLabel(xKey)}=%{x}<br>Count=%{y}<extra></extra>`,
+          groupedRows.forEach((group) => {
+            const rows = group.rows.filter((run) => run[xKey] != null);
+            if (rows.length === 0) return;
+            traces.push({
+              type: 'histogram',
+              x: rows.map((run) => run[xKey]) as number[],
+              xaxis: xRef,
+              yaxis: yRef,
+              name: group.label,
+              legendgroup: group.key,
+              marker: { color: colorForKey(group.key || String(xKey)), opacity: groupedRows.length > 1 ? 0.55 : 0.85 },
+              showlegend: row === 0 && col === 0 && groupedRows.length > 1,
+              hovertemplate: `${getLabel(xKey)}=%{x}<br>Count=%{y}<extra>${group.label}</extra>`,
+            });
           });
           continue;
         }
 
-        const rows = successOnly.filter((run) => run[xKey] != null && run[yKey] != null);
-        const { marker } = buildMarkerEncoding({
-          rows,
-          colorBy,
-          sizeBy,
-          symbolBy,
-          defaultColor: colorForKey(`${String(xKey)}|${String(yKey)}`),
-          defaultSize: 5,
-          opacity: 0.65,
-          minSize: 3,
-          maxSize: 11,
-          showColorScale: !colorScaleShown,
-        });
-        if (colorBy && isNumericPlotField(colorBy) && !colorScaleShown) {
-          colorScaleShown = true;
-        }
-        traces.push({
-          type: 'scatter',
-          mode: 'markers',
-          x: rows.map((run) => run[xKey]) as number[],
-          y: rows.map((run) => run[yKey]) as number[],
-          xaxis: xRef,
-          yaxis: yRef,
-          marker,
-          customdata: rows.map((run) => run.id),
-          showlegend: false,
-          hovertemplate: `${getLabel(xKey)}=%{x}<br>${getLabel(yKey)}=%{y}<br>Run #%{customdata}<extra></extra>`,
+        const cellRows = successOnly.filter((run) => run[xKey] != null && run[yKey] != null);
+        groupedRows.forEach((group, groupIndex) => {
+          const rows = group.rows.filter((run) => run[xKey] != null && run[yKey] != null);
+          if (rows.length === 0) return;
+          const { marker } = buildMarkerEncoding({
+            rows,
+            colorBy,
+            sizeBy,
+            symbolBy,
+            defaultColor: colorForKey(group.key || `${String(xKey)}|${String(yKey)}`),
+            defaultSize: 5,
+            opacity: 0.65,
+            minSize: 3,
+            maxSize: 11,
+            showColorScale: !colorScaleShown && groupIndex === 0,
+          });
+          if (colorBy && isNumericPlotField(colorBy) && !colorScaleShown && groupIndex === 0) {
+            colorScaleShown = true;
+          }
+          traces.push({
+            type: 'scatter',
+            mode: 'markers',
+            x: rows.map((run) => run[xKey]) as number[],
+            y: rows.map((run) => run[yKey]) as number[],
+            xaxis: xRef,
+            yaxis: yRef,
+            name: group.label,
+            legendgroup: group.key,
+            marker,
+            meta: rows.map((run) => run.id),
+            customdata: rows.map(buildRunHoverDetails),
+            showlegend: false,
+            hovertemplate: `${getLabel(xKey)}=%{x}<br>${getLabel(yKey)}=%{y}<br>${RUN_HOVER_TEMPLATE}<extra>${group.label}</extra>`,
+          });
         });
 
-        const xValues = rows.map((run) => run[xKey] as number);
-        const yValues = rows.map((run) => run[yKey] as number);
+        const xValues = cellRows.map((run) => run[xKey] as number);
+        const yValues = cellRows.map((run) => run[yKey] as number);
         const r = pearsonR(xValues, yValues);
         if (r != null) {
           annotations.push({
@@ -296,15 +381,18 @@ export function DataExplorerPanel() {
 
     const layout: Partial<Plotly.Layout> = {
       autosize: true,
-      margin: { l: 80, r: 30, t: 20, b: 60 },
+      margin: { l: 80, r: 30, t: 20, b: groupedRows.length > 1 ? 90 : 60 },
       paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
       font: { color: isDark ? '#ccc' : '#333', size: 10 },
-      showlegend: false, dragmode: 'select' as const,
+      showlegend: groupedRows.length > 1,
+      legend: { orientation: 'h', y: -0.12 },
+      barmode: groupedRows.length > 1 ? 'overlay' : undefined,
+      dragmode: 'select' as const,
       annotations, ...axisOverrides,
     };
 
     return { traces, layout };
-  }, [successOnly, splomKeys, colorBy, sizeBy, symbolBy, isDark]);
+  }, [successOnly, splomKeys, colorBy, sizeBy, symbolBy, isDark, groupedRows]);
 
   const handlePlotClick = useCallback((event: Readonly<Plotly.PlotMouseEvent>) => {
     const rawRunId = event.points?.[0]?.customdata;
@@ -332,6 +420,16 @@ export function DataExplorerPanel() {
     background: active ? (isDark ? 'rgba(0,212,170,0.15)' : 'rgba(0,212,170,0.1)') : 'transparent',
     color: active ? colorForKey('accent-active') : 'var(--text-secondary)', cursor: 'pointer', whiteSpace: 'nowrap',
   });
+  const selectStyle: React.CSSProperties = {
+    padding: '3px 6px', fontSize: '11px',
+    background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)',
+    borderRadius: '3px', color: 'var(--text-primary)', minWidth: '110px',
+  };
+  const labelStyle: React.CSSProperties = {
+    fontSize: '10px',
+    color: 'var(--text-muted)',
+    marginBottom: '2px',
+  };
 
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -422,57 +520,78 @@ export function DataExplorerPanel() {
       {/* ── Correlogram view ── */}
       {view === 'correlogram' && (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          {/* Column & color-by selectors */}
+          {/* Column & plot selectors */}
           <div style={{
             padding: '6px 10px', borderBottom: '1px solid var(--border-color)',
             display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', flexShrink: 0,
           }}>
-            <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginRight: '2px' }}>Columns:</span>
-            {NUMERIC_PLOT_FIELDS.map(f => (
-              <button key={f.key as string} onClick={() => toggleSplomKey(f.key)} style={chipStyle(splomKeys.includes(f.key))}>
-                {f.label}
-              </button>
-            ))}
-            <span style={{ borderLeft: '1px solid var(--border-color)', height: '16px', margin: '0 4px' }} />
-            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Color:</span>
-            <select
-              value={colorBy as string}
-              onChange={e => setColorBy((e.target.value || '') as keyof RunRow | '')}
-              style={{
-                padding: '2px 6px', fontSize: '10px',
-                background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)',
-                borderRadius: '3px', color: 'var(--text-primary)',
-              }}
-            >
-              <option value="">Color Auto</option>
-              {ENCODING_PLOT_FIELDS.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
-            </select>
-            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Size:</span>
-            <select
-              value={sizeBy as string}
-              onChange={e => setSizeBy((e.target.value || '') as keyof RunRow | '')}
-              style={{
-                padding: '2px 6px', fontSize: '10px',
-                background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)',
-                borderRadius: '3px', color: 'var(--text-primary)',
-              }}
-            >
-              <option value="">None</option>
-              {ENCODING_PLOT_FIELDS.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
-            </select>
-            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Type:</span>
-            <select
-              value={symbolBy as string}
-              onChange={e => setSymbolBy((e.target.value || '') as keyof RunRow | '')}
-              style={{
-                padding: '2px 6px', fontSize: '10px',
-                background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)',
-                borderRadius: '3px', color: 'var(--text-primary)',
-              }}
-            >
-              <option value="">None</option>
-              {ENCODING_PLOT_FIELDS.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
-            </select>
+            <div style={{ display: 'flex', flexDirection: 'column', minWidth: '280px', flex: 1 }}>
+              <span style={labelStyle}>Columns</span>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {NUMERIC_PLOT_FIELDS.map((f) => (
+                  <button key={f.key as string} onClick={() => toggleSplomKey(f.key)} style={chipStyle(splomKeys.includes(f.key))}>
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={labelStyle}>Data</span>
+              <select value={dataSource} onChange={(e) => setDataSource(e.target.value as DataSource)} style={selectStyle}>
+                <option value="full">All ({allRuns.length})</option>
+                <option value="filtered">Grid Filter ({filteredRuns.length})</option>
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={labelStyle}>Group By</span>
+              <select
+                value={groupBy as string}
+                onChange={(e) => setGroupBy((e.target.value || '') as keyof RunRow | '' | typeof AUTO_GROUP_KEY)}
+                style={selectStyle}
+              >
+                <option value={AUTO_GROUP_KEY}>Auto (Smart)</option>
+                <option value="">None</option>
+                {ENCODING_PLOT_FIELDS.map((f) => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={labelStyle}>Color</span>
+              <select
+                value={colorBy as string}
+                onChange={(e) => setColorBy((e.target.value || '') as keyof RunRow | '')}
+                style={selectStyle}
+              >
+                <option value="">Color Auto</option>
+                {ENCODING_PLOT_FIELDS.map((f) => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={labelStyle}>Marker Size</span>
+              <select
+                value={sizeBy as string}
+                onChange={(e) => setSizeBy((e.target.value || '') as keyof RunRow | '')}
+                style={selectStyle}
+              >
+                <option value="">None</option>
+                {ENCODING_PLOT_FIELDS.map((f) => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={labelStyle}>Marker Type</span>
+              <select
+                value={symbolBy as string}
+                onChange={(e) => setSymbolBy((e.target.value || '') as keyof RunRow | '')}
+                style={selectStyle}
+              >
+                <option value="">None</option>
+                {ENCODING_PLOT_FIELDS.map((f) => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
+              </select>
+            </div>
           </div>
 
           {/* SPLOM plot */}

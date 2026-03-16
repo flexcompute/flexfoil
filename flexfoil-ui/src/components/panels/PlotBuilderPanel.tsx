@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import Plot from 'react-plotly.js';
 import { useRunStore } from '../../stores/runStore';
 import { AUTO_GROUP_KEY, useRouteUiStore } from '../../stores/routeUiStore';
@@ -21,6 +21,7 @@ const CHART_TYPES: { value: ChartType; label: string }[] = [
 ];
 
 export function PlotBuilderPanel() {
+  const plotAreaRef = useRef<HTMLDivElement | null>(null);
   const { isDark } = useTheme();
   const { allRuns, filteredRuns, restoreRunById, selectedRunId } = useRunStore();
 
@@ -184,6 +185,35 @@ export function PlotBuilderPanel() {
     }
   }, [restoreRunById]);
 
+  useEffect(() => {
+    const container = plotAreaRef.current;
+    if (!container) return;
+
+    let frameId: number | null = null;
+    const requestPlotResize = () => {
+      if (frameId != null) {
+        cancelAnimationFrame(frameId);
+      }
+      frameId = requestAnimationFrame(() => {
+        window.dispatchEvent(new Event('resize'));
+      });
+    };
+
+    const observer = new ResizeObserver(() => {
+      requestPlotResize();
+    });
+
+    observer.observe(container);
+    requestPlotResize();
+
+    return () => {
+      observer.disconnect();
+      if (frameId != null) {
+        cancelAnimationFrame(frameId);
+      }
+    };
+  }, []);
+
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Controls */}
@@ -269,7 +299,7 @@ export function PlotBuilderPanel() {
       </div>
 
       {/* Plot area */}
-      <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+      <div ref={plotAreaRef} style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         {successOnly.length === 0 ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: '13px' }}>
             No data. Run some analyses in the Solve panel.
