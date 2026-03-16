@@ -1,137 +1,246 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { DockingLayout } from './components/DockingLayout';
-import { ThemeProvider } from './contexts/ThemeContext';
+import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { OnboardingProvider, useOnboarding } from './onboarding';
 import { initWasm } from './lib/wasm';
 import { useAirfoilStore } from './stores/airfoilStore';
+import { DEFAULT_ROUTE_UI_STATE, useRouteUiStore } from './stores/routeUiStore';
 import { useRunStore } from './stores/runStore';
 import { useVisualizationStore } from './stores/visualizationStore';
-import { loadFromUrl } from './lib/urlState';
+import { buildRouteStateSnapshot, parseRouteStateFromLocation, writeRouteState } from './lib/routeState';
 import 'flexlayout-react/style/light.css';
 import './App.css';
 
 function AppContent() {
   const [wasmStatus, setWasmStatus] = useState<'loading' | 'ready' | 'error'>('loading');
-  const [initialViewport, setInitialViewport] = useState<{ centerX: number; centerY: number; zoom: number } | null>(null);
   const initializeDefaultAirfoil = useAirfoilStore((s) => s.initializeDefaultAirfoil);
-  const setControlMode = useAirfoilStore((s) => s.setControlMode);
-  const setNPanels = useAirfoilStore((s) => s.setNPanels);
-  const setSpacingKnots = useAirfoilStore((s) => s.setSpacingKnots);
-  const setDisplayAlpha = useAirfoilStore((s) => s.setDisplayAlpha);
-  const setThicknessScale = useAirfoilStore((s) => s.setThicknessScale);
-  const setCamberScale = useAirfoilStore((s) => s.setCamberScale);
-  const setCurvatureWeight = useAirfoilStore((s) => s.setCurvatureWeight);
-  const setSpacingPanelMode = useAirfoilStore((s) => s.setSpacingPanelMode);
-  const setSSPInterpolation = useAirfoilStore((s) => s.setSSPInterpolation);
-  const setSSPVisualization = useAirfoilStore((s) => s.setSSPVisualization);
   const generateNaca4 = useAirfoilStore((s) => s.generateNaca4);
-  
-  // Get visualization store setters (individual selectors for stable references)
-  const setShowGrid = useVisualizationStore((s) => s.setShowGrid);
-  const setShowCurve = useVisualizationStore((s) => s.setShowCurve);
-  const setShowPanels = useVisualizationStore((s) => s.setShowPanels);
-  const setShowPoints = useVisualizationStore((s) => s.setShowPoints);
-  const setShowControls = useVisualizationStore((s) => s.setShowControls);
-  const setShowStreamlines = useVisualizationStore((s) => s.setShowStreamlines);
-  const setShowSmoke = useVisualizationStore((s) => s.setShowSmoke);
-  const setShowPsiContours = useVisualizationStore((s) => s.setShowPsiContours);
-  const setShowCp = useVisualizationStore((s) => s.setShowCp);
-  const setShowForces = useVisualizationStore((s) => s.setShowForces);
-  const setEnableMorphing = useVisualizationStore((s) => s.setEnableMorphing);
-  const setMorphDuration = useVisualizationStore((s) => s.setMorphDuration);
-  const setStreamlineDensity = useVisualizationStore((s) => s.setStreamlineDensity);
-  const setAdaptiveStreamlines = useVisualizationStore((s) => s.setAdaptiveStreamlines);
-  const setSmokeDensity = useVisualizationStore((s) => s.setSmokeDensity);
-  const setSmokeParticlesPerBlob = useVisualizationStore((s) => s.setSmokeParticlesPerBlob);
-  const setFlowSpeed = useVisualizationStore((s) => s.setFlowSpeed);
-  const setCpDisplayMode = useVisualizationStore((s) => s.setCpDisplayMode);
-  const setCpBarScale = useVisualizationStore((s) => s.setCpBarScale);
-  const setForceScale = useVisualizationStore((s) => s.setForceScale);
-  
+  const hydrateRouteState = useAirfoilStore((s) => s.hydrateRouteState);
+  const hydrateVisualizationState = useVisualizationStore((s) => s.hydrateVisualizationState);
+  const hydrateUiFromRoute = useRouteUiStore((s) => s.hydrateFromRoute);
   const initRunDb = useRunStore((s) => s.init);
   const { startTour, hasStartedTour } = useOnboarding();
+  const { theme, setTheme } = useTheme();
+  const basePathRef = useRef('/');
+  const isApplyingRouteRef = useRef(false);
+  const hasHydratedRouteRef = useRef(false);
+  const previousPanelRef = useRef<string | null>(null);
+  const wasmStatusRef = useRef(wasmStatus);
+
+  useEffect(() => {
+    wasmStatusRef.current = wasmStatus;
+  }, [wasmStatus]);
+
+  const airfoilRouteState = useAirfoilStore(
+    useShallow((state) => ({
+      name: state.name,
+      coordinates: state.coordinates,
+      panels: state.panels,
+      baseCoordinates: state.baseCoordinates,
+      camberControlPoints: state.camberControlPoints,
+      thicknessControlPoints: state.thicknessControlPoints,
+      controlMode: state.controlMode,
+      displayAlpha: state.displayAlpha,
+      reynolds: state.reynolds,
+      mach: state.mach,
+      ncrit: state.ncrit,
+      maxIterations: state.maxIterations,
+      solverMode: state.solverMode,
+      thicknessScale: state.thicknessScale,
+      camberScale: state.camberScale,
+      nPanels: state.nPanels,
+      spacingKnots: state.spacingKnots,
+      curvatureWeight: state.curvatureWeight,
+      spacingPanelMode: state.spacingPanelMode,
+      sspInterpolation: state.sspInterpolation,
+      sspVisualization: state.sspVisualization,
+    })),
+  );
+  const visualizationRouteState = useVisualizationStore(
+    useShallow((state) => ({
+      showGrid: state.showGrid,
+      showCurve: state.showCurve,
+      showPanels: state.showPanels,
+      showPoints: state.showPoints,
+      showControls: state.showControls,
+      showStreamlines: state.showStreamlines,
+      showSmoke: state.showSmoke,
+      showPsiContours: state.showPsiContours,
+      showCp: state.showCp,
+      showForces: state.showForces,
+      showBoundaryLayer: state.showBoundaryLayer,
+      showWake: state.showWake,
+      showDisplacementThickness: state.showDisplacementThickness,
+      enableMorphing: state.enableMorphing,
+      morphDuration: state.morphDuration,
+      streamlineDensity: state.streamlineDensity,
+      adaptiveStreamlines: state.adaptiveStreamlines,
+      smokeDensity: state.smokeDensity,
+      smokeParticlesPerBlob: state.smokeParticlesPerBlob,
+      smokeWaveSpacing: state.smokeWaveSpacing,
+      flowSpeed: state.flowSpeed,
+      cpDisplayMode: state.cpDisplayMode,
+      cpBarScale: state.cpBarScale,
+      forceScale: state.forceScale,
+      blThicknessScale: state.blThicknessScale,
+      useGPU: state.useGPU,
+    })),
+  );
+  const routeUiState = useRouteUiStore(
+    useShallow((state) => ({
+      libraryNacaCode: state.libraryNacaCode,
+      libraryNPoints: state.libraryNPoints,
+      spacingLiveUpdate: state.spacingLiveUpdate,
+      solveRunMode: state.solveRunMode,
+      solveShowAdvanced: state.solveShowAdvanced,
+      solveTargetCl: state.solveTargetCl,
+      solvePolarStart: state.solvePolarStart,
+      solvePolarEnd: state.solvePolarEnd,
+      solvePolarStep: state.solvePolarStep,
+      polarXAxis: state.polarXAxis,
+      polarYAxis: state.polarYAxis,
+      plotDataSource: state.plotDataSource,
+      plotChartType: state.plotChartType,
+      plotXField: state.plotXField,
+      plotYField: state.plotYField,
+      plotGroupBy: state.plotGroupBy,
+      plotXScale: state.plotXScale,
+      plotYScale: state.plotYScale,
+      dataExplorerView: state.dataExplorerView,
+      dataExplorerSplomKeys: state.dataExplorerSplomKeys,
+      dataExplorerColorBy: state.dataExplorerColorBy,
+      dataExplorerFilterModel: state.dataExplorerFilterModel,
+      activePanel: state.activePanel,
+      layoutJson: state.layoutJson,
+      viewport: state.viewport,
+    })),
+  );
+
+  const applyRouteSnapshot = useCallback((pathname?: string, search?: string, hash?: string) => {
+    const snapshot = parseRouteStateFromLocation({
+      pathname: pathname ?? window.location.pathname,
+      search: search ?? window.location.search,
+      hash: hash ?? window.location.hash,
+    });
+
+    if (!snapshot) {
+      initializeDefaultAirfoil();
+      return;
+    }
+
+    basePathRef.current = snapshot.basePath;
+
+    if (snapshot.theme) {
+      setTheme(snapshot.theme);
+    }
+
+    const exactGeometry = snapshot.airfoil.exactGeometry;
+    if (exactGeometry) {
+      hydrateRouteState({
+        name: exactGeometry.name,
+        coordinates: exactGeometry.coordinates,
+        panels: exactGeometry.panels,
+        baseCoordinates: exactGeometry.baseCoordinates,
+        camberControlPoints: exactGeometry.camberControlPoints,
+        thicknessControlPoints: exactGeometry.thicknessControlPoints,
+      });
+    } else if (snapshot.airfoil.nacaCode) {
+      const designation = snapshot.airfoil.nacaCode.padStart(4, '0').slice(0, 4);
+      const m = parseInt(designation[0], 10) / 100;
+      const p = parseInt(designation[1], 10) / 10;
+      const t = parseInt(designation.slice(2), 10) / 100;
+      generateNaca4({
+        m,
+        p,
+        t,
+        nPoints: snapshot.airfoil.nacaPoints ?? DEFAULT_ROUTE_UI_STATE.libraryNPoints,
+      });
+    } else {
+      initializeDefaultAirfoil();
+    }
+
+    hydrateRouteState({
+      controlMode: snapshot.airfoil.controlMode,
+      displayAlpha: snapshot.airfoil.displayAlpha,
+      reynolds: snapshot.airfoil.reynolds,
+      mach: snapshot.airfoil.mach,
+      ncrit: snapshot.airfoil.ncrit,
+      maxIterations: snapshot.airfoil.maxIterations,
+      solverMode: snapshot.airfoil.solverMode,
+      thicknessScale: snapshot.airfoil.thicknessScale,
+      camberScale: snapshot.airfoil.camberScale,
+      nPanels: snapshot.airfoil.nPanels,
+      spacingKnots: snapshot.airfoil.spacingKnots,
+      curvatureWeight: snapshot.airfoil.curvatureWeight,
+      spacingPanelMode: snapshot.airfoil.spacingPanelMode,
+      sspInterpolation: snapshot.airfoil.sspInterpolation,
+      sspVisualization: snapshot.airfoil.sspVisualization,
+    });
+    hydrateVisualizationState(snapshot.visualization);
+    hydrateUiFromRoute({
+      ...snapshot.ui,
+      activePanel: snapshot.panel,
+      layoutJson: snapshot.layoutJson ?? undefined,
+      viewport: snapshot.ui.viewport ?? undefined,
+    });
+  }, [generateNaca4, hydrateRouteState, hydrateUiFromRoute, hydrateVisualizationState, initializeDefaultAirfoil, setTheme]);
 
   // Initialize WASM, run DB, and hydrate from URL
   useEffect(() => {
+    const handlePopState = () => {
+      if (wasmStatusRef.current !== 'ready') return;
+      isApplyingRouteRef.current = true;
+      applyRouteSnapshot();
+      window.setTimeout(() => {
+        isApplyingRouteRef.current = false;
+      }, 0);
+    };
+
+    window.addEventListener('popstate', handlePopState);
     initRunDb().catch(err => console.warn('Run DB init failed:', err));
     initWasm()
       .then(() => {
         setWasmStatus('ready');
-        
-        // Load URL state first
-        const urlState = loadFromUrl();
-        
-        if (urlState) {
-          // Apply airfoil settings
-          if (urlState.naca && !urlState.custom) {
-            const designation = parseInt(urlState.naca, 10);
-            const m = Math.floor(designation / 1000) / 100;
-            const p = Math.floor((designation % 1000) / 100) / 10;
-            const t = (designation % 100) / 100;
-            generateNaca4({ m, p, t, nPoints: 100 });
-          } else {
-            initializeDefaultAirfoil();
-          }
-          
-          if (urlState.nPanels) setNPanels(urlState.nPanels);
-          if (urlState.spacing) setSpacingKnots(urlState.spacing);
-          if (urlState.mode) setControlMode(urlState.mode);
-          if (urlState.alpha !== undefined) setDisplayAlpha(urlState.alpha);
-          if (urlState.thicknessScale !== undefined) setThicknessScale(urlState.thicknessScale);
-          if (urlState.camberScale !== undefined) setCamberScale(urlState.camberScale);
-          if (urlState.curvatureWeight !== undefined) setCurvatureWeight(urlState.curvatureWeight);
-          if (urlState.spacingPanelMode) setSpacingPanelMode(urlState.spacingPanelMode);
-          if (urlState.sspInterpolation) setSSPInterpolation(urlState.sspInterpolation);
-          if (urlState.sspVisualization) setSSPVisualization(urlState.sspVisualization);
-          
-          // Apply visualization settings
-          if (urlState.showGrid !== undefined) setShowGrid(urlState.showGrid);
-          if (urlState.showCurve !== undefined) setShowCurve(urlState.showCurve);
-          if (urlState.showPanels !== undefined) setShowPanels(urlState.showPanels);
-          if (urlState.showPoints !== undefined) setShowPoints(urlState.showPoints);
-          if (urlState.showControls !== undefined) setShowControls(urlState.showControls);
-          if (urlState.showStreamlines !== undefined) setShowStreamlines(urlState.showStreamlines);
-          if (urlState.showSmoke !== undefined) setShowSmoke(urlState.showSmoke);
-          if (urlState.showPsiContours !== undefined) setShowPsiContours(urlState.showPsiContours);
-          if (urlState.showCp !== undefined) setShowCp(urlState.showCp);
-          if (urlState.showForces !== undefined) setShowForces(urlState.showForces);
-          
-          if (urlState.enableMorphing !== undefined) setEnableMorphing(urlState.enableMorphing);
-          if (urlState.morphDuration !== undefined) setMorphDuration(urlState.morphDuration);
-          
-          if (urlState.streamlineDensity !== undefined) setStreamlineDensity(urlState.streamlineDensity);
-          if (urlState.adaptiveStreamlines !== undefined) setAdaptiveStreamlines(urlState.adaptiveStreamlines);
-          
-          if (urlState.smokeDensity !== undefined) setSmokeDensity(urlState.smokeDensity);
-          if (urlState.smokeParticlesPerBlob !== undefined) setSmokeParticlesPerBlob(urlState.smokeParticlesPerBlob);
-          
-          if (urlState.flowSpeed !== undefined) setFlowSpeed(urlState.flowSpeed);
-          
-          if (urlState.cpDisplayMode !== undefined) setCpDisplayMode(urlState.cpDisplayMode);
-          if (urlState.cpBarScale !== undefined) setCpBarScale(urlState.cpBarScale);
-          
-          if (urlState.forceScale !== undefined) setForceScale(urlState.forceScale);
-          
-          // Store viewport for canvas to apply
-          if (urlState.viewCenterX !== undefined && urlState.viewCenterY !== undefined && urlState.viewZoom !== undefined) {
-            setInitialViewport({
-              centerX: urlState.viewCenterX,
-              centerY: urlState.viewCenterY,
-              zoom: urlState.viewZoom,
-            });
-          }
-        } else {
-          // No URL state, initialize defaults
-          initializeDefaultAirfoil();
-        }
+        isApplyingRouteRef.current = true;
+        applyRouteSnapshot();
+        window.setTimeout(() => {
+          isApplyingRouteRef.current = false;
+          hasHydratedRouteRef.current = true;
+        }, 0);
       })
       .catch((err) => {
         console.error('WASM init failed:', err);
         setWasmStatus('error');
       });
-  // Note: All store setters are stable functions from zustand, so they don't need to be in deps
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [applyRouteSnapshot, initRunDb]);
+
+  useEffect(() => {
+    if (wasmStatus !== 'ready' || isApplyingRouteRef.current || !hasHydratedRouteRef.current) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      const snapshot = buildRouteStateSnapshot({
+        theme,
+        airfoil: airfoilRouteState,
+        visualization: visualizationRouteState,
+        ui: routeUiState,
+      });
+      const mode =
+        previousPanelRef.current && previousPanelRef.current !== snapshot.panel
+          ? 'push'
+          : 'replace';
+      previousPanelRef.current = snapshot.panel;
+      writeRouteState(snapshot, {
+        basePath: basePathRef.current,
+        mode,
+      });
+    }, 300);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [airfoilRouteState, routeUiState, theme, visualizationRouteState, wasmStatus]);
 
   // Auto-trigger welcome tour on first visit (only if never started)
   useEffect(() => {
@@ -146,7 +255,7 @@ function AppContent() {
 
   return (
     <div className="app-container">
-      <DockingLayout wasmStatus={wasmStatus} initialViewport={initialViewport} />
+      <DockingLayout wasmStatus={wasmStatus} />
     </div>
   );
 }

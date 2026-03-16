@@ -19,6 +19,12 @@ export interface AirfoilPoint extends Point {
 /** Control modes for airfoil manipulation */
 export type ControlMode = 'parameters' | 'camber-spline' | 'thickness-spline';
 export type SolverMode = 'viscous' | 'inviscid';
+export type RunMode = 'alpha' | 'cl';
+export type AxisVariable = 'alpha' | 'cl' | 'cd' | 'cm';
+export type ChartType = 'scatter' | 'line' | 'bar' | 'histogram';
+export type DataSource = 'full' | 'filtered';
+export type AxisScale = 'linear' | 'log';
+export type DataExplorerViewMode = 'table' | 'correlogram';
 
 /** Spacing panel modes */
 export type SpacingPanelMode = 'simple' | 'advanced';

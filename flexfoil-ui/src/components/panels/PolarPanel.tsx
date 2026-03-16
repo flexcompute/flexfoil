@@ -5,11 +5,10 @@
  * with configurable axes and a color-coded legend.
  */
 
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useRef, useEffect, useCallback, useMemo, useState } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
-import type { PolarPoint } from '../../types';
-
-type AxisVariable = 'alpha' | 'cl' | 'cd' | 'cm';
+import { useRouteUiStore } from '../../stores/routeUiStore';
+import type { AxisVariable, PolarPoint } from '../../types';
 
 const AXIS_LABELS: Record<AxisVariable, string> = {
   alpha: 'α (deg)',
@@ -63,8 +62,10 @@ export function PolarPanel() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
-  const [xAxis, setXAxis] = useState<AxisVariable>('alpha');
-  const [yAxis, setYAxis] = useState<AxisVariable>('cl');
+  const xAxis = useRouteUiStore((state) => state.polarXAxis);
+  const setXAxis = useRouteUiStore((state) => state.setPolarXAxis);
+  const yAxis = useRouteUiStore((state) => state.polarYAxis);
+  const setYAxis = useRouteUiStore((state) => state.setPolarYAxis);
   const [canvasSize, setCanvasSize] = useState({ width: 400, height: 300 });
   
   const margin = { top: 20, right: 20, bottom: 40, left: 50 };
