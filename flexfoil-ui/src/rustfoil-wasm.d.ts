@@ -13,6 +13,8 @@ declare module 'rustfoil-wasm' {
   export const analyze_airfoil_faithful: (...args: any[]) => any;
   export const compute_streamlines: (...args: any[]) => any;
   export const compute_streamlines_faithful: (...args: any[]) => any;
+  export const compute_dividing_streamline: (...args: any[]) => any;
+  export const compute_dividing_streamline_faithful: (...args: any[]) => any;
   export const compute_psi_grid: (...args: any[]) => any;
   export const compute_psi_grid_faithful: (...args: any[]) => any;
   export const get_bl_distribution_faithful: (...args: any[]) => any;

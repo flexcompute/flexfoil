@@ -357,7 +357,6 @@ export function DataExplorerPanel() {
             name: group.label,
             legendgroup: group.key,
             marker,
-            meta: rows.map((run) => run.id),
             customdata: rows.map(buildRunHoverDetails),
             showlegend: false,
             hovertemplate: `${getLabel(xKey)}=%{x}<br>${getLabel(yKey)}=%{y}<br>${RUN_HOVER_TEMPLATE}<extra>${group.label}</extra>`,
