@@ -5,8 +5,9 @@
  * Advanced mode: Full SSP (Position-Based Mesh Spacing) control
  */
 
-import { useCallback, useMemo, useEffect, useState } from 'react';
+import { useCallback, useMemo, useEffect } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
+import { useRouteUiStore } from '../../stores/routeUiStore';
 import { SSPPlot, FoilSpacingPlot } from '../ssp';
 import { computeSpacing } from '../../lib/ssp';
 import { isWasmReady } from '../../lib/wasm';
@@ -35,7 +36,8 @@ export function SpacingPanel() {
     setSSPVisualization,
   } = useAirfoilStore();
 
-  const [liveUpdate, setLiveUpdate] = useState(true);
+  const liveUpdate = useRouteUiStore((state) => state.spacingLiveUpdate);
+  const setLiveUpdate = useRouteUiStore((state) => state.setSpacingLiveUpdate);
 
   // Compute output spacing for SSP mode
   const outputSpacing = useMemo(() => {

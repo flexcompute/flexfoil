@@ -9,18 +9,13 @@
  * currently visible in the AG Grid (filtered rows).
  */
 
-import { useState, useMemo, useCallback } from 'react';
+import { useMemo, useCallback } from 'react';
 import Plot from 'react-plotly.js';
 import { useRunStore } from '../../stores/runStore';
+import { AUTO_GROUP_KEY, useRouteUiStore } from '../../stores/routeUiStore';
 import { useTheme } from '../../contexts/ThemeContext';
 import { detectPolarGroups } from '../../lib/polarDetection';
-import type { RunRow } from '../../types';
-
-const AUTO_GROUP = '__auto__';
-
-type ChartType = 'scatter' | 'line' | 'bar' | 'histogram';
-type DataSource = 'full' | 'filtered';
-type AxisScale = 'linear' | 'log';
+import type { AxisScale, ChartType, DataSource, RunRow } from '../../types';
 
 interface AxisField {
   key: keyof RunRow;
@@ -69,13 +64,20 @@ export function PlotBuilderPanel() {
   const { isDark } = useTheme();
   const { allRuns, filteredRuns } = useRunStore();
 
-  const [dataSource, setDataSource] = useState<DataSource>('full');
-  const [chartType, setChartType] = useState<ChartType>('scatter');
-  const [xField, setXField] = useState<keyof RunRow>('alpha');
-  const [yField, setYField] = useState<keyof RunRow>('cl');
-  const [groupBy, setGroupBy] = useState<keyof RunRow | '' | typeof AUTO_GROUP>(AUTO_GROUP);
-  const [xScale, setXScale] = useState<AxisScale>('linear');
-  const [yScale, setYScale] = useState<AxisScale>('linear');
+  const dataSource = useRouteUiStore((state) => state.plotDataSource);
+  const setDataSource = useRouteUiStore((state) => state.setPlotDataSource);
+  const chartType = useRouteUiStore((state) => state.plotChartType);
+  const setChartType = useRouteUiStore((state) => state.setPlotChartType);
+  const xField = useRouteUiStore((state) => state.plotXField);
+  const setXField = useRouteUiStore((state) => state.setPlotXField);
+  const yField = useRouteUiStore((state) => state.plotYField);
+  const setYField = useRouteUiStore((state) => state.setPlotYField);
+  const groupBy = useRouteUiStore((state) => state.plotGroupBy);
+  const setGroupBy = useRouteUiStore((state) => state.setPlotGroupBy);
+  const xScale = useRouteUiStore((state) => state.plotXScale);
+  const setXScale = useRouteUiStore((state) => state.setPlotXScale);
+  const yScale = useRouteUiStore((state) => state.plotYScale);
+  const setYScale = useRouteUiStore((state) => state.setPlotYScale);
 
   const data = dataSource === 'full' ? allRuns : filteredRuns;
   const successOnly = useMemo(() => data.filter(r => r.success), [data]);
@@ -99,7 +101,7 @@ export function PlotBuilderPanel() {
     }
 
     // --- Auto (Polars) mode: compound-key grouping with gap detection ---
-    if (groupBy === AUTO_GROUP) {
+    if (groupBy === AUTO_GROUP_KEY) {
       const polarGroups = detectPolarGroups(successOnly, xField);
 
       return polarGroups.map((pg, i) => {
@@ -181,7 +183,7 @@ export function PlotBuilderPanel() {
       zerolinecolor: isDark ? '#555' : '#999',
     },
     legend: { orientation: 'h' as const, y: -0.2 },
-    showlegend: groupBy === AUTO_GROUP ? traces.length > 1 : !!groupBy,
+    showlegend: groupBy === AUTO_GROUP_KEY ? traces.length > 1 : !!groupBy,
   }), [xField, yField, xScale, yScale, chartType, groupBy, traces.length, getLabel, isDark]);
 
   const config = useMemo(() => ({
@@ -250,8 +252,8 @@ export function PlotBuilderPanel() {
 
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           <span style={labelStyle}>Group By</span>
-          <select value={groupBy as string} onChange={e => setGroupBy((e.target.value || '') as keyof RunRow | '' | typeof AUTO_GROUP)} style={selectStyle}>
-            <option value={AUTO_GROUP}>Auto (Polars)</option>
+          <select value={groupBy as string} onChange={e => setGroupBy((e.target.value || '') as keyof RunRow | '' | typeof AUTO_GROUP_KEY)} style={selectStyle}>
+            <option value={AUTO_GROUP_KEY}>Auto (Polars)</option>
             <option value="">None</option>
             {GROUP_FIELDS.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
           </select>

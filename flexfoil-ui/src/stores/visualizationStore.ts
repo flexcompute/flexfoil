@@ -60,6 +60,7 @@ interface VisualizationStore extends VisualizationState {
   
   // Reset
   resetVisualization: () => void;
+  hydrateVisualizationState: (state: Partial<VisualizationState>) => void;
 }
 
 const DEFAULT_PERF_METRICS: PerfMetrics = {
@@ -69,7 +70,7 @@ const DEFAULT_PERF_METRICS: PerfMetrics = {
   fps: 0,
 };
 
-const DEFAULT_STATE: VisualizationState = {
+export const DEFAULT_VISUALIZATION_STATE: VisualizationState = {
   // Display toggles
   showGrid: false,
   showCurve: true,
@@ -121,7 +122,7 @@ const DEFAULT_STATE: VisualizationState = {
 };
 
 export const useVisualizationStore = create<VisualizationStore>((set) => ({
-  ...DEFAULT_STATE,
+  ...DEFAULT_VISUALIZATION_STATE,
 
   // Display toggle actions
   setShowGrid: (show) => set({ showGrid: show }),
@@ -201,5 +202,12 @@ export const useVisualizationStore = create<VisualizationStore>((set) => ({
   })),
   
   // Reset
-  resetVisualization: () => set(DEFAULT_STATE),
+  resetVisualization: () => set(DEFAULT_VISUALIZATION_STATE),
+  hydrateVisualizationState: (state) =>
+    set((current) => ({
+      ...current,
+      ...Object.fromEntries(
+        Object.entries(state).filter(([, value]) => value !== undefined),
+      ),
+    })),
 }));

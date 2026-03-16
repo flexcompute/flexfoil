@@ -9,7 +9,7 @@
  * PlotBuilder can consume the filtered subset.
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import {
   themeQuartz,
@@ -22,14 +22,13 @@ import {
 } from 'ag-grid-community';
 import Plot from 'react-plotly.js';
 import { useRunStore } from '../../stores/runStore';
+import { useRouteUiStore } from '../../stores/routeUiStore';
 import { useTheme } from '../../contexts/ThemeContext';
 import type { RunRow } from '../../types';
 
 // ────────────────────────────────────────────────────────────
 // Shared constants
 // ────────────────────────────────────────────────────────────
-
-type ViewMode = 'table' | 'correlogram';
 
 interface NumericField { key: keyof RunRow; label: string }
 
@@ -54,8 +53,6 @@ const COLOR_FIELDS: NumericField[] = [
   { key: 'converged', label: 'Converged' },
   { key: 'session_id', label: 'Session' },
 ];
-
-const DEFAULT_SPLOM_KEYS: (keyof RunRow)[] = ['alpha', 'cl', 'cd', 'cm'];
 
 const COLORS = [
   '#00d4aa', '#ff6b6b', '#4ecdc4', '#ffe66d', '#a29bfe',
@@ -126,9 +123,14 @@ export function DataExplorerPanel() {
   const { isDark } = useTheme();
   const { allRuns, setFilteredRuns, clearAll, exportDb, importDb } = useRunStore();
 
-  const [view, setView] = useState<ViewMode>('table');
-  const [splomKeys, setSplomKeys] = useState<(keyof RunRow)[]>(DEFAULT_SPLOM_KEYS);
-  const [colorBy, setColorBy] = useState<keyof RunRow | ''>('');
+  const view = useRouteUiStore((state) => state.dataExplorerView);
+  const setView = useRouteUiStore((state) => state.setDataExplorerView);
+  const splomKeys = useRouteUiStore((state) => state.dataExplorerSplomKeys);
+  const setSplomKeys = useRouteUiStore((state) => state.setDataExplorerSplomKeys);
+  const colorBy = useRouteUiStore((state) => state.dataExplorerColorBy);
+  const setColorBy = useRouteUiStore((state) => state.setDataExplorerColorBy);
+  const filterModel = useRouteUiStore((state) => state.dataExplorerFilterModel);
+  const setFilterModel = useRouteUiStore((state) => state.setDataExplorerFilterModel);
 
   // ── AG Grid refs & config ──
   const gridRef = useRef<AgGridReact<RunRow>>(null);
@@ -147,22 +149,34 @@ export function DataExplorerPanel() {
   }), []);
   const cellSelection = useMemo<CellSelectionOptions>(() => ({ handle: { mode: 'fill' } }), []);
 
-  const onGridReady = useCallback((e: GridReadyEvent<RunRow>) => { apiRef.current = e.api; }, []);
+  const onGridReady = useCallback((e: GridReadyEvent<RunRow>) => {
+    apiRef.current = e.api;
+    if (filterModel) {
+      e.api.setFilterModel(filterModel as any);
+    }
+  }, [filterModel]);
   const onFilterChanged = useCallback((e: FilterChangedEvent<RunRow>) => {
     const filtered: RunRow[] = [];
     e.api.forEachNodeAfterFilterAndSort(node => { if (node.data) filtered.push(node.data); });
+    setFilterModel(e.api.getFilterModel());
     setFilteredRuns(filtered);
-  }, [setFilteredRuns]);
+  }, [setFilterModel, setFilteredRuns]);
 
   // ── Correlogram ──
   const successOnly = useMemo(() => allRuns.filter(r => r.success), [allRuns]);
 
   const toggleSplomKey = useCallback((key: keyof RunRow) => {
-    setSplomKeys(prev => {
-      if (prev.includes(key)) return prev.length <= 2 ? prev : prev.filter(k => k !== key);
-      return [...prev, key];
-    });
-  }, []);
+    if (splomKeys.includes(key)) {
+      setSplomKeys(splomKeys.length <= 2 ? splomKeys : splomKeys.filter(k => k !== key));
+      return;
+    }
+    setSplomKeys([...splomKeys, key]);
+  }, [setSplomKeys, splomKeys]);
+
+  useEffect(() => {
+    if (!apiRef.current) return;
+    apiRef.current.setFilterModel((filterModel as any) ?? null);
+  }, [filterModel]);
 
   const splomResult = useMemo(() => {
     if (successOnly.length === 0 || splomKeys.length < 2) return null;
@@ -266,7 +280,15 @@ export function DataExplorerPanel() {
         <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>{allRuns.length} runs</span>
         {view === 'table' && (
           <>
-            <button onClick={() => apiRef.current?.setFilterModel(null)} style={btnStyle}>Clear Filters</button>
+            <button
+              onClick={() => {
+                apiRef.current?.setFilterModel(null);
+                setFilterModel(null);
+              }}
+              style={btnStyle}
+            >
+              Clear Filters
+            </button>
             <button onClick={() => apiRef.current?.exportDataAsCsv({ fileName: 'flexfoil-runs.csv' })} style={btnStyle}>Export CSV</button>
           </>
         )}

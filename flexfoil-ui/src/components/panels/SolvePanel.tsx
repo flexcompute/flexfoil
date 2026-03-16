@@ -8,6 +8,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
+import { useRouteUiStore } from '../../stores/routeUiStore';
 import { useRunStore } from '../../stores/runStore';
 import { useCaseLogStore } from '../../stores/caseLogStore';
 import { analyzeAirfoil, analyzeAirfoilInviscid, isWasmReady, type AnalysisResult } from '../../lib/wasm';
@@ -40,7 +41,6 @@ function buildResultDetails(result: AnalysisResult): Record<string, unknown> {
     error: result.error ?? null,
   };
 }
-
 export function SolvePanel() {
   const {
     panels,
@@ -48,9 +48,15 @@ export function SolvePanel() {
     polarData,
     displayAlpha,
     reynolds,
+    mach,
+    ncrit,
+    maxIterations,
     solverMode,
     setDisplayAlpha,
     setReynolds,
+    setMach,
+    setNcrit,
+    setMaxIterations,
     setSolverMode,
     upsertPolar,
     clearAllPolars,
@@ -61,17 +67,21 @@ export function SolvePanel() {
   const appendEvent = useCaseLogStore((state) => state.appendEvent);
   const finishCase = useCaseLogStore((state) => state.finishCase);
 
-  const [runMode, setRunMode] = useState<RunMode>('alpha');
-  const [showAdvanced, setShowAdvanced] = useState(false);
-
-  // Solver parameters with sensible defaults
-  const [mach, setMach] = useState(0);
-  const [ncrit, setNcrit] = useState(9);
-  const [maxIterations, setMaxIterations] = useState(100);
+  const runMode = useRouteUiStore((state) => state.solveRunMode);
+  const setRunMode = useRouteUiStore((state) => state.setSolveRunMode);
+  const showAdvanced = useRouteUiStore((state) => state.solveShowAdvanced);
+  const setShowAdvanced = useRouteUiStore((state) => state.setSolveShowAdvanced);
+  const targetCl = useRouteUiStore((state) => state.solveTargetCl);
+  const setTargetCl = useRouteUiStore((state) => state.setSolveTargetCl);
+  const alphaStart = useRouteUiStore((state) => state.solvePolarStart);
+  const setAlphaStart = useRouteUiStore((state) => state.setSolvePolarStart);
+  const alphaEnd = useRouteUiStore((state) => state.solvePolarEnd);
+  const setAlphaEnd = useRouteUiStore((state) => state.setSolvePolarEnd);
+  const alphaStep = useRouteUiStore((state) => state.solvePolarStep);
+  const setAlphaStep = useRouteUiStore((state) => state.setSolvePolarStep);
 
   // Single-point inputs
   const [targetAlpha, setTargetAlphaLocal] = useState(displayAlpha);
-  const [targetCl, setTargetCl] = useState(0.5);
 
   const reynoldsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -120,11 +130,6 @@ export function SolvePanel() {
       setReynoldsText(String(reynolds));
     }
   }, [reynoldsText, reynolds, setReynolds]);
-  // Polar settings
-  const [alphaStart, setAlphaStart] = useState(-5);
-  const [alphaEnd, setAlphaEnd] = useState(15);
-  const [alphaStep, setAlphaStep] = useState(1);
-
   // Results
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [resultAlpha, setResultAlpha] = useState<number | null>(null);

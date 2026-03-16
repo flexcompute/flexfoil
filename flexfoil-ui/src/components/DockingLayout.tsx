@@ -2,9 +2,8 @@
  * DockingLayout - FlexLayout-based dockable panel system
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Layout, Model, Actions, DockLocation } from 'flexlayout-react';
-import type { IJsonModel } from 'flexlayout-react';
 
 // Panel components
 import { AirfoilCanvas } from './AirfoilCanvas';
@@ -20,115 +19,49 @@ import { PlotBuilderPanel } from './panels/PlotBuilderPanel';
 import { CaseLogsPanel } from './panels/CaseLogsPanel';
 import { MenuBar } from './MenuBar';
 import { LayoutProvider } from '../contexts/LayoutContext';
+import { defaultLayoutJson, PANELS } from '../layoutConfig';
+import { useRouteUiStore } from '../stores/routeUiStore';
 
 // Storage keys
 const LAYOUT_STORAGE_KEY = 'flexfoil-layout-v2';
 
-// Panel definitions
-export const PANELS = [
-  { id: 'canvas', name: 'Airfoil Canvas', component: 'canvas' },
-  { id: 'library', name: 'Airfoil Library', component: 'library' },
-  { id: 'control', name: 'Control Mode', component: 'control' },
-  { id: 'spacing', name: 'Spacing', component: 'spacing' },
-  { id: 'properties', name: 'Properties', component: 'properties' },
-  { id: 'solve', name: 'Solve', component: 'solve' },
-  { id: 'polar', name: 'Polar Plot', component: 'polar' },
-  { id: 'visualization', name: 'Visualization', component: 'visualization' },
-  { id: 'data-explorer', name: 'Data Explorer', component: 'data-explorer' },
-  { id: 'plot-builder', name: 'Plot Builder', component: 'plot-builder' },
-  { id: 'case-logs', name: 'Case Logs', component: 'case-logs' },
-];
-
-// Default layout configuration
-const defaultLayoutJson: IJsonModel = {
-  global: {
-    tabSetMinWidth: 200,
-    tabSetMinHeight: 150,
-    borderMinSize: 100,
-    splitterSize: 6,
-  },
-  borders: [],
-  layout: {
-    type: 'row',
-    weight: 100,
-    children: [
-      {
-        type: 'row',
-        weight: 25,
-        children: [
-          {
-            type: 'tabset',
-            weight: 50,
-            children: [
-              { type: 'tab', id: 'library', name: 'Airfoil Library', component: 'library' },
-            ],
-          },
-          {
-            type: 'tabset',
-            weight: 50,
-            children: [
-              { type: 'tab', id: 'spacing', name: 'Spacing', component: 'spacing' },
-            ],
-          },
-        ],
-      },
-      {
-        type: 'row',
-        weight: 50,
-        children: [
-          {
-            type: 'tabset',
-            weight: 70,
-            children: [
-              { type: 'tab', id: 'canvas', name: 'Airfoil Canvas', component: 'canvas' },
-            ],
-          },
-          {
-            type: 'tabset',
-            weight: 30,
-            children: [
-              { type: 'tab', id: 'polar', name: 'Polar Plot', component: 'polar' },
-              { type: 'tab', id: 'plot-builder', name: 'Plot Builder', component: 'plot-builder' },
-              { type: 'tab', id: 'data-explorer', name: 'Data Explorer', component: 'data-explorer' },
-              { type: 'tab', id: 'case-logs', name: 'Case Logs', component: 'case-logs' },
-            ],
-          },
-        ],
-      },
-      {
-        type: 'row',
-        weight: 25,
-        children: [
-          {
-            type: 'tabset',
-            weight: 50,
-            children: [
-              { type: 'tab', id: 'properties', name: 'Properties', component: 'properties' },
-              { type: 'tab', id: 'solve', name: 'Solve', component: 'solve' },
-            ],
-          },
-          {
-            type: 'tabset',
-            weight: 50,
-            children: [
-              { type: 'tab', id: 'control', name: 'Control Mode', component: 'control' },
-              { type: 'tab', id: 'visualization', name: 'Visualization', component: 'visualization' },
-            ],
-          },
-        ],
-      },
-    ],
-  },
-};
-
 interface DockingLayoutProps {
   wasmStatus: 'loading' | 'ready' | 'error';
-  initialViewport?: { centerX: number; centerY: number; zoom: number } | null;
 }
 
-export function DockingLayout({ wasmStatus, initialViewport }: DockingLayoutProps) {
+function findSelectedPanelFromJson(node: any): string | null {
+  if (!node || typeof node !== 'object') return null;
+
+  if (node.type === 'tabset' && Array.isArray(node.children) && typeof node.selected === 'number') {
+    const selected = node.children[node.selected];
+    if (selected?.component) {
+      return selected.component;
+    }
+  }
+
+  if (Array.isArray(node.children)) {
+    for (const child of node.children) {
+      const match = findSelectedPanelFromJson(child);
+      if (match) return match;
+    }
+  }
+
+  return null;
+}
+
+export function DockingLayout({ wasmStatus }: DockingLayoutProps) {
+  const layoutJson = useRouteUiStore((state) => state.layoutJson);
+  const layoutRevision = useRouteUiStore((state) => state.layoutRevision);
+  const activePanel = useRouteUiStore((state) => state.activePanel);
+  const activePanelRevision = useRouteUiStore((state) => state.activePanelRevision);
+  const setLayoutJson = useRouteUiStore((state) => state.setLayoutJson);
+  const setActivePanel = useRouteUiStore((state) => state.setActivePanel);
+
   // Initialize model from localStorage or default
   const [model, setModel] = useState(() => {
+    if (layoutJson) {
+      return Model.fromJson(layoutJson);
+    }
     try {
       const savedLayout = localStorage.getItem(LAYOUT_STORAGE_KEY);
       if (savedLayout) {
@@ -142,21 +75,15 @@ export function DockingLayout({ wasmStatus, initialViewport }: DockingLayoutProp
 
   const layoutRef = useRef<Layout>(null);
   const [closedPanels, setClosedPanels] = useState<Set<string>>(new Set());
+  const lastAppliedLayoutRevision = useRef(layoutRevision);
+  const lastAppliedActivePanelRevision = useRef(activePanelRevision);
 
-  // Save layout to localStorage when it changes
-  const handleModelChange = useCallback((newModel: Model) => {
-    try {
-      localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(newModel.toJson()));
-    } catch (error) {
-      console.warn('Failed to save layout:', error);
-    }
-
-    // Track closed panels
+  const applyClosedPanelsFromModel = useCallback((nextModel: Model) => {
     const visiblePanels = new Set<string>();
     const traverse = (node: any) => {
       if (node.getType?.() === 'tab') {
         const component = node.getComponent?.();
-        if (component && PANELS.some((p) => p.id === component)) {
+        if (component && PANELS.some((panel) => panel.id === component)) {
           visiblePanels.add(component);
         }
       }
@@ -164,24 +91,44 @@ export function DockingLayout({ wasmStatus, initialViewport }: DockingLayoutProp
         node.getChildren().forEach(traverse);
       }
     };
-    traverse(newModel.getRoot());
+    traverse(nextModel.getRoot());
 
-    const newClosed = new Set<string>();
-    PANELS.forEach((p) => {
-      if (!visiblePanels.has(p.id)) {
-        newClosed.add(p.id);
+    const nextClosed = new Set<string>();
+    PANELS.forEach((panel) => {
+      if (!visiblePanels.has(panel.id)) {
+        nextClosed.add(panel.id);
       }
     });
-    setClosedPanels(newClosed);
+    setClosedPanels(nextClosed);
   }, []);
+
+  // Save layout to localStorage when it changes
+  const handleModelChange = useCallback((newModel: Model) => {
+    const json = newModel.toJson();
+    try {
+      localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(json));
+    } catch (error) {
+      console.warn('Failed to save layout:', error);
+    }
+
+    setLayoutJson(json);
+    applyClosedPanelsFromModel(newModel);
+
+    const selected = findSelectedPanelFromJson(json.layout);
+    if (selected && PANELS.some((panel) => panel.id === selected)) {
+      setActivePanel(selected as typeof activePanel);
+    }
+  }, [activePanel, applyClosedPanelsFromModel, setActivePanel, setLayoutJson]);
 
   // Reset layout to default
   const handleResetLayout = useCallback(() => {
     const newModel = Model.fromJson(defaultLayoutJson);
     setModel(newModel);
     setClosedPanels(new Set());
+    setLayoutJson(null);
+    setActivePanel('canvas');
     localStorage.removeItem(LAYOUT_STORAGE_KEY);
-  }, []);
+  }, [setActivePanel, setLayoutJson]);
 
   // Focus/select an existing panel (bring to front)
   const handleOpenPanel = useCallback(
@@ -206,12 +153,13 @@ export function DockingLayout({ wasmStatus, initialViewport }: DockingLayoutProp
       if (existingTabId) {
         try {
           model.doAction(Actions.selectTab(existingTabId));
+          setActivePanel(panelId as typeof activePanel);
         } catch (e) {
           console.warn('Failed to select tab:', e);
         }
       }
     },
-    [model]
+    [activePanel, model, setActivePanel]
   );
 
   // Restore a closed panel
@@ -253,13 +201,53 @@ export function DockingLayout({ wasmStatus, initialViewport }: DockingLayoutProp
             next.delete(panelId);
             return next;
           });
+          setActivePanel(panelId as typeof activePanel);
         } catch (e) {
           console.warn('Failed to restore panel:', e);
         }
       }
     },
-    [model]
+    [activePanel, model, setActivePanel]
   );
+
+  useEffect(() => {
+    applyClosedPanelsFromModel(model);
+  }, [applyClosedPanelsFromModel, model]);
+
+  useEffect(() => {
+    if (layoutRevision === lastAppliedLayoutRevision.current) {
+      return;
+    }
+    lastAppliedLayoutRevision.current = layoutRevision;
+
+    if (layoutJson) {
+      try {
+        const nextModel = Model.fromJson(layoutJson);
+        setModel(nextModel);
+        applyClosedPanelsFromModel(nextModel);
+      } catch (error) {
+        console.warn('Failed to apply route layout:', error);
+      }
+      return;
+    }
+
+    const nextModel = Model.fromJson(defaultLayoutJson);
+    setModel(nextModel);
+    applyClosedPanelsFromModel(nextModel);
+  }, [applyClosedPanelsFromModel, layoutJson, layoutRevision]);
+
+  useEffect(() => {
+    if (activePanelRevision === lastAppliedActivePanelRevision.current) {
+      return;
+    }
+    lastAppliedActivePanelRevision.current = activePanelRevision;
+
+    if (closedPanels.has(activePanel)) {
+      handleRestorePanel(activePanel);
+    } else {
+      handleOpenPanel(activePanel);
+    }
+  }, [activePanel, activePanelRevision, closedPanels, handleOpenPanel, handleRestorePanel]);
 
   // Factory function to create panel components
   // Each panel is wrapped with data-tour attribute for onboarding targeting
@@ -270,7 +258,7 @@ export function DockingLayout({ wasmStatus, initialViewport }: DockingLayoutProp
       case 'canvas':
         return (
           <div data-tour="panel-canvas" style={{ width: '100%', height: '100%' }}>
-            <AirfoilCanvas initialViewport={initialViewport} />
+            <AirfoilCanvas />
           </div>
         );
       case 'library':
@@ -338,6 +326,8 @@ export function DockingLayout({ wasmStatus, initialViewport }: DockingLayoutProp
     }
   }, []);
 
+  const layoutPanels = useMemo(() => [...PANELS], []);
+
   // Custom tabset header buttons
   const onRenderTabSet = useCallback(
     (tabsetNode: any, renderValues: any) => {
@@ -366,11 +356,11 @@ export function DockingLayout({ wasmStatus, initialViewport }: DockingLayoutProp
   );
 
   return (
-    <LayoutProvider model={model} panels={PANELS}>
+    <LayoutProvider model={model} panels={layoutPanels}>
       <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
         {/* Menu bar */}
         <MenuBar
-          panels={PANELS}
+          panels={layoutPanels}
           closedPanels={closedPanels}
           onRestorePanel={handleRestorePanel}
           onOpenPanel={handleOpenPanel}

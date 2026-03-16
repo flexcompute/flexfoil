@@ -37,12 +37,7 @@ import {
   reconstructWithOriginalThickness,
   reconstructWithOriginalCamber,
 } from '../lib/airfoilGeometry';
-import { 
-  syncToUrl, 
-  loadFromUrl, 
-  parseNacaFromName,
-  type UrlState 
-} from '../lib/urlState';
+import { syncToUrl, loadFromUrl, parseNacaFromName, type UrlState } from '../lib/urlState';
 
 /**
  * State that is tracked for undo/redo.
@@ -185,6 +180,7 @@ interface AirfoilStore extends AirfoilState {
   
   // Initialize default airfoil (call after WASM ready)
   initializeDefaultAirfoil: () => void;
+  hydrateRouteState: (state: Partial<AirfoilState>) => void;
 }
 
 /**
@@ -873,6 +869,12 @@ export const useAirfoilStore = create<AirfoilStore>()(
           console.error('Failed to initialize default airfoil:', e);
         }
       },
+      hydrateRouteState: (routeState) => set((state) => ({
+        ...state,
+        ...Object.fromEntries(
+          Object.entries(routeState).filter(([, value]) => value !== undefined),
+        ),
+      })),
     }),
     {
       // Temporal middleware options

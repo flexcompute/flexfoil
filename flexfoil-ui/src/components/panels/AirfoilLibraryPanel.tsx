@@ -2,15 +2,16 @@
  * AirfoilLibraryPanel - NACA generator and file import
  */
 
-import { useState, useCallback } from 'react';
+import { useCallback } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
+import { useRouteUiStore } from '../../stores/routeUiStore';
 
 export function AirfoilLibraryPanel() {
   const { name, generateNaca4, reset } = useAirfoilStore();
-  
-  // NACA 4-series parameters
-  const [nacaCode, setNacaCode] = useState('0012');
-  const [nPoints, setNPoints] = useState(50);
+  const nacaCode = useRouteUiStore((state) => state.libraryNacaCode);
+  const nPoints = useRouteUiStore((state) => state.libraryNPoints);
+  const setNacaCode = useRouteUiStore((state) => state.setLibraryNacaCode);
+  const setNPoints = useRouteUiStore((state) => state.setLibraryNPoints);
 
   const handleGenerateNaca = useCallback(() => {
     // Parse NACA code (e.g., "2412" -> m=0.02, p=0.4, t=0.12)

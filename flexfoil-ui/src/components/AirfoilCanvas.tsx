@@ -19,13 +19,13 @@ import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAirfoilStore, pauseHistory, resumeHistory } from '../stores/airfoilStore';
 import { useVisualizationStore } from '../stores/visualizationStore';
+import { useRouteUiStore } from '../stores/routeUiStore';
 import { useTheme } from '../contexts/ThemeContext';
 import { useLayout } from '../contexts/LayoutContext';
 import type { Point, ViewportState, AirfoilPoint } from '../types';
-import { computeStreamlines, computePsiGrid, createSmokeSystem, isWasmReady, WasmSmokeSystem, analyzeAirfoil, computeGamma, getBLVisualizationData, type BLVisualizationData } from '../lib/wasm';
+import { computeStreamlines, computePsiGrid, createSmokeSystem, isWasmReady, analyzeAirfoil, computeGamma, getBLVisualizationData, type BLVisualizationData, type WasmSmokeSystem } from '../lib/wasm';
 import { useMorphingAnimation, getCpColor, computeForceVectors } from '../hooks/useMorphingAnimation';
 import { generateCamberSplineCurve } from '../lib/airfoilGeometry';
-import { syncToUrl, getCompleteUrlState } from '../lib/urlState';
 import { WebGPURenderer, checkWebGPUSupport } from '../lib/webgpu';
 // Removed d3-contour - using efficient cell-based rendering instead
 
@@ -462,11 +462,7 @@ const CONTROL_RADIUS = 6;
 const HIT_RADIUS = 10;
 const TOUCH_HIT_RADIUS = 24;
 
-interface AirfoilCanvasProps {
-  initialViewport?: { centerX: number; centerY: number; zoom: number } | null;
-}
-
-export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
+export function AirfoilCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const smokeCanvasRef = useRef<HTMLCanvasElement>(null);  // Overlay canvas for smoke (redraws every frame)
   const gpuCanvasRef = useRef<HTMLCanvasElement>(null);    // WebGPU canvas
@@ -524,36 +520,51 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
     }))
   );
 
-  // Viewport state (initialize from URL if provided)
+  const routeViewport = useRouteUiStore((state) => state.viewport);
+  const viewportRevision = useRouteUiStore((state) => state.viewportRevision);
+  const setRouteViewport = useRouteUiStore((state) => state.setViewport);
+
+  // Viewport state (initialize from route state)
   const [viewport, setViewport] = useState<ViewportState>(() => ({
     center: { 
-      x: initialViewport?.centerX ?? 0.5, 
-      y: initialViewport?.centerY ?? 0 
+      x: routeViewport.centerX ?? 0.5,
+      y: routeViewport.centerY ?? 0,
     },
-    zoom: initialViewport?.zoom ?? 400,
+    zoom: routeViewport.zoom ?? 400,
     width: 800,
     height: 600,
   }));
-  
-  // Get airfoil state for URL sync (use shallow equality)
-  const airfoilState = useAirfoilStore(
-    useShallow((state) => ({
-      name: state.name,
-      nPanels: state.nPanels,
-      spacingKnots: state.spacingKnots,
-      controlMode: state.controlMode,
-      displayAlpha: state.displayAlpha,
-      thicknessScale: state.thicknessScale,
-      camberScale: state.camberScale,
-      curvatureWeight: state.curvatureWeight,
-      spacingPanelMode: state.spacingPanelMode,
-      sspInterpolation: state.sspInterpolation,
-      sspVisualization: state.sspVisualization,
-    }))
-  );
 
-  // Visualization settings from store (use shallow equality to prevent infinite loops)
-  const visualizationState = useVisualizationStore(
+  const {
+    showGrid,
+    showCurve,
+    showPanels,
+    showPoints,
+    showControls,
+    showStreamlines,
+    showSmoke,
+    showPsiContours,
+    showCp,
+    showForces,
+    showBoundaryLayer,
+    showWake,
+    showDisplacementThickness,
+    blThicknessScale,
+    enableMorphing,
+    morphDuration,
+    streamlineDensity,
+    adaptiveStreamlines,
+    smokeDensity,
+    smokeParticlesPerBlob,
+    smokeWaveSpacing,
+    smokeResetCounter,
+    flowSpeed,
+    cpDisplayMode,
+    cpBarScale,
+    forceScale,
+    useGPU,
+    gpuAvailable: _gpuAvailable, // Used for conditional WebGPU setup
+  } = useVisualizationStore(
     useShallow((state) => ({
       showGrid: state.showGrid,
       showCurve: state.showCurve,
@@ -585,61 +596,40 @@ export function AirfoilCanvas({ initialViewport }: AirfoilCanvasProps) {
       gpuAvailable: state.gpuAvailable,
     }))
   );
-  
-  const {
-    showGrid,
-    showCurve,
-    showPanels,
-    showPoints,
-    showControls,
-    showStreamlines,
-    showSmoke,
-    showPsiContours,
-    showCp,
-    showForces,
-    showBoundaryLayer,
-    showWake,
-    showDisplacementThickness,
-    blThicknessScale,
-    enableMorphing,
-    morphDuration,
-    streamlineDensity,
-    adaptiveStreamlines,
-    smokeDensity,
-    smokeParticlesPerBlob,
-    smokeWaveSpacing,
-    smokeResetCounter,
-    flowSpeed,
-    cpDisplayMode,
-    cpBarScale,
-    forceScale,
-    useGPU,
-    gpuAvailable: _gpuAvailable, // Used for conditional WebGPU setup
-  } = visualizationState;
   void _gpuAvailable; // Suppress unused warning (used implicitly in GPU init)
   
   // Get store actions separately (not needed for URL sync)
   const setSmokeDensity = useVisualizationStore((state) => state.setSmokeDensity);
   const setGPUAvailable = useVisualizationStore((state) => state.setGPUAvailable);
   const updatePerfMetrics = useVisualizationStore((state) => state.updatePerfMetrics);
-  
-  // Sync all state to URL (debounced)
+  const appliedViewportRevisionRef = useRef(viewportRevision);
+
+  useEffect(() => {
+    if (viewportRevision === appliedViewportRevisionRef.current) {
+      return;
+    }
+    appliedViewportRevisionRef.current = viewportRevision;
+    setViewport((current) => ({
+      ...current,
+      center: {
+        x: routeViewport.centerX,
+        y: routeViewport.centerY,
+      },
+      zoom: routeViewport.zoom,
+    }));
+  }, [routeViewport.centerX, routeViewport.centerY, routeViewport.zoom, viewportRevision]);
+
   useEffect(() => {
     const timeoutId = setTimeout(() => {
-      const urlState = getCompleteUrlState(
-        airfoilState,
-        visualizationState,
-        {
-          centerX: viewport.center.x,
-          centerY: viewport.center.y,
-          zoom: viewport.zoom,
-        }
-      );
-      syncToUrl(urlState);
-    }, 500); // Debounce 500ms
-    
+      setRouteViewport({
+        centerX: viewport.center.x,
+        centerY: viewport.center.y,
+        zoom: viewport.zoom,
+      });
+    }, 200);
+
     return () => clearTimeout(timeoutId);
-  }, [airfoilState, visualizationState, viewport]);
+  }, [setRouteViewport, viewport.center.x, viewport.center.y, viewport.zoom]);
   
   // Streamlines cache
   const [streamlines, setStreamlines] = useState<[number, number][][]>([]);

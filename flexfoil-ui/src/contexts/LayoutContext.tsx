@@ -5,6 +5,7 @@
 import { createContext, useContext, useCallback, type ReactNode } from 'react';
 import type { Model } from 'flexlayout-react';
 import { Actions, DockLocation } from 'flexlayout-react';
+import { useRouteUiStore } from '../stores/routeUiStore';
 
 interface LayoutContextValue {
   openPanel: (panelId: string) => void;
@@ -19,6 +20,8 @@ interface LayoutProviderProps {
 }
 
 export function LayoutProvider({ children, model, panels }: LayoutProviderProps) {
+  const setActivePanel = useRouteUiStore((state) => state.setActivePanel);
+
   // Open/focus a panel by ID
   const openPanel = useCallback((panelId: string) => {
     const panelInfo = panels.find((p) => p.id === panelId);
@@ -46,6 +49,7 @@ export function LayoutProvider({ children, model, panels }: LayoutProviderProps)
       // Select the existing tab
       try {
         model.doAction(Actions.selectTab(existingTabId));
+        setActivePanel(panelId as any);
       } catch (e) {
         console.warn('Failed to select tab:', e);
       }
@@ -77,12 +81,13 @@ export function LayoutProvider({ children, model, panels }: LayoutProviderProps)
               -1
             )
           );
+          setActivePanel(panelId as any);
         } catch (e) {
           console.warn('Failed to add panel:', e);
         }
       }
     }
-  }, [model, panels]);
+  }, [model, panels, setActivePanel]);
 
   return (
     <LayoutContext.Provider value={{ openPanel }}>
