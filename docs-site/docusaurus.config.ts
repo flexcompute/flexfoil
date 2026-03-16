@@ -35,6 +35,7 @@ const config: Config = {
       'classic',
       {
         docs: {
+          routeBasePath: '/',
           sidebarPath: './sidebars.ts',
           editUrl: 'https://github.com/flexfoil/flexfoil/tree/main/docs-site/',
         },
@@ -82,7 +83,7 @@ const config: Config = {
           items: [
             {
               label: 'Architecture',
-              to: '/docs/xfoil-architecture-spec',
+              to: '/xfoil-architecture-spec',
             },
           ],
         },
