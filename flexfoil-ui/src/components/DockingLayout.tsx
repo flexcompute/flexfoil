@@ -18,12 +18,14 @@ import { DataExplorerPanel } from './panels/DataExplorerPanel';
 import { PlotBuilderPanel } from './panels/PlotBuilderPanel';
 import { CaseLogsPanel } from './panels/CaseLogsPanel';
 import { MenuBar } from './MenuBar';
+import { MobileLayout } from './MobileLayout';
 import { LayoutProvider } from '../contexts/LayoutContext';
 import { defaultLayoutJson, PANELS } from '../layoutConfig';
 import { useRouteUiStore } from '../stores/routeUiStore';
+import { useIsMobile } from '../hooks/useIsMobile';
 
 // Storage keys
-const LAYOUT_STORAGE_KEY = 'flexfoil-layout-v2';
+const LAYOUT_STORAGE_KEY = 'flexfoil-layout-v3';
 
 interface DockingLayoutProps {
   wasmStatus: 'loading' | 'ready' | 'error';
@@ -66,6 +68,16 @@ function findSelectedPanelFromJson(node: any): string | null {
 }
 
 export function DockingLayout({ wasmStatus }: DockingLayoutProps) {
+  const isMobile = useIsMobile();
+
+  if (isMobile) {
+    return <MobileLayout wasmStatus={wasmStatus} />;
+  }
+
+  return <DesktopLayout wasmStatus={wasmStatus} />;
+}
+
+function DesktopLayout({ wasmStatus }: DockingLayoutProps) {
   const layoutJson = useRouteUiStore((state) => state.layoutJson);
   const layoutRevision = useRouteUiStore((state) => state.layoutRevision);
   const activePanel = useRouteUiStore((state) => state.activePanel);
