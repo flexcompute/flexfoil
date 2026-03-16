@@ -25,7 +25,7 @@ import { useRouteUiStore } from '../stores/routeUiStore';
 import { useIsMobile } from '../hooks/useIsMobile';
 
 // Storage keys
-const LAYOUT_STORAGE_KEY = 'flexfoil-layout-v3';
+const LAYOUT_STORAGE_KEY = 'flexfoil-layout-v4';
 
 interface DockingLayoutProps {
   wasmStatus: 'loading' | 'ready' | 'error';

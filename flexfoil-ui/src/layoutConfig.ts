@@ -30,27 +30,7 @@ export const defaultLayoutJson: IJsonModel = {
     children: [
       {
         type: 'row',
-        weight: 25,
-        children: [
-          {
-            type: 'tabset',
-            weight: 50,
-            children: [
-              { type: 'tab', id: 'library', name: 'Airfoil Library', component: 'library' },
-            ],
-          },
-          {
-            type: 'tabset',
-            weight: 50,
-            children: [
-              { type: 'tab', id: 'spacing', name: 'Spacing', component: 'spacing' },
-            ],
-          },
-        ],
-      },
-      {
-        type: 'row',
-        weight: 50,
+        weight: 65,
         children: [
           {
             type: 'tabset',
@@ -73,22 +53,24 @@ export const defaultLayoutJson: IJsonModel = {
       },
       {
         type: 'row',
-        weight: 25,
+        weight: 35,
         children: [
           {
             type: 'tabset',
             weight: 50,
             children: [
-              { type: 'tab', id: 'properties', name: 'Properties', component: 'properties' },
               { type: 'tab', id: 'solve', name: 'Solve', component: 'solve' },
+              { type: 'tab', id: 'properties', name: 'Properties', component: 'properties' },
             ],
           },
           {
             type: 'tabset',
             weight: 50,
             children: [
+              { type: 'tab', id: 'library', name: 'Airfoil Library', component: 'library' },
               { type: 'tab', id: 'control', name: 'Control Mode', component: 'control' },
               { type: 'tab', id: 'visualization', name: 'Visualization', component: 'visualization' },
+              { type: 'tab', id: 'spacing', name: 'Spacing', component: 'spacing' },
             ],
           },
         ],
