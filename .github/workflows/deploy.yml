@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -33,7 +33,7 @@ jobs:
           wasm-pack build --target web --release --out-dir ../../pkg
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm

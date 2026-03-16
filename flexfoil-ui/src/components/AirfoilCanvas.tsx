@@ -23,7 +23,7 @@ import { useRouteUiStore } from '../stores/routeUiStore';
 import { useTheme } from '../contexts/ThemeContext';
 import { useLayout } from '../contexts/LayoutContext';
 import type { Point, ViewportState, AirfoilPoint } from '../types';
-import { computeDividingStreamline, computeStreamlines, computePsiGrid, createSmokeSystem, isWasmReady, analyzeAirfoil, computeGamma, getBLVisualizationData, type BLVisualizationData, type WasmSmokeSystem } from '../lib/wasm';
+import { computeStreamlines, computePsiGrid, createSmokeSystem, isWasmReady, analyzeAirfoil, computeGamma, getBLVisualizationData, type BLVisualizationData, type WasmSmokeSystem } from '../lib/wasm';
 import { useMorphingAnimation, getCpColor, computeForceVectors } from '../hooks/useMorphingAnimation';
 import { generateCamberSplineCurve } from '../lib/airfoilGeometry';
 import { WebGPURenderer, checkWebGPUSupport } from '../lib/webgpu';
@@ -870,25 +870,8 @@ export function AirfoilCanvas() {
         }
       }
       
-      let psi0Lines: [number, number][][] = [];
-      const dividingResult = computeDividingStreamline(
-        panels,
-        displayAlpha,
-        reynolds,
-        bounds,
-        mach,
-        ncrit,
-        maxIterations,
-        solverMode
-      );
-
-      if (dividingResult.success && dividingResult.streamline.length >= 2) {
-        psi0Lines = [dividingResult.streamline];
-      } else {
-        // Fall back to the contour-derived branch if the streamline bracketing fails.
-        const psi0Segments = marchingSquares(grid, nx, ny, psi_0, bounds[0], bounds[2], dx, dy);
-        psi0Lines = connectSegments(psi0Segments).filter(line => line.length >= 2);
-      }
+      const psi0Segments = marchingSquares(grid, nx, ny, psi_0, bounds[0], bounds[2], dx, dy);
+      let psi0Lines = connectSegments(psi0Segments).filter(line => line.length >= 2);
       
       // Filter out parts of dividing streamline that are inside the airfoil
       // Split lines at airfoil boundary and keep only exterior segments
@@ -912,10 +895,7 @@ export function AirfoilCanvas() {
       }
       psi0Lines = filteredPsi0Lines;
       
-      if (!(dividingResult.success && dividingResult.streamline.length >= 2)) {
-        // Only use the contour cleanup path for the marching-squares fallback.
-        psi0Lines = extrapolateDividingStreamline(psi0Lines, panels);
-      }
+      psi0Lines = extrapolateDividingStreamline(psi0Lines, panels);
       
       setPsiContours({ 
         grid, 

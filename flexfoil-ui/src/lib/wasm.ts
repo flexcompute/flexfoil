@@ -14,8 +14,6 @@ import init, {
     analyze_airfoil_faithful,
     compute_streamlines as compute_streamlines_inviscid_wasm,
     compute_streamlines_faithful,
-    compute_dividing_streamline as compute_dividing_streamline_inviscid_wasm,
-    compute_dividing_streamline_faithful,
     compute_psi_grid as compute_psi_grid_inviscid_wasm,
     compute_psi_grid_faithful,
     get_bl_distribution_faithful,
@@ -505,12 +503,6 @@ export interface StreamlineResult {
     error?: string;
 }
 
-export interface DividingStreamlineResult {
-    streamline: [number, number][];
-    success: boolean;
-    error?: string;
-}
-
 /**
  * Compute streamlines for flow visualization.
  * 
@@ -553,40 +545,6 @@ export function computeStreamlines(
         seedCount,
         new Float64Array(bounds)
     ) as StreamlineResult;
-}
-
-export function computeDividingStreamline(
-    coordinates: { x: number; y: number }[],
-    alphaDeg: number,
-    reynolds: number = 1e6,
-    bounds: [number, number, number, number] = [-0.5, 2.0, -0.5, 0.5],
-    mach: number = 0,
-    ncrit: number = 9,
-    maxIterations: number = 100,
-    solverMode: 'inviscid' | 'viscous' = 'viscous'
-): DividingStreamlineResult {
-    if (!initialized) {
-        throw new Error('WASM not initialized. Call initWasm() first.');
-    }
-
-    const coordsFlat = pointsToFlat(coordinates);
-    if (solverMode === 'inviscid') {
-        return compute_dividing_streamline_inviscid_wasm(
-            coordsFlat,
-            alphaDeg,
-            new Float64Array(bounds)
-        ) as DividingStreamlineResult;
-    }
-
-    return compute_dividing_streamline_faithful(
-        coordsFlat,
-        alphaDeg,
-        reynolds,
-        mach,
-        ncrit,
-        maxIterations,
-        new Float64Array(bounds)
-    ) as DividingStreamlineResult;
 }
 
 /**
