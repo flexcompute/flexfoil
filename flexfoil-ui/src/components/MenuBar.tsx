@@ -8,7 +8,7 @@ import { useUndoRedo } from '../hooks/useUndoRedo';
 import { useOnboarding } from '../onboarding';
 import flexcomputeLogo from '../assets/flexcompute-logo.svg';
 
-const DOCUMENTATION_URL = 'https://flexfoil.dev/';
+const DOCUMENTATION_URL = 'https://foil.flexcompute.com/docs/';
 const FLEXCOMPUTE_URL = 'https://www.flexcompute.com/';
 
 interface PanelInfo {
