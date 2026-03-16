@@ -86,6 +86,8 @@ function buildRunHoverDetails(run: RunRow): Array<string | number> {
     run.n_panels,
     run.max_iter,
     run.solver_mode,
+    run.session_id ?? 'n/a',
+    run.created_at,
   ];
 }
 
@@ -99,6 +101,8 @@ const RUN_HOVER_TEMPLATE = [
   'Panels=%{customdata[5]}',
   'MaxIter=%{customdata[6]}',
   'Solver=%{customdata[7]}',
+  'Session=%{customdata[8]}',
+  'Created=%{customdata[9]}',
 ].join('<br>');
 
 // ────────────────────────────────────────────────────────────
