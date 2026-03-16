@@ -4,9 +4,10 @@
 
 import { useState, useCallback } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
+import { parseAirfoilDat } from '../../lib/airfoilImport';
 
 export function AirfoilLibraryPanel() {
-  const { name, generateNaca4, reset } = useAirfoilStore();
+  const { name, generateNaca4, importAirfoil, reset } = useAirfoilStore();
   
   // NACA 4-series parameters
   const [nacaCode, setNacaCode] = useState('0012');
@@ -32,13 +33,19 @@ export function AirfoilLibraryPanel() {
 
     const reader = new FileReader();
     reader.onload = (event) => {
-      const text = event.target?.result as string;
-      // TODO: Parse airfoil coordinate file (Selig format)
-      console.log('Imported file:', file.name, text.slice(0, 100));
-      alert('File import not yet implemented. Use NACA generator for now.');
+      try {
+        const text = String(event.target?.result ?? '');
+        const parsed = parseAirfoilDat(text, file.name);
+        importAirfoil(parsed.name, parsed.coordinates);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown import error.';
+        window.alert(`Could not import ${file.name}: ${message}`);
+      } finally {
+        e.target.value = '';
+      }
     };
     reader.readAsText(file);
-  }, []);
+  }, [importAirfoil]);
 
   return (
     <div className="panel">

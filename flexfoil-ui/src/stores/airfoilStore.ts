@@ -30,6 +30,7 @@ import {
   isWasmReady
 } from '../lib/wasm';
 import { evaluateBSpline, evaluateBezierCurve } from '../lib/bspline';
+import { prepareImportedAirfoil } from '../lib/airfoilImport';
 import {
   scaleAirfoil,
   createCamberControlPoints,
@@ -170,6 +171,7 @@ interface AirfoilStore extends AirfoilState {
   
   // NACA generation
   generateNaca4: (params: Naca4Params) => void;
+  importAirfoil: (name: string, coords: AirfoilPoint[]) => void;
   
   // Repaneling
   repanel: () => void;
@@ -487,7 +489,7 @@ export const useAirfoilStore = create<AirfoilStore>()(
               if (repaneled.length > 0) {
                 panels = repaneled.map(pt => ({ x: pt.x, y: pt.y }));
               }
-            } catch (e) {
+            } catch {
               // Silent fail - use unrepaneled coords
             }
           }
@@ -569,7 +571,7 @@ export const useAirfoilStore = create<AirfoilStore>()(
               if (repaneled.length > 0) {
                 panels = repaneled.map(pt => ({ x: pt.x, y: pt.y }));
               }
-            } catch (e) {
+            } catch {
               // Silent fail - use unrepaneled coords
             }
           }
@@ -753,6 +755,29 @@ export const useAirfoilStore = create<AirfoilStore>()(
           thicknessControlPoints: [],
         });
       },
+
+      importAirfoil: (name, coords) => set((state) => {
+        const imported = prepareImportedAirfoil(
+          { name, coordinates: coords },
+          state.nPanels,
+          isWasmReady()
+            ? (coordinates, nPanels) => repanelXfoil(coordinates, nPanels).map((pt) => ({ x: pt.x, y: pt.y }))
+            : undefined,
+        );
+
+        return {
+          name: imported.name,
+          coordinates: imported.coordinates,
+          panels: imported.panels,
+          bezierHandles: [],
+          bsplineControlPoints: [],
+          baseCoordinates: imported.coordinates,
+          thicknessScale: 1.0,
+          camberScale: 1.0,
+          camberControlPoints: [],
+          thicknessControlPoints: [],
+        };
+      }),
 
       repanel: () => set((state) => {
         if (!isWasmReady()) {
