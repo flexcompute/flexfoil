@@ -13,7 +13,7 @@ export const PLOT_FIELDS: PlotFieldMeta[] = [
   { key: 'id', label: 'ID', kind: 'numeric' },
   { key: 'airfoil_name', label: 'Airfoil', kind: 'categorical', autoGroupInvariant: true },
   { key: 'airfoil_hash', label: 'Airfoil Hash', kind: 'categorical', autoGroupInvariant: true },
-  { key: 'alpha', label: 'Alpha', kind: 'numeric', autoGroupInvariant: true },
+  { key: 'alpha', label: 'Alpha', kind: 'numeric' },
   { key: 'reynolds', label: 'Re', kind: 'numeric', autoGroupInvariant: true },
   { key: 'mach', label: 'Mach', kind: 'numeric', autoGroupInvariant: true },
   { key: 'ncrit', label: 'Ncrit', kind: 'numeric', autoGroupInvariant: true },

@@ -257,7 +257,7 @@ export function detectSmartRunGroups(
 
   const labels = buildSmartLabels(
     allSegments.map(s => s.meta),
-    new Set(plottedFields as string[]),
+    new Set([...(plottedFields as string[]), 'alpha']),
   );
 
   return allSegments.map((seg, i) => {
