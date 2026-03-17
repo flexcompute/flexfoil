@@ -74,7 +74,10 @@ interface GroupMeta {
  * the provided groups. When every group shares the same airfoil, the
  * airfoil name is omitted, etc.
  */
-function buildSmartLabels(groups: GroupMeta[]): string[] {
+function buildSmartLabels(
+  groups: GroupMeta[],
+  excludeFromLabels: Set<string> = new Set(),
+): string[] {
   if (groups.length === 0) return [];
   if (groups.length === 1) return [groups[0].airfoil_name];
 
@@ -88,9 +91,10 @@ function buildSmartLabels(groups: GroupMeta[]): string[] {
     'max_iter',
     'solver_mode',
   ];
-  const varyingFields = labelFields.filter((field) => (
-    new Set(groups.map((group) => valueKey(group[field]))).size > 1
-  ));
+  const varyingFields = labelFields.filter((field) => {
+    if (excludeFromLabels.has(field)) return false;
+    return new Set(groups.map((group) => valueKey(group[field]))).size > 1;
+  });
 
   return groups.map((group) => {
     const parts = varyingFields.map((field) => formatLabelPart(field, group[field]));
@@ -234,22 +238,27 @@ export function detectSmartRunGroups(
   const allSegments: { key: string; meta: GroupMeta; rows: RunRow[]; subIndex: number; totalSubs: number }[] = [];
 
   for (const [key, groupRows] of [...compoundGroups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    const sorted = sortRows(groupRows, sortField);
-    const segments = splitByNumericGap(sorted, sortField);
-    const meta = buildGroupMeta(sorted[0]);
+    // Always detect gaps by alpha (the natural sweep variable for polars),
+    // then sort each resulting segment by the actual plot X axis.
+    const gapSorted = sortRows(groupRows, 'alpha');
+    const segments = splitByNumericGap(gapSorted, 'alpha');
+    const meta = buildGroupMeta(gapSorted[0]);
 
     for (let i = 0; i < segments.length; i++) {
       allSegments.push({
         key: segments.length > 1 ? `${key}__seg${i}` : key,
         meta,
-        rows: segments[i],
+        rows: sortRows(segments[i], sortField),
         subIndex: i,
         totalSubs: segments.length,
       });
     }
   }
 
-  const labels = buildSmartLabels(allSegments.map(s => s.meta));
+  const labels = buildSmartLabels(
+    allSegments.map(s => s.meta),
+    new Set(plottedFields as string[]),
+  );
 
   return allSegments.map((seg, i) => {
     let label = labels[i];
