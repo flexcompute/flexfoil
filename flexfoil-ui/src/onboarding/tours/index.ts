@@ -6,8 +6,9 @@ import type { DriveStep } from 'driver.js';
 import { welcomeTour } from './welcomeTour';
 import { airfoilEditingTour } from './airfoilEditingTour';
 import { solvingTour } from './solvingTour';
+import { dataExplorerTour } from './dataExplorerTour';
 
-export type TourId = 'welcome' | 'airfoilEditing' | 'solving';
+export type TourId = 'welcome' | 'airfoilEditing' | 'solving' | 'dataExplorer';
 
 /**
  * Extended tour step that can include a challenge and panel focus
@@ -25,6 +26,7 @@ export const tours: Record<TourId, TourStep[]> = {
   welcome: welcomeTour,
   airfoilEditing: airfoilEditingTour,
   solving: solvingTour,
+  dataExplorer: dataExplorerTour,
 };
 
-export { welcomeTour, airfoilEditingTour, solvingTour };
+export { welcomeTour, airfoilEditingTour, solvingTour, dataExplorerTour };

@@ -62,6 +62,8 @@ export function getPanelDisplayName(panelId: string): string {
     'spacing': 'Spacing',
     'properties': 'Properties',
     'info': 'Airfoil Info',
+    'data-explorer': 'Data Explorer',
+    'plot-builder': 'Plot Builder',
   };
   return names[panelId] || panelId;
 }
@@ -94,6 +96,25 @@ const ELEMENT_TO_PANEL: Record<string, string> = {
   '[data-tour="panel-polar"]': 'polar',
   '[data-tour="panel-canvas"]': 'canvas',
   '[data-tour="panel-properties"]': 'properties',
+  // Data Explorer elements
+  '[data-tour="de-tab-table"]': 'data-explorer',
+  '[data-tour="de-tab-correlogram"]': 'data-explorer',
+  '[data-tour="de-table-view"]': 'data-explorer',
+  '[data-tour="de-export-csv"]': 'data-explorer',
+  '[data-tour="de-export-db"]': 'data-explorer',
+  '[data-tour="de-import-db"]': 'data-explorer',
+  '[data-tour="de-column-chips"]': 'data-explorer',
+  '[data-tour="de-encoding-controls"]': 'data-explorer',
+  '[data-tour="de-correlogram-controls"]': 'data-explorer',
+  '[data-tour="de-correlogram-plot"]': 'data-explorer',
+  '[data-tour="panel-data-explorer"]': 'data-explorer',
+  // Plot Builder elements
+  '[data-tour="pb-tab-build"]': 'plot-builder',
+  '[data-tour="pb-tab-saved"]': 'plot-builder',
+  '[data-tour="pb-save-plot"]': 'plot-builder',
+  '[data-tour="pb-controls"]': 'plot-builder',
+  '[data-tour="pb-plot-area"]': 'plot-builder',
+  '[data-tour="panel-plot-builder"]': 'plot-builder',
 };
 
 /**

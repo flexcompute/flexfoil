@@ -24,6 +24,7 @@ import Plot from 'react-plotly.js';
 import { useRunStore } from '../../stores/runStore';
 import { AUTO_GROUP_KEY, useRouteUiStore } from '../../stores/routeUiStore';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useOnboarding } from '../../onboarding/useOnboarding';
 import type { DataSource, RunRow } from '../../types';
 import {
   ENCODING_PLOT_FIELDS,
@@ -145,6 +146,7 @@ type GridFilterModel = ReturnType<GridApi<RunRow>['getFilterModel']>;
 
 export function DataExplorerPanel() {
   const { isDark } = useTheme();
+  const { startTour } = useOnboarding();
   const {
     allRuns,
     filteredRuns,
@@ -390,7 +392,8 @@ export function DataExplorerPanel() {
       showlegend: groupedRows.length > 1,
       legend: { orientation: 'h', y: -0.12 },
       barmode: groupedRows.length > 1 ? 'overlay' : undefined,
-      dragmode: 'select' as const,
+      dragmode: 'zoom' as const,
+      hovermode: 'closest' as const,
       annotations, ...axisOverrides,
     };
 
@@ -403,6 +406,57 @@ export function DataExplorerPanel() {
       restoreRunById(rawRunId);
     }
   }, [restoreRunById]);
+
+  // ── Context menu (right-click → Open in Plot Builder) ──
+  const setPlotXField = useRouteUiStore((state) => state.setPlotXField);
+  const setPlotYField = useRouteUiStore((state) => state.setPlotYField);
+  const setPlotChartType = useRouteUiStore((state) => state.setPlotChartType);
+  const applyRouteActivePanel = useRouteUiStore((state) => state.applyRouteActivePanel);
+
+  const hoveredCellRef = useRef<{ xKey: keyof RunRow; yKey: keyof RunRow } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; xKey: keyof RunRow; yKey: keyof RunRow } | null>(null);
+
+  const handlePlotHover = useCallback((event: Readonly<Plotly.PlotHoverEvent>) => {
+    const point = event.points?.[0];
+    if (!point) return;
+    const xAxisId = (point as any).xaxis?._id as string | undefined;
+    if (!xAxisId) return;
+    const axisNum = xAxisId === 'x' ? 1 : parseInt(xAxisId.replace('x', ''), 10);
+    const n = splomKeys.length;
+    const col = (axisNum - 1) % n;
+    const row = Math.floor((axisNum - 1) / n);
+    if (col < n && row < n) {
+      hoveredCellRef.current = { xKey: splomKeys[col], yKey: splomKeys[row] };
+    }
+  }, [splomKeys]);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    const cell = hoveredCellRef.current;
+    if (!cell || cell.xKey === cell.yKey) return;
+    e.preventDefault();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setContextMenu({ x: e.clientX - rect.left, y: e.clientY - rect.top, xKey: cell.xKey, yKey: cell.yKey });
+  }, []);
+
+  const handleOpenInPlotBuilder = useCallback(() => {
+    if (!contextMenu) return;
+    setPlotXField(contextMenu.xKey);
+    setPlotYField(contextMenu.yKey);
+    setPlotChartType('scatter');
+    applyRouteActivePanel('plot-builder');
+    setContextMenu(null);
+  }, [contextMenu, setPlotXField, setPlotYField, setPlotChartType, applyRouteActivePanel]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const dismiss = () => setContextMenu(null);
+    window.addEventListener('click', dismiss);
+    window.addEventListener('scroll', dismiss, true);
+    return () => {
+      window.removeEventListener('click', dismiss);
+      window.removeEventListener('scroll', dismiss, true);
+    };
+  }, [contextMenu]);
 
   // ── Styles ──
   const btnStyle: React.CSSProperties = {
@@ -443,8 +497,19 @@ export function DataExplorerPanel() {
         flexShrink: 0, flexWrap: 'wrap',
       }}>
         {/* View tabs */}
-        <button onClick={() => setView('table')} style={tabStyle(view === 'table')}>Table</button>
-        <button onClick={() => setView('correlogram')} style={tabStyle(view === 'correlogram')}>Correlogram</button>
+        <button data-tour="de-tab-table" onClick={() => setView('table')} style={tabStyle(view === 'table')}>Table</button>
+        <button data-tour="de-tab-correlogram" onClick={() => setView('correlogram')} style={tabStyle(view === 'correlogram')}>Correlogram</button>
+        <button
+          onClick={() => startTour('dataExplorer', true)}
+          title="Data Explorer guide"
+          style={{
+            padding: '1px 6px', fontSize: '11px', fontWeight: 600,
+            background: 'transparent', border: '1px solid var(--border-color)',
+            borderRadius: '50%', color: 'var(--text-muted)', cursor: 'pointer',
+            lineHeight: '16px', width: '20px', height: '20px',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >?</button>
 
         <span style={{ flex: 1 }} />
 
@@ -461,10 +526,11 @@ export function DataExplorerPanel() {
             >
               Clear Filters
             </button>
-            <button onClick={() => apiRef.current?.exportDataAsCsv({ fileName: 'flexfoil-runs.csv' })} style={btnStyle}>Export CSV</button>
+            <button data-tour="de-export-csv" onClick={() => apiRef.current?.exportDataAsCsv({ fileName: 'flexfoil-runs.csv' })} style={btnStyle}>Export CSV</button>
           </>
         )}
         <button
+          data-tour="de-export-db"
           onClick={() => {
             const data = exportDb();
             const blob = new Blob([new Uint8Array(data) as BlobPart], { type: 'application/octet-stream' });
@@ -475,7 +541,7 @@ export function DataExplorerPanel() {
           }}
           style={btnStyle}
         >Export DB</button>
-        <button onClick={() => fileInputRef.current?.click()} style={btnStyle}>Import DB</button>
+        <button data-tour="de-import-db" onClick={() => fileInputRef.current?.click()} style={btnStyle}>Import DB</button>
         <input ref={fileInputRef} type="file" accept=".sqlite,.db" style={{ display: 'none' }}
           onChange={async (e) => {
             const file = e.target.files?.[0];
@@ -493,7 +559,7 @@ export function DataExplorerPanel() {
 
       {/* ── Table view ── */}
       {view === 'table' && (
-        <div style={{ flex: 1, minHeight: 0 }}>
+        <div data-tour="de-table-view" style={{ flex: 1, minHeight: 0 }}>
           <AgGridReact<RunRow>
             ref={gridRef}
             theme={gridTheme}
@@ -524,11 +590,11 @@ export function DataExplorerPanel() {
       {view === 'correlogram' && (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           {/* Column & plot selectors */}
-          <div style={{
+          <div data-tour="de-correlogram-controls" style={{
             padding: '6px 10px', borderBottom: '1px solid var(--border-color)',
             display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', flexShrink: 0,
           }}>
-            <div style={{ display: 'flex', flexDirection: 'column', minWidth: '280px', flex: 1 }}>
+            <div data-tour="de-column-chips" style={{ display: 'flex', flexDirection: 'column', minWidth: '280px', flex: 1 }}>
               <span style={labelStyle}>Columns</span>
               <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                 {NUMERIC_PLOT_FIELDS.map((f) => (
@@ -547,6 +613,7 @@ export function DataExplorerPanel() {
               </select>
             </div>
 
+            <div data-tour="de-encoding-controls" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <span style={labelStyle}>Group By</span>
               <select
@@ -595,10 +662,11 @@ export function DataExplorerPanel() {
                 {ENCODING_PLOT_FIELDS.map((f) => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
               </select>
             </div>
+            </div>
           </div>
 
           {/* SPLOM plot */}
-          <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+          <div data-tour="de-correlogram-plot" style={{ flex: 1, minHeight: 0, position: 'relative' }} onContextMenu={handleContextMenu}>
             {successOnly.length === 0 ? (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: '13px' }}>
                 No data. Run some analyses in the Solve panel.
@@ -613,9 +681,49 @@ export function DataExplorerPanel() {
                 layout={(splomResult?.layout ?? {}) as Partial<Plotly.Layout>}
                 config={{ responsive: true, displayModeBar: true, displaylogo: false }}
                 onClick={handlePlotClick}
+                onHover={handlePlotHover}
                 useResizeHandler
                 style={{ width: '100%', height: '100%' }}
               />
+            )}
+            {contextMenu && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: contextMenu.x,
+                  top: contextMenu.y,
+                  zIndex: 1000,
+                  background: isDark ? '#1c241f' : '#fff',
+                  border: `1px solid ${isDark ? '#3a463d' : '#d2dbd0'}`,
+                  borderRadius: '6px',
+                  boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 4px 16px rgba(0,0,0,0.12)',
+                  padding: '4px 0',
+                  minWidth: '180px',
+                }}
+              >
+                <button
+                  onClick={handleOpenInPlotBuilder}
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    padding: '7px 14px',
+                    background: 'transparent',
+                    border: 'none',
+                    borderRadius: 0,
+                    textAlign: 'left',
+                    fontSize: '12px',
+                    color: isDark ? '#f0f2f0' : '#111813',
+                    cursor: 'pointer',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                >
+                  Open in Plot Builder
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '8px' }}>
+                    {getLabel(contextMenu.xKey)} vs {getLabel(contextMenu.yKey)}
+                  </span>
+                </button>
+              </div>
             )}
           </div>
           <div style={{

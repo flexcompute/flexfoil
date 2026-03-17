@@ -273,6 +273,13 @@ export function MenuBar({
                 setActiveMenu(null);
               }}
             />
+            <MenuItem
+              label="Data Explorer Guide"
+              onClick={() => {
+                startTour('dataExplorer', true);
+                setActiveMenu(null);
+              }}
+            />
             <MenuDivider />
             <MenuItem
               label="Reset Tutorial Progress"
