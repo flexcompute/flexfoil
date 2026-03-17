@@ -490,6 +490,7 @@ button.primary:hover {
   border-radius: 8px !important;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3) !important;
   font-family: var(--font-sans) !important;
+  text-shadow: none !important;
 }
 
 .driver-popover-title {
@@ -530,7 +531,6 @@ button.primary:hover {
   color: var(--text-primary) !important;
   font-family: var(--font-sans) !important;
   font-size: 13px !important;
-  text-shadow: none !important;
   cursor: pointer !important;
   transition: all 0.15s ease !important;
 }
@@ -544,7 +544,7 @@ button.primary:hover {
 .driver-popover-next-btn {
   background: var(--accent-primary) !important;
   border-color: var(--accent-primary) !important;
-  color: var(--bg-primary) !important;
+  color: #fff !important;
   font-weight: 600 !important;
 }
 
