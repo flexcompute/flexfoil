@@ -85,5 +85,8 @@ cp_*.txt
 /test_*.txt
 /test_*.py
 
+# PDFs (documentation lives in docs-site, not loose files)
+*.pdf
+
 # Video recording artifacts
 video-clips/
