@@ -32,7 +32,7 @@ function getValue(point: PolarPoint, variable: AxisVariable): number {
     const cd = point.cd ?? 0;
     return Math.abs(cd) > 1e-10 ? point.cl / cd : 0;
   }
-  return (point as Record<string, number | undefined>)[variable] ?? 0;
+  return (point as unknown as Record<string, number | undefined>)[variable] ?? 0;
 }
 
 function getAxisBounds(values: number[]): [number, number] {

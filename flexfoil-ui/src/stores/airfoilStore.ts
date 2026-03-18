@@ -43,8 +43,7 @@ import {
   reconstructWithOriginalThickness,
   reconstructWithOriginalCamber,
 } from '../lib/airfoilGeometry';
-import { syncToUrl, loadFromUrl, parseNacaFromName, type UrlState } from '../lib/urlState';
-import { applyFlapsToBase } from '../lib/flapGeometry';
+import { syncToUrl, parseNacaFromName, type UrlState } from '../lib/urlState';
 
 /**
  * State that is tracked for undo/redo.
@@ -1176,13 +1175,6 @@ export function redo(): void {
 }
 
 /**
- * Clear all history (past and future states).
- */
-function clearHistory(): void {
-  useAirfoilStore.temporal.getState().clear();
-}
-
-/**
  * Get current state for URL encoding
  * Note: Viewport and visualization state are added separately by the components
  */
@@ -1204,61 +1196,6 @@ export function getUrlState(): UrlState {
 }
 
 /**
- * Hydrate store from URL state
- */
-function hydrateFromUrl(): boolean {
-  const urlState = loadFromUrl();
-  if (!urlState) return false;
-  
-  const store = useAirfoilStore.getState();
-  
-  // Apply NACA airfoil if specified
-  if (urlState.naca && !urlState.custom) {
-    const designation = parseInt(urlState.naca, 10);
-    const m = Math.floor(designation / 1000) / 100;
-    const p = Math.floor((designation % 1000) / 100) / 10;
-    const t = (designation % 100) / 100;
-    
-    // Generate after WASM is ready
-    setTimeout(() => {
-      if (isWasmReady()) {
-        store.generateNaca4({ m, p, t, nPoints: 100 });
-      }
-    }, 100);
-  }
-  
-  // Apply paneling settings
-  if (urlState.nPanels) {
-    store.setNPanels(urlState.nPanels);
-  }
-  if (urlState.spacing) {
-    store.setSpacingKnots(urlState.spacing);
-  }
-  
-  // Apply control mode
-  if (urlState.mode) {
-    store.setControlMode(urlState.mode);
-  }
-
-  // Restore flap definitions and apply geometry
-  if (urlState.flaps && urlState.flaps.length > 0) {
-    store.setGeometryDesign({ flaps: urlState.flaps });
-    // Defer geometry application until WASM is ready and base geometry exists
-    setTimeout(() => {
-      if (!isWasmReady()) return;
-      const { baseCoordinates, nPanels } = useAirfoilStore.getState();
-      if (baseCoordinates.length < 4) return;
-      const result = applyFlapsToBase(baseCoordinates, urlState.flaps!, nPanels);
-      if (result) {
-        useAirfoilStore.setState({ coordinates: result.coordinates, panels: result.panels });
-      }
-    }, 200);
-  }
-  
-  return true;
-}
-
-/**
  * Sync store state to URL (debounced)
  */
 let syncTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -1274,19 +1211,3 @@ export function syncStoreToUrl(): void {
   }, 500); // Debounce 500ms
 }
 
-/**
- * Subscribe to store changes and sync to URL
- */
-function subscribeToUrlSync(): () => void {
-  return useAirfoilStore.subscribe((state, prevState) => {
-    // Only sync on meaningful changes
-    if (
-      state.name !== prevState.name ||
-      state.nPanels !== prevState.nPanels ||
-      state.controlMode !== prevState.controlMode ||
-      state.spacingKnots !== prevState.spacingKnots
-    ) {
-      syncStoreToUrl();
-    }
-  });
-}

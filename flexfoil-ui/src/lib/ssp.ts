@@ -162,38 +162,6 @@ function computeSSP(knots: SpacingKnot[], n: number): ComputedSSP {
 }
 
 /**
- * Create default initial knots
- */
-function createDefaultKnots(): SpacingKnot[] {
-  return [
-    { S: 0, F: 1 },
-    { S: 1, F: 1 }
-  ];
-}
-
-/**
- * Validate and sanitize knots
- */
-function sanitizeKnots(knots: SpacingKnot[]): SpacingKnot[] {
-  if (knots.length < 2) {
-    return createDefaultKnots();
-  }
-  
-  // Sort by S value
-  const sorted = [...knots].sort((a, b) => a.S - b.S);
-  
-  // Force endpoints
-  sorted[0].S = 0;
-  sorted[sorted.length - 1].S = 1;
-  
-  // Ensure positive F values
-  return sorted.map(k => ({
-    S: k.S,
-    F: Math.max(0.01, k.F)
-  }));
-}
-
-/**
  * Compute si values (convenience function)
  */
 export function computeSpacing(knots: SpacingKnot[], n: number): number[] {

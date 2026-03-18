@@ -8,7 +8,7 @@
  * The active backend is chosen once at startup and stays for the session.
  */
 
-import type { RunRow, AirfoilPoint, RunGeometrySnapshot, SolverMode } from '../types';
+import type { RunRow, SolverMode } from '../types';
 
 export interface RunInsert {
   airfoil_name: string;

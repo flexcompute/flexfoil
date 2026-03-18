@@ -4,11 +4,9 @@
 
 import init, {
     generate_naca4,
-    generate_naca4_from_string,
     generate_naca4_xfoil,
     repanel_with_spacing_and_curvature,
     repanel_xfoil,
-    repanel_xfoil_with_params,
     compute_curvature_spacing,
     analyze_airfoil as analyze_airfoil_inviscid_wasm,
     analyze_airfoil_faithful,
@@ -23,14 +21,9 @@ import init, {
     WasmSmokeSystem,
     greet,
     RustFoil,
-    // Morphing interpolation functions
-    lerp_points,
-    lerp_array,
     lerp_streamlines,
     lerp_morph_state,
-    // Inverse design (QDES)
     inverse_design_qdes,
-    // Geometry design (GDES)
     gdes_rotate,
     gdes_scale,
     gdes_translate,
@@ -39,7 +32,6 @@ import init, {
     gdes_set_le_radius,
     gdes_scale_thickness,
     gdes_scale_camber,
-    // Full-inverse design (MDES)
     full_inverse_design_mdes,
 } from 'rustfoil-wasm';
 
@@ -121,24 +113,6 @@ export function generateNaca4(
 }
 
 /**
- * Generate NACA 4-series from string designation (e.g., "2412", "0012").
- */
-function generateNaca4FromString(
-    digits: string, 
-    nPoints: number
-): { x: number; y: number }[] {
-    if (!initialized) {
-        throw new Error('WASM not initialized. Call initWasm() first.');
-    }
-    
-    const flat = generate_naca4_from_string(digits, nPoints);
-    if (flat.length === 0) {
-        throw new Error(`Invalid NACA designation: ${digits}`);
-    }
-    return flatToPoints(flat);
-}
-
-/**
  * Generate NACA 4-series using XFOIL's exact algorithm.
  * 
  * This matches XFOIL's naca.f SUBROUTINE NACA4 exactly:
@@ -161,21 +135,6 @@ export function generateNaca4Xfoil(
     
     const flat = generate_naca4_xfoil(designation, nPointsPerSide);
     return flatToPoints(flat);
-}
-
-/**
- * Repanel airfoil with custom SSP spacing.
- * 
- * @param coordinates - Current airfoil coordinates
- * @param spacingKnots - Array of {s, f} knots for spacing function
- * @param nPanels - Desired number of panels
- */
-function repanelWithSpacing(
-    coordinates: { x: number; y: number }[],
-    spacingKnots: { s: number; f: number }[],
-    nPanels: number
-): { x: number; y: number }[] {
-    return repanelWithSpacingAndCurvature(coordinates, spacingKnots, nPanels, 0);
 }
 
 /**
@@ -254,46 +213,6 @@ export function repanelXfoil(
     
     const coordsFlat = pointsToFlat(coordinates);
     const result = repanel_xfoil(coordsFlat, nPanels);
-    return flatToPoints(result);
-}
-
-/**
- * XFOIL paneling parameters.
- */
-interface XfoilPanelingParams {
-    /** Curvature attraction (0=uniform, 1=XFOIL default bunching) */
-    curvParam?: number;
-    /** TE/LE panel density ratio (XFOIL default: 0.15) */
-    teLeRatio?: number;
-    /** TE panel length ratio (XFOIL default: 0.667) */
-    teSpacingRatio?: number;
-}
-
-/**
- * Repanel airfoil using XFOIL's algorithm with custom parameters.
- * 
- * @param coordinates - Current airfoil coordinates
- * @param nPanels - Desired number of panels
- * @param params - XFOIL paneling parameters
- * @returns Repaneled coordinates
- */
-function repanelXfoilWithParams(
-    coordinates: { x: number; y: number }[],
-    nPanels: number,
-    params: XfoilPanelingParams = {}
-): { x: number; y: number }[] {
-    if (!initialized) {
-        throw new Error('WASM not initialized. Call initWasm() first.');
-    }
-    
-    const coordsFlat = pointsToFlat(coordinates);
-    const result = repanel_xfoil_with_params(
-        coordsFlat,
-        nPanels,
-        params.curvParam ?? 1.0,
-        params.teLeRatio ?? 0.15,
-        params.teSpacingRatio ?? 0.667
-    );
     return flatToPoints(result);
 }
 
@@ -686,45 +605,6 @@ export function createSmokeSystem(
     }
     
     return new WasmSmokeSystem(new Float64Array(spawnY), spawnX, particlesPerBlob);
-}
-
-// ============================================================================
-// Morphing Interpolation (WASM-accelerated)
-// ============================================================================
-
-/**
- * Interpolate between two point arrays using WASM.
- * Much faster than JavaScript for large arrays.
- */
-function wasmLerpPoints(
-    from: { x: number; y: number }[],
-    to: { x: number; y: number }[],
-    t: number
-): { x: number; y: number }[] {
-    if (!initialized) {
-        throw new Error('WASM not initialized. Call initWasm() first.');
-    }
-    
-    const fromFlat = pointsToFlat(from);
-    const toFlat = pointsToFlat(to);
-    const result = lerp_points(fromFlat, toFlat, t);
-    return flatToPoints(result);
-}
-
-/**
- * Interpolate between two number arrays using WASM.
- */
-function wasmLerpArray(
-    from: number[],
-    to: number[],
-    t: number
-): number[] {
-    if (!initialized) {
-        throw new Error('WASM not initialized. Call initWasm() first.');
-    }
-    
-    const result = lerp_array(new Float64Array(from), new Float64Array(to), t);
-    return Array.from(result);
 }
 
 /**
