@@ -4,11 +4,7 @@ sidebar_position: 4
 
 # XFOIL vs RustFoil Formula Comparison Reference
 
-:::info[Work in Progress]
-This documentation is actively being updated as FlexFoil development continues.
-:::
-
-**Purpose**: Term-by-term comparison of XFOIL's turbulent boundary layer formulas with RustFoil's implementation. Use this for offline study to identify CD errors.
+**Purpose**: Term-by-term comparison of XFOIL's turbulent boundary layer formulas with RustFoil's implementation.
 
 ---
 
@@ -28,7 +24,6 @@ This documentation is actively being updated as FlexFoil development continues.
 | DI Turbulent | `xblsys.f` | 2545-2555 (DIT) | `closures/dissipation.rs` 159-176 |
 | DI Wake | `xblsys.f` | 2464-2480 (DILW) | `closures/dissipation.rs` 208-230 |
 | DAMPL | `xblsys.f` | 2123-2244 | `closures/transition.rs` 77-165 |
-| DAMPL2 | `xblsys.f` | 2248-2421 | **NOT IMPLEMENTED** |
 | Hc (density) | `xblsys.f` | 2684-2693 (HCT) | `closures/density.rs` |
 
 ---
@@ -570,45 +565,7 @@ let ax_rt = ax_base * rfac_rt;
 
 ---
 
-## 7. ⚠️ DAMPL2 (Separated Flow Amplification) - NOT IMPLEMENTED
-
-### XFOIL (lines 2248-2421)
-XFOIL has a **second amplification routine** `DAMPL2` that blends in a modified correlation for **separated profiles** (Hk > 3.5):
-
-```fortran
-DATA HK1, HK2 / 3.5, 4.0 /
-
-IF(HK .LT. HK1) RETURN  ! Use DAMPL only
-
-! Blend between DAMPL (AX1) and modified amplification (AX2)
-HNORM = (HK - HK1) / (HK2 - HK1)
-IF(HNORM .GE. 1.0) THEN
-  HFAC = 1.0
-ELSE
-  HFAC = 3.0*HNORM**2 - 2.0*HNORM**3
-ENDIF
-
-! AX1 = normal envelope amplification (from DAMPL)
-AX1 = AX
-
-! AX2 = modified amplification for separated profiles
-GR0 = 0.30 + 0.35 * EXP(-0.15*(HK-5.0))
-TNR = TANH(1.2*(GR - GR0))
-AX2 = (0.086*TNR - 0.25/(HK-1.0)**1.5) / TH
-IF(AX2 .LT. 0.0) AX2 = 0.0
-
-! Blend: AX = HFAC*AX2 + (1-HFAC)*AX1
-AX = HFAC*AX2 + (1.0 - HFAC)*AX1
-```
-
-### RustFoil
-**❌ NOT IMPLEMENTED** - RustFoil only has DAMPL (the basic correlation).
-
-**Impact**: At high Hk (>3.5, i.e., near separation), RustFoil's transition prediction may differ from XFOIL. This could affect transition location prediction in separated regions.
-
----
-
-## 8. BLDIF (Turbulent Shear-Lag Equation)
+## 7. BLDIF (Turbulent Shear-Lag Equation)
 
 This is the **most complex and critical** formula for turbulent BL accuracy.
 
@@ -700,76 +657,19 @@ let rezc = scc * (cqa - sa * ald) * dxi
 
 ---
 
-## 9. Known Implementation Differences
-
-### 9a. DAMPL2 Blending (Not in RustFoil)
-**Impact**: May affect transition prediction for Hk > 3.5 (separated flow)
-
-### 9b. Turbulent DI in BLVAR
-Both use the same base formula, but there's complex logic for:
-- Wall contribution with DFAC correction
-- Outer layer (DD) contribution  
-- Laminar stress (DD2) contribution
-- Comparison with laminar DI
-
-**Recommend**: Compare DI values station-by-station to identify any differences.
-
-### 9c. CFM (Midpoint Cf) in Momentum Equation
-XFOIL uses a special midpoint Cf calculation:
-```fortran
-CFX = 0.50*CFM*XA/TA + 0.25*(CF1*X1/T1 + CF2*X2/T2)
-```
-
-RustFoil has `blmid()` function for this - verify it matches.
-
----
-
-## 10. Debugging Checklist
-
-When tracing CD errors, compare these values station-by-station:
-
-| Variable | XFOIL Name | RustFoil Field | Units |
-|----------|------------|----------------|-------|
-| Shape factor H | `H2` | `station.h` | - |
-| Kinematic Hk | `HK2` | `station.hk` | - |
-| Energy shape Hs | `HS2` | `station.hs` | - |
-| Skin friction | `CF2` | `station.cf` | - |
-| Dissipation | `DI2` | `station.cd` | - |
-| Edge velocity Us | `US2` | `station.us` | - |
-| Shear stress | `S2` | `station.ctau` | - |
-| Eq. shear coef | `CQ2` | `station.cq` | - |
-| BL thickness | `DE2` | `station.de` | - |
-| Rtheta | `RT2` | `station.r_theta` | - |
-
-### Suggested Workflow
-
-1. Run both XFOIL and RustFoil with identical inputs
-2. Dump BL stations at each marching step
-3. Compare the above variables
-4. First discrepancy indicates the problematic closure
-
----
-
 ## Summary
 
 | Component | Status |
 |-----------|--------|
-| Constants | ✅ Match |
-| Hkin | ✅ Match |
-| Hs Laminar | ✅ Match |
-| Hs Turbulent | ✅ Match |
-| Cf Laminar | ✅ Match |
-| Cf Turbulent | ✅ Match |
-| DI Laminar | ✅ Match |
-| DI Turbulent | ✅ Match |
-| DI Wake | ✅ Match |
-| DAMPL | ✅ Match |
-| DAMPL2 | ❌ **Missing** |
-| Shear-lag | ✅ Match |
-| BLDIF structure | ✅ Match |
-
-**Likely CD Error Sources**:
-1. Missing DAMPL2 blending for separated flow
-2. Jacobian propagation errors (chain rule)
-3. Subtle differences in turbulent DI wall correction (DFAC)
-4. CFM midpoint calculation in momentum equation
+| Constants | Match |
+| Hkin | Match |
+| Hs Laminar | Match |
+| Hs Turbulent | Match |
+| Cf Laminar | Match |
+| Cf Turbulent | Match |
+| DI Laminar | Match |
+| DI Turbulent | Match |
+| DI Wake | Match |
+| DAMPL | Match |
+| Shear-lag | Match |
+| BLDIF structure | Match |

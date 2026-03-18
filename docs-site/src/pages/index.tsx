@@ -17,20 +17,17 @@ function HomepageHeader() {
           {siteConfig.title}
         </Heading>
         <p className="hero__subtitle">{siteConfig.tagline}</p>
-        <p style={{fontSize: '0.9rem', opacity: 0.85, marginTop: '-0.5rem'}}>
-          These docs are a work in progress and will be updated as the project evolves.
-        </p>
         <div className={styles.buttons}>
           <Link
             className="button button--secondary button--lg"
-            to="/xfoil-architecture-spec">
-            XFOIL Architecture
+            to="/intro">
+            Get Started
           </Link>
           <Link
             className="button button--secondary button--lg"
             style={{marginLeft: '1rem'}}
-            to="/inviscid-implementation">
-            Inviscid Solver
+            to="/python-api">
+            Python API
           </Link>
         </div>
       </div>
@@ -42,8 +39,8 @@ export default function Home(): ReactNode {
   const {siteConfig} = useDocusaurusContext();
   return (
     <Layout
-      title={`Hello from ${siteConfig.title}`}
-      description="Description will go into a meta tag in <head />">
+      title={siteConfig.title}
+      description="Airfoil analysis powered by XFOIL — in Python and the browser">
       <HomepageHeader />
       <main>
         <HomepageFeatures />

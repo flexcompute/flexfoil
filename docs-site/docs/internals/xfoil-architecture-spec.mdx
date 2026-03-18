@@ -1,5 +1,4 @@
 ---
-id: xfoil-architecture-spec
 title: How XFOIL Works (Architecture Spec)
 sidebar_label: XFOIL Architecture
 sidebar_position: 1
@@ -10,16 +9,6 @@ keywords: [xfoil, airfoil, boundary layer, viscous, inviscid, coupling]
 import HkCorrelationPlot from '@site/src/components/Interactive/HkCorrelationPlot';
 
 # How XFOIL Works
-
-:::info[Work in Progress]
-This documentation is actively being updated as FlexFoil development continues.
-:::
-
-> **Document Status**: Specification for Rust implementation  
-> **Source**: XFOIL 6.99 FORTRAN source code analysis  
-> **Last Updated**: 2026-01-20
-
----
 
 ## One-Page Mental Model
 
@@ -904,16 +893,4 @@ graph LR
 
 ---
 
-## TODO / VERIFY IN CODE
-
-The following items require additional verification against the FORTRAN source:
-
-1. **SPECULATIVE**: Exact wake panel distribution algorithm in `XYWAKE`
-2. **SPECULATIVE**: Precise implementation of Karman-Tsien compressibility correction in lift calculation
-3. **TODO**: Verify exact implementation of `DILW` (wake dissipation) vs `DIT` (turbulent dissipation)
-4. **TODO**: Confirm handling of blunt trailing edge (`SHARP = .FALSE.`) in `TESYS`
-5. **TODO**: Document exact formula for `GAMTE`, `SIGTE` trailing edge panel strengths
-
----
-
-*Document based on XFOIL 6.99 source code. For FlexFoil Rust implementation.*
+*Based on XFOIL 6.99 source code analysis.*

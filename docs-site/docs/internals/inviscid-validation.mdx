@@ -6,10 +6,6 @@ sidebar_position: 5
 
 # Inviscid Solver Validation
 
-:::info[Work in Progress]
-This documentation is actively being updated as FlexFoil development continues.
-:::
-
 This document presents the comprehensive validation of RustFoil's inviscid panel method solver against XFOIL, demonstrating machine-precision agreement across multiple airfoils and angles of attack.
 
 ## Validation Summary
@@ -171,32 +167,6 @@ The Cp distributions overlay exactly across all test cases. Key features capture
 - **Stagnation point:** Cp = 1.0 at leading edge
 - **Suction peak:** Cp ≈ -0.41 near 12% chord (NACA 0012 at α=0°)
 - **Trailing edge recovery:** Cp ≈ 0.41 at both upper and lower TE
-
-## Interactive Comparison Dashboard
-
-An interactive HTML dashboard is available at:
-
-```
-scripts/comparison_data/comparison_report.html
-```
-
-Features:
-- Tabbed interface: Polars, Cp distributions, γ distributions, Error analysis
-- All 3 airfoils × 8 angles of attack
-- Hover for exact values
-
-To regenerate:
-
-```bash
-# Generate XFOIL reference data
-python3 scripts/generate_comparison_data.py
-
-# Generate RustFoil data
-cargo run --release --package rustfoil-inviscid --example generate_rustfoil_data
-
-# Create comparison plots
-python3 scripts/comparison_plots.py
-```
 
 ## Key Implementation Details
 

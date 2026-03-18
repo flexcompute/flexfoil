@@ -6,10 +6,6 @@ description: Comparison of XFOIL and RustFoil curvature-based paneling (PANGEN)
 
 # Paneling Validation: XFOIL vs RustFoil
 
-:::info[Work in Progress]
-This documentation is actively being updated as FlexFoil development continues.
-:::
-
 This document compares the paneling algorithms between XFOIL's `PANGEN` subroutine and RustFoil's `resample_xfoil()` implementation.
 
 ## Algorithm Overview
@@ -108,27 +104,6 @@ RustFoil's `lefind` implementation may have subtle differences in:
 1. Initial guess for Newton iteration
 2. Convergence tolerance
 3. Spline derivative evaluation
-
-## Interactive Comparison
-
-An interactive comparison plot is available at:
-```
-scripts/paneling_comparison_actual.html
-```
-
-Run the comparison script:
-```bash
-python3 scripts/interactive_paneling_comparison.py
-```
-
-## Files
-
-- `scripts/compare_paneling.py` - Paneling methodology comparison
-- `scripts/interactive_paneling_comparison.py` - Interactive Plotly visualization
-- `crates/rustfoil-core/examples/dump_paneling.rs` - Dump actual coordinates
-- `naca*_buffer_xfoil.dat` - XFOIL buffer coordinates (245 points)
-- `naca*_paneled_xfoil.dat` - XFOIL paneled output (160 points)
-- `naca*_rustfoil_paneled.dat` - RustFoil paneled output (160 points)
 
 ## Fix Applied
 

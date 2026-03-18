@@ -2,11 +2,7 @@
 sidebar_position: 7
 ---
 
-# Stall Prediction Investigation (2026-01-28)
-
-:::info[Work in Progress]
-This documentation is actively being updated as FlexFoil development continues.
-:::
+# Stall Prediction Investigation
 
 This document summarizes the investigation into why RustFoil cannot predict airfoil stall and the critical fixes implemented.
 
@@ -225,54 +221,6 @@ The 30-120% CD errors suggest issues in:
    - Early-station θ still too small
    - N-factor calibration needed
 
-## Next Steps
-
-### Immediate (Before Further Debugging)
-
-1. **Study XFOIL's Turbulent BL**
-   - Read `xblsys.f` DAEROD, BLDIF turbulent case
-   - Verify all formulas match RustFoil implementation
-   - Check for missing terms or sign errors
-
-2. **Test at α=0°**
-   - Eliminate stall complications
-   - Focus on basic turbulent BL accuracy
-   - Should achieve CD < 5% error
-
-3. **Station-by-Station Comparison**
-   - Compare θ, δ*, H from LE to TE
-   - Identify exact divergence location
-   - Fix the earliest error first
-
-### Short Term
-
-4. **Fix Turbulent BL Growth**
-   - Implement any missing XFOIL formulas
-   - Verify integration method
-   - Target: CD < 10% at all angles
-
-5. **Stabilize Newton with Re-March**
-   - Add adaptive damping
-   - Prevent RMS explosion at high α
-   - Monitor residual convergence
-
-6. **Calibrate Transition**
-   - Address remaining 14% delay
-   - May need N-factor tuning
-   - Or initial BL thickness correction
-
-### Long Term
-
-7. **Implement Proper TE Separation**
-   - Detect when Cf → 0 at TE
-   - Allow H > htmax in final iterations
-   - Enable stall prediction
-
-8. **Validate Across Reynolds Numbers**
-   - Test at Re = 1M, 5M, 10M, 20M
-   - Ensure robustness
-   - Match XFOIL polars within 5%
-
 ## Key Learnings
 
 ### 1. Re-March is Essential
@@ -298,22 +246,6 @@ Don't assume your implementation matches XFOIL. Verify every:
 - BL equation implementation (term-by-term)
 
 ## References
-
-### Implementation Files
-- `crates/rustfoil-solver/src/viscous/viscal.rs` - Main viscous solver with re-march
-- `crates/rustfoil-coupling/src/march.rs` - BL marching algorithm
-- `crates/rustfoil-coupling/src/wake.rs` - Wake BL handling
-- Test files - Fixed Ue capping bug
-
-### Documentation
-- `_snippets/2026-01-28_Full_Session_Report.md` - Complete session timeline
-- `_snippets/CRITICAL_STALL_BUG_FINDING.md` - Re-march necessity analysis
-- `docs/debugging/bl_remarch_fix.md` - Implementation details
-- `docs/debugging/shape_factor_error_root_cause.md` - Transition analysis
-
-### Analysis Tools
-- `scripts/compare_shape_factor.py` - H distribution analyzer
-- `scripts/compare_early_theta.py` - Early BL thickness comparison
 
 ### XFOIL Source
 - `xbl.f` - BL marching (MRCHUE), Newton coupling (SETBL, UPDATE)

@@ -5,49 +5,42 @@ import styles from './styles.module.css';
 
 type FeatureItem = {
   title: string;
-  Svg: React.ComponentType<React.ComponentProps<'svg'>>;
   description: ReactNode;
 };
 
 const FeatureList: FeatureItem[] = [
   {
-    title: 'XFOIL Compatible',
-    Svg: require('@site/static/img/undraw_docusaurus_mountain.svg').default,
+    title: 'Python API',
     description: (
       <>
-        Full implementation of XFOIL&apos;s viscous-inviscid coupling with 
-        boundary layer analysis, transition prediction, and stall modeling.
+        <code>pip install flexfoil</code> — solve airfoils in three lines of
+        code. Run polar sweeps, export to pandas, and plot with matplotlib.
       </>
     ),
   },
   {
-    title: 'Rust + WebAssembly',
-    Svg: require('@site/static/img/undraw_docusaurus_tree.svg').default,
+    title: 'Web App',
     description: (
       <>
-        High-performance Rust core compiles to WebAssembly for browser-based 
-        airfoil analysis with near-native speed.
+        Interactive browser-based analysis with flow visualization, polar
+        plots, a data explorer, plot builder, and inverse design tools.
       </>
     ),
   },
   {
-    title: 'Interactive Visualizations',
-    Svg: require('@site/static/img/undraw_docusaurus_react.svg').default,
+    title: 'XFOIL Heritage',
     description: (
       <>
-        React-based UI with live plots of pressure distributions, boundary 
-        layer profiles, and polar curves.
+        Faithful reimplementation of Mark Drela&apos;s XFOIL solver —
+        viscous-inviscid coupling, e<sup>N</sup> transition, and panel method.
       </>
     ),
   },
 ];
 
-function Feature({title, Svg, description}: FeatureItem) {
+function Feature({title, description}: FeatureItem) {
   return (
     <div className={clsx('col col--4')}>
-      <div className="text--center">
-        <Svg className={styles.featureSvg} role="img" />
-      </div>
       <div className="text--center padding-horiz--md">
         <Heading as="h3">{title}</Heading>
         <p>{description}</p>

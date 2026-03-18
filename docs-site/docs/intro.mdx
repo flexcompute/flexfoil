@@ -1,0 +1,84 @@
+---
+sidebar_position: 1
+title: What is FlexFoil?
+---
+
+# FlexFoil
+
+**Airfoil analysis powered by XFOIL — in Python and the browser.**
+
+FlexFoil is a faithful reimplementation of Mark Drela's
+[XFOIL](https://web.mit.edu/drela/Public/web/xfoil/) solver, rewritten from
+Fortran into Rust. It ships as a **Python library** (`pip install flexfoil`)
+and a **browser-based web app** — both backed by the same solver core.
+
+```python
+import flexfoil
+
+foil = flexfoil.naca("2412")
+result = foil.solve(alpha=5.0, Re=1e6)
+print(result)
+# SolveResult(α=5.00°, Re=1e+06, CL=0.8094, CD=0.00775, CM=-0.0540, converged)
+```
+
+## Three ways to use it
+
+| | Python API | Web App | CLI |
+|---|---|---|---|
+| **Install** | `pip install flexfoil` | [foil.flexcompute.com](https://foil.flexcompute.com/flexfoil/) | Included with the Python package |
+| **Best for** | Scripting, batch sweeps, integration with notebooks | Interactive exploration, flow visualization | Quick one-off solves from the terminal |
+
+### Python API
+
+Solve airfoils in a few lines, run polar sweeps, export to pandas, and plot
+with matplotlib. Every result is cached in a local SQLite database.
+
+```python
+foil = flexfoil.naca("2412")
+polar = foil.polar(alpha=(-5, 15, 0.5), Re=1e6)
+polar.plot()        # 4-panel matplotlib figure
+polar.to_dataframe() # export to pandas
+```
+
+See the full [Python API documentation](./python-api).
+
+### Web App
+
+A browser-based analysis environment with an airfoil library, interactive
+geometry editing, flow visualization (streamlines, smoke, Cp, boundary layer),
+polar plots, a data explorer, and a plot builder.
+
+Launch it locally from Python:
+
+```python
+flexfoil.serve()  # opens http://localhost:8420
+```
+
+Or visit the hosted version at
+[foil.flexcompute.com](https://foil.flexcompute.com/flexfoil/).
+
+See the [Web App guide](./web-app).
+
+### CLI
+
+```bash
+flexfoil solve 2412 -a 5 -r 1e6    # quick solve from the terminal
+flexfoil serve                       # launch the web UI
+flexfoil info                        # show config and DB location
+```
+
+## XFOIL heritage
+
+FlexFoil implements the same physics as XFOIL:
+
+- **Panel method** — linear-vorticity / constant-source inviscid formulation
+- **Integral boundary layer** — two-equation (H, θ) dissipation-closure model for laminar and turbulent flow
+- **Viscous-inviscid coupling** — mass-defect transpiration via a global Newton system
+- **Transition prediction** — e^N envelope method (default N_crit = 9)
+- **Design modes** — full-inverse (MDES), mixed-inverse (QDES), and geometry editing (GDES)
+
+The Rust solver is compiled to native code for the Python library (via PyO3)
+and to WebAssembly for the browser app. Both produce byte-identical results.
+
+For the technical details of the solver implementation, see the
+[Solver Internals](./internals/xfoil-architecture-spec) section.

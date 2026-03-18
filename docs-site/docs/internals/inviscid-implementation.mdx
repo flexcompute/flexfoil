@@ -6,10 +6,6 @@ sidebar_position: 2
 
 # Inviscid Solver Implementation
 
-:::info[Work in Progress]
-This documentation is actively being updated as FlexFoil development continues.
-:::
-
 This document describes the implementation of the inviscid panel method solver in the `rustfoil-inviscid` crate.
 
 ## Overview
@@ -54,8 +50,6 @@ let geom = AirfoilGeometry::from_points(&points)?;
 ### 2. Influence Coefficients (`influence.rs`)
 
 Matches XFOIL's `PSILIN` subroutine using the PSIS/PSID formulation:
-
-The stream function is computed as:
 
 The stream function is computed as:
 
@@ -192,13 +186,6 @@ for alpha_deg in [0.0, 2.0, 4.0, 6.0, 8.0] {
 2. **Inviscid only**: This module computes inviscid flow. For viscous effects, use `rustfoil-bl` for boundary layer calculations.
 
 3. **Coordinate matching**: Using the same coordinates as XFOIL gives &lt;0.01% accuracy. Different paneling (e.g., simple cosine spacing) may show larger differences.
-
-## Future Work
-
-- [ ] Import XFOIL panel coordinates directly for exact comparison
-- [ ] Add source distribution for viscous coupling (SIGLIN mode)
-- [ ] Implement stagnation point tracking for boundary layer initialization
-- [ ] Add compressibility corrections (Prandtl-Glauert)
 
 ## XFOIL Subroutine Mapping
 

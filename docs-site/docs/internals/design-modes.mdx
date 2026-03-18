@@ -1,5 +1,4 @@
 ---
-id: design-modes
 title: Inverse & Geometry Design (QDES / MDES / GDES)
 sidebar_label: Design Modes
 sidebar_position: 8
@@ -146,7 +145,7 @@ GDES provides **direct geometry modifications** — no flow solve involved. Thes
 
 | Operation | Function | Description |
 |-----------|----------|-------------|
-| **Flap deflection** | `deflectFlap(coords, hingeX, angleDeg)` | Rotate all points aft of hinge x-position |
+| **Flap deflection** | `deflectFlap(coords, hingeX, hingeYFrac, angleDeg)` | Rotate all points aft of hinge x-position about a user-defined hinge point |
 | **TE gap** | `setTeGap(coords, gap, blend)` | Set trailing-edge gap with blended ramp |
 | **LE radius** | `setLeRadius(coords, factor)` | Scale leading-edge radius (front 15% of chord) |
 | **Thickness scale** | `scaleThickness(coords, factor)` | Scale thickness while preserving camber line |
@@ -158,20 +157,39 @@ GDES provides **direct geometry modifications** — no flow solve involved. Thes
 ### Usage in the App
 
 1. Switch to **Geometry** mode in the Control panel
-2. Adjust sliders for flap deflection, TE gap, or LE radius
-3. Click **Apply** — the geometry updates immediately
-4. Use undo (Cmd+Z) to revert
+2. Click **Add Flap** to create one or more flap definitions
+3. For each flap, set hinge x/c, hinge y/t (fraction of local thickness), and deflection
+4. Click **Apply** — all flaps are applied sequentially, then repaneled once
+5. Flap definitions are editable until applied; TE gap and LE radius sections remain unchanged
+6. Use undo (Cmd+Z) to revert the geometry
+
+### Flap Object Model
+
+Flaps are represented as an ordered list of `FlapDefinition` objects:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `string` | Unique identifier |
+| `hingeX` | `number` | Hinge x as fraction of chord (0.5–0.95) |
+| `hingeYFrac` | `number` | Hinge y as fraction of local thickness (0 = lower surface, 0.5 = mid-thickness, 1 = upper) |
+| `deflection` | `number` | Deflection in degrees (positive = down) |
+
+Multiple flaps are applied in array order. A main flap at x/c = 0.7 followed by a tab at x/c = 0.9 rotates everything aft of 0.7 first, then rotates only the tab region relative to the already-deflected geometry.
+
+Flap definitions are stored alongside each run in the `flaps_json` database column.
 
 ### Flap Implementation Detail
 
-The flap operation rotates all points with `x > hinge_x` about the hinge point. The hinge y-coordinate is interpolated as the mean of upper and lower surface y at the hinge x-location:
+Before rotating, break points are inserted on both surfaces at the hinge x-station to ensure a clean geometric discontinuity. The hinge y-coordinate is interpolated from the upper and lower surface y values at the hinge x-location and positioned according to `hingeYFrac`:
 
 ```
-For each point p where p.x > hinge_x:
+y_hinge = y_lower + hingeYFrac × (y_upper - y_lower)
+
+For each point p where p.x ≥ hinge_x:
     dx = p.x - hinge_x
-    dy = p.y - hinge_y
+    dy = p.y - y_hinge
     p.x = hinge_x + dx·cos(δ) + dy·sin(δ)
-    p.y = hinge_y - dx·sin(δ) + dy·cos(δ)
+    p.y = y_hinge - dx·sin(δ) + dy·cos(δ)
 ```
 
 ### TE Gap Implementation Detail
@@ -199,7 +217,7 @@ All three modes follow the same integration pattern:
 └──────────────┬──────────────────────────────┬────┘
                │                              │
          wasm.ts                        wasm.ts
-    runInverseDesign()              deflectFlap()
+    runInverseDesign()              deflectFlap(…, hingeYFrac, …)
     runFullInverseDesign()         setTeGap() etc.
                │                              │
          ┌─────┴──────┐              ┌────────┴────────┐

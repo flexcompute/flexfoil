@@ -4,8 +4,8 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
   title: 'FlexFoil',
-  tagline: 'XFOIL-compatible airfoil analysis in Rust/WASM',
-  favicon: 'img/favicon.ico',
+  tagline: 'Airfoil analysis powered by XFOIL — in Python and the browser',
+  favicon: 'img/logo.svg',
 
   future: {
     v4: true,
@@ -39,7 +39,7 @@ const config: Config = {
           sidebarPath: './sidebars.ts',
           editUrl: 'https://github.com/flexfoil/flexfoil/tree/main/docs-site/',
         },
-        blog: false, // Disable blog for now
+        blog: false,
         theme: {
           customCss: './src/css/custom.css',
         },
@@ -48,7 +48,7 @@ const config: Config = {
   ],
 
   themeConfig: {
-    image: 'img/docusaurus-social-card.jpg',
+    // image: 'img/social-card.jpg',
     colorMode: {
       respectPrefersColorScheme: true,
     },
@@ -82,14 +82,26 @@ const config: Config = {
           title: 'Docs',
           items: [
             {
-              label: 'Architecture',
-              to: '/xfoil-architecture-spec',
+              label: 'Get Started',
+              to: '/intro',
+            },
+            {
+              label: 'Python API',
+              to: '/python-api',
+            },
+            {
+              label: 'Web App',
+              to: '/web-app',
             },
           ],
         },
         {
           title: 'More',
           items: [
+            {
+              label: 'Solver Internals',
+              to: '/internals/xfoil-architecture-spec',
+            },
             {
               label: 'GitHub',
               href: 'https://github.com/flexfoil/flexfoil',

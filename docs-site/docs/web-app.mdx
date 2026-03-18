@@ -1,0 +1,107 @@
+---
+sidebar_position: 3
+title: Web App
+---
+
+# Web App
+
+FlexFoil includes a browser-based analysis environment. Use it at
+[foil.flexcompute.com](https://foil.flexcompute.com/flexfoil/), or launch it
+locally from Python:
+
+```python
+import flexfoil
+flexfoil.serve()  # opens http://localhost:8420
+```
+
+```bash
+flexfoil serve    # or from the command line
+```
+
+The web app runs the same RustFoil solver compiled to WebAssembly, so analysis
+happens entirely in the browser with no server round-trips. When launched via
+`flexfoil.serve()`, it shares the same SQLite database as the Python API — runs
+appear in both places.
+
+## Panels
+
+The UI is organized as a set of dockable, rearrangeable panels.
+
+### Airfoil Library
+
+Browse and load airfoils from the NACA 4-digit generator and the Selig
+database (over 1,500 airfoils). Select any airfoil to load it into the canvas.
+
+### Airfoil Canvas
+
+Interactive airfoil display with pan and zoom. Shows the current geometry with
+panel nodes, and overlays pressure distributions, boundary layer thickness, and
+other flow quantities when a solution is available.
+
+### Solve
+
+Configure and run single-point analysis. Set angle of attack, Reynolds number,
+Mach number, and N_crit. Toggle between viscous and inviscid modes. Results
+update in real time.
+
+### Polar Plot
+
+Run alpha sweeps and visualize CL-alpha, CD-alpha, CL-CD, and CM-alpha curves.
+Overlay multiple series (different airfoils or Reynolds numbers) for direct
+comparison.
+
+### Visualization
+
+Real-time flow visualization powered by WebGPU:
+
+- **Streamlines** — potential flow streamlines around the airfoil
+- **Smoke** — particle-based smoke visualization
+- **Cp** — pressure coefficient distribution
+- **Boundary layer** — displacement thickness envelope
+- **Wake** — wake trajectory downstream of the trailing edge
+
+### Data Explorer
+
+A full-featured data table (AG Grid) of all solver runs in the database. Sort,
+filter, and search across airfoils, operating conditions, and results. Includes
+a SPLOM (scatter plot matrix) correlogram for multivariate exploration. Custom
+computed columns let you define algebraic expressions over existing fields.
+
+### Plot Builder
+
+Build custom charts from run data: scatter, line, bar, and histogram plots.
+Map any database field to axes, color, or size. Useful for parameter studies
+and trade-off visualization.
+
+### Case Logs
+
+View the solver's internal convergence log for the current case — Newton
+iterations, residuals, and boundary layer events.
+
+## Design modes
+
+### Geometry Design (GDES)
+
+Direct geometry manipulation tools:
+
+- **Flap deflection** — define one or more trailing-edge flaps with configurable hinge x/c, hinge y/t, and deflection angle
+- **Trailing-edge gap** — modify the TE gap
+- **Leading-edge radius** — scale the LE radius
+- **Camber/thickness splines** — interactive control points for shape editing
+
+### Inverse Design (QDES)
+
+Mixed-inverse design mode: prescribe a target pressure distribution (Cp or
+velocity) on part of the airfoil surface, and the solver computes the geometry
+that produces it. Useful for designing airfoils to meet specific aerodynamic
+targets.
+
+## Sharing and persistence
+
+- **URL sharing** — the full application state (airfoil, solver settings,
+  panel layout, visualization) is encoded in the URL. Copy and share a link to
+  reproduce exactly what you see.
+- **SQLite database** — all runs are persisted locally. Export and import the
+  database for backup or sharing.
+- **Mobile layout** — the app adapts to smaller screens with a stacked panel
+  layout.
