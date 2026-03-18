@@ -1,0 +1,96 @@
+name: Deploy FlexFoil Beta to flight-sciences dev
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - "flexfoil-ui/**"
+      - "crates/rustfoil-wasm/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/deploy-foil-beta.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AWS_REGION: us-east-1
+      AWS_ROLE: arn:aws:iam::343549021813:role/github-frontend-assume-role
+      S3_BUCKET: flight-sciences-website-dev
+      S3_DEPLOY_PATH: /flexfoil
+      BASE_URL: /flexfoil/
+      PUBLIC_URL: https://flight-sciences.dev-simulation.cloud/flexfoil/
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM package
+        run: |
+          cd crates/rustfoil-wasm
+          wasm-pack build --target web --release --out-dir ../../pkg
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: flexfoil-ui/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ./flexfoil-ui
+        run: npm ci
+
+      - name: Build FlexFoil frontend
+        working-directory: ./flexfoil-ui
+        run: npm run build
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+          BASE_URL: ${{ env.BASE_URL }}
+          VITE_AG_GRID_LICENSE_KEY: ${{ secrets.AG_GRID_ENTERPRISE_LICENSE_KEY }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_ROLE }}
+          role-session-name: FlexFoilBetaDeploy
+
+      - name: Deploy FlexFoil Beta to S3
+        working-directory: ./flexfoil-ui/dist
+        run: |
+          echo "Deploying to s3://${S3_BUCKET}${S3_DEPLOY_PATH}"
+
+          aws s3 rm "s3://${S3_BUCKET}${S3_DEPLOY_PATH}" --recursive
+
+          aws s3 cp . "s3://${S3_BUCKET}${S3_DEPLOY_PATH}" \
+            --recursive --exclude "*" --include "*.html" \
+            --metadata-directive REPLACE \
+            --cache-control 'max-age=0, no-cache, no-store, must-revalidate' \
+            --metadata "deploy-sha1=${GITHUB_SHA}"
+
+          aws s3 cp . "s3://${S3_BUCKET}${S3_DEPLOY_PATH}" \
+            --recursive --exclude "*" --include "*.json" \
+            --metadata-directive REPLACE \
+            --cache-control 'max-age=300, must-revalidate' \
+            --metadata "deploy-sha1=${GITHUB_SHA}"
+
+          aws s3 cp . "s3://${S3_BUCKET}${S3_DEPLOY_PATH}" \
+            --recursive --exclude "*.html" --exclude "*.json" --exclude "*.map" \
+            --cache-control 'max-age=31536000, immutable' \
+            --metadata "deploy-sha1=${GITHUB_SHA}"
+
+      - name: Deployment Summary
+        run: |
+          echo "FlexFoil Beta deployed to ${PUBLIC_URL}"
