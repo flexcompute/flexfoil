@@ -127,7 +127,11 @@ export function AirfoilLibraryPanel() {
             <input
               type="number"
               value={nPoints}
-              onChange={(e) => setNPoints(Math.max(10, Math.min(200, parseInt(e.target.value) || 50)))}
+              onChange={(e) => {
+                const val = parseInt(e.target.value);
+                if (!isNaN(val)) setNPoints(Math.min(200, val));
+              }}
+              onBlur={() => setNPoints(Math.max(10, Math.min(200, nPoints || 50)))}
               min={10}
               max={200}
               style={{ width: '80px' }}
