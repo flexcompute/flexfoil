@@ -196,3 +196,81 @@ class TestParseDat:
     def test_parse_nonexistent_file(self):
         with pytest.raises(Exception):
             parse_dat_file("/nonexistent/path.dat")
+
+
+# ---------------------------------------------------------------------------
+# Batch (parallel) solvers
+# ---------------------------------------------------------------------------
+
+class TestFaithfulBatch:
+    def _make_coords(self):
+        raw = generate_naca4(2412)
+        flat = [v for x, y in raw for v in (x, y)]
+        paneled = repanel_xfoil(flat, 160)
+        return [v for x, y in paneled for v in (x, y)]
+
+    def test_batch_returns_correct_count(self):
+        from flexfoil._rustfoil import analyze_faithful_batch
+        coords = self._make_coords()
+        results = analyze_faithful_batch(coords, [0.0, 3.0, 6.0])
+        assert len(results) == 3
+
+    def test_batch_results_match_single(self):
+        from flexfoil._rustfoil import analyze_faithful_batch
+        coords = self._make_coords()
+        alphas = [0.0, 5.0, 10.0]
+
+        batch = analyze_faithful_batch(coords, alphas, 1e6, 0.0, 9.0, 100)
+        singles = [analyze_faithful(coords, a, 1e6, 0.0, 9.0, 100) for a in alphas]
+
+        for b, s in zip(batch, singles):
+            assert b["success"] == s["success"]
+            if b["success"]:
+                assert abs(b["cl"] - s["cl"]) < 1e-10
+                assert abs(b["cd"] - s["cd"]) < 1e-10
+
+    def test_batch_empty_alphas(self):
+        from flexfoil._rustfoil import analyze_faithful_batch
+        coords = self._make_coords()
+        results = analyze_faithful_batch(coords, [])
+        assert results == []
+
+    def test_batch_invalid_coords(self):
+        from flexfoil._rustfoil import analyze_faithful_batch
+        results = analyze_faithful_batch([1.0, 0.0], [0.0, 5.0])
+        assert len(results) == 2
+        assert not results[0]["success"]
+        assert not results[1]["success"]
+
+
+class TestInviscidBatch:
+    def _make_coords(self):
+        raw = generate_naca4(2412)
+        flat = [v for x, y in raw for v in (x, y)]
+        paneled = repanel_xfoil(flat, 160)
+        return [v for x, y in paneled for v in (x, y)]
+
+    def test_batch_returns_correct_count(self):
+        from flexfoil._rustfoil import analyze_inviscid_batch
+        coords = self._make_coords()
+        results = analyze_inviscid_batch(coords, [0.0, 3.0, 6.0])
+        assert len(results) == 3
+
+    def test_batch_results_match_single(self):
+        from flexfoil._rustfoil import analyze_inviscid_batch
+        coords = self._make_coords()
+        alphas = [0.0, 5.0, 10.0]
+
+        batch = analyze_inviscid_batch(coords, alphas)
+        singles = [analyze_inviscid(coords, a) for a in alphas]
+
+        for b, s in zip(batch, singles):
+            assert b["success"] == s["success"]
+            if b["success"]:
+                assert abs(b["cl"] - s["cl"]) < 1e-10
+
+    def test_batch_invalid_coords(self):
+        from flexfoil._rustfoil import analyze_inviscid_batch
+        results = analyze_inviscid_batch([1.0, 0.0], [0.0, 5.0])
+        assert len(results) == 2
+        assert not results[0]["success"]

@@ -243,3 +243,38 @@ class TestCli:
         main([])
         out = capsys.readouterr().out
         assert "usage" in out.lower() or "flexfoil" in out.lower()
+
+
+# ---------------------------------------------------------------------------
+# Parallel polar
+# ---------------------------------------------------------------------------
+
+class TestParallelPolar:
+    def test_parallel_default(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        polar = foil.polar(alpha=(0, 4, 2.0), Re=1e6)
+        assert len(polar.converged) >= 2
+
+    def test_parallel_matches_sequential(self):
+        import flexfoil
+        foil = flexfoil.naca("0012")
+        par = foil.polar(alpha=(0, 4, 2.0), Re=1e6, parallel=True, store=False)
+        seq = foil.polar(alpha=(0, 4, 2.0), Re=1e6, parallel=False, store=False)
+        assert len(par.converged) == len(seq.converged)
+        for p, s in zip(par.converged, seq.converged):
+            assert abs(p.cl - s.cl) < 1e-10
+            assert abs(p.cd - s.cd) < 1e-10
+
+    def test_parallel_inviscid(self):
+        import flexfoil
+        foil = flexfoil.naca("0012")
+        polar = foil.polar(alpha=(0, 6, 2.0), Re=1e6, viscous=False, parallel=True)
+        assert all(cd == 0.0 for cd in polar.cd)
+
+    def test_parallel_stores_in_db(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        foil.polar(alpha=(0, 2, 1.0), Re=1e6, parallel=True)
+        runs = flexfoil.runs()
+        assert len(runs) >= 3

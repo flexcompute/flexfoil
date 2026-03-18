@@ -35,6 +35,24 @@ def repanel_xfoil(
     """Repanel airfoil using XFOIL's curvature-based algorithm."""
     ...
 
+def analyze_faithful_batch(
+    coords: list[float],
+    alphas: list[float],
+    reynolds: float = 1e6,
+    mach: float = 0.0,
+    ncrit: float = 9.0,
+    max_iterations: int = 100,
+) -> list[dict[str, object]]:
+    """Batch viscous analysis: solve multiple alphas in parallel via rayon."""
+    ...
+
+def analyze_inviscid_batch(
+    coords: list[float],
+    alphas: list[float],
+) -> list[dict[str, object]]:
+    """Batch inviscid analysis: solve multiple alphas in parallel via rayon."""
+    ...
+
 def parse_dat_file(path: str) -> list[tuple[float, float]]:
     """Parse a Selig/Lednicer .dat file and return coordinate tuples."""
     ...

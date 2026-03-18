@@ -16,3 +16,4 @@ rustfoil-solver = { path = "../rustfoil-solver" }
 rustfoil-inviscid = { path = "../rustfoil-inviscid" }
 rustfoil-xfoil = { path = "../rustfoil-xfoil" }
 pyo3 = { version = "0.23", features = ["extension-module"] }
+rayon = "1.10"

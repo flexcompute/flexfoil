@@ -212,6 +212,7 @@ class Airfoil:
         max_iter: int = 100,
         viscous: bool = True,
         store: bool = True,
+        parallel: bool = True,
     ) -> PolarResult:
         """Run a polar sweep over a range of angles of attack.
 
@@ -220,7 +221,8 @@ class Airfoil:
         alpha : (start, end, step) in degrees
         Re, mach, ncrit, max_iter : solver parameters
         viscous : if False, inviscid only
-        store : if True, cache each point
+        store : if True, cache each point in the local database
+        parallel : if True (default), solve all alphas in parallel via rayon
         """
         from flexfoil.polar import PolarResult
 
@@ -229,18 +231,20 @@ class Airfoil:
         start, end, step = alpha
         alphas = np.arange(start, end + step * 0.5, step)
 
-        results: list[SolveResult] = []
-        for a in alphas:
-            r = self.solve(
-                float(a),
-                Re=Re,
-                mach=mach,
-                ncrit=ncrit,
-                max_iter=max_iter,
-                viscous=viscous,
-                store=store,
+        if parallel:
+            results = self._polar_batch(
+                [float(a) for a in alphas],
+                Re=Re, mach=mach, ncrit=ncrit, max_iter=max_iter,
+                viscous=viscous, store=store,
             )
-            results.append(r)
+        else:
+            results = [
+                self.solve(
+                    float(a), Re=Re, mach=mach, ncrit=ncrit,
+                    max_iter=max_iter, viscous=viscous, store=store,
+                )
+                for a in alphas
+            ]
 
         return PolarResult(
             airfoil_name=self.name,
@@ -249,6 +253,74 @@ class Airfoil:
             ncrit=ncrit,
             results=results,
         )
+
+    def _polar_batch(
+        self,
+        alphas: list[float],
+        *,
+        Re: float,
+        mach: float,
+        ncrit: float,
+        max_iter: int,
+        viscous: bool,
+        store: bool,
+    ) -> list[SolveResult]:
+        """Solve all alphas in a single parallel Rust call."""
+        coords = self._flat_panels()
+
+        if viscous:
+            from flexfoil._rustfoil import analyze_faithful_batch
+
+            raw_list = analyze_faithful_batch(coords, alphas, Re, mach, ncrit, max_iter)
+            results = [
+                SolveResult(
+                    cl=raw.get("cl", 0.0),
+                    cd=raw.get("cd", 0.0),
+                    cm=raw.get("cm", 0.0),
+                    converged=raw.get("converged", False),
+                    iterations=raw.get("iterations", 0),
+                    residual=raw.get("residual", 0.0),
+                    x_tr_upper=raw.get("x_tr_upper", 1.0),
+                    x_tr_lower=raw.get("x_tr_lower", 1.0),
+                    alpha=a,
+                    reynolds=Re,
+                    mach=mach,
+                    ncrit=ncrit,
+                    success=raw.get("success", False),
+                    error=raw.get("error"),
+                )
+                for a, raw in zip(alphas, raw_list)
+            ]
+        else:
+            from flexfoil._rustfoil import analyze_inviscid_batch
+
+            raw_list = analyze_inviscid_batch(coords, alphas)
+            results = [
+                SolveResult(
+                    cl=raw.get("cl", 0.0),
+                    cd=0.0,
+                    cm=raw.get("cm", 0.0),
+                    converged=True,
+                    iterations=0,
+                    residual=0.0,
+                    x_tr_upper=1.0,
+                    x_tr_lower=1.0,
+                    alpha=a,
+                    reynolds=0.0,
+                    mach=0.0,
+                    ncrit=0.0,
+                    success=raw.get("success", False),
+                    error=raw.get("error"),
+                )
+                for a, raw in zip(alphas, raw_list)
+            ]
+
+        if store:
+            for r in results:
+                if r.success:
+                    self._store_run(r, viscous=viscous, max_iter=max_iter)
+
+        return results
 
     def _store_run(self, result: SolveResult, *, viscous: bool, max_iter: int) -> None:
         """Insert a run into the local database."""
