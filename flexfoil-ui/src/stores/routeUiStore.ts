@@ -8,6 +8,7 @@ import type {
   DataSource,
   RunMode,
   RunRow,
+  SweepAxis,
 } from '../types';
 import type { PanelId } from '../layoutConfig';
 
@@ -29,6 +30,8 @@ export interface RouteUiSnapshot {
   solvePolarStart: number;
   solvePolarEnd: number;
   solvePolarStep: number;
+  sweepPrimary: SweepAxis;
+  sweepSecondary: SweepAxis | null;
   polarXAxis: AxisVariable;
   polarYAxis: AxisVariable;
   plotDataSource: DataSource;
@@ -42,6 +45,7 @@ export interface RouteUiSnapshot {
   dataExplorerSplomKeys: (keyof RunRow)[];
   dataExplorerColorBy: keyof RunRow | '';
   dataExplorerFilterModel: unknown | null;
+  outlierFilterEnabled: boolean;
   activePanel: PanelId;
   layoutJson: IJsonModel | null;
   viewport: RouteViewportState;
@@ -60,6 +64,10 @@ interface RouteUiStore extends RouteUiSnapshot {
   setSolvePolarStart: (value: number) => void;
   setSolvePolarEnd: (value: number) => void;
   setSolvePolarStep: (value: number) => void;
+  setSweepPrimary: (value: SweepAxis) => void;
+  updateSweepPrimary: (partial: Partial<SweepAxis>) => void;
+  setSweepSecondary: (value: SweepAxis | null) => void;
+  updateSweepSecondary: (partial: Partial<SweepAxis>) => void;
   setPolarXAxis: (value: AxisVariable) => void;
   setPolarYAxis: (value: AxisVariable) => void;
   setPlotDataSource: (value: DataSource) => void;
@@ -73,6 +81,7 @@ interface RouteUiStore extends RouteUiSnapshot {
   setDataExplorerSplomKeys: (value: (keyof RunRow)[]) => void;
   setDataExplorerColorBy: (value: keyof RunRow | '') => void;
   setDataExplorerFilterModel: (value: unknown | null) => void;
+  setOutlierFilterEnabled: (value: boolean) => void;
   setViewport: (value: RouteViewportState) => void;
   applyRouteViewport: (value: Partial<RouteViewportState>) => void;
   setLayoutJson: (value: IJsonModel | null) => void;
@@ -92,6 +101,8 @@ export const DEFAULT_ROUTE_UI_STATE: RouteUiSnapshot = {
   solvePolarStart: -5,
   solvePolarEnd: 15,
   solvePolarStep: 1,
+  sweepPrimary: { param: 'alpha', start: -5, end: 15, step: 1 },
+  sweepSecondary: null,
   polarXAxis: 'alpha',
   polarYAxis: 'cl',
   plotDataSource: 'full',
@@ -105,6 +116,7 @@ export const DEFAULT_ROUTE_UI_STATE: RouteUiSnapshot = {
   dataExplorerSplomKeys: ['alpha', 'cl', 'cd', 'cm'],
   dataExplorerColorBy: '',
   dataExplorerFilterModel: null,
+  outlierFilterEnabled: false,
   activePanel: 'canvas',
   layoutJson: null,
   viewport: {
@@ -120,7 +132,7 @@ export const useRouteUiStore = create<RouteUiStore>((set) => ({
   layoutRevision: 0,
   activePanelRevision: 0,
   setLibraryNacaCode: (libraryNacaCode) => set({ libraryNacaCode }),
-  setLibraryNPoints: (libraryNPoints) => set({ libraryNPoints: Math.max(10, Math.min(200, libraryNPoints)) }),
+  setLibraryNPoints: (libraryNPoints) => set({ libraryNPoints: Math.max(10, Math.min(500, libraryNPoints)) }),
   setSpacingLiveUpdate: (spacingLiveUpdate) => set({ spacingLiveUpdate }),
   setSolveRunMode: (solveRunMode) => set({ solveRunMode }),
   setSolveShowAdvanced: (solveShowAdvanced) => set({ solveShowAdvanced }),
@@ -128,6 +140,12 @@ export const useRouteUiStore = create<RouteUiStore>((set) => ({
   setSolvePolarStart: (solvePolarStart) => set({ solvePolarStart }),
   setSolvePolarEnd: (solvePolarEnd) => set({ solvePolarEnd }),
   setSolvePolarStep: (solvePolarStep) => set({ solvePolarStep: Math.max(0.01, solvePolarStep) }),
+  setSweepPrimary: (sweepPrimary) => set({ sweepPrimary }),
+  updateSweepPrimary: (partial) => set((s) => ({ sweepPrimary: { ...s.sweepPrimary, ...partial } })),
+  setSweepSecondary: (sweepSecondary) => set({ sweepSecondary }),
+  updateSweepSecondary: (partial) => set((s) => ({
+    sweepSecondary: s.sweepSecondary ? { ...s.sweepSecondary, ...partial } : null,
+  })),
   setPolarXAxis: (polarXAxis) => set({ polarXAxis }),
   setPolarYAxis: (polarYAxis) => set({ polarYAxis }),
   setPlotDataSource: (plotDataSource) => set({ plotDataSource }),
@@ -141,6 +159,7 @@ export const useRouteUiStore = create<RouteUiStore>((set) => ({
   setDataExplorerSplomKeys: (dataExplorerSplomKeys) => set({ dataExplorerSplomKeys }),
   setDataExplorerColorBy: (dataExplorerColorBy) => set({ dataExplorerColorBy }),
   setDataExplorerFilterModel: (dataExplorerFilterModel) => set({ dataExplorerFilterModel }),
+  setOutlierFilterEnabled: (outlierFilterEnabled) => set({ outlierFilterEnabled }),
   setViewport: (viewport) => set({ viewport }),
   applyRouteViewport: (value) =>
     set((state) => ({

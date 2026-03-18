@@ -35,6 +35,7 @@ import {
 } from '../../lib/plotFields';
 import { detectSmartRunGroups } from '../../lib/polarDetection';
 import { buildMarkerEncoding, colorForKey } from '../../lib/plotStyling';
+import { buildFence, isInlier, type Fence } from '../../lib/outlierFilter';
 import { useCustomColumnStore, compileCustomColumns } from '../../stores/customColumnStore';
 import { useAllPlotFields } from '../../hooks/useAllPlotFields';
 import { CustomColumnEditor } from '../CustomColumnEditor';
@@ -240,6 +241,9 @@ export function DataExplorerPanel() {
     }
   }, [renameRun]);
 
+  const outlierFilter = useRouteUiStore((state) => state.outlierFilterEnabled);
+  const setOutlierFilter = useRouteUiStore((state) => state.setOutlierFilterEnabled);
+
   // ── Correlogram ──
   const data = dataSource === 'full' ? allRuns : filteredRuns;
   const successOnly = useMemo(() => data.filter((r) => r.success), [data]);
@@ -304,8 +308,40 @@ export function DataExplorerPanel() {
     const gridColor = isDark ? '#333' : '#ddd';
     const traces: Plotly.Data[] = [];
     const axisOverrides: Record<string, unknown> = {};
+
+    // Pre-compute one IQR fence per SPLOM column so each cell only
+    // applies its own X/Y fences rather than filtering globally.
+    const fenceMap: Record<string, Fence | null> = {};
+    if (outlierFilter) {
+      for (const key of splomKeys) {
+        const vals = successOnly
+          .map((r) => gv(r, key as string))
+          .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+        fenceMap[key as string] = buildFence(vals);
+      }
+    }
+
+    const passesOutlierFence = (run: RunRow, ...keys: string[]): boolean => {
+      if (!outlierFilter) return true;
+      return keys.every((k) => isInlier(gv(run, k) as number | null, fenceMap[k] ?? null));
+    };
+
+    // Axis ranges should reflect the fenced data when filtering is on
     const ranges = Object.fromEntries(
-      splomKeys.map((key) => [key, computeNumericRange(successOnly, key, gv)]),
+      splomKeys.map((key) => {
+        if (outlierFilter) {
+          const fence = fenceMap[key as string];
+          const values = successOnly
+            .map((r) => gv(r, key as string))
+            .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && isInlier(v, fence));
+          if (values.length === 0) return [key, [0, 1]];
+          const min = Math.min(...values);
+          const max = Math.max(...values);
+          const pad = (max - min) * 0.05 || 0.5;
+          return [key, [min - pad, max + pad]];
+        }
+        return [key, computeNumericRange(successOnly, key, gv)];
+      }),
     ) as Record<keyof RunRow, [number, number]>;
 
     let colorScaleShown = false;
@@ -355,8 +391,11 @@ export function DataExplorerPanel() {
         };
 
         if (row === col) {
+          // Diagonal: histogram — filter on the single variable
           groupedRows.forEach((group) => {
-            const rows = group.rows.filter((run) => gv(run, xStr) != null);
+            const rows = group.rows.filter(
+              (run) => gv(run, xStr) != null && passesOutlierFence(run, xStr),
+            );
             if (rows.length === 0) return;
             traces.push({
               type: 'histogram',
@@ -373,9 +412,14 @@ export function DataExplorerPanel() {
           continue;
         }
 
-        const cellRows = successOnly.filter((run) => gv(run, xStr) != null && gv(run, yStr) != null);
+        // Off-diagonal: scatter — filter on both X and Y for this cell
+        const cellRows = successOnly.filter(
+          (run) => gv(run, xStr) != null && gv(run, yStr) != null && passesOutlierFence(run, xStr, yStr),
+        );
         groupedRows.forEach((group, groupIndex) => {
-          const rows = group.rows.filter((run) => gv(run, xStr) != null && gv(run, yStr) != null);
+          const rows = group.rows.filter(
+            (run) => gv(run, xStr) != null && gv(run, yStr) != null && passesOutlierFence(run, xStr, yStr),
+          );
           if (rows.length === 0) return;
           const { marker } = buildMarkerEncoding({
             rows,
@@ -441,7 +485,7 @@ export function DataExplorerPanel() {
     };
 
     return { traces, layout };
-  }, [successOnly, splomKeys, colorBy, sizeBy, symbolBy, isDark, groupedRows, getFieldValue, mergedGetLabel]);
+  }, [successOnly, splomKeys, colorBy, sizeBy, symbolBy, isDark, groupedRows, getFieldValue, mergedGetLabel, outlierFilter]);
 
   const handlePlotClick = useCallback((event: Readonly<Plotly.PlotMouseEvent>) => {
     const rawRunId = event.points?.[0]?.customdata;
@@ -720,6 +764,20 @@ export function DataExplorerPanel() {
                 {mergedEncodingFields.map((f) => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
               </select>
             </div>
+
+            <label style={{
+              display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px',
+              color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none',
+              alignSelf: 'flex-end', paddingBottom: '3px',
+            }}>
+              <input
+                type="checkbox"
+                checked={outlierFilter}
+                onChange={(e) => setOutlierFilter(e.target.checked)}
+                style={{ margin: 0, accentColor: 'var(--accent-primary)' }}
+              />
+              Remove Outliers
+            </label>
             </div>
           </div>
 

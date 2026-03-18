@@ -41,6 +41,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       { category: 'added', text: 'Flap configurations included in shareable URLs' },
       { category: 'added', text: 'Solver result caching — repeated sweeps skip already-computed points and display cache hit stats' },
       { category: 'added', text: "What's New feature tour shown automatically on version update" },
+      { category: 'added', text: 'Automatic IQR-based outlier removal toggle in Polar plot, Plot Builder, and Data Explorer' },
     ],
     tourSlides: [
       {

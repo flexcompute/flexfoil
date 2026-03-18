@@ -55,7 +55,9 @@ or flap deflection vs Ncrit). Results plot as overlaid series in the Polar panel
 
 Visualize sweep results with configurable axes — CL, CD, CM, L/D, alpha,
 Reynolds, Mach, Ncrit, flap deflection, and flap hinge x/c. Overlay
-multiple series for direct comparison.
+multiple series for direct comparison. Enable the **Outliers** checkbox to
+automatically remove statistical outliers (IQR method) from the displayed
+data.
 
 ### Visualization
 
@@ -72,13 +74,15 @@ Real-time flow visualization powered by WebGPU:
 A full-featured data table (AG Grid) of all solver runs in the database. Sort,
 filter, and search across airfoils, operating conditions, and results. Includes
 a SPLOM (scatter plot matrix) correlogram for multivariate exploration. Custom
-computed columns let you define algebraic expressions over existing fields.
+computed columns let you define algebraic expressions over existing fields. The
+correlogram view supports automatic outlier removal via the **Outliers** toggle.
 
 ### Plot Builder
 
 Build custom charts from run data: scatter, line, bar, and histogram plots.
 Map any database field to axes, color, or size. Useful for parameter studies
-and trade-off visualization.
+and trade-off visualization. Toggle **Outliers** to automatically exclude
+statistical outliers using the IQR method.
 
 ### Case Logs
 

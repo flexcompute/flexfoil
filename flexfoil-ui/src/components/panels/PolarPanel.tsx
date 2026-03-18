@@ -9,6 +9,7 @@ import { useRef, useEffect, useCallback, useMemo, useState } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
 import { useRouteUiStore } from '../../stores/routeUiStore';
 import { colorForKey } from '../../lib/plotStyling';
+import { filterOutliers } from '../../lib/outlierFilter';
 import type { AxisVariable, PolarPoint } from '../../types';
 
 const PLOT_MARGIN = { top: 20, right: 20, bottom: 40, left: 50 };
@@ -19,6 +20,11 @@ const AXIS_LABELS: Record<AxisVariable, string> = {
   cd: 'Cd',
   cm: 'Cm',
   ld: 'L/D',
+  reynolds: 'Re',
+  mach: 'Mach',
+  ncrit: 'Ncrit',
+  flapDeflection: 'Flap δ (deg)',
+  flapHingeX: 'Flap x/c',
 };
 
 function getValue(point: PolarPoint, variable: AxisVariable): number {
@@ -26,7 +32,7 @@ function getValue(point: PolarPoint, variable: AxisVariable): number {
     const cd = point.cd ?? 0;
     return Math.abs(cd) > 1e-10 ? point.cl / cd : 0;
   }
-  return point[variable] ?? 0;
+  return (point as Record<string, number | undefined>)[variable] ?? 0;
 }
 
 function getAxisBounds(values: number[]): [number, number] {
@@ -63,18 +69,35 @@ export function PolarPanel() {
   const setXAxis = useRouteUiStore((state) => state.setPolarXAxis);
   const yAxis = useRouteUiStore((state) => state.polarYAxis);
   const setYAxis = useRouteUiStore((state) => state.setPolarYAxis);
+  const outlierFilter = useRouteUiStore((state) => state.outlierFilterEnabled);
+  const setOutlierFilter = useRouteUiStore((state) => state.setOutlierFilterEnabled);
   const [canvasSize, setCanvasSize] = useState({ width: 400, height: 300 });
-  
+
+  const filteredPolarData = useMemo(() => {
+    if (!outlierFilter) return polarData;
+    return polarData.map((series) => ({
+      ...series,
+      points: filterOutliers(series.points, [
+        (p) => getValue(p, xAxis),
+        (p) => getValue(p, yAxis),
+      ]),
+    }));
+  }, [polarData, outlierFilter, xAxis, yAxis]);
+
   const totalPoints = useMemo(
+    () => filteredPolarData.reduce((n, s) => n + s.points.length, 0),
+    [filteredPolarData],
+  );
+  const rawTotalPoints = useMemo(
     () => polarData.reduce((n, s) => n + s.points.length, 0),
     [polarData],
   );
+  const outlierCount = rawTotalPoints - totalPoints;
 
-  // Compute global axis bounds across all series
   const { xBounds, yBounds } = useMemo(() => {
     const allX: number[] = [];
     const allY: number[] = [];
-    for (const series of polarData) {
+    for (const series of filteredPolarData) {
       for (const p of series.points) {
         allX.push(getValue(p, xAxis));
         allY.push(getValue(p, yAxis));
@@ -84,7 +107,7 @@ export function PolarPanel() {
       xBounds: getAxisBounds(allX),
       yBounds: getAxisBounds(allY),
     };
-  }, [polarData, xAxis, yAxis]);
+  }, [filteredPolarData, xAxis, yAxis]);
   
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -174,7 +197,7 @@ export function PolarPanel() {
     
     // Draw each series
     if (totalPoints > 0) {
-      polarData.forEach((series) => {
+      filteredPolarData.forEach((series) => {
         const color = colorForKey(series.key);
         const pts = series.points;
         if (pts.length === 0) return;
@@ -212,7 +235,7 @@ export function PolarPanel() {
       ctx.textBaseline = 'middle';
       ctx.fillText('No polar data. Run a polar sweep in the Solve panel.', width / 2, height / 2);
     }
-  }, [canvasSize, polarData, totalPoints, xAxis, yAxis, xBounds, yBounds]);
+  }, [canvasSize, filteredPolarData, totalPoints, xAxis, yAxis, xBounds, yBounds]);
   
   // Resize observer
   useEffect(() => {
@@ -249,11 +272,9 @@ export function PolarPanel() {
             onChange={(e) => setXAxis(e.target.value as AxisVariable)}
             style={{ padding: '4px', fontSize: '12px' }}
           >
-            <option value="alpha">Alpha</option>
-            <option value="cl">Cl</option>
-            <option value="cd">Cd</option>
-            <option value="cm">Cm</option>
-            <option value="ld">L/D</option>
+            {Object.entries(AXIS_LABELS).map(([k, v]) => (
+              <option key={k} value={k}>{v}</option>
+            ))}
           </select>
         </label>
         
@@ -264,12 +285,23 @@ export function PolarPanel() {
             onChange={(e) => setYAxis(e.target.value as AxisVariable)}
             style={{ padding: '4px', fontSize: '12px' }}
           >
-            <option value="alpha">Alpha</option>
-            <option value="cl">Cl</option>
-            <option value="cd">Cd</option>
-            <option value="cm">Cm</option>
-            <option value="ld">L/D</option>
+            {Object.entries(AXIS_LABELS).map(([k, v]) => (
+              <option key={k} value={k}>{v}</option>
+            ))}
           </select>
+        </label>
+        
+        <label style={{
+          display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px',
+          color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none',
+        }}>
+          <input
+            type="checkbox"
+            checked={outlierFilter}
+            onChange={(e) => setOutlierFilter(e.target.checked)}
+            style={{ margin: 0, accentColor: 'var(--accent-primary)' }}
+          />
+          Remove Outliers
         </label>
         
         <span style={{ 
@@ -278,7 +310,10 @@ export function PolarPanel() {
           color: 'var(--text-secondary)' 
         }}>
           {totalPoints} pts
-          {polarData.length > 1 && ` · ${polarData.length} series`}
+          {outlierFilter && outlierCount > 0 && (
+            <span style={{ color: 'var(--accent-warning, #f59e0b)' }}> ({outlierCount} removed)</span>
+          )}
+          {filteredPolarData.length > 1 && ` · ${filteredPolarData.length} series`}
         </span>
       </div>
       
@@ -296,7 +331,7 @@ export function PolarPanel() {
       </div>
 
       {/* Legend */}
-      {polarData.length > 0 && (
+      {filteredPolarData.length > 0 && (
         <div style={{
           padding: '6px 8px',
           borderTop: '1px solid var(--border-color)',
@@ -306,7 +341,7 @@ export function PolarPanel() {
           maxHeight: '100px',
           overflowY: 'auto',
         }}>
-          {polarData.map((series) => (
+          {filteredPolarData.map((series) => (
             <div
               key={series.key}
               style={{
@@ -349,7 +384,7 @@ export function PolarPanel() {
               </button>
             </div>
           ))}
-          {polarData.length > 1 && (
+          {filteredPolarData.length > 1 && (
             <button
               onClick={clearAllPolars}
               style={{

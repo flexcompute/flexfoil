@@ -13,6 +13,7 @@ import {
 import { buildMarkerEncoding, colorForKey, colorForValue } from '../../lib/plotStyling';
 import { useSavedPlotStore, type SavedPlot } from '../../stores/savedPlotStore';
 import { useAllPlotFields } from '../../hooks/useAllPlotFields';
+import { filterOutliers } from '../../lib/outlierFilter';
 import type { AxisScale, ChartType, DataSource, RunRow } from '../../types';
 
 const CHART_TYPES: { value: ChartType; label: string }[] = [
@@ -69,9 +70,24 @@ export function PlotBuilderPanel() {
     getFieldValue,
   } = useAllPlotFields();
 
+  const outlierFilter = useRouteUiStore((state) => state.outlierFilterEnabled);
+  const setOutlierFilter = useRouteUiStore((state) => state.setOutlierFilterEnabled);
+
   const data = dataSource === 'full' ? allRuns : filteredRuns;
-  const successOnly = useMemo(() => data.filter(r => r.success), [data]);
+  const successOnlyRaw = useMemo(() => data.filter(r => r.success), [data]);
   const getLabel = useCallback((key: keyof RunRow) => mergedGetLabel(key as string), [mergedGetLabel]);
+
+  const successOnly = useMemo(() => {
+    if (!outlierFilter) return successOnlyRaw;
+    const extractors: Array<(row: RunRow) => number | null | undefined> = [
+      (row) => getFieldValue(row, xField as string) as number | null,
+    ];
+    if (chartType !== 'histogram') {
+      extractors.push((row) => getFieldValue(row, yField as string) as number | null);
+    }
+    return filterOutliers(successOnlyRaw, extractors);
+  }, [successOnlyRaw, outlierFilter, xField, yField, chartType, getFieldValue]);
+  const outlierCount = successOnlyRaw.length - successOnly.length;
 
   const groups = useMemo(() => {
     if (successOnly.length === 0) return [];
@@ -423,6 +439,25 @@ export function PlotBuilderPanel() {
                 {mergedEncodingFields.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
               </select>
             </div>
+
+            <label style={{
+              display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px',
+              color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none',
+              alignSelf: 'flex-end', paddingBottom: '3px',
+            }}>
+              <input
+                type="checkbox"
+                checked={outlierFilter}
+                onChange={(e) => setOutlierFilter(e.target.checked)}
+                style={{ margin: 0, accentColor: 'var(--accent-primary)' }}
+              />
+              Remove Outliers
+              {outlierFilter && outlierCount > 0 && (
+                <span style={{ color: 'var(--accent-warning, #f59e0b)', fontSize: '10px' }}>
+                  ({outlierCount})
+                </span>
+              )}
+            </label>
           </div>
 
           {/* Plot area */}
