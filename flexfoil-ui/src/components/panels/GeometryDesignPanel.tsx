@@ -9,30 +9,12 @@
 import React, { useCallback, useEffect, useRef } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
 import {
-  deflectFlap,
   setTeGap,
   setLeRadius,
   isWasmReady,
-  repanelXfoil,
 } from '../../lib/wasm';
+import { applyFlapsToBase, repanelBoth } from '../../lib/flapGeometry';
 import type { AirfoilPoint, FlapDefinition } from '../../types';
-
-function applyAndRepanel(
-  coords: { x: number; y: number }[],
-  nPanels: number,
-): { coordinates: AirfoilPoint[]; panels: AirfoilPoint[] } {
-  const raw: AirfoilPoint[] = coords.map(p => ({ x: p.x, y: p.y }));
-  if (isWasmReady()) {
-    try {
-      const repaneled = repanelXfoil(coords, nPanels);
-      if (repaneled.length > 0) {
-        const smooth = repaneled.map(pt => ({ x: pt.x, y: pt.y }));
-        return { coordinates: smooth, panels: smooth };
-      }
-    } catch { /* keep raw */ }
-  }
-  return { coordinates: raw, panels: raw };
-}
 
 const sliderRow: React.CSSProperties = { display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '6px' };
 const labelStyle: React.CSSProperties = { color: 'var(--text-muted)', minWidth: '70px' };
@@ -113,12 +95,6 @@ export function GeometryDesignPanel() {
   const flapsJsonRef = useRef('');
 
   // Reactively re-derive geometry from baseCoordinates whenever flaps change.
-  // Strategy: fit a high-resolution spline through the base airfoil first
-  // (1000 points), then define the hinge and rotate on that dense representation.
-  // The kink at the hinge spans < 0.001c and is invisible. Then repanel down
-  // to nPanels for the solver.
-  const HIRES_POINTS = 1000;
-
   useEffect(() => {
     if (!isWasmReady()) return;
 
@@ -129,46 +105,17 @@ export function GeometryDesignPanel() {
     const base = useAirfoilStore.getState().baseCoordinates;
     if (base.length < 4) return;
 
-    const hasDeflection = flaps.some(f => Math.abs(f.deflection) >= 0.01);
-
-    if (flaps.length === 0 || !hasDeflection) {
-      const { coordinates: c, panels: p } = applyAndRepanel(
-        base.map(pt => ({ x: pt.x, y: pt.y })),
-        nPanels,
-      );
-      useAirfoilStore.setState({ coordinates: c, panels: p });
-      return;
+    const result = applyFlapsToBase(base, flaps, nPanels);
+    if (result) {
+      useAirfoilStore.setState({ coordinates: result.coordinates, panels: result.panels });
     }
-
-    // Fit a dense spline through the base airfoil — no kink yet, so the spline is clean
-    const hiRes = repanelXfoil(base, HIRES_POINTS);
-    if (hiRes.length === 0) return;
-
-    // Apply flaps to the dense point cloud — kink spans ~1 point out of 200
-    let pts: { x: number; y: number }[] = hiRes;
-    for (const flap of flaps) {
-      if (Math.abs(flap.deflection) < 0.01) continue;
-      const result = deflectFlap(pts, flap.hingeX, flap.hingeYFrac, flap.deflection);
-      if (result.length > 0) pts = result;
-    }
-
-    // Visual coordinates = high-res flapped geometry (smooth enough for the canvas spline)
-    const coordinates: AirfoilPoint[] = pts.map(p => ({ x: p.x, y: p.y }));
-
-    // Solver panels = repanel the high-res flapped geometry down to nPanels
-    const solverPanels = repanelXfoil(pts, nPanels);
-    const panels: AirfoilPoint[] = solverPanels.length > 0
-      ? solverPanels.map(pt => ({ x: pt.x, y: pt.y }))
-      : coordinates;
-
-    useAirfoilStore.setState({ coordinates, panels });
   }, [flaps, nPanels]);
 
   const applyTeGap = useCallback(() => {
     if (!isWasmReady()) return;
     const result = setTeGap(coordinates, geometryDesign.teGap, geometryDesign.teGapBlend);
     if (result.length > 0) {
-      const { coordinates: c, panels: p } = applyAndRepanel(result, nPanels);
+      const { coordinates: c, panels: p } = repanelBoth(result, nPanels);
       useAirfoilStore.setState({ coordinates: c, panels: p, baseCoordinates: c });
     }
   }, [coordinates, nPanels, geometryDesign.teGap, geometryDesign.teGapBlend]);
@@ -177,7 +124,7 @@ export function GeometryDesignPanel() {
     if (!isWasmReady()) return;
     const result = setLeRadius(coordinates, geometryDesign.leRadiusFactor);
     if (result.length > 0) {
-      const { coordinates: c, panels: p } = applyAndRepanel(result, nPanels);
+      const { coordinates: c, panels: p } = repanelBoth(result, nPanels);
       useAirfoilStore.setState({ coordinates: c, panels: p, baseCoordinates: c });
     }
   }, [coordinates, nPanels, geometryDesign.leRadiusFactor]);

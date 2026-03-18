@@ -20,7 +20,27 @@ export interface AirfoilPoint extends Point {
 export type ControlMode = 'parameters' | 'camber-spline' | 'thickness-spline' | 'inverse-design' | 'geometry-design';
 export type SolverMode = 'viscous' | 'inviscid';
 export type RunMode = 'alpha' | 'cl';
-export type AxisVariable = 'alpha' | 'cl' | 'cd' | 'cm' | 'ld';
+export type AxisVariable = 'alpha' | 'cl' | 'cd' | 'cm' | 'ld'
+  | 'reynolds' | 'mach' | 'ncrit' | 'flapDeflection' | 'flapHingeX';
+
+/** Parameters that can be swept in a polar-style study */
+export type SweepParam =
+  | 'alpha'
+  | 'reynolds'
+  | 'mach'
+  | 'ncrit'
+  | 'flapDeflection'
+  | 'flapHingeX';
+
+/** Configuration for one sweep axis (primary or secondary) */
+export interface SweepAxis {
+  param: SweepParam;
+  start: number;
+  end: number;
+  step: number;
+  /** Which flap to vary — only used for flapDeflection / flapHingeX */
+  flapId?: string;
+}
 export type ChartType = 'scatter' | 'line' | 'bar' | 'histogram';
 export type DataSource = 'full' | 'filtered';
 export type AxisScale = 'linear' | 'log';
@@ -153,12 +173,17 @@ export interface AirfoilState {
   geometryDesign: GeometryDesignState;
 }
 
-/** A polar data point */
+/** A polar data point with optional swept-parameter values */
 export interface PolarPoint {
   alpha: number;
   cl: number;
   cd?: number;
   cm: number;
+  reynolds?: number;
+  mach?: number;
+  ncrit?: number;
+  flapDeflection?: number;
+  flapHingeX?: number;
 }
 
 /** A named polar series keyed by solver config (airfoil + Re + Mach + Ncrit + …) */
@@ -201,6 +226,8 @@ export interface RunRow {
   geometry_snapshot: RunGeometrySnapshot | null;
   flaps: FlapDefinition[] | null;
   ld: number | null;
+  flap_deflection: number | null;
+  flap_hinge_x: number | null;
 }
 
 /** Panel configuration for FlexLayout */

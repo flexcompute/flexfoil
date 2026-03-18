@@ -7,7 +7,7 @@
  */
 
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { useAirfoilStore } from '../../stores/airfoilStore';
+import { useAirfoilStore, clearPolarSuppression } from '../../stores/airfoilStore';
 import { useRouteUiStore } from '../../stores/routeUiStore';
 import { useRunStore } from '../../stores/runStore';
 import { useCaseLogStore } from '../../stores/caseLogStore';
@@ -583,6 +583,8 @@ export function SolvePanel() {
       return;
     }
 
+    clearPolarSuppression();
+
     const { id: jobId, signal } = jobDispatch(
       `Polar ${alphaStart.toFixed(0)} to ${alphaEnd.toFixed(0)} (${isViscous ? 'viscous' : 'inviscid'})`
     );
@@ -719,8 +721,11 @@ export function SolvePanel() {
 
   // --------------- multi-param sweep ---------------
 
+  const { addRunBatch } = useRunStore();
+
   const runMultiSweep = useCallback(async () => {
     if (!isWasmReady() || panels.length < 3) return;
+    clearPolarSuppression();
     if (sweepAbortRef.current) sweepAbortRef.current.abort();
     const controller = new AbortController();
     sweepAbortRef.current = controller;
@@ -729,7 +734,6 @@ export function SolvePanel() {
       ? `Sweep ${sweepPrimary.param} × ${sweepSecondary.param} (${isViscous ? 'viscous' : 'inviscid'})`
       : `Sweep ${sweepPrimary.param} ${sweepPrimary.start}→${sweepPrimary.end} (${isViscous ? 'viscous' : 'inviscid'})`;
     const { id: jobId, signal: jobSignal } = jobDispatch(sweepLabel);
-    // Abort the sweep if the job is cancelled from the status bar
     jobSignal.addEventListener('abort', () => controller.abort(), { once: true });
 
     setIsRunning(true);
@@ -737,6 +741,28 @@ export function SolvePanel() {
     setSweepProgress({ done: 0, total: 1 });
 
     try {
+      // Ensure DB is ready before collecting runs
+      if (!useRunStore.getState().ready) {
+        await useRunStore.getState().init();
+      }
+
+      let pendingRuns: Parameters<typeof addRun>[0][] = [];
+      let dbOk = 0;
+      let dbFail = 0;
+
+      const flushPending = async () => {
+        if (pendingRuns.length === 0) return;
+        const batch = pendingRuns;
+        pendingRuns = [];
+        try {
+          await addRunBatch(batch);
+          dbOk += batch.length;
+        } catch (err) {
+          dbFail += batch.length;
+          console.warn('[sweep] batch insert failed:', err);
+        }
+      };
+
       const base = useAirfoilStore.getState().baseCoordinates;
       const config: SweepConfig = {
         primary: sweepPrimary,
@@ -759,8 +785,8 @@ export function SolvePanel() {
 
       await runSweep(config, {
         onPoint: (series) => upsertPolar(series),
-        onRun: async (data: SweepRunData) => {
-          await addRun({
+        onRun: (data: SweepRunData) => {
+          pendingRuns.push({
             airfoil_name: data.name,
             airfoil_hash: data.airfoilHash,
             alpha: data.alpha,
@@ -789,8 +815,16 @@ export function SolvePanel() {
           setSweepProgress({ done, total });
           jobUpdate(jobId, `${done}/${total} points`, done / total);
         },
+        onSeriesComplete: flushPending,
         signal: controller.signal,
       });
+
+      // Flush any remaining runs (single sweep with no secondary axis)
+      await flushPending();
+
+      if (dbFail > 0) console.warn(`[sweep] DB: ${dbOk} inserted, ${dbFail} failed`);
+      else if (dbOk > 0) console.log(`[sweep] DB: ${dbOk} runs saved`);
+
       jobComplete(jobId);
     } catch (e) {
       if (!controller.signal.aborted) {
@@ -806,7 +840,7 @@ export function SolvePanel() {
       sweepAbortRef.current = null;
     }
   }, [panels, sweepPrimary, sweepSecondary, displayAlpha, reynolds, mach, ncrit,
-      maxIterations, solverMode, geometryDesign.flaps, name, isViscous, upsertPolar, addRun,
+      maxIterations, solverMode, geometryDesign.flaps, name, isViscous, upsertPolar, addRun, addRunBatch,
       jobDispatch, jobComplete, jobUpdate]);
 
   // --------------- derived ---------------
@@ -1228,6 +1262,51 @@ const SWEEP_DEFAULTS: Record<SweepParam, { start: number; end: number; step: num
   flapHingeX: { start: 0.6, end: 0.9, step: 0.05 },
 };
 
+/** Text input that commits a parsed number on blur/Enter, supporting scientific notation (e.g. 6e6). */
+function NumericTextInput({ value, onCommit, min, placeholder }: {
+  value: number;
+  onCommit: (v: number) => void;
+  min?: number;
+  placeholder?: string;
+}) {
+  const [text, setText] = useState(() => formatNumericDisplay(value));
+  const focusedRef = useRef(false);
+
+  useEffect(() => {
+    if (!focusedRef.current) setText(formatNumericDisplay(value));
+  }, [value]);
+
+  const commit = useCallback(() => {
+    focusedRef.current = false;
+    const parsed = Number(text);
+    if (!isNaN(parsed) && isFinite(parsed) && (min == null || parsed >= min)) {
+      onCommit(parsed);
+    } else {
+      setText(formatNumericDisplay(value));
+    }
+  }, [text, value, onCommit, min]);
+
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onFocus={() => { focusedRef.current = true; }}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === 'Enter') commit(); }}
+      placeholder={placeholder}
+    />
+  );
+}
+
+function formatNumericDisplay(v: number): string {
+  if (v === 0) return '0';
+  const abs = Math.abs(v);
+  if (abs >= 1e5 || (abs > 0 && abs < 0.01)) return v.toExponential();
+  return String(v);
+}
+
 function SweepAxisRow({ label, axis, onUpdate, flaps }: {
   label: string;
   axis: { param: SweepParam; start: number; end: number; step: number; flapId?: string };
@@ -1236,7 +1315,6 @@ function SweepAxisRow({ label, axis, onUpdate, flaps }: {
 }) {
   const options = buildSweepOptions(flaps);
 
-  // Current composite value for the dropdown (param or param:flapId)
   const isFlapParam = axis.param === 'flapDeflection' || axis.param === 'flapHingeX';
   const selectedValue = isFlapParam && axis.flapId
     ? `${axis.param}:${axis.flapId}`
@@ -1269,15 +1347,15 @@ function SweepAxisRow({ label, axis, onUpdate, flaps }: {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px' }}>
         <div>
           <label style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Start</label>
-          <input type="number" value={axis.start} onChange={(e) => onUpdate({ start: parseFloat(e.target.value) || 0 })} step={axis.step} />
+          <NumericTextInput value={axis.start} onCommit={(v) => onUpdate({ start: v })} />
         </div>
         <div>
           <label style={{ fontSize: '9px', color: 'var(--text-muted)' }}>End</label>
-          <input type="number" value={axis.end} onChange={(e) => onUpdate({ end: parseFloat(e.target.value) || 0 })} step={axis.step} />
+          <NumericTextInput value={axis.end} onCommit={(v) => onUpdate({ end: v })} />
         </div>
         <div>
           <label style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Step</label>
-          <input type="number" value={axis.step} onChange={(e) => onUpdate({ step: parseFloat(e.target.value) || 1 })} step={axis.step * 0.1} min={0.001} />
+          <NumericTextInput value={axis.step} onCommit={(v) => onUpdate({ step: v })} min={0.001} />
         </div>
       </div>
     </div>

@@ -6,7 +6,7 @@
  */
 
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from 'lz-string';
-import type { ControlMode, SpacingKnot } from '../types';
+import type { ControlMode, FlapDefinition, SpacingKnot } from '../types';
 
 // Default values (don't encode if unchanged)
 const DEFAULTS = {
@@ -142,62 +142,65 @@ export interface UrlState {
   spacingPanelMode?: 'simple' | 'advanced';
   sspInterpolation?: 'linear' | 'spline';
   sspVisualization?: 'plot' | 'foil';
+
+  // Flap definitions
+  flaps?: FlapDefinition[];
 }
 
 /**
- * Compact state for encoding (short keys, omit defaults)
+ * Compact state for encoding (single-char keys where possible).
+ *
+ * Display/animation booleans are packed into a single bitmask `v`:
+ *   bit 0: showGrid          bit 6:  showSmoke
+ *   bit 1: showCurve         bit 7:  showPsiContours
+ *   bit 2: showPanels        bit 8:  showCp
+ *   bit 3: showPoints        bit 9:  showForces
+ *   bit 4: showControls      bit 10: enableMorphing
+ *   bit 5: showStreamlines   bit 11: adaptiveStreamlines
  */
 interface CompactState {
   n?: string;      // naca
-  c?: 1;           // custom (flag)
+  c?: 1;           // custom
   p?: number;      // nPanels
-  s?: number[][];  // spacing [[S,F], ...]
-  m?: string;      // mode (first char: p/c/t)
+  s?: number[][];  // spacing
+  m?: string;      // mode
   a?: number;      // alpha
-  ps?: number;     // polar start
-  pe?: number;     // polar end
-  pd?: number;     // polar delta
-  t?: string;      // theme (d/l)
+  b?: number;      // polar start (begin)
+  e?: number;      // polar end
+  d?: number;      // polar step (delta)
+  t?: string;      // theme
   l?: object;      // layout
-  // Viewport
-  vcx?: number;    // view center x
-  vcy?: number;    // view center y
-  vz?: number;     // view zoom
-  // Display toggles (only store if true to save space)
-  dg?: 1;          // showGrid
-  dc?: 1;          // showCurve
-  dp?: 1;          // showPanels
-  dpt?: 1;         // showPoints
-  dct?: 1;         // showControls
-  dst?: 1;         // showStreamlines
-  dsm?: 1;         // showSmoke
-  dps?: 1;         // showPsiContours
-  dcp?: 1;         // showCp
-  df?: 1;          // showForces
-  // Animation
-  em?: 1;          // enableMorphing
-  md?: number;     // morphDuration
-  // Streamlines
-  sld?: number;    // streamlineDensity
-  sla?: 1;         // adaptiveStreamlines
-  // Smoke
-  smd?: number;    // smokeDensity
-  smp?: number;    // smokeParticlesPerBlob
-  // Flow
-  fs?: number;     // flowSpeed
-  // Cp
-  cpm?: string;    // cpDisplayMode (c/b/x for color/bars/both)
-  cpb?: number;    // cpBarScale
-  // Force
-  fsc?: number;    // forceScale
-  // Parameters mode
-  ts?: number;     // thicknessScale
-  cs?: number;     // camberScale
-  // Spacing panel
-  cw?: number;     // curvatureWeight
-  spm?: string;    // spacingPanelMode (s/a for simple/advanced)
-  sspi?: string;   // sspInterpolation (l/s for linear/spline)
-  sspv?: string;   // sspVisualization (p/f for plot/foil)
+  x?: number;      // view center x
+  y?: number;      // view center y
+  z?: number;      // view zoom
+  v?: number;      // vis-flag bitmask (see above)
+  h?: number;      // morph duration
+  i?: number;      // streamline density
+  j?: number;      // smoke density
+  k?: number;      // smoke particles per blob
+  f?: number;      // flow speed
+  o?: string;      // cp display mode (c/b/x)
+  q?: number;      // cp bar scale
+  r?: number;      // force scale
+  u?: number;      // thickness scale
+  w?: number;      // camber scale
+  g?: number;      // curvature weight
+  // Spacing panel: mode + interpolation + vis packed as "sap" etc.
+  sp?: string;
+  // Flaps: [name, hingeX, hingeYFrac, deflection] (id regenerated on load)
+  F?: Array<[string, number, number, number]>;
+
+  // --- Legacy keys (accepted on decode, never emitted) ---
+  ps?: number; pe?: number; pd?: number;
+  vcx?: number; vcy?: number; vz?: number;
+  dg?: 1; dc?: 1; dp?: 1; dpt?: 1; dct?: 1;
+  dst?: 1; dsm?: 1; dps?: 1; dcp?: 1; df?: 1;
+  em?: 1; md?: number; sld?: number; sla?: 1;
+  smd?: number; smp?: number; fs?: number;
+  cpm?: string; cpb?: number; fsc?: number;
+  ts?: number; cs?: number; cw?: number;
+  spm?: string; sspi?: string; sspv?: string;
+  fl?: Array<[string, string, number, number, number]>;
 }
 
 /**
@@ -205,176 +208,84 @@ interface CompactState {
  */
 export function encodeUrlState(state: UrlState): string {
   const compact: CompactState = {};
-  
-  // NACA designation
-  if (state.naca && state.naca !== DEFAULTS.naca) {
-    compact.n = state.naca;
-  }
-  if (state.custom) {
-    compact.c = 1;
-  }
-  
-  // Paneling
-  if (state.nPanels && state.nPanels !== DEFAULTS.nPanels) {
-    compact.p = state.nPanels;
-  }
-  if (state.spacing && !isDefaultSpacing(state.spacing)) {
-    compact.s = state.spacing.map(k => [k.S, k.F]);
-  }
-  
-  // Control mode
+
+  if (state.naca && state.naca !== DEFAULTS.naca) compact.n = state.naca;
+  if (state.custom) compact.c = 1;
+  if (state.nPanels && state.nPanels !== DEFAULTS.nPanels) compact.p = state.nPanels;
+  if (state.spacing && !isDefaultSpacing(state.spacing)) compact.s = state.spacing.map(k => [k.S, k.F]);
+
   if (state.mode && state.mode !== DEFAULTS.mode) {
-    // p = parameters, c = camber-spline, t = thickness-spline
     switch (state.mode) {
       case 'parameters': compact.m = 'p'; break;
       case 'camber-spline': compact.m = 'c'; break;
       case 'thickness-spline': compact.m = 't'; break;
+      case 'inverse-design': compact.m = 'i'; break;
+      case 'geometry-design': compact.m = 'g'; break;
     }
   }
-  
-  // Solver settings
-  if (state.alpha !== undefined && state.alpha !== DEFAULTS.alpha) {
-    compact.a = state.alpha;
-  }
-  if (state.polarStart !== undefined && state.polarStart !== DEFAULTS.polarStart) {
-    compact.ps = state.polarStart;
-  }
-  if (state.polarEnd !== undefined && state.polarEnd !== DEFAULTS.polarEnd) {
-    compact.pe = state.polarEnd;
-  }
-  if (state.polarStep !== undefined && state.polarStep !== DEFAULTS.polarStep) {
-    compact.pd = state.polarStep;
-  }
-  
-  // Theme
-  if (state.theme && state.theme !== DEFAULTS.theme) {
-    compact.t = state.theme[0]; // 'd' or 'l'
-  }
-  
-  // Layout (only if provided)
-  if (state.layout) {
-    compact.l = state.layout;
-  }
-  
+
+  if (state.alpha !== undefined && state.alpha !== DEFAULTS.alpha) compact.a = state.alpha;
+  if (state.polarStart !== undefined && state.polarStart !== DEFAULTS.polarStart) compact.b = state.polarStart;
+  if (state.polarEnd !== undefined && state.polarEnd !== DEFAULTS.polarEnd) compact.e = state.polarEnd;
+  if (state.polarStep !== undefined && state.polarStep !== DEFAULTS.polarStep) compact.d = state.polarStep;
+  if (state.theme && state.theme !== DEFAULTS.theme) compact.t = state.theme[0];
+  if (state.layout) compact.l = state.layout;
+
   // Viewport
-  if (state.viewCenterX !== undefined && state.viewCenterX !== DEFAULTS.viewCenterX) {
-    compact.vcx = state.viewCenterX;
-  }
-  if (state.viewCenterY !== undefined && state.viewCenterY !== DEFAULTS.viewCenterY) {
-    compact.vcy = state.viewCenterY;
-  }
-  if (state.viewZoom !== undefined && state.viewZoom !== DEFAULTS.viewZoom) {
-    compact.vz = state.viewZoom;
-  }
-  
-  // Display toggles (only encode if different from default)
-  if (state.showGrid !== undefined && state.showGrid !== DEFAULTS.showGrid) {
-    compact.dg = state.showGrid ? 1 : undefined;
-  }
-  if (state.showCurve !== undefined && state.showCurve !== DEFAULTS.showCurve) {
-    compact.dc = state.showCurve ? 1 : undefined;
-  }
-  if (state.showPanels !== undefined && state.showPanels !== DEFAULTS.showPanels) {
-    compact.dp = state.showPanels ? 1 : undefined;
-  }
-  if (state.showPoints !== undefined && state.showPoints !== DEFAULTS.showPoints) {
-    compact.dpt = state.showPoints ? 1 : undefined;
-  }
-  if (state.showControls !== undefined && state.showControls !== DEFAULTS.showControls) {
-    compact.dct = state.showControls ? 1 : undefined;
-  }
-  if (state.showStreamlines !== undefined && state.showStreamlines !== DEFAULTS.showStreamlines) {
-    compact.dst = state.showStreamlines ? 1 : undefined;
-  }
-  if (state.showSmoke !== undefined && state.showSmoke !== DEFAULTS.showSmoke) {
-    compact.dsm = state.showSmoke ? 1 : undefined;
-  }
-  if (state.showPsiContours !== undefined && state.showPsiContours !== DEFAULTS.showPsiContours) {
-    compact.dps = state.showPsiContours ? 1 : undefined;
-  }
-  if (state.showCp !== undefined && state.showCp !== DEFAULTS.showCp) {
-    compact.dcp = state.showCp ? 1 : undefined;
-  }
-  if (state.showForces !== undefined && state.showForces !== DEFAULTS.showForces) {
-    compact.df = state.showForces ? 1 : undefined;
-  }
-  
-  // Animation
-  if (state.enableMorphing !== undefined && state.enableMorphing !== DEFAULTS.enableMorphing) {
-    compact.em = state.enableMorphing ? 1 : undefined;
-  }
-  if (state.morphDuration !== undefined && state.morphDuration !== DEFAULTS.morphDuration) {
-    compact.md = state.morphDuration;
-  }
-  
-  // Streamlines
-  if (state.streamlineDensity !== undefined && state.streamlineDensity !== DEFAULTS.streamlineDensity) {
-    compact.sld = state.streamlineDensity;
-  }
-  if (state.adaptiveStreamlines !== undefined && state.adaptiveStreamlines !== DEFAULTS.adaptiveStreamlines) {
-    compact.sla = state.adaptiveStreamlines ? 1 : undefined;
-  }
-  
-  // Smoke
-  if (state.smokeDensity !== undefined && state.smokeDensity !== DEFAULTS.smokeDensity) {
-    compact.smd = state.smokeDensity;
-  }
-  if (state.smokeParticlesPerBlob !== undefined && state.smokeParticlesPerBlob !== DEFAULTS.smokeParticlesPerBlob) {
-    compact.smp = state.smokeParticlesPerBlob;
-  }
-  
-  // Flow speed
-  if (state.flowSpeed !== undefined && state.flowSpeed !== DEFAULTS.flowSpeed) {
-    compact.fs = state.flowSpeed;
-  }
-  
-  // Cp
-  if (state.cpDisplayMode && state.cpDisplayMode !== DEFAULTS.cpDisplayMode) {
-    switch (state.cpDisplayMode) {
-      case 'color': compact.cpm = 'c'; break;
-      case 'bars': compact.cpm = 'b'; break;
-      case 'both': compact.cpm = 'x'; break;
+  if (state.viewCenterX !== undefined && state.viewCenterX !== DEFAULTS.viewCenterX) compact.x = state.viewCenterX;
+  if (state.viewCenterY !== undefined && state.viewCenterY !== DEFAULTS.viewCenterY) compact.y = state.viewCenterY;
+  if (state.viewZoom !== undefined && state.viewZoom !== DEFAULTS.viewZoom) compact.z = state.viewZoom;
+
+  // Pack 12 boolean flags into one bitmask
+  const flags = [
+    state.showGrid, state.showCurve, state.showPanels, state.showPoints,
+    state.showControls, state.showStreamlines, state.showSmoke, state.showPsiContours,
+    state.showCp, state.showForces, state.enableMorphing, state.adaptiveStreamlines,
+  ];
+  const defaults = [
+    DEFAULTS.showGrid, DEFAULTS.showCurve, DEFAULTS.showPanels, DEFAULTS.showPoints,
+    DEFAULTS.showControls, DEFAULTS.showStreamlines, DEFAULTS.showSmoke, DEFAULTS.showPsiContours,
+    DEFAULTS.showCp, DEFAULTS.showForces, DEFAULTS.enableMorphing, DEFAULTS.adaptiveStreamlines,
+  ];
+  const anyDifferent = flags.some((f, i) => f !== undefined && f !== defaults[i]);
+  if (anyDifferent) {
+    let bits = 0;
+    for (let i = 0; i < flags.length; i++) {
+      if (flags[i] ?? defaults[i]) bits |= (1 << i);
     }
+    compact.v = bits;
   }
-  if (state.cpBarScale !== undefined && state.cpBarScale !== DEFAULTS.cpBarScale) {
-    compact.cpb = state.cpBarScale;
+
+  if (state.morphDuration !== undefined && state.morphDuration !== DEFAULTS.morphDuration) compact.h = state.morphDuration;
+  if (state.streamlineDensity !== undefined && state.streamlineDensity !== DEFAULTS.streamlineDensity) compact.i = state.streamlineDensity;
+  if (state.smokeDensity !== undefined && state.smokeDensity !== DEFAULTS.smokeDensity) compact.j = state.smokeDensity;
+  if (state.smokeParticlesPerBlob !== undefined && state.smokeParticlesPerBlob !== DEFAULTS.smokeParticlesPerBlob) compact.k = state.smokeParticlesPerBlob;
+  if (state.flowSpeed !== undefined && state.flowSpeed !== DEFAULTS.flowSpeed) compact.f = state.flowSpeed;
+
+  if (state.cpDisplayMode && state.cpDisplayMode !== DEFAULTS.cpDisplayMode) {
+    compact.o = state.cpDisplayMode === 'color' ? 'c' : state.cpDisplayMode === 'bars' ? 'b' : 'x';
   }
-  
-  // Force
-  if (state.forceScale !== undefined && state.forceScale !== DEFAULTS.forceScale) {
-    compact.fsc = state.forceScale;
+  if (state.cpBarScale !== undefined && state.cpBarScale !== DEFAULTS.cpBarScale) compact.q = state.cpBarScale;
+  if (state.forceScale !== undefined && state.forceScale !== DEFAULTS.forceScale) compact.r = state.forceScale;
+  if (state.thicknessScale !== undefined && state.thicknessScale !== DEFAULTS.thicknessScale) compact.u = state.thicknessScale;
+  if (state.camberScale !== undefined && state.camberScale !== DEFAULTS.camberScale) compact.w = state.camberScale;
+  if (state.curvatureWeight !== undefined && state.curvatureWeight !== DEFAULTS.curvatureWeight) compact.g = state.curvatureWeight;
+
+  // Spacing panel: pack mode+interp+vis into 3-char string
+  const spMode = state.spacingPanelMode ?? DEFAULTS.spacingPanelMode;
+  const spInterp = state.sspInterpolation ?? DEFAULTS.sspInterpolation;
+  const spVis = state.sspVisualization ?? DEFAULTS.sspVisualization;
+  if (spMode !== DEFAULTS.spacingPanelMode || spInterp !== DEFAULTS.sspInterpolation || spVis !== DEFAULTS.sspVisualization) {
+    compact.sp = (spMode === 'simple' ? 's' : 'a') + (spInterp === 'linear' ? 'l' : 's') + (spVis === 'plot' ? 'p' : 'f');
   }
-  
-  // Parameters mode
-  if (state.thicknessScale !== undefined && state.thicknessScale !== DEFAULTS.thicknessScale) {
-    compact.ts = state.thicknessScale;
+
+  // Flaps (omit id — regenerated on decode)
+  if (state.flaps && state.flaps.length > 0) {
+    compact.F = state.flaps.map(f => [f.name, f.hingeX, f.hingeYFrac, f.deflection]);
   }
-  if (state.camberScale !== undefined && state.camberScale !== DEFAULTS.camberScale) {
-    compact.cs = state.camberScale;
-  }
-  
-  // Spacing panel
-  if (state.curvatureWeight !== undefined && state.curvatureWeight !== DEFAULTS.curvatureWeight) {
-    compact.cw = state.curvatureWeight;
-  }
-  if (state.spacingPanelMode && state.spacingPanelMode !== DEFAULTS.spacingPanelMode) {
-    compact.spm = state.spacingPanelMode === 'simple' ? 's' : 'a';
-  }
-  if (state.sspInterpolation && state.sspInterpolation !== DEFAULTS.sspInterpolation) {
-    compact.sspi = state.sspInterpolation === 'linear' ? 'l' : 's';
-  }
-  if (state.sspVisualization && state.sspVisualization !== DEFAULTS.sspVisualization) {
-    compact.sspv = state.sspVisualization === 'plot' ? 'p' : 'f';
-  }
-  
-  // If nothing to encode, return empty
-  if (Object.keys(compact).length === 0) {
-    return '';
-  }
-  
-  // Compress and return
-  const json = JSON.stringify(compact);
-  return compressToEncodedURIComponent(json);
+
+  if (Object.keys(compact).length === 0) return '';
+  return compressToEncodedURIComponent(JSON.stringify(compact));
 }
 
 /**
@@ -387,109 +298,120 @@ export function decodeUrlState(encoded: string): UrlState | null {
     const json = decompressFromEncodedURIComponent(encoded);
     if (!json) return null;
     
-    const compact: CompactState = JSON.parse(json);
+    const C: CompactState = JSON.parse(json);
     const state: UrlState = {};
     
-    // NACA designation
-    if (compact.n) {
-      state.naca = compact.n;
-    }
-    if (compact.c) {
-      state.custom = true;
-    }
-    
-    // Paneling
-    if (compact.p) {
-      state.nPanels = compact.p;
-    }
-    if (compact.s) {
-      state.spacing = compact.s.map(([S, F]) => ({ S, F }));
-    }
-    
-    // Control mode
-    if (compact.m) {
-      switch (compact.m) {
+    if (C.n) state.naca = C.n;
+    if (C.c) state.custom = true;
+    if (C.p) state.nPanels = C.p;
+    if (C.s) state.spacing = C.s.map(([S, F]) => ({ S, F }));
+
+    if (C.m) {
+      switch (C.m) {
         case 'p': state.mode = 'parameters'; break;
         case 'c': state.mode = 'camber-spline'; break;
         case 't': state.mode = 'thickness-spline'; break;
+        case 'i': state.mode = 'inverse-design'; break;
+        case 'g': state.mode = 'geometry-design'; break;
       }
     }
-    
-    // Solver settings
-    if (compact.a !== undefined) state.alpha = compact.a;
-    if (compact.ps !== undefined) state.polarStart = compact.ps;
-    if (compact.pe !== undefined) state.polarEnd = compact.pe;
-    if (compact.pd !== undefined) state.polarStep = compact.pd;
-    
-    // Theme
-    if (compact.t) {
-      state.theme = compact.t === 'l' ? 'light' : 'dark';
+
+    if (C.a !== undefined) state.alpha = C.a;
+    state.polarStart = C.b ?? C.ps;
+    state.polarEnd = C.e ?? C.pe;
+    state.polarStep = C.d ?? C.pd;
+    if (C.t) state.theme = C.t === 'l' ? 'light' : 'dark';
+    if (C.l) state.layout = C.l;
+
+    // Viewport (new keys x/y/z, fallback to legacy vcx/vcy/vz)
+    state.viewCenterX = C.x ?? C.vcx;
+    state.viewCenterY = C.y ?? C.vcy;
+    state.viewZoom = C.z ?? C.vz;
+
+    // Display bitmask (new key `v`) or legacy individual flags
+    if (C.v !== undefined) {
+      const bit = (i: number) => !!(C.v! & (1 << i));
+      state.showGrid = bit(0);
+      state.showCurve = bit(1);
+      state.showPanels = bit(2);
+      state.showPoints = bit(3);
+      state.showControls = bit(4);
+      state.showStreamlines = bit(5);
+      state.showSmoke = bit(6);
+      state.showPsiContours = bit(7);
+      state.showCp = bit(8);
+      state.showForces = bit(9);
+      state.enableMorphing = bit(10);
+      state.adaptiveStreamlines = bit(11);
+    } else {
+      if (C.dg !== undefined) state.showGrid = !!C.dg;
+      if (C.dc !== undefined) state.showCurve = !!C.dc;
+      if (C.dp !== undefined) state.showPanels = !!C.dp;
+      if (C.dpt !== undefined) state.showPoints = !!C.dpt;
+      if (C.dct !== undefined) state.showControls = !!C.dct;
+      if (C.dst !== undefined) state.showStreamlines = !!C.dst;
+      if (C.dsm !== undefined) state.showSmoke = !!C.dsm;
+      if (C.dps !== undefined) state.showPsiContours = !!C.dps;
+      if (C.dcp !== undefined) state.showCp = !!C.dcp;
+      if (C.df !== undefined) state.showForces = !!C.df;
+      if (C.em !== undefined) state.enableMorphing = !!C.em;
+      if (C.sla !== undefined) state.adaptiveStreamlines = !!C.sla;
     }
-    
-    // Layout
-    if (compact.l) {
-      state.layout = compact.l;
-    }
-    
-    // Viewport
-    if (compact.vcx !== undefined) state.viewCenterX = compact.vcx;
-    if (compact.vcy !== undefined) state.viewCenterY = compact.vcy;
-    if (compact.vz !== undefined) state.viewZoom = compact.vz;
-    
-    // Display toggles
-    if (compact.dg !== undefined) state.showGrid = !!compact.dg;
-    if (compact.dc !== undefined) state.showCurve = !!compact.dc;
-    if (compact.dp !== undefined) state.showPanels = !!compact.dp;
-    if (compact.dpt !== undefined) state.showPoints = !!compact.dpt;
-    if (compact.dct !== undefined) state.showControls = !!compact.dct;
-    if (compact.dst !== undefined) state.showStreamlines = !!compact.dst;
-    if (compact.dsm !== undefined) state.showSmoke = !!compact.dsm;
-    if (compact.dps !== undefined) state.showPsiContours = !!compact.dps;
-    if (compact.dcp !== undefined) state.showCp = !!compact.dcp;
-    if (compact.df !== undefined) state.showForces = !!compact.df;
-    
-    // Animation
-    if (compact.em !== undefined) state.enableMorphing = !!compact.em;
-    if (compact.md !== undefined) state.morphDuration = compact.md;
-    
-    // Streamlines
-    if (compact.sld !== undefined) state.streamlineDensity = compact.sld;
-    if (compact.sla !== undefined) state.adaptiveStreamlines = !!compact.sla;
-    
-    // Smoke
-    if (compact.smd !== undefined) state.smokeDensity = compact.smd;
-    if (compact.smp !== undefined) state.smokeParticlesPerBlob = compact.smp;
-    
-    // Flow speed
-    if (compact.fs !== undefined) state.flowSpeed = compact.fs;
-    
-    // Cp
-    if (compact.cpm) {
-      switch (compact.cpm) {
+
+    state.morphDuration = C.h ?? C.md;
+    state.streamlineDensity = C.i ?? C.sld;
+    state.smokeDensity = C.j ?? C.smd;
+    state.smokeParticlesPerBlob = C.k ?? C.smp;
+    state.flowSpeed = C.f ?? C.fs;
+
+    // Cp (new key o/q, legacy cpm/cpb)
+    const cpMode = C.o ?? C.cpm;
+    if (cpMode) {
+      switch (cpMode) {
         case 'c': state.cpDisplayMode = 'color'; break;
         case 'b': state.cpDisplayMode = 'bars'; break;
         case 'x': state.cpDisplayMode = 'both'; break;
       }
     }
-    if (compact.cpb !== undefined) state.cpBarScale = compact.cpb;
-    
-    // Force
-    if (compact.fsc !== undefined) state.forceScale = compact.fsc;
-    
-    // Parameters mode
-    if (compact.ts !== undefined) state.thicknessScale = compact.ts;
-    if (compact.cs !== undefined) state.camberScale = compact.cs;
-    
-    // Spacing panel
-    if (compact.cw !== undefined) state.curvatureWeight = compact.cw;
-    if (compact.spm) {
-      state.spacingPanelMode = compact.spm === 's' ? 'simple' : 'advanced';
+    state.cpBarScale = C.q ?? C.cpb;
+    state.forceScale = C.r ?? C.fsc;
+    state.thicknessScale = C.u ?? C.ts;
+    state.camberScale = C.w ?? C.cs;
+    state.curvatureWeight = C.g ?? C.cw;
+
+    // Spacing panel (new packed `sp`, legacy spm/sspi/sspv)
+    if (C.sp && C.sp.length === 3) {
+      state.spacingPanelMode = C.sp[0] === 's' ? 'simple' : 'advanced';
+      state.sspInterpolation = C.sp[1] === 'l' ? 'linear' : 'spline';
+      state.sspVisualization = C.sp[2] === 'p' ? 'plot' : 'foil';
+    } else {
+      if (C.spm) state.spacingPanelMode = C.spm === 's' ? 'simple' : 'advanced';
+      if (C.sspi) state.sspInterpolation = C.sspi === 'l' ? 'linear' : 'spline';
+      if (C.sspv) state.sspVisualization = C.sspv === 'p' ? 'plot' : 'foil';
     }
-    if (compact.sspi) {
-      state.sspInterpolation = compact.sspi === 'l' ? 'linear' : 'spline';
+
+    // Flaps (new compact `F` without id, legacy `fl` with id)
+    if (C.F && Array.isArray(C.F)) {
+      state.flaps = C.F.map(([name, hingeX, hingeYFrac, deflection], i) => ({
+        id: `flap_${Date.now().toString(36)}_${i}`,
+        name: String(name),
+        hingeX: Number(hingeX),
+        hingeYFrac: Number(hingeYFrac),
+        deflection: Number(deflection),
+      }));
+    } else if (C.fl && Array.isArray(C.fl)) {
+      state.flaps = C.fl.map(([id, name, hingeX, hingeYFrac, deflection]) => ({
+        id: String(id),
+        name: String(name),
+        hingeX: Number(hingeX),
+        hingeYFrac: Number(hingeYFrac),
+        deflection: Number(deflection),
+      }));
     }
-    if (compact.sspv) {
-      state.sspVisualization = compact.sspv === 'p' ? 'plot' : 'foil';
+
+    // Strip undefined values
+    for (const key of Object.keys(state) as (keyof UrlState)[]) {
+      if (state[key] === undefined) delete state[key];
     }
     
     return state;

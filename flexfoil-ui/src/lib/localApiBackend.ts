@@ -85,6 +85,33 @@ function apiRowToRunRow(obj: Record<string, unknown>): RunRow {
   };
 }
 
+function runInsertPayload(run: RunInsert): Record<string, unknown> {
+  return {
+    airfoil_name: run.airfoil_name,
+    airfoil_hash: run.airfoil_hash,
+    alpha: run.alpha,
+    reynolds: run.reynolds,
+    mach: run.mach,
+    ncrit: run.ncrit,
+    n_panels: run.n_panels,
+    max_iter: run.max_iter,
+    cl: run.cl,
+    cd: run.cd,
+    cm: run.cm,
+    converged: run.converged,
+    iterations: run.iterations,
+    residual: run.residual,
+    x_tr_upper: run.x_tr_upper,
+    x_tr_lower: run.x_tr_lower,
+    solver_mode: run.solver_mode,
+    success: run.success,
+    error: run.error,
+    coordinates_json: run.coordinates_json,
+    panels_json: run.panels_json,
+    flaps_json: run.flaps_json,
+  };
+}
+
 let _cachedRuns: RunRow[] = [];
 let _changeCallbacks: Array<() => void> = [];
 let _eventSource: EventSource | null = null;
@@ -124,35 +151,38 @@ export const localApiBackend: StorageBackend = {
     const resp = await fetch(`${base}/api/runs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        airfoil_name: run.airfoil_name,
-        airfoil_hash: run.airfoil_hash,
-        alpha: run.alpha,
-        reynolds: run.reynolds,
-        mach: run.mach,
-        ncrit: run.ncrit,
-        n_panels: run.n_panels,
-        max_iter: run.max_iter,
-        cl: run.cl,
-        cd: run.cd,
-        cm: run.cm,
-        converged: run.converged,
-        iterations: run.iterations,
-        residual: run.residual,
-        x_tr_upper: run.x_tr_upper,
-        x_tr_lower: run.x_tr_lower,
-        solver_mode: run.solver_mode,
-        success: run.success,
-        error: run.error,
-        coordinates_json: run.coordinates_json,
-        panels_json: run.panels_json,
-        flaps_json: run.flaps_json,
-      }),
+      body: JSON.stringify(runInsertPayload(run)),
     });
     const { id } = await resp.json();
-    // Re-fetch (SSE will also trigger, but we want immediate consistency)
     _cachedRuns = await fetchAllRuns();
     return id;
+  },
+
+  async insertRunBatch(runs: RunInsert[]): Promise<number> {
+    if (runs.length === 0) return 0;
+    const base = getApiBase();
+    // Try the batch endpoint; fall back to sequential POSTs.
+    try {
+      const resp = await fetch(`${base}/api/runs/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(runs.map(runInsertPayload)),
+      });
+      if (resp.ok) {
+        _cachedRuns = await fetchAllRuns();
+        return runs.length;
+      }
+    } catch { /* batch endpoint not available */ }
+
+    for (const run of runs) {
+      await fetch(`${base}/api/runs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(runInsertPayload(run)),
+      });
+    }
+    _cachedRuns = await fetchAllRuns();
+    return runs.length;
   },
 
   lookupCache(airfoilHash, alpha, reynolds, mach, ncrit, nPanels, maxIter): RunRow | null {

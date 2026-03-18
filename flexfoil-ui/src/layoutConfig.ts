@@ -3,7 +3,7 @@ import type { IJsonModel } from 'flexlayout-react';
 export const PANELS = [
   { id: 'canvas', name: 'Airfoil Canvas', component: 'canvas' },
   { id: 'library', name: 'Airfoil Library', component: 'library' },
-  { id: 'control', name: 'Control Mode', component: 'control' },
+  { id: 'control', name: 'Geometry Control', component: 'control' },
   { id: 'spacing', name: 'Spacing', component: 'spacing' },
   { id: 'properties', name: 'Properties', component: 'properties' },
   { id: 'solve', name: 'Solve', component: 'solve' },
@@ -68,7 +68,7 @@ export const defaultLayoutJson: IJsonModel = {
             weight: 50,
             children: [
               { type: 'tab', id: 'library', name: 'Airfoil Library', component: 'library' },
-              { type: 'tab', id: 'control', name: 'Control Mode', component: 'control' },
+              { type: 'tab', id: 'control', name: 'Geometry Control', component: 'control' },
               { type: 'tab', id: 'visualization', name: 'Visualization', component: 'visualization' },
               { type: 'tab', id: 'spacing', name: 'Spacing', component: 'spacing' },
             ],

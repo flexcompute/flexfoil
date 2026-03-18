@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { DockingLayout } from './components/DockingLayout';
 import { CookieConsent } from './components/CookieConsent';
+import { UrlLoadingModal } from './components/UrlLoadingModal';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { OnboardingProvider, useOnboarding } from './onboarding';
 import { initWasm } from './lib/wasm';
@@ -10,13 +11,31 @@ import { useAirfoilStore } from './stores/airfoilStore';
 import { DEFAULT_ROUTE_UI_STATE, useRouteUiStore } from './stores/routeUiStore';
 import { useRunStore } from './stores/runStore';
 import { useVisualizationStore } from './stores/visualizationStore';
-import { buildRouteStateSnapshot, parseRouteStateFromLocation, writeRouteState } from './lib/routeState';
+import {
+  buildRouteStateSnapshot,
+  parseRouteStateFromLocation,
+  writeRouteState,
+  type RouteStateSnapshot,
+} from './lib/routeState';
 import { loadEphemeralState, mergeEphemeralIntoSnapshot, saveEphemeralState } from './lib/ephemeralState';
 import 'flexlayout-react/style/light.css';
 import './App.css';
 
 function AppContent() {
   const [wasmStatus, setWasmStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [urlSnapshot] = useState<RouteStateSnapshot | null>(() => {
+    const loc = window.location;
+    if (!loc.search && !loc.hash) return null;
+    const snap = parseRouteStateFromLocation(loc);
+    if (!snap) return null;
+    const hasState =
+      snap.airfoil.nacaCode ||
+      snap.airfoil.exactGeometry ||
+      snap.airfoil.controlMode ||
+      snap.airfoil.displayAlpha !== undefined;
+    return hasState ? snap : null;
+  });
+  const [urlHydrated, setUrlHydrated] = useState(false);
   const initializeDefaultAirfoil = useAirfoilStore((s) => s.initializeDefaultAirfoil);
   const generateNaca4 = useAirfoilStore((s) => s.generateNaca4);
   const hydrateRouteState = useAirfoilStore((s) => s.hydrateRouteState);
@@ -68,6 +87,7 @@ function AppContent() {
       spacingPanelMode: state.spacingPanelMode,
       sspInterpolation: state.sspInterpolation,
       sspVisualization: state.sspVisualization,
+      geometryDesign: state.geometryDesign,
     })),
   );
   const visualizationRouteState = useVisualizationStore(
@@ -176,6 +196,10 @@ function AppContent() {
       initializeDefaultAirfoil();
     }
 
+    const gd = snapshot.airfoil.geometryDesign;
+    if (gd?.flaps?.length) {
+      console.log('[hydrate] Restoring', gd.flaps.length, 'flap(s):', gd.flaps.map(f => f.name));
+    }
     hydrateRouteState({
       controlMode: snapshot.airfoil.controlMode,
       displayAlpha: snapshot.airfoil.displayAlpha,
@@ -192,6 +216,7 @@ function AppContent() {
       spacingPanelMode: snapshot.airfoil.spacingPanelMode,
       sspInterpolation: snapshot.airfoil.sspInterpolation,
       sspVisualization: snapshot.airfoil.sspVisualization,
+      geometryDesign: gd,
     });
     hydrateVisualizationState(snapshot.visualization);
     hydrateUiFromRoute({
@@ -224,11 +249,13 @@ function AppContent() {
         window.setTimeout(() => {
           isApplyingRouteRef.current = false;
           hasHydratedRouteRef.current = true;
+          setUrlHydrated(true);
         }, 0);
       })
       .catch((err) => {
         console.error('WASM init failed:', err);
         setWasmStatus('error');
+        setUrlHydrated(true);
       });
     return () => window.removeEventListener('popstate', handlePopState);
   }, [applyRouteSnapshot, initRunDb]);
@@ -279,6 +306,13 @@ function AppContent() {
     <div className="app-container">
       <DockingLayout wasmStatus={wasmStatus} />
       <CookieConsent />
+      {urlSnapshot && (
+        <UrlLoadingModal
+          snapshot={urlSnapshot}
+          wasmReady={wasmStatus === 'ready'}
+          hydrated={urlHydrated}
+        />
+      )}
     </div>
   );
 }

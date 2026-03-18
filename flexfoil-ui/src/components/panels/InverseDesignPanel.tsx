@@ -120,11 +120,11 @@ const TargetCurveEditor: React.FC<TargetCurveEditorProps> = ({
           key={`${surface}-${i}`}
           cx={toSvgX(x)}
           cy={toSvgY(target.values[i])}
-          r={4}
+          r={5}
           fill={color}
           stroke="var(--bg-primary)"
           strokeWidth={1.5}
-          style={{ cursor: 'grab' }}
+          style={{ cursor: 'grab', pointerEvents: 'all' }}
         />
       ))}
     </g>
@@ -190,21 +190,37 @@ export function InverseDesignPanel() {
     const vals = surface === 'upper' ? currentCp.upperCp : currentCp.lowerCp;
     if (xs.length < 2) return;
     
+    // Sort by increasing x (upper surface arrives in TE→LE / decreasing-x order
+    // from the solver, but targets must be monotonically increasing for QDES
+    // validation and for the drag-constraint logic to work correctly)
+    const pairs = xs.map((x, i) => ({ x, v: vals[i] }));
+    pairs.sort((a, b) => a.x - b.x);
+    
     // Subsample to ~15 editable points
-    const step = Math.max(1, Math.floor(xs.length / 15));
+    const step = Math.max(1, Math.floor(pairs.length / 15));
     const sampledX: number[] = [];
     const sampledV: number[] = [];
-    for (let i = 0; i < xs.length; i += step) {
-      sampledX.push(xs[i]);
-      sampledV.push(vals[i]);
+    for (let i = 0; i < pairs.length; i += step) {
+      sampledX.push(pairs[i].x);
+      sampledV.push(pairs[i].v);
     }
-    if (sampledX[sampledX.length - 1] !== xs[xs.length - 1]) {
-      sampledX.push(xs[xs.length - 1]);
-      sampledV.push(vals[vals.length - 1]);
+    if (sampledX[sampledX.length - 1] !== pairs[pairs.length - 1].x) {
+      sampledX.push(pairs[pairs.length - 1].x);
+      sampledV.push(pairs[pairs.length - 1].v);
     }
     
     setInverseDesignTarget(surface, { x: sampledX, values: sampledV });
   }, [currentCp, setInverseDesignTarget]);
+
+  // Auto-initialize upper target from current Cp on first render if none exist
+  const hasAutoInited = useRef(false);
+  useEffect(() => {
+    if (hasAutoInited.current) return;
+    if (!inverseDesign.upperTarget && !inverseDesign.lowerTarget && currentCp.upperX.length > 2) {
+      hasAutoInited.current = true;
+      initFromCurrent('upper');
+    }
+  }, [inverseDesign.upperTarget, inverseDesign.lowerTarget, currentCp.upperX.length, initFromCurrent]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     if (!svgRef.current) return;
@@ -218,7 +234,7 @@ export function InverseDesignPanel() {
       for (let i = 0; i < target.x.length; i++) {
         const kx = toSvgX(target.x[i]);
         const ky = toSvgY(target.values[i]);
-        if (Math.hypot(svgX - kx, svgY - ky) < 8) {
+        if (Math.hypot(svgX - kx, svgY - ky) < 12) {
           if (e.shiftKey && target.x.length > 2) {
             const newX = [...target.x];
             const newV = [...target.values];
@@ -385,7 +401,19 @@ export function InverseDesignPanel() {
   const cpTicks = ticks(CP_MIN, CP_MAX, 0.5);
 
   return (
-    <div className="inverse-design-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'auto' }}>
+    <div className="inverse-design-panel" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'auto' }}>
+      {/* WIP banner */}
+      <div style={{
+        padding: '6px 10px',
+        background: 'color-mix(in srgb, var(--warning-color, #f59e0b) 12%, transparent)',
+        borderBottom: '1px solid color-mix(in srgb, var(--warning-color, #f59e0b) 30%, transparent)',
+        fontSize: '11px',
+        color: 'var(--text-secondary)',
+        lineHeight: 1.4,
+      }}>
+        <strong style={{ color: 'var(--warning-color, #f59e0b)' }}>Experimental</strong> — QDES and MDES are works in progress and may produce unexpected results.
+      </div>
+
       {/* Method selector */}
       <div style={{ padding: '6px 10px', display: 'flex', gap: '4px', borderBottom: '1px solid var(--border-color)' }}>
         <button
@@ -482,6 +510,20 @@ export function InverseDesignPanel() {
             transform={`rotate(-90, 12, ${HEIGHT / 2})`}>
             {inverseDesign.targetKind === 'cp' ? '-Cp' : 'Ue'}
           </text>
+          
+          {/* Empty state guidance */}
+          {!inverseDesign.upperTarget && !inverseDesign.lowerTarget && (
+            <>
+              <text x={MARGIN.left + PLOT_W / 2} y={MARGIN.top + PLOT_H / 2 - 10}
+                textAnchor="middle" fontSize={13} fill="var(--text-muted)">
+                No target distribution set
+              </text>
+              <text x={MARGIN.left + PLOT_W / 2} y={MARGIN.top + PLOT_H / 2 + 12}
+                textAnchor="middle" fontSize={11} fill="var(--text-muted)" opacity={0.7}>
+                Click &quot;+ Upper&quot; or &quot;+ Lower&quot; above to begin
+              </text>
+            </>
+          )}
           
           {/* Curves */}
           <TargetCurveEditor

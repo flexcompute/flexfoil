@@ -38,6 +38,8 @@ export interface RunInsert {
 export interface StorageBackend {
   init(): Promise<void>;
   insertRun(run: RunInsert): Promise<number>;
+  /** Batch-insert multiple runs in a single transaction / persist cycle. */
+  insertRunBatch(runs: RunInsert[]): Promise<number>;
   lookupCache(
     airfoilHash: string,
     alpha: number,
@@ -86,7 +88,7 @@ export function isLocalMode(): boolean {
   // which are Vite dev/preview) is very likely the Python server.
   const { hostname, port } = window.location;
   const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
-  const isDevServer = port === '5173' || port === '4173' || port === '';
+  const isDevServer = port === '5173' || port === '4173' || port === '4174' || port === '4175' || port === '4176' || port === '';
   _isLocal = isLocalhost && !isDevServer;
   return _isLocal;
 }

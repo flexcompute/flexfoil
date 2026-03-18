@@ -126,14 +126,16 @@ export function AirfoilLibraryPanel() {
           <div className="form-row" style={{ marginBottom: '8px' }}>
             <input
               type="number"
-              value={nPoints}
-              onChange={(e) => {
+              defaultValue={nPoints}
+              key={nPoints}
+              onBlur={(e) => {
                 const val = parseInt(e.target.value);
-                if (!isNaN(val)) setNPoints(Math.min(200, val));
+                if (!isNaN(val) && val >= 10 && val <= 500) setNPoints(val);
+                else e.target.value = String(nPoints);
               }}
-              onBlur={() => setNPoints(Math.max(10, Math.min(200, nPoints || 50)))}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
               min={10}
-              max={200}
+              max={500}
               style={{ width: '80px' }}
             />
             <span style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>

@@ -5,6 +5,7 @@ import type {
   AirfoilState,
   CamberControlPoint,
   ControlMode,
+  FlapDefinition,
   RunRow,
   SpacingKnot,
   ThicknessControlPoint,
@@ -26,6 +27,7 @@ interface HeavyRouteData {
   spacing?: SpacingKnot[];
   layout?: IJsonModel;
   filters?: unknown;
+  flaps?: FlapDefinition[];
 }
 
 interface SerializedAirfoilData {
@@ -82,6 +84,7 @@ interface BuildRouteStateArgs {
     | 'spacingPanelMode'
     | 'sspInterpolation'
     | 'sspVisualization'
+    | 'geometryDesign'
   >;
   visualization: Pick<
     VisualizationState,
@@ -215,6 +218,7 @@ export function buildRouteStateSnapshot({
       spacingPanelMode: airfoil.spacingPanelMode,
       sspInterpolation: airfoil.sspInterpolation,
       sspVisualization: airfoil.sspVisualization,
+      geometryDesign: airfoil.geometryDesign,
     },
     visualization: { ...visualization },
     ui,
@@ -243,6 +247,11 @@ export function serializeRouteState(snapshot: CanonicalRouteStateSnapshot, baseP
   const heavy: HeavyRouteData = {};
   if (airfoil.spacingKnots?.length) heavy.spacing = airfoil.spacingKnots;
   if (airfoil.exactGeometry) heavy.foil = airfoil.exactGeometry;
+  const flaps = airfoil.geometryDesign?.flaps;
+  if (flaps && flaps.length > 0) {
+    heavy.flaps = flaps;
+    console.log('[routeState] Serializing', flaps.length, 'flap(s) into URL');
+  }
 
   const pathname = buildPathname(basePath, snapshot.panel);
   const search = params.toString();
@@ -347,6 +356,8 @@ export function parseRouteStateFromLocation(
 
   const spacingKnots = heavy?.spacing ?? decodeCompressed<SpacingKnot[]>(params.get('spacing')) ?? undefined;
   const exactGeometry = heavy?.foil ?? decodeCompressed<SerializedAirfoilData>(params.get('foil')) ?? undefined;
+  const restoredFlaps = heavy?.flaps;
+  if (restoredFlaps?.length) console.log('[routeState] Decoded', restoredFlaps.length, 'flap(s) from URL');
   const layoutJson = heavy?.layout ?? decodeCompressed<IJsonModel>(params.get('layout'));
   const filterModel = heavy?.filters ?? decodeCompressed(params.get('filters'));
 
@@ -387,6 +398,9 @@ export function parseRouteStateFromLocation(
       spacingPanelMode: (params.get('spacingMode') as AirfoilState['spacingPanelMode'] | null) ?? undefined,
       sspInterpolation: (params.get('sspInterp') as AirfoilState['sspInterpolation'] | null) ?? undefined,
       sspVisualization: (params.get('sspViz') as AirfoilState['sspVisualization'] | null) ?? undefined,
+      ...(restoredFlaps && restoredFlaps.length > 0
+        ? { geometryDesign: { flaps: restoredFlaps, teGap: 0, teGapBlend: 0.8, leRadiusFactor: 1.0 } }
+        : {}),
     },
     visualization: {
       showGrid: parseBoolean(params.get('grid')),

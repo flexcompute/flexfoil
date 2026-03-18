@@ -44,6 +44,7 @@ import {
   reconstructWithOriginalCamber,
 } from '../lib/airfoilGeometry';
 import { syncToUrl, loadFromUrl, parseNacaFromName, type UrlState } from '../lib/urlState';
+import { applyFlapsToBase } from '../lib/flapGeometry';
 
 /**
  * State that is tracked for undo/redo.
@@ -233,6 +234,17 @@ interface AirfoilStore extends AirfoilState {
   // Initialize default airfoil (call after WASM ready)
   initializeDefaultAirfoil: () => void;
   hydrateRouteState: (state: Partial<AirfoilState>) => void;
+}
+
+/**
+ * Polar keys the user explicitly removed while a sweep was running.
+ * Prevents `upsertPolar` from re-inserting a series the user deleted.
+ * Cleared at the start of each new sweep via `clearPolarSuppression()`.
+ */
+const _suppressedPolarKeys = new Set<string>();
+
+export function clearPolarSuppression(): void {
+  _suppressedPolarKeys.clear();
 }
 
 /**
@@ -878,6 +890,7 @@ export const useAirfoilStore = create<AirfoilStore>()(
       
       // Polar data actions (multi-series)
       upsertPolar: (series) => set((state) => {
+        if (_suppressedPolarKeys.has(series.key)) return state;
         const idx = state.polarData.findIndex(s => s.key === series.key);
         if (idx >= 0) {
           const updated = [...state.polarData];
@@ -886,10 +899,14 @@ export const useAirfoilStore = create<AirfoilStore>()(
         }
         return { polarData: [...state.polarData, series] };
       }),
-      removePolar: (key) => set((state) => ({
-        polarData: state.polarData.filter(s => s.key !== key),
-      })),
-      clearAllPolars: () => set({ polarData: [] }),
+      removePolar: (key) => set((state) => {
+        _suppressedPolarKeys.add(key);
+        return { polarData: state.polarData.filter(s => s.key !== key) };
+      }),
+      clearAllPolars: () => set((state) => {
+        for (const s of state.polarData) _suppressedPolarKeys.add(s.key);
+        return { polarData: [] };
+      }),
       restoreRunSnapshot: (run) => set((state) => {
         if (!run.geometry_snapshot) return state;
         return {
@@ -1180,6 +1197,9 @@ export function getUrlState(): UrlState {
     spacing: state.spacingKnots,
     mode: state.controlMode,
     alpha: state.displayAlpha,
+    flaps: state.geometryDesign.flaps.length > 0
+      ? state.geometryDesign.flaps
+      : undefined,
   };
 }
 
@@ -1218,6 +1238,21 @@ function hydrateFromUrl(): boolean {
   // Apply control mode
   if (urlState.mode) {
     store.setControlMode(urlState.mode);
+  }
+
+  // Restore flap definitions and apply geometry
+  if (urlState.flaps && urlState.flaps.length > 0) {
+    store.setGeometryDesign({ flaps: urlState.flaps });
+    // Defer geometry application until WASM is ready and base geometry exists
+    setTimeout(() => {
+      if (!isWasmReady()) return;
+      const { baseCoordinates, nPanels } = useAirfoilStore.getState();
+      if (baseCoordinates.length < 4) return;
+      const result = applyFlapsToBase(baseCoordinates, urlState.flaps!, nPanels);
+      if (result) {
+        useAirfoilStore.setState({ coordinates: result.coordinates, panels: result.panels });
+      }
+    }, 200);
   }
   
   return true;

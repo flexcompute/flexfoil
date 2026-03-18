@@ -92,7 +92,7 @@ export const welcomeTour: TourStep[] = [
     element: '[data-tour="panel-control"]',
     focusPanel: 'control',
     popover: {
-      title: 'Control Mode',
+      title: 'Geometry Control',
       description: 'The <strong>Parameters</strong> tab lets you quickly adjust thickness and camber using sliders. The Camber and Thickness tabs provide finer control with draggable spline points.',
       side: 'left',
       align: 'start',

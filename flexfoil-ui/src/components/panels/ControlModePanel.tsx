@@ -150,7 +150,7 @@ export function ControlModePanel() {
 
   return (
     <div className="panel">
-      <div className="panel-header">Control Mode</div>
+      <div className="panel-header">Geometry Control</div>
       <div className="panel-content">
         {/* Mode selection */}
         <div className="form-group">

@@ -10,6 +10,7 @@ import type { StorageBackend, RunInsert } from './storageBackend';
 import {
   initRunDatabase,
   insertRun as dbInsertRun,
+  insertRunBatch as dbInsertRunBatch,
   lookupCache as dbLookupCache,
   queryAllRuns as dbQueryAllRuns,
   clearAllRuns as dbClearAllRuns,
@@ -28,6 +29,11 @@ export const browserBackend: StorageBackend = {
   async insertRun(run: RunInsert): Promise<number> {
     await ensureRunDatabase();
     return dbInsertRun(run);
+  },
+
+  async insertRunBatch(runs: RunInsert[]): Promise<number> {
+    await ensureRunDatabase();
+    return dbInsertRunBatch(runs);
   },
 
   lookupCache(airfoilHash, alpha, reynolds, mach, ncrit, nPanels, maxIter): RunRow | null {

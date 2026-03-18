@@ -373,15 +373,17 @@ fn apply_basis_update(
     let chord = (x_max - x_min).abs().max(1.0e-6);
     let mut delta_norm_sq = 0.0;
 
+    // Points are in XFOIL order: upper TE → LE → lower TE.
+    // Indices 1..le_idx are the UPPER surface; le_idx+1..n-1 are LOWER.
     for idx in 1..le_idx {
         let eta = ((points[idx].x - x_min) / chord).clamp(0.0, 1.0);
-        let delta = basis_delta(eta, SurfaceId::Lower, basis, coefficients, coefficient_limit);
+        let delta = basis_delta(eta, SurfaceId::Upper, basis, coefficients, coefficient_limit);
         points[idx].y += delta;
         delta_norm_sq += delta * delta;
     }
     for idx in (le_idx + 1)..points.len().saturating_sub(1) {
         let eta = ((points[idx].x - x_min) / chord).clamp(0.0, 1.0);
-        let delta = basis_delta(eta, SurfaceId::Upper, basis, coefficients, coefficient_limit);
+        let delta = basis_delta(eta, SurfaceId::Lower, basis, coefficients, coefficient_limit);
         points[idx].y += delta;
         delta_norm_sq += delta * delta;
     }

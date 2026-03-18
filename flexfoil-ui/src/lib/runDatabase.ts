@@ -157,6 +157,32 @@ export interface RunInsert {
   flaps_json: string | null;
 }
 
+export async function insertRunBatch(runs: RunInsert[]): Promise<number> {
+  if (runs.length === 0) return 0;
+  const d = getDb();
+  const sid = getSessionId();
+  const stmt = d.prepare(
+    `INSERT OR IGNORE INTO runs
+       (airfoil_name, airfoil_hash, alpha, reynolds, mach, ncrit, n_panels, max_iter,
+        cl, cd, cm, converged, iterations, residual, x_tr_upper, x_tr_lower,
+       solver_mode, success, error, coordinates_json, panels_json, flaps_json, session_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  );
+  for (const run of runs) {
+    stmt.run([
+      run.airfoil_name, run.airfoil_hash, run.alpha, run.reynolds,
+      run.mach, run.ncrit, run.n_panels, run.max_iter,
+      run.cl, run.cd, run.cm, run.converged ? 1 : 0,
+      run.iterations, run.residual, run.x_tr_upper, run.x_tr_lower,
+      run.solver_mode, run.success ? 1 : 0, run.error,
+      run.coordinates_json, run.panels_json, run.flaps_json, sid,
+    ]);
+  }
+  stmt.free();
+  await persistToIdb();
+  return runs.length;
+}
+
 export async function insertRun(run: RunInsert): Promise<number> {
   const d = getDb();
   d.run(
@@ -363,5 +389,13 @@ function rowToRunRow(columns: string[], values: (string | number | null | Uint8A
     ld: (obj.cl != null && obj.cd != null && Math.abs(obj.cd as number) > 1e-10)
       ? (obj.cl as number) / (obj.cd as number)
       : null,
+    flap_deflection: (() => {
+      const flaps = parseFlapsJson(obj.flaps_json);
+      return flaps && flaps.length > 0 ? flaps[0].deflection : null;
+    })(),
+    flap_hinge_x: (() => {
+      const flaps = parseFlapsJson(obj.flaps_json);
+      return flaps && flaps.length > 0 ? flaps[0].hingeX : null;
+    })(),
   };
 }

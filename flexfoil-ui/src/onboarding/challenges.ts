@@ -55,8 +55,8 @@ export function getPanelDisplayName(panelId: string): string {
     'solve': 'Solve',
     'library': 'Library', 
     'visualization': 'Visualization',
-    'control': 'Control Mode',
-    'control-mode': 'Control Mode',
+    'control': 'Geometry Control',
+    'control-mode': 'Geometry Control',
     'polar': 'Polar Plot',
     'canvas': 'Canvas',
     'spacing': 'Spacing',
@@ -284,7 +284,7 @@ export const challenges: Record<string, Challenge> = {
   'switch-to-camber': {
     id: 'switch-to-camber',
     instruction: 'Switch to Camber editing mode',
-    hint: 'Click the "Camber" button in Control Mode panel',
+    hint: 'Click the "Camber" button in Geometry Control panel',
     validate: () => {
       const { airfoil } = getState();
       return airfoil.controlMode === 'camber-spline';
@@ -315,7 +315,7 @@ export const challenges: Record<string, Challenge> = {
   'switch-to-thickness': {
     id: 'switch-to-thickness',
     instruction: 'Switch to Thickness editing mode',
-    hint: 'Click the "Thickness" button in Control Mode panel',
+    hint: 'Click the "Thickness" button in Geometry Control panel',
     validate: () => {
       const { airfoil } = getState();
       return airfoil.controlMode === 'thickness-spline';

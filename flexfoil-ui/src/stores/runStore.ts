@@ -37,6 +37,8 @@ interface RunStoreState {
 
   /** Insert a new run (returns the cached-or-new row) */
   addRun: (run: RunInsert) => Promise<void>;
+  /** Batch-insert runs in one transaction, refresh once at the end */
+  addRunBatch: (runs: RunInsert[]) => Promise<void>;
   /** Look up a cached result; returns null on miss */
   lookup: (
     airfoilHash: string,
@@ -91,10 +93,21 @@ export const useRunStore = create<RunStoreState>()((set, get) => ({
     const backend = getBackend();
     if (!get().ready) {
       await backend.init();
-      const rows = backend.queryAllRuns();
-      set({ allRuns: rows, filteredRuns: rows, ready: true });
+      set({ ready: true });
     }
     await backend.insertRun(run);
+    await backend.pruneOldRuns();
+    get().refresh();
+  },
+
+  addRunBatch: async (runs) => {
+    if (runs.length === 0) return;
+    const backend = getBackend();
+    if (!get().ready) {
+      await backend.init();
+      set({ ready: true });
+    }
+    await backend.insertRunBatch(runs);
     await backend.pruneOldRuns();
     get().refresh();
   },
