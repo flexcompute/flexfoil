@@ -35,10 +35,55 @@ coverage/
 # Large trace artifacts (no Git LFS)
 crates/rustfoil-solver/**/*.json
 
-# Fortran build artifacts
+# Fortran build artifacts and runtime outputs
 *.o
 Xfoil/bin/xfoil
 Xfoil/bin/pplot
 Xfoil/bin/pxplot
 Xfoil-instrumented/bin/xfoil_instrumented
 Xfoil-instrumented/bin/xfoil_debug
+Xfoil-instrumented/bin/*.json
+Xfoil-instrumented/bin/*.txt
+Xfoil-instrumented/bin/*.dat
+Xfoil-instrumented/bin/*.bl
+Xfoil-instrumented/bin/fort.*
+Xfoil-instrumented/bin/quit
+Xfoil-instrumented/bin/ALFA*
+
+# Fortran compiled archives
+*.a
+
+# Fortran runtime files
+fort.*
+*.bl
+
+# Debug dumps and comparison artifacts
+*debug*.json
+*_dump*.txt
+*_dump*.dat
+xfoil_*.dat
+xfoil_*.txt
+xfoil_polar*.txt
+cp_*.txt
+/traces/
+/comparison_results/
+/_snippets/
+/scripts/comparison_data/
+/scripts/comparison_dashboard.*
+/scripts/*comparison*.py
+/scripts/*comparison*.html
+/scripts/*comparison*.png
+/scripts/debug_compare/
+/scripts/debug_compare.py
+
+# Loose root-level data files (belong in testdata/ if needed)
+/naca*.dat
+/naca*_buffer*.dat
+/naca*_paneled*.dat
+/naca*_xfoil*.dat
+/naca*_rustfoil*.dat
+/test_*.txt
+/test_*.py
+
+# Video recording artifacts
+video-clips/
