@@ -1,0 +1,40 @@
+---
+description: Checklist enforced whenever creating a PR that targets main
+alwaysApply: true
+---
+
+# PR-to-Main Requirements
+
+Every pull request that targets `main` **must** satisfy the two gates below before it can be opened. Treat these as blocking — do not create the PR until both are done.
+
+## 1. Update "What's New"
+
+The in-app changelog lives in `flexfoil-ui/src/lib/version.ts` (the `CHANGELOG` array).
+
+- If the current top entry's `version` already matches the release being prepared, **append** new items to that entry.
+- Otherwise, **add a new entry** at index 0 with the next version, today's date, and the items.
+- Every user-visible change in the PR must have a corresponding `{ category, text }` item. Use the correct category:
+  - `added` — wholly new feature or capability
+  - `changed` — enhancement or modification to existing behavior
+  - `fixed` — bug fix
+- Keep descriptions concise (one sentence, no period).
+
+## 2. Keep Documentation in Sync
+
+The docs site lives in `docs-site/docs/` (Docusaurus `.mdx` files).
+
+- If the PR adds, changes, or removes **any** solver behavior, UI feature, API surface, or configuration option, the corresponding doc page must be created or updated in the same PR.
+- Docs must reflect the **actual** implementation — no aspirational or outdated content. If existing docs reference behavior that the PR changes, update those docs.
+- New major features need their own doc page added to `docs-site/docs/`.
+
+## PR Authoring Checklist
+
+When drafting the PR description, include this checklist (filled in):
+
+```markdown
+## Changelog & Docs
+- [ ] `flexfoil-ui/src/lib/version.ts` CHANGELOG updated
+- [ ] All user-visible changes have a changelog entry
+- [ ] New/changed docs pages added or updated in `docs-site/docs/`
+- [ ] No stale or aspirational content remains in affected docs
+```
