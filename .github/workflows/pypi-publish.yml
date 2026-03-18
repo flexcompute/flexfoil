@@ -41,7 +41,7 @@ jobs:
         run: |
           cd flexfoil-ui
           npm ci
-          npx vite build
+          NODE_OPTIONS="--max-old-space-size=4096" npx vite build
 
       - name: Upload frontend dist
         uses: actions/upload-artifact@v4
