@@ -21,6 +21,7 @@ classifiers = [
 keywords = ["airfoil", "aerodynamics", "xfoil", "cfd", "panel-method"]
 dependencies = [
     "numpy>=1.24",
+    "plotly>=5.15",
 ]
 
 [project.urls]
@@ -34,14 +35,14 @@ server = [
     "starlette>=0.36",
     "uvicorn[standard]>=0.27",
 ]
-plotting = [
+matplotlib = [
     "matplotlib>=3.7",
 ]
 dataframe = [
     "pandas>=2.0",
 ]
 all = [
-    "flexfoil[server,plotting,dataframe]",
+    "flexfoil[server,matplotlib,dataframe]",
 ]
 dev = [
     "flexfoil[all]",

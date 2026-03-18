@@ -22,13 +22,13 @@ Pre-built wheels are available for:
 - Linux x86_64
 - Windows x86_64
 
-Optional extras:
+Plotly is included by default for interactive plots. Optional extras:
 
 ```bash
-pip install "flexfoil[all]"       # server + matplotlib + pandas
-pip install "flexfoil[plotting]"  # matplotlib for polar.plot()
-pip install "flexfoil[dataframe]" # pandas for polar.to_dataframe()
-pip install "flexfoil[server]"    # starlette + uvicorn for flexfoil.serve()
+pip install "flexfoil[all]"        # server + matplotlib + pandas
+pip install "flexfoil[matplotlib]" # matplotlib for polar.plot(backend="matplotlib")
+pip install "flexfoil[dataframe]"  # pandas for polar.to_dataframe()
+pip install "flexfoil[server]"     # starlette + uvicorn for flexfoil.serve()
 ```
 
 ## What is this?
@@ -66,8 +66,11 @@ polar = foil.polar(alpha=(-5, 15, 0.5), Re=1e6)
 print(polar)
 # PolarResult('NACA 2412', Re=1e+06, 40/41 converged)
 
-# 4-panel matplotlib figure: CL-α, CD-α, CL-CD, CM-α
+# Interactive plotly figure (default): CL-α, CD-α, CL-CD, CM-α
 polar.plot()
+
+# Or use matplotlib
+polar.plot(backend="matplotlib")
 
 # Export to pandas
 df = polar.to_dataframe()
@@ -211,7 +214,7 @@ flexfoil info                        # show config and DB location
 | `.results` | `list[SolveResult]` — all results |
 | `.to_dict()` | Export as `dict` |
 | `.to_dataframe()` | Export as `pandas.DataFrame` |
-| `.plot(show=True)` | 4-panel matplotlib figure |
+| `.plot(show=True, backend="plotly")` | 4-panel figure (plotly default, or `"matplotlib"`) |
 
 ### `RunDatabase`
 
