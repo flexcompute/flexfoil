@@ -330,5 +330,8 @@ function rowToRunRow(columns: string[], values: (string | number | null | Uint8A
     created_at: obj.created_at as string,
     session_id: obj.session_id as string | null,
     geometry_snapshot: parseGeometrySnapshot(obj.coordinates_json, obj.panels_json),
+    ld: (obj.cl != null && obj.cd != null && Math.abs(obj.cd as number) > 1e-10)
+      ? (obj.cl as number) / (obj.cd as number)
+      : null,
   };
 }

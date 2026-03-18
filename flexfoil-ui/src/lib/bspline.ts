@@ -283,7 +283,7 @@ function solveLeastSquares(
  * Uses least-squares fitting to find control points such that the resulting
  * B-spline curve closely matches the original airfoil.
  */
-export function createBSplineControlPointsFromAirfoil(
+function createBSplineControlPointsFromAirfoil(
   coordinates: AirfoilPoint[],
   numControlPoints: number = 12,
   degree: number = 3
@@ -328,7 +328,7 @@ export function createBSplineControlPointsFromAirfoil(
  * the original curve shape by computing proper tangent directions
  * and handle lengths based on the local curvature.
  */
-export function createBezierHandlesFromAirfoil(
+function createBezierHandlesFromAirfoil(
   coordinates: AirfoilPoint[],
   numHandles: number = 8
 ): { pointIndex: number; position: { x: number; y: number }; type: 'in' | 'out' }[] {

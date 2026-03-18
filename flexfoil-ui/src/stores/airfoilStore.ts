@@ -22,6 +22,9 @@ import type {
   CamberControlPoint,
   ThicknessControlPoint,
   RunRow,
+  InverseDesignState,
+  InverseDesignSurfaceTarget,
+  GeometryDesignState,
 } from '../types';
 import {
   generateNaca4 as wasmGenerateNaca4,
@@ -105,6 +108,29 @@ const DEFAULT_SPACING_KNOTS: SpacingKnot[] = [
   { S: 1, F: 1.5 },    // Dense at TE
 ];
 
+const DEFAULT_INVERSE_DESIGN: InverseDesignState = {
+  active: false,
+  targetKind: 'cp',
+  upperTarget: null,
+  lowerTarget: null,
+  achievedUpper: null,
+  achievedLower: null,
+  solving: false,
+  maxIterations: 6,
+  damping: 0.6,
+  resultCoords: null,
+  converged: null,
+  history: [],
+};
+
+const DEFAULT_GEOMETRY_DESIGN: GeometryDesignState = {
+  flapHingeX: 0.75,
+  flapDeflection: 0,
+  teGap: 0,
+  teGapBlend: 0.8,
+  leRadiusFactor: 1.0,
+};
+
 interface AirfoilStore extends AirfoilState {
   // Actions
   setCoordinates: (coords: AirfoilPoint[]) => void;
@@ -179,6 +205,25 @@ interface AirfoilStore extends AirfoilState {
   clearAllPolars: () => void;
   restoreRunSnapshot: (run: RunRow) => void;
   
+  // Inverse design (QDES) actions
+  setInverseDesignTargetKind: (kind: 'cp' | 'velocity') => void;
+  setInverseDesignTarget: (surface: 'upper' | 'lower', target: InverseDesignSurfaceTarget | null) => void;
+  setInverseDesignSolving: (solving: boolean) => void;
+  setInverseDesignResult: (result: {
+    resultCoords: { x: number; y: number }[] | null;
+    converged: boolean | null;
+    achievedUpper: InverseDesignSurfaceTarget | null;
+    achievedLower: InverseDesignSurfaceTarget | null;
+    history: InverseDesignState['history'];
+  }) => void;
+  clearInverseDesign: () => void;
+  setInverseDesignMaxIterations: (n: number) => void;
+  setInverseDesignDamping: (d: number) => void;
+  applyInverseDesignResult: () => void;
+  
+  // Geometry design (GDES) actions
+  setGeometryDesign: (updates: Partial<GeometryDesignState>) => void;
+  
   // Reset
   reset: () => void;
   
@@ -240,6 +285,11 @@ export const useAirfoilStore = create<AirfoilStore>()(
       thicknessScale: 1.0,
       camberScale: 1.0,
       baseCoordinates: DEFAULT_NACA0012,
+
+      // Inverse design state
+      inverseDesign: { ...DEFAULT_INVERSE_DESIGN },
+      // Geometry design state
+      geometryDesign: { ...DEFAULT_GEOMETRY_DESIGN },
 
       // Actions
       setCoordinates: (coords) => set({ coordinates: coords }),
@@ -1002,7 +1052,7 @@ export function redo(): void {
 /**
  * Clear all history (past and future states).
  */
-export function clearHistory(): void {
+function clearHistory(): void {
   useAirfoilStore.temporal.getState().clear();
 }
 
@@ -1027,7 +1077,7 @@ export function getUrlState(): UrlState {
 /**
  * Hydrate store from URL state
  */
-export function hydrateFromUrl(): boolean {
+function hydrateFromUrl(): boolean {
   const urlState = loadFromUrl();
   if (!urlState) return false;
   
@@ -1083,7 +1133,7 @@ export function syncStoreToUrl(): void {
 /**
  * Subscribe to store changes and sync to URL
  */
-export function subscribeToUrlSync(): () => void {
+function subscribeToUrlSync(): () => void {
   return useAirfoilStore.subscribe((state, prevState) => {
     // Only sync on meaningful changes
     if (

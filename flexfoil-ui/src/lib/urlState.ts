@@ -529,7 +529,7 @@ export function loadFromUrl(): UrlState | null {
 /**
  * Generate shareable URL with current state
  */
-export function getShareableUrl(state: UrlState): string {
+function getShareableUrl(state: UrlState): string {
   const encoded = encodeUrlState(state);
   const base = window.location.origin + window.location.pathname;
   return encoded ? `${base}#s=${encoded}` : base;
@@ -547,7 +547,7 @@ export function parseNacaFromName(name: string): string | null {
  * Get complete URL state from all stores
  * This should be called by components that need to sync to URL
  */
-export function getCompleteUrlState(
+function getCompleteUrlState(
   airfoilState: {
     name: string;
     nPanels: number;

@@ -35,6 +35,9 @@ import {
 } from '../../lib/plotFields';
 import { detectSmartRunGroups } from '../../lib/polarDetection';
 import { buildMarkerEncoding, colorForKey } from '../../lib/plotStyling';
+import { useCustomColumnStore, compileCustomColumns } from '../../stores/customColumnStore';
+import { useAllPlotFields } from '../../hooks/useAllPlotFields';
+import { CustomColumnEditor } from '../CustomColumnEditor';
 
 // ────────────────────────────────────────────────────────────
 // Helpers
@@ -67,9 +70,13 @@ function axisLayoutKey(prefix: 'x' | 'y', index: number): string {
   return index === 1 ? `${prefix}axis` : `${prefix}axis${index}`;
 }
 
-function computeNumericRange(rows: RunRow[], key: keyof RunRow): [number, number] {
+function computeNumericRange(
+  rows: RunRow[],
+  key: keyof RunRow,
+  getter?: (row: RunRow, key: string) => unknown,
+): [number, number] {
   const values = rows
-    .map((row) => row[key])
+    .map((row) => getter ? getter(row, key as string) : row[key])
     .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
   if (values.length === 0) return [0, 1];
   const min = Math.min(...values);
@@ -122,6 +129,7 @@ function buildColumnDefs(): ColDef<RunRow>[] {
     { field: 'cl', headerName: 'CL', width: 110, chartDataType: 'series' as const, valueFormatter: p => p.value?.toFixed(5) ?? '' },
     { field: 'cd', headerName: 'CD', width: 110, chartDataType: 'series' as const, valueFormatter: p => p.value?.toFixed(6) ?? '' },
     { field: 'cm', headerName: 'CM', width: 110, chartDataType: 'series' as const, valueFormatter: p => p.value?.toFixed(5) ?? '' },
+    { field: 'ld', headerName: 'L/D', width: 100, chartDataType: 'series' as const, valueFormatter: p => p.value?.toFixed(3) ?? '' },
     { field: 'converged', headerName: 'Converged', width: 100, chartDataType: 'category' as const, enableRowGroup: true,
       valueFormatter: p => p.value ? 'Yes' : 'No',
       cellStyle: p => ({ color: p.value ? 'var(--accent-primary)' : 'var(--accent-danger)' }),
@@ -169,6 +177,9 @@ export function DataExplorerPanel() {
   const filterModel = useRouteUiStore((state) => state.dataExplorerFilterModel);
   const setFilterModel = useRouteUiStore((state) => state.setDataExplorerFilterModel);
   const [dataSource, setDataSource] = useState<DataSource>('full');
+  const [showColumnEditor, setShowColumnEditor] = useState(false);
+  const customColumns = useCustomColumnStore((s) => s.columns);
+  const { numericFields: mergedNumericFields, encodingFields: mergedEncodingFields, getFieldLabel: mergedGetLabel, getFieldValue } = useAllPlotFields();
   const [groupBy, setGroupBy] = useState<keyof RunRow | '' | typeof AUTO_GROUP_KEY>(AUTO_GROUP_KEY);
   const [sizeBy, setSizeBy] = useState<keyof RunRow | ''>('');
   const [symbolBy, setSymbolBy] = useState<keyof RunRow | ''>('');
@@ -183,7 +194,25 @@ export function DataExplorerPanel() {
     () => isDark ? themeQuartz.withPart(colorSchemeDark) : themeQuartz,
     [isDark],
   );
-  const columnDefs = useMemo(() => buildColumnDefs(), []);
+  const compiledCustomCols = useMemo(() => compileCustomColumns(customColumns), [customColumns]);
+  const columnDefs = useMemo(() => {
+    const base = buildColumnDefs();
+    const custom: ColDef<RunRow>[] = customColumns.map((col) => {
+      const evalFn = compiledCustomCols.get(col.id);
+      return {
+        headerName: col.name,
+        colId: `custom_${col.id}`,
+        width: 110,
+        chartDataType: 'series' as const,
+        valueGetter: (params: { data?: RunRow }) => {
+          if (!params.data || !evalFn) return null;
+          return evalFn(params.data);
+        },
+        valueFormatter: (p: { value?: number | null }) => p.value?.toFixed(4) ?? '',
+      };
+    });
+    return [...base, ...custom];
+  }, [customColumns, compiledCustomCols]);
   const defaultColDef = useMemo<ColDef<RunRow>>(() => ({
     sortable: true, filter: true, resizable: true,
     enableRowGroup: true, enableValue: true,
@@ -265,6 +294,8 @@ export function DataExplorerPanel() {
 
   const splomResult = useMemo(() => {
     if (successOnly.length === 0 || splomKeys.length < 2) return null;
+    const gv = getFieldValue;
+    const gl = mergedGetLabel;
 
     const n = splomKeys.length;
     const gridGap = n > 4 ? 0.012 : 0.02;
@@ -274,7 +305,7 @@ export function DataExplorerPanel() {
     const traces: Plotly.Data[] = [];
     const axisOverrides: Record<string, unknown> = {};
     const ranges = Object.fromEntries(
-      splomKeys.map((key) => [key, computeNumericRange(successOnly, key)]),
+      splomKeys.map((key) => [key, computeNumericRange(successOnly, key, gv)]),
     ) as Record<keyof RunRow, [number, number]>;
 
     let colorScaleShown = false;
@@ -296,6 +327,8 @@ export function DataExplorerPanel() {
         ];
         const xKey = splomKeys[col];
         const yKey = splomKeys[row];
+        const xStr = xKey as string;
+        const yStr = yKey as string;
 
         axisOverrides[xLayoutKey] = {
           domain: domainX,
@@ -307,7 +340,7 @@ export function DataExplorerPanel() {
           mirror: true,
           tickfont: { size: 9 },
           showticklabels: row === n - 1,
-          title: row === n - 1 ? { text: getLabel(xKey), font: { size: 10 } } : undefined,
+          title: row === n - 1 ? { text: gl(xStr), font: { size: 10 } } : undefined,
         };
         axisOverrides[yLayoutKey] = {
           domain: domainY,
@@ -318,38 +351,38 @@ export function DataExplorerPanel() {
           mirror: true,
           tickfont: { size: 9 },
           showticklabels: col === 0,
-          title: col === 0 ? { text: getLabel(yKey), font: { size: 10 } } : undefined,
+          title: col === 0 ? { text: gl(yStr), font: { size: 10 } } : undefined,
         };
 
         if (row === col) {
           groupedRows.forEach((group) => {
-            const rows = group.rows.filter((run) => run[xKey] != null);
+            const rows = group.rows.filter((run) => gv(run, xStr) != null);
             if (rows.length === 0) return;
             traces.push({
               type: 'histogram',
-              x: rows.map((run) => run[xKey]) as number[],
+              x: rows.map((run) => gv(run, xStr)) as number[],
               xaxis: xRef,
               yaxis: yRef,
               name: group.label,
               legendgroup: group.key,
-              marker: { color: colorForKey(group.key || String(xKey)), opacity: groupedRows.length > 1 ? 0.55 : 0.85 },
+              marker: { color: colorForKey(group.key || xStr), opacity: groupedRows.length > 1 ? 0.55 : 0.85 },
               showlegend: row === 0 && col === 0 && groupedRows.length > 1,
-              hovertemplate: `${getLabel(xKey)}=%{x}<br>Count=%{y}<extra>${group.label}</extra>`,
+              hovertemplate: `${gl(xStr)}=%{x}<br>Count=%{y}<extra>${group.label}</extra>`,
             });
           });
           continue;
         }
 
-        const cellRows = successOnly.filter((run) => run[xKey] != null && run[yKey] != null);
+        const cellRows = successOnly.filter((run) => gv(run, xStr) != null && gv(run, yStr) != null);
         groupedRows.forEach((group, groupIndex) => {
-          const rows = group.rows.filter((run) => run[xKey] != null && run[yKey] != null);
+          const rows = group.rows.filter((run) => gv(run, xStr) != null && gv(run, yStr) != null);
           if (rows.length === 0) return;
           const { marker } = buildMarkerEncoding({
             rows,
             colorBy,
             sizeBy,
             symbolBy,
-            defaultColor: colorForKey(group.key || `${String(xKey)}|${String(yKey)}`),
+            defaultColor: colorForKey(group.key || `${xStr}|${yStr}`),
             defaultSize: 5,
             opacity: 0.65,
             minSize: 3,
@@ -362,8 +395,8 @@ export function DataExplorerPanel() {
           traces.push({
             type: 'scatter',
             mode: 'markers',
-            x: rows.map((run) => run[xKey]) as number[],
-            y: rows.map((run) => run[yKey]) as number[],
+            x: rows.map((run) => gv(run, xStr)) as number[],
+            y: rows.map((run) => gv(run, yStr)) as number[],
             xaxis: xRef,
             yaxis: yRef,
             name: group.label,
@@ -371,12 +404,12 @@ export function DataExplorerPanel() {
             marker,
             customdata: rows.map(buildRunHoverDetails),
             showlegend: false,
-            hovertemplate: `${getLabel(xKey)}=%{x}<br>${getLabel(yKey)}=%{y}<br>${RUN_HOVER_TEMPLATE}<extra>${group.label}</extra>`,
+            hovertemplate: `${gl(xStr)}=%{x}<br>${gl(yStr)}=%{y}<br>${RUN_HOVER_TEMPLATE}<extra>${group.label}</extra>`,
           });
         });
 
-        const xValues = cellRows.map((run) => run[xKey] as number);
-        const yValues = cellRows.map((run) => run[yKey] as number);
+        const xValues = cellRows.map((run) => gv(run, xStr) as number);
+        const yValues = cellRows.map((run) => gv(run, yStr) as number);
         const r = pearsonR(xValues, yValues);
         if (r != null) {
           annotations.push({
@@ -408,7 +441,7 @@ export function DataExplorerPanel() {
     };
 
     return { traces, layout };
-  }, [successOnly, splomKeys, colorBy, sizeBy, symbolBy, isDark, groupedRows]);
+  }, [successOnly, splomKeys, colorBy, sizeBy, symbolBy, isDark, groupedRows, getFieldValue, mergedGetLabel]);
 
   const handlePlotClick = useCallback((event: Readonly<Plotly.PlotMouseEvent>) => {
     const rawRunId = event.points?.[0]?.customdata;
@@ -525,6 +558,20 @@ export function DataExplorerPanel() {
 
         {/* Common actions */}
         <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>{allRuns.length} runs</span>
+        <button
+          onClick={() => setShowColumnEditor(true)}
+          title="Custom computed columns"
+          style={{
+            ...btnStyle,
+            fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '3px',
+          }}
+        >
+          <span style={{ fontSize: '13px', lineHeight: 1 }}>+</span>
+          Columns{customColumns.length > 0 ? ` (${customColumns.length})` : ''}
+        </button>
         {view === 'table' && (
           <>
             <button
@@ -608,7 +655,7 @@ export function DataExplorerPanel() {
             <div data-tour="de-column-chips" style={{ display: 'flex', flexDirection: 'column', minWidth: '280px', flex: 1 }}>
               <span style={labelStyle}>Columns</span>
               <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                {NUMERIC_PLOT_FIELDS.map((f) => (
+                {mergedNumericFields.map((f) => (
                   <button key={f.key as string} onClick={() => toggleSplomKey(f.key)} style={chipStyle(splomKeys.includes(f.key))}>
                     {f.label}
                   </button>
@@ -634,7 +681,7 @@ export function DataExplorerPanel() {
               >
                 <option value={AUTO_GROUP_KEY}>Auto (Smart)</option>
                 <option value="">None</option>
-                {ENCODING_PLOT_FIELDS.map((f) => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
+                {mergedEncodingFields.map((f) => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
               </select>
             </div>
 
@@ -646,7 +693,7 @@ export function DataExplorerPanel() {
                 style={selectStyle}
               >
                 <option value="">Color Auto</option>
-                {ENCODING_PLOT_FIELDS.map((f) => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
+                {mergedEncodingFields.map((f) => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
               </select>
             </div>
 
@@ -658,7 +705,7 @@ export function DataExplorerPanel() {
                 style={selectStyle}
               >
                 <option value="">None</option>
-                {ENCODING_PLOT_FIELDS.map((f) => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
+                {mergedEncodingFields.map((f) => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
               </select>
             </div>
 
@@ -670,7 +717,7 @@ export function DataExplorerPanel() {
                 style={selectStyle}
               >
                 <option value="">None</option>
-                {ENCODING_PLOT_FIELDS.map((f) => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
+                {mergedEncodingFields.map((f) => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
               </select>
             </div>
             </div>
@@ -748,6 +795,10 @@ export function DataExplorerPanel() {
             {selectedRunId != null ? ` Current restored run: #${selectedRunId}` : ''}
           </div>
         </div>
+      )}
+
+      {showColumnEditor && (
+        <CustomColumnEditor onClose={() => setShowColumnEditor(false)} />
       )}
     </div>
   );

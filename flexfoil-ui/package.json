@@ -1,7 +1,7 @@
 {
   "name": "flexfoil-ui",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.1.0-dev",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,14 +10,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@types/d3-contour": "^3.0.6",
-    "@types/d3-geo": "^3.1.0",
     "ag-charts-enterprise": "^13.1.0",
     "ag-grid-community": "^35.1.0",
     "ag-grid-enterprise": "^35.1.0",
     "ag-grid-react": "^35.1.0",
-    "d3-contour": "^4.0.2",
-    "d3-geo": "^3.1.1",
     "distinct-colors": "^3.0.0",
     "driver.js": "^1.4.0",
     "flexlayout-react": "^0.8.18",

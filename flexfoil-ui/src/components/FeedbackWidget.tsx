@@ -1,8 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 
-const GOOGLE_SHEET_URL =
-  import.meta.env.VITE_FEEDBACK_SHEET_URL ??
-  'REDACTED_GOOGLE_APPS_SCRIPT_URL';
+const GOOGLE_SHEET_URL: string | undefined = import.meta.env.VITE_FEEDBACK_SHEET_URL;
 
 type FeedbackType = 'bug' | 'feature' | 'general';
 

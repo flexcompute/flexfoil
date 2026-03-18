@@ -22,6 +22,7 @@ export const PLOT_FIELDS: PlotFieldMeta[] = [
   { key: 'cl', label: 'CL', kind: 'numeric' },
   { key: 'cd', label: 'CD', kind: 'numeric' },
   { key: 'cm', label: 'CM', kind: 'numeric' },
+  { key: 'ld', label: 'L/D', kind: 'numeric' },
   { key: 'converged', label: 'Converged', kind: 'boolean' },
   { key: 'iterations', label: 'Iterations', kind: 'numeric' },
   { key: 'residual', label: 'Residual', kind: 'numeric' },
@@ -36,7 +37,7 @@ export const NUMERIC_PLOT_FIELDS = PLOT_FIELDS.filter(
   (field) => field.kind === 'numeric',
 );
 
-export const DISCRETE_PLOT_FIELDS = PLOT_FIELDS.filter(
+const DISCRETE_PLOT_FIELDS = PLOT_FIELDS.filter(
   (field) => field.kind !== 'numeric',
 );
 
@@ -58,6 +59,6 @@ export function isNumericPlotField(key: keyof RunRow): boolean {
   return getPlotFieldMeta(key)?.kind === 'numeric';
 }
 
-export function isDiscretePlotField(key: keyof RunRow): boolean {
+function isDiscretePlotField(key: keyof RunRow): boolean {
   return !isNumericPlotField(key);
 }

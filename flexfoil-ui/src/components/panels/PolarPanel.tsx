@@ -18,9 +18,14 @@ const AXIS_LABELS: Record<AxisVariable, string> = {
   cl: 'Cl',
   cd: 'Cd',
   cm: 'Cm',
+  ld: 'L/D',
 };
 
 function getValue(point: PolarPoint, variable: AxisVariable): number {
+  if (variable === 'ld') {
+    const cd = point.cd ?? 0;
+    return Math.abs(cd) > 1e-10 ? point.cl / cd : 0;
+  }
   return point[variable] ?? 0;
 }
 
@@ -248,6 +253,7 @@ export function PolarPanel() {
             <option value="cl">Cl</option>
             <option value="cd">Cd</option>
             <option value="cm">Cm</option>
+            <option value="ld">L/D</option>
           </select>
         </label>
         
@@ -262,6 +268,7 @@ export function PolarPanel() {
             <option value="cl">Cl</option>
             <option value="cd">Cd</option>
             <option value="cm">Cm</option>
+            <option value="ld">L/D</option>
           </select>
         </label>
         

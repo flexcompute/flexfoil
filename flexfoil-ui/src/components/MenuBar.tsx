@@ -7,6 +7,8 @@ import { DarkModeToggle } from './DarkModeToggle';
 import { useUndoRedo } from '../hooks/useUndoRedo';
 import { useOnboarding } from '../onboarding';
 import { FlexcomputeLogo } from './FlexcomputeLogo';
+import { AboutDialog } from './AboutDialog';
+import { ChangelogDialog } from './ChangelogDialog';
 
 const DOCUMENTATION_URL = 'https://foil.flexcompute.com/docs/';
 const FLEXCOMPUTE_URL = 'https://www.flexcompute.com/';
@@ -34,6 +36,8 @@ export function MenuBar({
   wasmStatus,
 }: MenuBarProps) {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
+  const [showAbout, setShowAbout] = useState(false);
+  const [showChangelog, setShowChangelog] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   
   // Undo/redo functionality
@@ -281,7 +285,20 @@ export function MenuBar({
               }}
             />
             <MenuDivider />
-            <MenuItem label="About Flexcompute" disabled />
+            <MenuItem
+              label="What's New"
+              onClick={() => {
+                setShowChangelog(true);
+                setActiveMenu(null);
+              }}
+            />
+            <MenuItem
+              label="About FlexFoil"
+              onClick={() => {
+                setShowAbout(true);
+                setActiveMenu(null);
+              }}
+            />
           </MenuDropdown>
         )}
       </MenuGroup>
@@ -333,6 +350,16 @@ export function MenuBar({
       >
         <DarkModeToggle />
       </div>
+
+      <AboutDialog
+        open={showAbout}
+        onClose={() => setShowAbout(false)}
+        onOpenChangelog={() => setShowChangelog(true)}
+      />
+      <ChangelogDialog
+        open={showChangelog}
+        onClose={() => setShowChangelog(false)}
+      />
     </div>
   );
 }

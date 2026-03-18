@@ -9,7 +9,7 @@
 
 import type { SpacingKnot } from '../types';
 
-export interface ComputedSSP {
+interface ComputedSSP {
   T: number[];
   scaledKnots: SpacingKnot[];
   si: number[];
@@ -19,7 +19,7 @@ export interface ComputedSSP {
  * Step 1: Compute parametric knot positions Tj
  * Uses equations (9), (10), (11) from the document
  */
-export function computeTj(knots: SpacingKnot[]): number[] {
+function computeTj(knots: SpacingKnot[]): number[] {
   const T: number[] = [0]; // T1 = 0 (Eq. 10)
   
   for (let j = 0; j < knots.length - 1; j++) {
@@ -51,7 +51,7 @@ export function computeTj(knots: SpacingKnot[]): number[] {
 /**
  * Step 2: Rescale to enforce TN = 1
  */
-export function rescale(
+function rescale(
   knots: SpacingKnot[],
   T: number[]
 ): { scaledKnots: SpacingKnot[]; scaledT: number[] } {
@@ -88,7 +88,7 @@ function findInterval(T: number[], t: number): number {
 /**
  * Step 3: Compute output points si for each ti
  */
-export function computeSi(knots: SpacingKnot[], T: number[], n: number): number[] {
+function computeSi(knots: SpacingKnot[], T: number[], n: number): number[] {
   const si: number[] = [0]; // s1 = S1 = 0 (Eq. 16)
   
   for (let i = 1; i < n; i++) {
@@ -133,7 +133,7 @@ export function computeSi(knots: SpacingKnot[], T: number[], n: number): number[
 /**
  * Main SSP computation function
  */
-export function computeSSP(knots: SpacingKnot[], n: number): ComputedSSP {
+function computeSSP(knots: SpacingKnot[], n: number): ComputedSSP {
   // Validate inputs
   if (knots.length < 2) {
     throw new Error('SSP requires at least 2 knots');
@@ -164,7 +164,7 @@ export function computeSSP(knots: SpacingKnot[], n: number): ComputedSSP {
 /**
  * Create default initial knots
  */
-export function createDefaultKnots(): SpacingKnot[] {
+function createDefaultKnots(): SpacingKnot[] {
   return [
     { S: 0, F: 1 },
     { S: 1, F: 1 }
@@ -174,7 +174,7 @@ export function createDefaultKnots(): SpacingKnot[] {
 /**
  * Validate and sanitize knots
  */
-export function sanitizeKnots(knots: SpacingKnot[]): SpacingKnot[] {
+function sanitizeKnots(knots: SpacingKnot[]): SpacingKnot[] {
   if (knots.length < 2) {
     return createDefaultKnots();
   }

@@ -28,6 +28,17 @@ import init, {
     lerp_array,
     lerp_streamlines,
     lerp_morph_state,
+    // Inverse design (QDES)
+    inverse_design_qdes,
+    // Geometry design (GDES)
+    gdes_rotate,
+    gdes_scale,
+    gdes_translate,
+    gdes_set_te_gap,
+    gdes_flap,
+    gdes_set_le_radius,
+    gdes_scale_thickness,
+    gdes_scale_camber,
 } from 'rustfoil-wasm';
 
 let initialized = false;
@@ -110,7 +121,7 @@ export function generateNaca4(
 /**
  * Generate NACA 4-series from string designation (e.g., "2412", "0012").
  */
-export function generateNaca4FromString(
+function generateNaca4FromString(
     digits: string, 
     nPoints: number
 ): { x: number; y: number }[] {
@@ -157,7 +168,7 @@ export function generateNaca4Xfoil(
  * @param spacingKnots - Array of {s, f} knots for spacing function
  * @param nPanels - Desired number of panels
  */
-export function repanelWithSpacing(
+function repanelWithSpacing(
     coordinates: { x: number; y: number }[],
     spacingKnots: { s: number; f: number }[],
     nPanels: number
@@ -247,7 +258,7 @@ export function repanelXfoil(
 /**
  * XFOIL paneling parameters.
  */
-export interface XfoilPanelingParams {
+interface XfoilPanelingParams {
     /** Curvature attraction (0=uniform, 1=XFOIL default bunching) */
     curvParam?: number;
     /** TE/LE panel density ratio (XFOIL default: 0.15) */
@@ -264,7 +275,7 @@ export interface XfoilPanelingParams {
  * @param params - XFOIL paneling parameters
  * @returns Repaneled coordinates
  */
-export function repanelXfoilWithParams(
+function repanelXfoilWithParams(
     coordinates: { x: number; y: number }[],
     nPanels: number,
     params: XfoilPanelingParams = {}
@@ -683,7 +694,7 @@ export function createSmokeSystem(
  * Interpolate between two point arrays using WASM.
  * Much faster than JavaScript for large arrays.
  */
-export function wasmLerpPoints(
+function wasmLerpPoints(
     from: { x: number; y: number }[],
     to: { x: number; y: number }[],
     t: number
@@ -701,7 +712,7 @@ export function wasmLerpPoints(
 /**
  * Interpolate between two number arrays using WASM.
  */
-export function wasmLerpArray(
+function wasmLerpArray(
     from: number[],
     to: number[],
     t: number
@@ -718,7 +729,7 @@ export function wasmLerpArray(
  * Encode streamlines to flat array format for WASM.
  * Format: [n_lines, n_pts_0, x0, y0, x1, y1, ..., n_pts_1, x0, y0, ...]
  */
-export function encodeStreamlines(streamlines: [number, number][][]): Float64Array {
+function encodeStreamlines(streamlines: [number, number][][]): Float64Array {
     // Calculate total size
     const totalPts = streamlines.reduce((sum, line) => sum + line.length, 0);
     const totalSize = 1 + streamlines.length + totalPts * 2;
@@ -741,7 +752,7 @@ export function encodeStreamlines(streamlines: [number, number][][]): Float64Arr
 /**
  * Decode streamlines from flat array format.
  */
-export function decodeStreamlines(data: Float64Array | number[]): [number, number][][] {
+function decodeStreamlines(data: Float64Array | number[]): [number, number][][] {
     if (data.length === 0) {
         return [];
     }
@@ -837,6 +848,200 @@ export function wasmLerpMorphState(
         cp: Array.from(result.cp),
         cpX: Array.from(result.cp_x),
     };
+}
+
+// ============================================================================
+// Inverse Design (QDES)
+// ============================================================================
+
+export interface InverseDesignIterationSnapshot {
+    iteration: number;
+    rms_error: number;
+    max_error: number;
+    geometry_delta_norm: number;
+    cl: number;
+    cd: number;
+}
+
+export interface InverseDesignResult {
+    input_coords: number[];
+    output_coords: number[];
+    paneled_coords: number[];
+    cl: number;
+    cd: number;
+    cm: number;
+    converged: boolean;
+    iterations: number;
+    rms_error: number;
+    max_error: number;
+    target_kind: 'cp' | 'velocity';
+    target_upper_x: number[];
+    target_upper_values: number[];
+    target_lower_x: number[];
+    target_lower_values: number[];
+    achieved_upper_x: number[];
+    achieved_upper_values: number[];
+    achieved_lower_x: number[];
+    achieved_lower_values: number[];
+    history: InverseDesignIterationSnapshot[];
+    success: boolean;
+    error?: string;
+}
+
+export interface InverseDesignTarget {
+    x: number[];
+    values: number[];
+}
+
+export interface InverseDesignOptions {
+    alphaDeg: number;
+    reynolds?: number;
+    mach?: number;
+    ncrit?: number;
+    targetKind: 'cp' | 'velocity';
+    upper?: InverseDesignTarget;
+    lower?: InverseDesignTarget;
+    maxDesignIterations?: number;
+    damping?: number;
+}
+
+/**
+ * Run inverse design (QDES) to modify an airfoil to match a target Cp or velocity distribution.
+ *
+ * Provide target distributions on the upper and/or lower surface.
+ * The solver iterates, perturbing the geometry to match the target.
+ */
+export function runInverseDesign(
+    coordinates: { x: number; y: number }[],
+    options: InverseDesignOptions,
+): InverseDesignResult {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+
+    const coordsFlat = pointsToFlat(coordinates);
+    const upperX = options.upper ? new Float64Array(options.upper.x) : new Float64Array(0);
+    const upperValues = options.upper ? new Float64Array(options.upper.values) : new Float64Array(0);
+    const lowerX = options.lower ? new Float64Array(options.lower.x) : new Float64Array(0);
+    const lowerValues = options.lower ? new Float64Array(options.lower.values) : new Float64Array(0);
+
+    return inverse_design_qdes(
+        coordsFlat,
+        options.alphaDeg,
+        options.reynolds ?? 1e6,
+        options.mach ?? 0,
+        options.ncrit ?? 9,
+        options.targetKind,
+        upperX,
+        upperValues,
+        lowerX,
+        lowerValues,
+        options.maxDesignIterations ?? 6,
+        options.damping ?? 0.6,
+    ) as InverseDesignResult;
+}
+
+// ============================================================================
+// Geometry Design (GDES)
+// ============================================================================
+
+export interface GeometryResult {
+    coords: number[];
+    success: boolean;
+    error?: string;
+}
+
+function gdesResultToPoints(result: GeometryResult): { x: number; y: number }[] {
+    if (!result.success || result.coords.length < 2) return [];
+    return flatToPoints(result.coords);
+}
+
+/** Rotate airfoil by angle (degrees) about center (cx, cy). */
+export function rotateAirfoil(
+    coordinates: { x: number; y: number }[],
+    angleDeg: number,
+    cx: number = 0.25,
+    cy: number = 0,
+): { x: number; y: number }[] {
+    if (!initialized) throw new Error('WASM not initialized.');
+    const result = gdes_rotate(pointsToFlat(coordinates), angleDeg, cx, cy) as GeometryResult;
+    return gdesResultToPoints(result);
+}
+
+/** Scale airfoil about center (cx, cy) by factors (sx, sy). */
+export function scaleAirfoil(
+    coordinates: { x: number; y: number }[],
+    sx: number,
+    sy: number,
+    cx: number = 0,
+    cy: number = 0,
+): { x: number; y: number }[] {
+    if (!initialized) throw new Error('WASM not initialized.');
+    const result = gdes_scale(pointsToFlat(coordinates), sx, sy, cx, cy) as GeometryResult;
+    return gdesResultToPoints(result);
+}
+
+/** Translate airfoil by (dx, dy). */
+export function translateAirfoil(
+    coordinates: { x: number; y: number }[],
+    dx: number,
+    dy: number,
+): { x: number; y: number }[] {
+    if (!initialized) throw new Error('WASM not initialized.');
+    const result = gdes_translate(pointsToFlat(coordinates), dx, dy) as GeometryResult;
+    return gdesResultToPoints(result);
+}
+
+/** Set trailing-edge gap (fraction of chord). blendFraction controls how far forward the change extends. */
+export function setTeGap(
+    coordinates: { x: number; y: number }[],
+    gap: number,
+    blendFraction: number = 0.8,
+): { x: number; y: number }[] {
+    if (!initialized) throw new Error('WASM not initialized.');
+    const result = gdes_set_te_gap(pointsToFlat(coordinates), gap, blendFraction) as GeometryResult;
+    return gdesResultToPoints(result);
+}
+
+/** Apply a trailing-edge flap deflection. hingeXFrac is hinge location as fraction of chord. */
+export function deflectFlap(
+    coordinates: { x: number; y: number }[],
+    hingeXFrac: number,
+    deflectionDeg: number,
+): { x: number; y: number }[] {
+    if (!initialized) throw new Error('WASM not initialized.');
+    const result = gdes_flap(pointsToFlat(coordinates), hingeXFrac, deflectionDeg) as GeometryResult;
+    return gdesResultToPoints(result);
+}
+
+/** Scale leading-edge radius by factor (1.0 = unchanged). */
+export function setLeRadius(
+    coordinates: { x: number; y: number }[],
+    factor: number,
+): { x: number; y: number }[] {
+    if (!initialized) throw new Error('WASM not initialized.');
+    const result = gdes_set_le_radius(pointsToFlat(coordinates), factor) as GeometryResult;
+    return gdesResultToPoints(result);
+}
+
+/** Scale thickness while preserving camber (1.0 = unchanged). */
+export function scaleThickness(
+    coordinates: { x: number; y: number }[],
+    factor: number,
+): { x: number; y: number }[] {
+    if (!initialized) throw new Error('WASM not initialized.');
+    const result = gdes_scale_thickness(pointsToFlat(coordinates), factor) as GeometryResult;
+    return gdesResultToPoints(result);
+}
+
+/** Scale camber while preserving thickness (1.0 = unchanged, 0.0 = symmetric). */
+export function scaleCamber(
+    coordinates: { x: number; y: number }[],
+    factor: number,
+): { x: number; y: number }[] {
+    if (!initialized) throw new Error('WASM not initialized.');
+    const result = gdes_scale_camber(pointsToFlat(coordinates), factor) as GeometryResult;
+    return gdesResultToPoints(result);
 }
 
 // Re-export the RustFoil class and WasmSmokeSystem for advanced usage

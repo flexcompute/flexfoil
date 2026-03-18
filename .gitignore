@@ -34,3 +34,11 @@ coverage/
 
 # Large trace artifacts (no Git LFS)
 crates/rustfoil-solver/**/*.json
+
+# Fortran build artifacts
+*.o
+Xfoil/bin/xfoil
+Xfoil/bin/pplot
+Xfoil/bin/pxplot
+Xfoil-instrumented/bin/xfoil_instrumented
+Xfoil-instrumented/bin/xfoil_debug

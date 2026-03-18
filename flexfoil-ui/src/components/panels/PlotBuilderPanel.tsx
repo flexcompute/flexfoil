@@ -12,6 +12,7 @@ import {
 } from '../../lib/plotFields';
 import { buildMarkerEncoding, colorForKey, colorForValue } from '../../lib/plotStyling';
 import { useSavedPlotStore, type SavedPlot } from '../../stores/savedPlotStore';
+import { useAllPlotFields } from '../../hooks/useAllPlotFields';
 import type { AxisScale, ChartType, DataSource, RunRow } from '../../types';
 
 const CHART_TYPES: { value: ChartType; label: string }[] = [
@@ -61,9 +62,16 @@ export function PlotBuilderPanel() {
   const { savedPlots, addPlot, deletePlot } = useSavedPlotStore();
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
+  const {
+    numericFields: mergedNumericFields,
+    encodingFields: mergedEncodingFields,
+    getFieldLabel: mergedGetLabel,
+    getFieldValue,
+  } = useAllPlotFields();
+
   const data = dataSource === 'full' ? allRuns : filteredRuns;
   const successOnly = useMemo(() => data.filter(r => r.success), [data]);
-  const getLabel = useCallback((key: keyof RunRow) => getPlotFieldLabel(key), []);
+  const getLabel = useCallback((key: keyof RunRow) => mergedGetLabel(key as string), [mergedGetLabel]);
 
   const groups = useMemo(() => {
     if (successOnly.length === 0) return [];
@@ -98,14 +106,17 @@ export function PlotBuilderPanel() {
       }));
   }, [successOnly, chartType, xField, yField, colorBy, sizeBy, symbolBy, groupBy, getLabel]);
 
+  const gfv = getFieldValue;
   const traces = useMemo(() => {
+    const xKey = xField as string;
+    const yKey = yField as string;
     return groups.reduce<Plotly.Data[]>((allTraces, group, groupIndex) => {
       const defaultColor = colorForKey(group.key);
       if (chartType === 'histogram') {
-        const rows = group.rows.filter((row) => row[xField] != null);
+        const rows = group.rows.filter((row) => gfv(row, xKey) != null);
         if (rows.length === 0) return allTraces;
         allTraces.push({
-          x: rows.map((row) => row[xField]) as number[],
+          x: rows.map((row) => gfv(row, xKey)) as number[],
           type: 'histogram' as const,
           name: group.label,
           marker: { color: defaultColor, opacity: 0.8 },
@@ -115,10 +126,10 @@ export function PlotBuilderPanel() {
         return allTraces;
       }
 
-      const rows = group.rows.filter((row) => row[xField] != null && row[yField] != null);
+      const rows = group.rows.filter((row) => gfv(row, xKey) != null && gfv(row, yKey) != null);
       if (rows.length === 0) return allTraces;
-      const x = rows.map((row) => row[xField]) as number[];
-      const y = rows.map((row) => row[yField]) as number[];
+      const x = rows.map((row) => gfv(row, xKey)) as number[];
+      const y = rows.map((row) => gfv(row, yKey)) as number[];
       const mode = group.isSinglePoint ? 'markers' as const
         : chartType === 'scatter' ? 'markers' as const
         : chartType === 'line' ? 'lines+markers' as const
@@ -159,7 +170,7 @@ export function PlotBuilderPanel() {
       });
       return allTraces;
     }, []);
-  }, [groups, chartType, xField, yField, colorBy, sizeBy, symbolBy, getLabel]);
+  }, [groups, chartType, xField, yField, colorBy, sizeBy, symbolBy, getLabel, gfv]);
 
   const layout = useMemo(() => ({
     autosize: true,
@@ -356,7 +367,7 @@ export function PlotBuilderPanel() {
               <span style={labelStyle}>X Axis</span>
               <div style={{ display: 'flex', gap: '4px' }}>
                 <select value={xField as string} onChange={e => setXField(e.target.value as keyof RunRow)} style={selectStyle}>
-                  {NUMERIC_PLOT_FIELDS.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
+                  {mergedNumericFields.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
                 </select>
                 <select value={xScale} onChange={e => setXScale(e.target.value as AxisScale)} style={{ ...selectStyle, flex: 'none', width: '55px' }}>
                   <option value="linear">Lin</option>
@@ -370,7 +381,7 @@ export function PlotBuilderPanel() {
                 <span style={labelStyle}>Y Axis</span>
                 <div style={{ display: 'flex', gap: '4px' }}>
                   <select value={yField as string} onChange={e => setYField(e.target.value as keyof RunRow)} style={selectStyle}>
-                    {NUMERIC_PLOT_FIELDS.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
+                    {mergedNumericFields.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
                   </select>
                   <select value={yScale} onChange={e => setYScale(e.target.value as AxisScale)} style={{ ...selectStyle, flex: 'none', width: '55px' }}>
                     <option value="linear">Lin</option>
@@ -385,7 +396,7 @@ export function PlotBuilderPanel() {
               <select value={groupBy as string} onChange={e => setGroupBy((e.target.value || '') as keyof RunRow | '' | typeof AUTO_GROUP_KEY)} style={selectStyle}>
                 <option value={AUTO_GROUP_KEY}>Auto (Smart)</option>
                 <option value="">None</option>
-                {ENCODING_PLOT_FIELDS.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
+                {mergedEncodingFields.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
               </select>
             </div>
 
@@ -393,7 +404,7 @@ export function PlotBuilderPanel() {
               <span style={labelStyle}>Color</span>
               <select value={colorBy as string} onChange={e => setColorBy((e.target.value || '') as keyof RunRow | '')} style={selectStyle}>
                 <option value="">Color Auto</option>
-                {ENCODING_PLOT_FIELDS.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
+                {mergedEncodingFields.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
               </select>
             </div>
 
@@ -401,7 +412,7 @@ export function PlotBuilderPanel() {
               <span style={labelStyle}>Marker Size</span>
               <select value={sizeBy as string} onChange={e => setSizeBy((e.target.value || '') as keyof RunRow | '')} style={selectStyle}>
                 <option value="">None</option>
-                {ENCODING_PLOT_FIELDS.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
+                {mergedEncodingFields.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
               </select>
             </div>
 
@@ -409,7 +420,7 @@ export function PlotBuilderPanel() {
               <span style={labelStyle}>Marker Type</span>
               <select value={symbolBy as string} onChange={e => setSymbolBy((e.target.value || '') as keyof RunRow | '')} style={selectStyle}>
                 <option value="">None</option>
-                {ENCODING_PLOT_FIELDS.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
+                {mergedEncodingFields.map(f => <option key={f.key as string} value={f.key as string}>{f.label}</option>)}
               </select>
             </div>
           </div>

@@ -235,7 +235,7 @@ function evaluateCubicSpline(coeffs: SplineCoefficients, targetX: number): numbe
  * This provides smooth C2-continuous interpolation through the control points.
  * Exported for use in other modules that need spline interpolation.
  */
-export function interpolateYSpline(points: { x: number; y: number }[], targetX: number): number {
+function interpolateYSpline(points: { x: number; y: number }[], targetX: number): number {
   if (points.length === 0) return 0;
   if (points.length === 1) return points[0].y;
   if (points.length === 2) {
@@ -475,7 +475,7 @@ export function reconstructFromCamberThicknessSpline(
  * @param factor - Scale factor (1.0 = original, 2.0 = double thickness)
  * @returns Scaled airfoil coordinates
  */
-export function scaleThickness(coords: AirfoilPoint[], factor: number): AirfoilPoint[] {
+function scaleThickness(coords: AirfoilPoint[], factor: number): AirfoilPoint[] {
   if (coords.length < 5 || factor <= 0) {
     return coords;
   }
@@ -498,7 +498,7 @@ export function scaleThickness(coords: AirfoilPoint[], factor: number): AirfoilP
  * @param factor - Scale factor (0.0 = symmetric, 1.0 = original, 2.0 = double camber)
  * @returns Scaled airfoil coordinates
  */
-export function scaleCamber(coords: AirfoilPoint[], factor: number): AirfoilPoint[] {
+function scaleCamber(coords: AirfoilPoint[], factor: number): AirfoilPoint[] {
   if (coords.length < 5) {
     return coords;
   }
@@ -649,7 +649,7 @@ export function createThicknessControlPoints(
  * @param nPoints - Number of output points
  * @returns Airfoil coordinates
  */
-export function reconstructFromControlPoints(
+function reconstructFromControlPoints(
   camberPoints: CamberControlPoint[],
   thicknessPoints: ThicknessControlPoint[],
   nPoints: number = 161

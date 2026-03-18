@@ -17,10 +17,10 @@ export interface AirfoilPoint extends Point {
 }
 
 /** Control modes for airfoil manipulation */
-export type ControlMode = 'parameters' | 'camber-spline' | 'thickness-spline';
+export type ControlMode = 'parameters' | 'camber-spline' | 'thickness-spline' | 'inverse-design' | 'geometry-design';
 export type SolverMode = 'viscous' | 'inviscid';
 export type RunMode = 'alpha' | 'cl';
-export type AxisVariable = 'alpha' | 'cl' | 'cd' | 'cm';
+export type AxisVariable = 'alpha' | 'cl' | 'cd' | 'cm' | 'ld';
 export type ChartType = 'scatter' | 'line' | 'bar' | 'histogram';
 export type DataSource = 'full' | 'filtered';
 export type AxisScale = 'linear' | 'log';
@@ -147,6 +147,10 @@ export interface AirfoilState {
   camberScale: number;
   /** Original airfoil for scaling reference */
   baseCoordinates: AirfoilPoint[];
+  /** Inverse design (QDES) state */
+  inverseDesign: InverseDesignState;
+  /** Geometry design (GDES) state */
+  geometryDesign: GeometryDesignState;
 }
 
 /** A polar data point */
@@ -195,6 +199,7 @@ export interface RunRow {
   created_at: string;
   session_id: string | null;
   geometry_snapshot: RunGeometrySnapshot | null;
+  ld: number | null;
 }
 
 /** Panel configuration for FlexLayout */
@@ -214,6 +219,56 @@ export interface ViewportState {
   width: number;
   /** Canvas height in pixels */
   height: number;
+}
+
+/** Target distribution for one surface in inverse design */
+export interface InverseDesignSurfaceTarget {
+  /** x-locations along the surface */
+  x: number[];
+  /** Target values (Cp or edge velocity) at each x-location */
+  values: number[];
+}
+
+/** Inverse design (QDES) state */
+export interface InverseDesignState {
+  /** Whether inverse design mode is active */
+  active: boolean;
+  /** Target kind: pressure coefficient or edge velocity */
+  targetKind: 'cp' | 'velocity';
+  /** Upper surface target (null if not targeting upper) */
+  upperTarget: InverseDesignSurfaceTarget | null;
+  /** Lower surface target (null if not targeting lower) */
+  lowerTarget: InverseDesignSurfaceTarget | null;
+  /** Achieved upper surface distribution (from last solve) */
+  achievedUpper: InverseDesignSurfaceTarget | null;
+  /** Achieved lower surface distribution (from last solve) */
+  achievedLower: InverseDesignSurfaceTarget | null;
+  /** Whether the solver is currently running */
+  solving: boolean;
+  /** Max design iterations */
+  maxIterations: number;
+  /** Damping factor (0-1) */
+  damping: number;
+  /** Result coordinates from last solve (flat array) */
+  resultCoords: { x: number; y: number }[] | null;
+  /** Convergence flag from last solve */
+  converged: boolean | null;
+  /** Iteration history */
+  history: { iteration: number; rms_error: number; max_error: number; cl: number; cd: number }[];
+}
+
+/** Geometry design (GDES) state for flap, TE gap, LE radius, transforms */
+export interface GeometryDesignState {
+  /** Flap hinge x-position as fraction of chord */
+  flapHingeX: number;
+  /** Flap deflection in degrees */
+  flapDeflection: number;
+  /** Trailing-edge gap as fraction of chord */
+  teGap: number;
+  /** TE gap blend fraction */
+  teGapBlend: number;
+  /** Leading-edge radius scale factor */
+  leRadiusFactor: number;
 }
 
 /** Performance metrics for visualization */
