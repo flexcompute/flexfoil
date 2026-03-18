@@ -39,6 +39,8 @@ import init, {
     gdes_set_le_radius,
     gdes_scale_thickness,
     gdes_scale_camber,
+    // Full-inverse design (MDES)
+    full_inverse_design_mdes,
 } from 'rustfoil-wasm';
 
 let initialized = false;
@@ -1042,6 +1044,59 @@ export function scaleCamber(
     if (!initialized) throw new Error('WASM not initialized.');
     const result = gdes_scale_camber(pointsToFlat(coordinates), factor) as GeometryResult;
     return gdesResultToPoints(result);
+}
+
+// ============================================================================
+// Full-Inverse Design (MDES) via Circle-Plane Conformal Mapping
+// ============================================================================
+
+export interface MdesDesignResult {
+    x: number[];
+    y: number[];
+    qspec_x: number[];
+    qspec_values: number[];
+    cl: number;
+    cm: number;
+    success: boolean;
+    error?: string;
+}
+
+export interface MdesOptions {
+    alphaDeg: number;
+    symmetric?: boolean;
+    filterStrength?: number;
+    /** Target velocity distribution (nc circle-plane points). Omit to use current airfoil's. */
+    targetQ?: number[];
+    /** Number of circle-plane points (must be 2^n + 1, e.g. 129). Default 129. */
+    nc?: number;
+}
+
+/**
+ * Run full-inverse design (MDES) via circle-plane conformal mapping.
+ *
+ * This is XFOIL's full-inverse method. It maps the airfoil to a circle plane
+ * via Fourier coefficients, then recovers geometry from a target Q(w).
+ */
+export function runFullInverseDesign(
+    coordinates: { x: number; y: number }[],
+    options: MdesOptions,
+): MdesDesignResult {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+
+    const coordsFlat = pointsToFlat(coordinates);
+    const nc = options.nc ?? 129;
+    const targetQ = options.targetQ ? new Float64Array(options.targetQ) : new Float64Array(0);
+
+    return full_inverse_design_mdes(
+        coordsFlat,
+        options.alphaDeg,
+        options.symmetric ?? false,
+        options.filterStrength ?? 0,
+        targetQ,
+        nc,
+    ) as MdesDesignResult;
 }
 
 // Re-export the RustFoil class and WasmSmokeSystem for advanced usage

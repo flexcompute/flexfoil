@@ -1,11 +1,14 @@
 /**
- * ControlModePanel - Switch between parameters, camber-spline, and thickness-spline modes
+ * ControlModePanel - Switch between parameters, camber-spline, thickness-spline,
+ * inverse-design (QDES), and geometry-design (GDES) modes
  */
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
 import { useVisualizationStore } from '../../stores/visualizationStore';
 import type { ControlMode } from '../../types';
+import { InverseDesignPanel } from './InverseDesignPanel';
+import { GeometryDesignPanel } from './GeometryDesignPanel';
 
 // Debounce delay for repaneling after slider changes (ms)
 const REPANEL_DEBOUNCE_MS = 150;
@@ -174,6 +177,20 @@ export function ControlModePanel() {
             >
               Thickness
             </button>
+            <button
+              className={`control-mode-btn ${controlMode === 'inverse-design' ? 'active' : ''}`}
+              onClick={() => handleModeChange('inverse-design')}
+              data-tour="control-mode-inverse"
+            >
+              Inverse
+            </button>
+            <button
+              className={`control-mode-btn ${controlMode === 'geometry-design' ? 'active' : ''}`}
+              onClick={() => handleModeChange('geometry-design')}
+              data-tour="control-mode-gdes"
+            >
+              Geometry
+            </button>
           </div>
         </div>
 
@@ -210,6 +227,24 @@ export function ControlModePanel() {
               <p style={{ margin: '4px 0 0' }}>
                 Drag control points to reshape the thickness distribution.
                 Click to add, shift+click to remove points.
+              </p>
+            </>
+          )}
+          {controlMode === 'inverse-design' && (
+            <>
+              <strong style={{ color: 'var(--text-primary)' }}>Inverse Design (QDES)</strong>
+              <p style={{ margin: '4px 0 0' }}>
+                Specify a target Cp or velocity distribution.
+                The solver modifies the geometry to match the target.
+              </p>
+            </>
+          )}
+          {controlMode === 'geometry-design' && (
+            <>
+              <strong style={{ color: 'var(--text-primary)' }}>Geometry Design (GDES)</strong>
+              <p style={{ margin: '4px 0 0' }}>
+                Direct geometry modifications: flap deflection,
+                trailing-edge gap, leading-edge radius.
               </p>
             </>
           )}
@@ -371,6 +406,16 @@ export function ControlModePanel() {
           </>
         )}
 
+        {/* Inverse design mode */}
+        {controlMode === 'inverse-design' && (
+          <InverseDesignPanel />
+        )}
+
+        {/* Geometry design mode */}
+        {controlMode === 'geometry-design' && (
+          <GeometryDesignPanel />
+        )}
+
         {/* Instructions */}
         <div style={{ 
           marginTop: '12px',
@@ -385,6 +430,18 @@ export function ControlModePanel() {
             <>
               <div>• Drag sliders to scale</div>
               <div>• Apply to save changes</div>
+            </>
+          ) : controlMode === 'inverse-design' ? (
+            <>
+              <div>• Click "+" to initialize targets from current Cp</div>
+              <div>• Drag target points to modify</div>
+              <div>• Double-click to add points, shift+click to remove</div>
+              <div>• Execute to solve, Apply to accept</div>
+            </>
+          ) : controlMode === 'geometry-design' ? (
+            <>
+              <div>• Adjust sliders and click Apply</div>
+              <div>• Each operation modifies the geometry</div>
             </>
           ) : (
             <>

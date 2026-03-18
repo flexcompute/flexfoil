@@ -647,6 +647,8 @@ export function AirfoilCanvas() {
     removeCamberControlPoint,
     addThicknessControlPoint,
     removeThicknessControlPoint,
+    // Inverse design overlay
+    inverseDesignResultCoords,
   } = useAirfoilStore(
     useShallow((state) => ({
       coordinates: state.coordinates,
@@ -666,6 +668,7 @@ export function AirfoilCanvas() {
       removeCamberControlPoint: state.removeCamberControlPoint,
       addThicknessControlPoint: state.addThicknessControlPoint,
       removeThicknessControlPoint: state.removeThicknessControlPoint,
+      inverseDesignResultCoords: state.inverseDesign.resultCoords,
     }))
   );
 
@@ -2108,6 +2111,24 @@ export function AirfoilCanvas() {
       ctx.globalAlpha = 1;
     }
     
+    // Draw inverse design result overlay (ghosted outline of new geometry)
+    if (controlMode === 'inverse-design' && inverseDesignResultCoords && inverseDesignResultCoords.length > 2) {
+      ctx.beginPath();
+      ctx.strokeStyle = '#22c55e';
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.7;
+      ctx.setLineDash([6, 4]);
+      for (let i = 0; i < inverseDesignResultCoords.length; i++) {
+        const pt = inverseDesignResultCoords[i];
+        const pCanvas = toCanvas(rotatePoint({ x: pt.x, y: pt.y }));
+        if (i === 0) ctx.moveTo(pCanvas.x, pCanvas.y);
+        else ctx.lineTo(pCanvas.x, pCanvas.y);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+    
     // Draw force vectors (lift and drag)
     if (showForces && Math.abs(morphState.cl) > 0.001) {
       const forces = computeForceVectors(morphState.cl, displayAlpha, forceScale);
@@ -2577,7 +2598,7 @@ export function AirfoilCanvas() {
 
   // NOTE: Smoke state (smokePositions, etc.) intentionally NOT in dependencies
   // Smoke is drawn on separate overlay canvas to avoid expensive redraws
-  }, [viewport, morphState, splineCurve, controlMode, camberControlPoints, thicknessControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showPsiContours, psiContours, displayAlpha, toCanvas, isDark, showCp, showForces, cpDisplayMode, cpBarScale, forceScale, showBoundaryLayer, showWake, showDisplacementThickness, blVisData, blThicknessScale, blHoverInfo]);
+  }, [viewport, morphState, splineCurve, controlMode, camberControlPoints, thicknessControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showPsiContours, psiContours, displayAlpha, toCanvas, isDark, showCp, showForces, cpDisplayMode, cpBarScale, forceScale, showBoundaryLayer, showWake, showDisplacementThickness, blVisData, blThicknessScale, blHoverInfo, inverseDesignResultCoords]);
 
   // Draw grid
   const drawGrid = useCallback((ctx: CanvasRenderingContext2D) => {

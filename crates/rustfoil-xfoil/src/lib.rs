@@ -10,6 +10,7 @@ pub mod config;
 pub mod error;
 pub mod forces;
 pub mod march;
+pub mod mdes;
 pub mod oper;
 pub mod qdes;
 pub mod result;

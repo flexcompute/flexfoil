@@ -12,8 +12,9 @@ import { useRouteUiStore } from '../../stores/routeUiStore';
 import { useRunStore } from '../../stores/runStore';
 import { useCaseLogStore } from '../../stores/caseLogStore';
 import { analyzeAirfoil, analyzeAirfoilInviscid, isWasmReady, type AnalysisResult } from '../../lib/wasm';
+import { useSolverJobStore } from '../../stores/solverJobStore';
 import type { PolarPoint } from '../../types';
-import type { RunInsert } from '../../lib/runDatabase';
+import type { RunInsert } from '../../lib/storageBackend';
 
 type SolveOrCacheResult = {
   result: AnalysisResult | null;
@@ -317,11 +318,19 @@ export function SolvePanel() {
 
   // --------------- single-point ---------------
 
+  const jobDispatch = useSolverJobStore.getState().dispatch;
+  const jobComplete = useSolverJobStore.getState().complete;
+
   const runAnalysis = useCallback(async () => {
     if (!isWasmReady() || panels.length < 3) {
       setError('WASM not ready or insufficient geometry');
       return;
     }
+
+    const jobLabel = runMode === 'alpha'
+      ? `${isViscous ? 'Viscous' : 'Inviscid'} @ alpha=${targetAlpha.toFixed(1)}`
+      : `${isViscous ? 'Viscous' : 'Inviscid'} -> CL=${targetCl.toFixed(3)}`;
+    const { id: jobId, signal } = jobDispatch(jobLabel);
 
     setIsRunning(true);
     setError(null);
@@ -516,6 +525,7 @@ export function SolvePanel() {
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Unknown error';
       setError(message);
+      jobComplete(jobId, message);
       if (caseId) {
         appendEvent(caseId, {
           level: 'error',
@@ -529,6 +539,7 @@ export function SolvePanel() {
       }
     } finally {
       setIsRunning(false);
+      jobComplete(jobId);
     }
   }, [
     panels,
@@ -543,6 +554,8 @@ export function SolvePanel() {
     appendEvent,
     finishCase,
     buildCaseMetadata,
+    jobDispatch,
+    jobComplete,
   ]);
 
   // --------------- polar sweep ---------------
@@ -552,6 +565,10 @@ export function SolvePanel() {
       setError('WASM not ready or insufficient geometry');
       return;
     }
+
+    const { id: jobId, signal } = jobDispatch(
+      `Polar ${alphaStart.toFixed(0)} to ${alphaEnd.toFixed(0)} (${isViscous ? 'viscous' : 'inviscid'})`
+    );
 
     setIsRunning(true);
     setError(null);
@@ -674,9 +691,11 @@ export function SolvePanel() {
       }
     } finally {
       setIsRunning(false);
+      jobComplete(jobId);
     }
   }, [panels, name, alphaStart, alphaEnd, alphaStep, cacheRe, cacheMach, cacheNcrit, cacheMaxIter,
-      isViscous, upsertPolar, hashPanels, solveOrCache, startCase, appendEvent, finishCase, buildCaseMetadata]);
+      isViscous, upsertPolar, hashPanels, solveOrCache, startCase, appendEvent, finishCase, buildCaseMetadata,
+      jobDispatch, jobComplete]);
 
   // --------------- derived ---------------
 

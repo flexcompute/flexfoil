@@ -13,6 +13,7 @@ rustfoil-coupling = { path = "../rustfoil-coupling" }
 rustfoil-inviscid = { path = "../rustfoil-inviscid" }
 rustfoil-solver = { path = "../rustfoil-solver" }
 nalgebra.workspace = true
+num-complex = "0.4"
 serde = { version = "1", features = ["derive"] }
 thiserror.workspace = true
 

@@ -911,6 +911,78 @@ export const useAirfoilStore = create<AirfoilStore>()(
         };
       }),
 
+      // Inverse design (QDES) actions
+      setInverseDesignTargetKind: (kind) => set((state) => ({
+        inverseDesign: { ...state.inverseDesign, targetKind: kind },
+      })),
+      
+      setInverseDesignTarget: (surface, target) => set((state) => ({
+        inverseDesign: {
+          ...state.inverseDesign,
+          ...(surface === 'upper' ? { upperTarget: target } : { lowerTarget: target }),
+        },
+      })),
+      
+      setInverseDesignSolving: (solving) => set((state) => ({
+        inverseDesign: { ...state.inverseDesign, solving },
+      })),
+      
+      setInverseDesignResult: (result) => set((state) => ({
+        inverseDesign: {
+          ...state.inverseDesign,
+          resultCoords: result.resultCoords,
+          converged: result.converged,
+          achievedUpper: result.achievedUpper,
+          achievedLower: result.achievedLower,
+          history: result.history,
+          solving: false,
+        },
+      })),
+      
+      clearInverseDesign: () => set({
+        inverseDesign: { ...DEFAULT_INVERSE_DESIGN },
+      }),
+      
+      setInverseDesignMaxIterations: (n) => set((state) => ({
+        inverseDesign: { ...state.inverseDesign, maxIterations: Math.max(1, Math.min(20, n)) },
+      })),
+      
+      setInverseDesignDamping: (d) => set((state) => ({
+        inverseDesign: { ...state.inverseDesign, damping: Math.max(0.1, Math.min(1.0, d)) },
+      })),
+      
+      applyInverseDesignResult: () => set((state) => {
+        const result = state.inverseDesign.resultCoords;
+        if (!result || result.length === 0) return state;
+        
+        const newCoords: AirfoilPoint[] = result.map(p => ({ x: p.x, y: p.y }));
+        let panels = newCoords;
+        if (isWasmReady()) {
+          try {
+            const repaneled = repanelXfoil(newCoords, state.nPanels);
+            if (repaneled.length > 0) {
+              panels = repaneled.map(pt => ({ x: pt.x, y: pt.y }));
+            }
+          } catch { /* keep raw coords */ }
+        }
+        
+        return {
+          coordinates: newCoords,
+          panels,
+          baseCoordinates: newCoords,
+          thicknessScale: 1.0,
+          camberScale: 1.0,
+          camberControlPoints: [],
+          thicknessControlPoints: [],
+          inverseDesign: { ...DEFAULT_INVERSE_DESIGN },
+        };
+      }),
+      
+      // Geometry design (GDES) actions
+      setGeometryDesign: (updates) => set((state) => ({
+        geometryDesign: { ...state.geometryDesign, ...updates },
+      })),
+      
       reset: () => set({
         name: 'NACA 0012',
         coordinates: DEFAULT_NACA0012,
@@ -920,7 +992,7 @@ export const useAirfoilStore = create<AirfoilStore>()(
         bsplineControlPoints: [],
         bsplineDegree: 3,
         spacingKnots: DEFAULT_SPACING_KNOTS,
-        nPanels: 160,  // XFOIL's default NPAN
+        nPanels: 160,
         curvatureWeight: 0,
         displayAlpha: 0,
         mach: 0,
@@ -935,6 +1007,8 @@ export const useAirfoilStore = create<AirfoilStore>()(
         thicknessScale: 1.0,
         camberScale: 1.0,
         baseCoordinates: DEFAULT_NACA0012,
+        inverseDesign: { ...DEFAULT_INVERSE_DESIGN },
+        geometryDesign: { ...DEFAULT_GEOMETRY_DESIGN },
       }),
       
       initializeDefaultAirfoil: () => {

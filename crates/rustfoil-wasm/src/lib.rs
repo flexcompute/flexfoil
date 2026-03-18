@@ -2373,6 +2373,667 @@ pub struct MorphResult {
     pub cp_x: Vec<f64>,
 }
 
+// ============================================================================
+// Inverse Design (QDES)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InverseDesignResult {
+    pub input_coords: Vec<f64>,
+    pub output_coords: Vec<f64>,
+    pub paneled_coords: Vec<f64>,
+    pub cl: f64,
+    pub cd: f64,
+    pub cm: f64,
+    pub converged: bool,
+    pub iterations: usize,
+    pub rms_error: f64,
+    pub max_error: f64,
+    pub target_kind: String,
+    pub target_upper_x: Vec<f64>,
+    pub target_upper_values: Vec<f64>,
+    pub target_lower_x: Vec<f64>,
+    pub target_lower_values: Vec<f64>,
+    pub achieved_upper_x: Vec<f64>,
+    pub achieved_upper_values: Vec<f64>,
+    pub achieved_lower_x: Vec<f64>,
+    pub achieved_lower_values: Vec<f64>,
+    pub history: Vec<InverseDesignIterationSnapshot>,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InverseDesignIterationSnapshot {
+    pub iteration: usize,
+    pub rms_error: f64,
+    pub max_error: f64,
+    pub geometry_delta_norm: f64,
+    pub cl: f64,
+    pub cd: f64,
+}
+
+/// Run inverse design (QDES) to modify an airfoil to match a target Cp or velocity distribution.
+///
+/// # Arguments
+/// * `coords` - Airfoil coordinates as flat array [x0, y0, x1, y1, ...]
+/// * `alpha_deg` - Design angle of attack in degrees
+/// * `reynolds` - Reynolds number
+/// * `mach` - Mach number
+/// * `ncrit` - eN transition criterion
+/// * `target_kind` - "cp" for pressure coefficient, "velocity" for edge velocity
+/// * `upper_x` - Target x-locations on upper surface (empty to skip upper)
+/// * `upper_values` - Target values on upper surface
+/// * `lower_x` - Target x-locations on lower surface (empty to skip lower)
+/// * `lower_values` - Target values on lower surface
+/// * `max_design_iterations` - Max inverse design outer iterations (default 6)
+/// * `damping` - Update damping factor 0-1 (default 0.6)
+#[wasm_bindgen]
+pub fn inverse_design_qdes(
+    coords: &[f64],
+    alpha_deg: f64,
+    reynolds: f64,
+    mach: f64,
+    ncrit: f64,
+    target_kind: &str,
+    upper_x: &[f64],
+    upper_values: &[f64],
+    lower_x: &[f64],
+    lower_values: &[f64],
+    max_design_iterations: Option<usize>,
+    damping: Option<f64>,
+) -> JsValue {
+    let result = inverse_design_qdes_impl(
+        coords, alpha_deg, reynolds, mach, ncrit,
+        target_kind, upper_x, upper_values, lower_x, lower_values,
+        max_design_iterations, damping,
+    );
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+fn inverse_design_qdes_impl(
+    coords: &[f64],
+    alpha_deg: f64,
+    reynolds: f64,
+    mach: f64,
+    ncrit: f64,
+    target_kind: &str,
+    upper_x: &[f64],
+    upper_values: &[f64],
+    lower_x: &[f64],
+    lower_values: &[f64],
+    max_design_iterations: Option<usize>,
+    damping: Option<f64>,
+) -> InverseDesignResult {
+    use rustfoil_xfoil::{
+        QdesOptions, QdesSpec, QdesTarget, QdesTargetKind, AlphaSpec,
+        solve_coords_qdes,
+    };
+
+    if coords.len() < 8 || coords.len() % 2 != 0 {
+        return inverse_design_error("Invalid coordinates: need at least 4 points");
+    }
+    if upper_x.is_empty() && lower_x.is_empty() {
+        return inverse_design_error("At least one surface target (upper or lower) is required");
+    }
+    if upper_x.len() != upper_values.len() {
+        return inverse_design_error("upper_x and upper_values must have the same length");
+    }
+    if lower_x.len() != lower_values.len() {
+        return inverse_design_error("lower_x and lower_values must have the same length");
+    }
+
+    let kind = match target_kind {
+        "cp" | "Cp" | "CP" | "pressure" => QdesTargetKind::PressureCoefficient,
+        _ => QdesTargetKind::EdgeVelocity,
+    };
+
+    let upper = if !upper_x.is_empty() {
+        Some(QdesTarget {
+            x: upper_x.to_vec(),
+            values: upper_values.to_vec(),
+        })
+    } else {
+        None
+    };
+
+    let lower = if !lower_x.is_empty() {
+        Some(QdesTarget {
+            x: lower_x.to_vec(),
+            values: lower_values.to_vec(),
+        })
+    } else {
+        None
+    };
+
+    let spec = QdesSpec {
+        operating_point: AlphaSpec::AlphaDeg(alpha_deg),
+        target_kind: kind,
+        upper,
+        lower,
+    };
+
+    let options = QdesOptions {
+        xfoil_options: rustfoil_xfoil::XfoilOptions {
+            reynolds,
+            mach,
+            ncrit,
+            max_iterations: 100,
+            ..Default::default()
+        },
+        outer_iterations: max_design_iterations.unwrap_or(6),
+        update_damping: damping.unwrap_or(0.6),
+        ..Default::default()
+    };
+
+    let coord_pairs: Vec<(f64, f64)> = coords.chunks(2).map(|c| (c[0], c[1])).collect();
+
+    match solve_coords_qdes("airfoil", &coord_pairs, spec, options) {
+        Ok(qdes_result) => {
+            let (tu_x, tu_v) = qdes_result.target_upper.as_ref()
+                .map(|t| (t.x.clone(), t.values.clone()))
+                .unwrap_or_default();
+            let (tl_x, tl_v) = qdes_result.target_lower.as_ref()
+                .map(|t| (t.x.clone(), t.values.clone()))
+                .unwrap_or_default();
+            let (au_x, au_v) = qdes_result.achieved_upper.as_ref()
+                .map(|d| (d.x.clone(), d.values.clone()))
+                .unwrap_or_default();
+            let (al_x, al_v) = qdes_result.achieved_lower.as_ref()
+                .map(|d| (d.x.clone(), d.values.clone()))
+                .unwrap_or_default();
+
+            InverseDesignResult {
+                input_coords: qdes_result.input_coords.iter().flat_map(|&(x, y)| [x, y]).collect(),
+                output_coords: qdes_result.output_coords.iter().flat_map(|&(x, y)| [x, y]).collect(),
+                paneled_coords: qdes_result.paneled_coords.iter().flat_map(|&(x, y)| [x, y]).collect(),
+                cl: qdes_result.oper_result.cl,
+                cd: qdes_result.oper_result.cd,
+                cm: qdes_result.oper_result.cm,
+                converged: qdes_result.converged,
+                iterations: qdes_result.iterations,
+                rms_error: qdes_result.rms_error,
+                max_error: qdes_result.max_error,
+                target_kind: match qdes_result.target_kind {
+                    rustfoil_xfoil::QdesTargetKind::PressureCoefficient => "cp".to_string(),
+                    rustfoil_xfoil::QdesTargetKind::EdgeVelocity => "velocity".to_string(),
+                },
+                target_upper_x: tu_x,
+                target_upper_values: tu_v,
+                target_lower_x: tl_x,
+                target_lower_values: tl_v,
+                achieved_upper_x: au_x,
+                achieved_upper_values: au_v,
+                achieved_lower_x: al_x,
+                achieved_lower_values: al_v,
+                history: qdes_result.history.iter().map(|h| InverseDesignIterationSnapshot {
+                    iteration: h.iteration,
+                    rms_error: h.rms_error,
+                    max_error: h.max_error,
+                    geometry_delta_norm: h.geometry_delta_norm,
+                    cl: h.oper_result.cl,
+                    cd: h.oper_result.cd,
+                }).collect(),
+                success: true,
+                error: None,
+            }
+        }
+        Err(e) => inverse_design_error(format!("Inverse design failed: {e}")),
+    }
+}
+
+fn inverse_design_error(message: impl Into<String>) -> InverseDesignResult {
+    InverseDesignResult {
+        input_coords: vec![], output_coords: vec![], paneled_coords: vec![],
+        cl: 0.0, cd: 0.0, cm: 0.0, converged: false, iterations: 0,
+        rms_error: 0.0, max_error: 0.0,
+        target_kind: String::new(),
+        target_upper_x: vec![], target_upper_values: vec![],
+        target_lower_x: vec![], target_lower_values: vec![],
+        achieved_upper_x: vec![], achieved_upper_values: vec![],
+        achieved_lower_x: vec![], achieved_lower_values: vec![],
+        history: vec![],
+        success: false, error: Some(message.into()),
+    }
+}
+
+// ============================================================================
+// Geometry Design (GDES) Operations
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeometryResult {
+    pub coords: Vec<f64>,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+fn geometry_error(message: impl Into<String>) -> GeometryResult {
+    GeometryResult { coords: vec![], success: false, error: Some(message.into()) }
+}
+
+fn parse_coords(coords: &[f64]) -> Option<Vec<Point>> {
+    if coords.len() < 6 || coords.len() % 2 != 0 { return None; }
+    Some(coords.chunks(2).map(|c| point(c[0], c[1])).collect())
+}
+
+fn points_to_flat(pts: &[Point]) -> Vec<f64> {
+    pts.iter().flat_map(|p| [p.x, p.y]).collect()
+}
+
+/// Rotate airfoil by the given angle in degrees about (cx, cy).
+#[wasm_bindgen]
+pub fn gdes_rotate(coords: &[f64], angle_deg: f64, cx: f64, cy: f64) -> JsValue {
+    let result = match parse_coords(coords) {
+        Some(pts) => {
+            let rad = angle_deg.to_radians();
+            let cos_a = rad.cos();
+            let sin_a = rad.sin();
+            let rotated: Vec<Point> = pts.iter().map(|p| {
+                let dx = p.x - cx;
+                let dy = p.y - cy;
+                point(cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
+            }).collect();
+            GeometryResult { coords: points_to_flat(&rotated), success: true, error: None }
+        }
+        None => geometry_error("Invalid coordinates"),
+    };
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+/// Scale airfoil about (cx, cy) by the given factors.
+#[wasm_bindgen]
+pub fn gdes_scale(coords: &[f64], sx: f64, sy: f64, cx: f64, cy: f64) -> JsValue {
+    let result = match parse_coords(coords) {
+        Some(pts) => {
+            let scaled: Vec<Point> = pts.iter().map(|p| {
+                point(cx + (p.x - cx) * sx, cy + (p.y - cy) * sy)
+            }).collect();
+            GeometryResult { coords: points_to_flat(&scaled), success: true, error: None }
+        }
+        None => geometry_error("Invalid coordinates"),
+    };
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+/// Translate airfoil by (dx, dy).
+#[wasm_bindgen]
+pub fn gdes_translate(coords: &[f64], dx: f64, dy: f64) -> JsValue {
+    let result = match parse_coords(coords) {
+        Some(pts) => {
+            let translated: Vec<Point> = pts.iter().map(|p| point(p.x + dx, p.y + dy)).collect();
+            GeometryResult { coords: points_to_flat(&translated), success: true, error: None }
+        }
+        None => geometry_error("Invalid coordinates"),
+    };
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+/// Set trailing-edge gap to specified value (fraction of chord).
+/// Blends the gap change over the aft portion of the airfoil (XFOIL TGAP approach).
+#[wasm_bindgen]
+pub fn gdes_set_te_gap(coords: &[f64], gap: f64, blend_fraction: f64) -> JsValue {
+    let result = match parse_coords(coords) {
+        Some(pts) => {
+            if pts.len() < 4 {
+                geometry_error("Need at least 4 points")
+            } else {
+                let modified = set_te_gap_impl(&pts, gap, blend_fraction);
+                GeometryResult { coords: points_to_flat(&modified), success: true, error: None }
+            }
+        }
+        None => geometry_error("Invalid coordinates"),
+    };
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+fn set_te_gap_impl(pts: &[Point], target_gap: f64, blend_fraction: f64) -> Vec<Point> {
+    let n = pts.len();
+    let le_idx = pts.iter().enumerate()
+        .min_by(|(_, a), (_, b)| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i).unwrap_or(0);
+
+    let x_min = pts[le_idx].x;
+    let x_max = pts.iter().fold(f64::NEG_INFINITY, |acc, p| acc.max(p.x));
+    let chord = (x_max - x_min).max(1e-10);
+
+    let current_gap = pts[0].y - pts[n - 1].y;
+    let delta = target_gap * chord - current_gap;
+    let blend = blend_fraction.clamp(0.1, 1.0);
+
+    pts.iter().enumerate().map(|(i, p)| {
+        let eta = ((p.x - x_min) / chord).clamp(0.0, 1.0);
+        let ramp = if eta > (1.0 - blend) {
+            ((eta - (1.0 - blend)) / blend).powi(2)
+        } else {
+            0.0
+        };
+        let sign = if i <= le_idx { -1.0 } else { 1.0 };
+        point(p.x, p.y + sign * 0.5 * delta * ramp)
+    }).collect()
+}
+
+/// Apply a trailing-edge flap deflection.
+///
+/// * `hinge_x` - Hinge x-position as fraction of chord (e.g. 0.75)
+/// * `deflection_deg` - Flap deflection angle in degrees (positive = down)
+#[wasm_bindgen]
+pub fn gdes_flap(coords: &[f64], hinge_x_frac: f64, deflection_deg: f64) -> JsValue {
+    let result = match parse_coords(coords) {
+        Some(pts) => {
+            if pts.len() < 4 {
+                geometry_error("Need at least 4 points")
+            } else {
+                let modified = flap_impl(&pts, hinge_x_frac, deflection_deg);
+                GeometryResult { coords: points_to_flat(&modified), success: true, error: None }
+            }
+        }
+        None => geometry_error("Invalid coordinates"),
+    };
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+fn flap_impl(pts: &[Point], hinge_x_frac: f64, deflection_deg: f64) -> Vec<Point> {
+    let le_idx = pts.iter().enumerate()
+        .min_by(|(_, a), (_, b)| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i).unwrap_or(0);
+
+    let x_min = pts[le_idx].x;
+    let x_max = pts.iter().fold(f64::NEG_INFINITY, |acc, p| acc.max(p.x));
+    let chord = (x_max - x_min).max(1e-10);
+    let hinge_x = x_min + hinge_x_frac * chord;
+
+    let spline = match CubicSpline::from_points(pts) {
+        Ok(s) => s,
+        Err(_) => return pts.to_vec(),
+    };
+
+    let hinge_s = spline.total_arc_length() * 0.5;
+    let hinge_pt = spline.evaluate(hinge_s);
+    let hinge_y = hinge_pt.y;
+
+    let le_y_at_hinge = {
+        let upper_pts: Vec<&Point> = pts[le_idx..].iter().collect();
+        let lower_pts: Vec<&Point> = pts[..=le_idx].iter().rev().collect();
+        let y_upper = upper_pts.iter().rev()
+            .zip(upper_pts.iter().rev().skip(1))
+            .find(|(_, b)| b.x <= hinge_x)
+            .map(|(a, b)| {
+                let t = if (a.x - b.x).abs() > 1e-12 { (hinge_x - b.x) / (a.x - b.x) } else { 0.5 };
+                b.y + t * (a.y - b.y)
+            })
+            .unwrap_or(hinge_y);
+        let y_lower = lower_pts.iter().rev()
+            .zip(lower_pts.iter().rev().skip(1))
+            .find(|(_, b)| b.x <= hinge_x)
+            .map(|(a, b)| {
+                let t = if (a.x - b.x).abs() > 1e-12 { (hinge_x - b.x) / (a.x - b.x) } else { 0.5 };
+                b.y + t * (a.y - b.y)
+            })
+            .unwrap_or(hinge_y);
+        (y_upper + y_lower) / 2.0
+    };
+
+    let rad = deflection_deg.to_radians();
+    let cos_d = rad.cos();
+    let sin_d = rad.sin();
+
+    pts.iter().map(|p| {
+        if p.x > hinge_x {
+            let dx = p.x - hinge_x;
+            let dy = p.y - hinge_y;
+            point(
+                hinge_x + dx * cos_d + dy * sin_d,
+                hinge_y - dx * sin_d + dy * cos_d,
+            )
+        } else {
+            *p
+        }
+    }).collect()
+}
+
+/// Set leading-edge radius by scaling the forward portion of the airfoil.
+///
+/// * `le_radius_factor` - Multiplier for LE radius (1.0 = unchanged)
+#[wasm_bindgen]
+pub fn gdes_set_le_radius(coords: &[f64], le_radius_factor: f64) -> JsValue {
+    let result = match parse_coords(coords) {
+        Some(pts) => {
+            if pts.len() < 4 {
+                geometry_error("Need at least 4 points")
+            } else {
+                let modified = set_le_radius_impl(&pts, le_radius_factor);
+                GeometryResult { coords: points_to_flat(&modified), success: true, error: None }
+            }
+        }
+        None => geometry_error("Invalid coordinates"),
+    };
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+fn set_le_radius_impl(pts: &[Point], factor: f64) -> Vec<Point> {
+    let le_idx = pts.iter().enumerate()
+        .min_by(|(_, a), (_, b)| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i).unwrap_or(0);
+
+    let x_min = pts[le_idx].x;
+    let x_max = pts.iter().fold(f64::NEG_INFINITY, |acc, p| acc.max(p.x));
+    let chord = (x_max - x_min).max(1e-10);
+
+    let blend_extent = 0.15;
+
+    pts.iter().enumerate().map(|(_, p)| {
+        let eta = ((p.x - x_min) / chord).clamp(0.0, 1.0);
+        if eta < blend_extent {
+            let local = eta / blend_extent;
+            let scale = 1.0 + (factor - 1.0) * (1.0 - local * local);
+            let y_from_camber = p.y;
+            point(p.x, y_from_camber * scale)
+        } else {
+            *p
+        }
+    }).collect()
+}
+
+/// Scale thickness by a factor while preserving camber line.
+///
+/// * `factor` - Thickness multiplier (1.0 = unchanged)
+#[wasm_bindgen]
+pub fn gdes_scale_thickness(coords: &[f64], factor: f64) -> JsValue {
+    let result = match parse_coords(coords) {
+        Some(pts) => {
+            if pts.len() < 4 {
+                geometry_error("Need at least 4 points")
+            } else {
+                let modified = scale_thickness_impl(&pts, factor);
+                GeometryResult { coords: points_to_flat(&modified), success: true, error: None }
+            }
+        }
+        None => geometry_error("Invalid coordinates"),
+    };
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+fn scale_thickness_impl(pts: &[Point], factor: f64) -> Vec<Point> {
+    let le_idx = pts.iter().enumerate()
+        .min_by(|(_, a), (_, b)| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i).unwrap_or(0);
+
+    let upper = &pts[le_idx..];
+    let lower = &pts[..=le_idx];
+    let lower_rev: Vec<&Point> = lower.iter().rev().collect();
+
+    let compute_camber_at = |x: f64| -> f64 {
+        let y_u = interp_surface(upper, x);
+        let y_l = interp_surface_rev(&lower_rev, x);
+        (y_u + y_l) / 2.0
+    };
+
+    pts.iter().enumerate().map(|(i, p)| {
+        let camber_y = compute_camber_at(p.x);
+        let thickness_half = p.y - camber_y;
+        point(p.x, camber_y + thickness_half * factor)
+    }).collect()
+}
+
+fn interp_surface(surface: &[Point], x: f64) -> f64 {
+    if surface.is_empty() { return 0.0; }
+    if surface.len() == 1 { return surface[0].y; }
+    for i in 1..surface.len() {
+        if (surface[i].x >= x && surface[i - 1].x <= x)
+            || (surface[i].x <= x && surface[i - 1].x >= x) {
+            let dx = surface[i].x - surface[i - 1].x;
+            if dx.abs() < 1e-12 { return surface[i].y; }
+            let t = (x - surface[i - 1].x) / dx;
+            return surface[i - 1].y + t * (surface[i].y - surface[i - 1].y);
+        }
+    }
+    surface.last().unwrap().y
+}
+
+fn interp_surface_rev(surface: &[&Point], x: f64) -> f64 {
+    if surface.is_empty() { return 0.0; }
+    if surface.len() == 1 { return surface[0].y; }
+    for i in 1..surface.len() {
+        if (surface[i].x >= x && surface[i - 1].x <= x)
+            || (surface[i].x <= x && surface[i - 1].x >= x) {
+            let dx = surface[i].x - surface[i - 1].x;
+            if dx.abs() < 1e-12 { return surface[i].y; }
+            let t = (x - surface[i - 1].x) / dx;
+            return surface[i - 1].y + t * (surface[i].y - surface[i - 1].y);
+        }
+    }
+    surface.last().unwrap().y
+}
+
+/// Scale camber by a factor while preserving thickness distribution.
+///
+/// * `factor` - Camber multiplier (1.0 = unchanged, 0.0 = symmetric)
+#[wasm_bindgen]
+pub fn gdes_scale_camber(coords: &[f64], factor: f64) -> JsValue {
+    let result = match parse_coords(coords) {
+        Some(pts) => {
+            if pts.len() < 4 {
+                geometry_error("Need at least 4 points")
+            } else {
+                let modified = scale_camber_impl(&pts, factor);
+                GeometryResult { coords: points_to_flat(&modified), success: true, error: None }
+            }
+        }
+        None => geometry_error("Invalid coordinates"),
+    };
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+fn scale_camber_impl(pts: &[Point], factor: f64) -> Vec<Point> {
+    let le_idx = pts.iter().enumerate()
+        .min_by(|(_, a), (_, b)| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i).unwrap_or(0);
+
+    let upper = &pts[le_idx..];
+    let lower = &pts[..=le_idx];
+    let lower_rev: Vec<&Point> = lower.iter().rev().collect();
+
+    let compute_camber_at = |x: f64| -> f64 {
+        let y_u = interp_surface(upper, x);
+        let y_l = interp_surface_rev(&lower_rev, x);
+        (y_u + y_l) / 2.0
+    };
+
+    pts.iter().map(|p| {
+        let camber_y = compute_camber_at(p.x);
+        let thickness_half = p.y - camber_y;
+        point(p.x, camber_y * factor + thickness_half)
+    }).collect()
+}
+
+// ============================================================================
+// Full-Inverse Design (MDES) via Circle-Plane Conformal Mapping
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MdesDesignResult {
+    pub x: Vec<f64>,
+    pub y: Vec<f64>,
+    pub qspec_x: Vec<f64>,
+    pub qspec_values: Vec<f64>,
+    pub cl: f64,
+    pub cm: f64,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+/// Run full-inverse design (MDES) via circle-plane conformal mapping.
+///
+/// This is XFOIL's full-inverse method, which designs an entire airfoil
+/// from a velocity distribution using Fourier coefficients in the circle plane.
+///
+/// # Arguments
+/// * `coords` - Initial airfoil coordinates as flat array [x0, y0, ...]
+/// * `alpha_deg` - Design angle of attack in degrees
+/// * `symmetric` - If true, enforce symmetric airfoil
+/// * `filter_strength` - Hanning filter strength (0 = none, higher = more smoothing)
+/// * `target_q` - Optional target velocity distribution (nc points). If empty,
+///   uses the current airfoil's velocity distribution.
+/// * `nc` - Number of circle-plane points (must be 2^n + 1, e.g. 129)
+#[wasm_bindgen]
+pub fn full_inverse_design_mdes(
+    coords: &[f64],
+    alpha_deg: f64,
+    symmetric: bool,
+    filter_strength: f64,
+    target_q: &[f64],
+    nc: usize,
+) -> JsValue {
+    let result = full_inverse_design_mdes_impl(
+        coords, alpha_deg, symmetric, filter_strength, target_q, nc,
+    );
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+fn full_inverse_design_mdes_impl(
+    coords: &[f64],
+    alpha_deg: f64,
+    symmetric: bool,
+    filter_strength: f64,
+    target_q: &[f64],
+    nc: usize,
+) -> MdesDesignResult {
+    use rustfoil_xfoil::mdes::{MdesOptions, solve_mdes};
+
+    if coords.len() < 8 || coords.len() % 2 != 0 {
+        return MdesDesignResult {
+            x: vec![], y: vec![], qspec_x: vec![], qspec_values: vec![],
+            cl: 0.0, cm: 0.0, success: false,
+            error: Some("Invalid coordinates: need at least 4 points".to_string()),
+        };
+    }
+
+    let x: Vec<f64> = coords.iter().step_by(2).copied().collect();
+    let y: Vec<f64> = coords.iter().skip(1).step_by(2).copied().collect();
+
+    let options = MdesOptions {
+        nc: if nc >= 33 { nc } else { 129 },
+        alpha_deg,
+        symmetric,
+        filter_strength,
+    };
+
+    let tq = if target_q.is_empty() { None } else { Some(target_q) };
+    let result = solve_mdes(&x, &y, tq, &options);
+
+    MdesDesignResult {
+        x: result.x,
+        y: result.y,
+        qspec_x: result.qspec_x,
+        qspec_values: result.qspec_values,
+        cl: result.cl,
+        cm: result.cm,
+        success: result.success,
+        error: result.error,
+    }
+}
+
 /// Main RustFoil interface for JavaScript.
 ///
 /// Provides a stateful API for interactive airfoil manipulation.
@@ -2802,5 +3463,135 @@ mod tests {
             "dividing streamline should terminate near the leading-edge stagnation region, got y={}",
             end.1
         );
+    }
+
+    // ====================================================================
+    // GDES geometry operation tests (call underlying Rust fns, not WASM)
+    // ====================================================================
+
+    fn diamond_pts() -> Vec<Point> {
+        vec![
+            point(1.0, 0.0),
+            point(0.75, 0.04), point(0.5, 0.06), point(0.25, 0.04),
+            point(0.0, 0.0),
+            point(0.25, -0.04), point(0.5, -0.06), point(0.75, -0.04),
+            point(1.0, 0.0),
+        ]
+    }
+
+    #[test]
+    fn gdes_rotate_zero_is_identity() {
+        let pts = diamond_pts();
+        let rad = 0.0_f64.to_radians();
+        let cos_a = rad.cos();
+        let sin_a = rad.sin();
+        let (cx, cy) = (0.5, 0.0);
+        for p in &pts {
+            let dx = p.x - cx;
+            let dy = p.y - cy;
+            let rx = cx + dx * cos_a - dy * sin_a;
+            let ry = cy + dx * sin_a + dy * cos_a;
+            assert!((rx - p.x).abs() < 1e-12);
+            assert!((ry - p.y).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn gdes_flap_deflects_te_downward() {
+        let pts = diamond_pts();
+        let result = flap_impl(&pts, 0.75, 10.0);
+        // TE (first point, was at y=0) should have moved down for positive deflection
+        assert!(result[0].y < -0.001, "positive flap should move TE down, got y={}", result[0].y);
+        // Points before hinge should be unchanged
+        assert!((result[4].x - 0.0).abs() < 1e-10, "LE should not move");
+        assert!((result[4].y - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn gdes_flap_zero_deflection_is_identity() {
+        let pts = diamond_pts();
+        let result = flap_impl(&pts, 0.75, 0.0);
+        for (a, b) in result.iter().zip(pts.iter()) {
+            assert!((a.x - b.x).abs() < 1e-10);
+            assert!((a.y - b.y).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn gdes_te_gap_zero_closes_te() {
+        let pts = diamond_pts();
+        let result = set_te_gap_impl(&pts, 0.0, 0.8);
+        let gap = (result[0].y - result[result.len() - 1].y).abs();
+        assert!(gap < 0.01, "TE gap should be near zero, got {gap}");
+    }
+
+    #[test]
+    fn gdes_scale_thickness_doubles() {
+        let pts = diamond_pts();
+        let result = scale_thickness_impl(&pts, 2.0);
+        // Max y should roughly double from 0.06
+        let y_max = result.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+        assert!(y_max > 0.10, "doubled thickness should exceed 0.10, got {y_max}");
+    }
+
+    #[test]
+    fn gdes_scale_camber_zero_symmetrizes() {
+        let cambered = vec![
+            point(1.0, 0.01),
+            point(0.5, 0.08),
+            point(0.0, 0.02),
+            point(0.5, -0.04),
+            point(1.0, -0.01),
+        ];
+        let result = scale_camber_impl(&cambered, 0.0);
+        // At x=0.5, upper and lower y should be ±same
+        let y_upper = result[1].y;
+        let y_lower = result[3].y;
+        assert!(
+            (y_upper + y_lower).abs() < 0.02,
+            "zero camber should be nearly symmetric: y_u={y_upper}, y_l={y_lower}"
+        );
+    }
+
+    #[test]
+    fn gdes_le_radius_factor_1_is_identity() {
+        let pts = diamond_pts();
+        let result = set_le_radius_impl(&pts, 1.0);
+        for (a, b) in result.iter().zip(pts.iter()) {
+            assert!((a.x - b.x).abs() < 1e-10);
+            assert!((a.y - b.y).abs() < 1e-10);
+        }
+    }
+
+    // ====================================================================
+    // QDES integration test (calls underlying Rust fn)
+    // ====================================================================
+
+    #[test]
+    fn inverse_design_qdes_impl_rejects_empty_targets() {
+        let result = inverse_design_qdes_impl(
+            &[1.0, 0.0, 0.5, 0.06, 0.0, 0.0, 0.5, -0.06, 1.0, 0.0],
+            0.0, 1e6, 0.0, 9.0, "cp",
+            &[], &[], &[], &[],
+            Some(3), Some(0.6),
+        );
+        assert!(!result.success);
+        assert!(result.error.as_ref().unwrap().contains("required"));
+    }
+
+    // ====================================================================
+    // MDES integration test (calls underlying Rust fn)
+    // ====================================================================
+
+    #[test]
+    fn full_inverse_design_mdes_impl_naca0012() {
+        let buf = generate_naca4_xfoil(12, Some(65));
+        let result = full_inverse_design_mdes_impl(
+            &buf, 0.0, false, 0.0, &[], 65,
+        );
+
+        assert!(result.success, "MDES should succeed: {:?}", result.error);
+        assert!(result.x.len() > 10);
+        assert_eq!(result.x.len(), result.y.len());
     }
 }

@@ -511,3 +511,153 @@ fn interpolate_clamped(x: &[f64], y: &[f64], target: f64) -> f64 {
     }
     *y.last().unwrap_or(&0.0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::oper::AlphaSpec;
+    use crate::result::{QdesSpec, QdesTarget, QdesTargetKind};
+
+    fn naca0012_coords() -> Vec<(f64, f64)> {
+        let n = 65;
+        let mut pts = Vec::new();
+        // Upper TE -> LE
+        for i in (0..n).rev() {
+            let beta = std::f64::consts::PI * i as f64 / (n - 1) as f64;
+            let x = 0.5 * (1.0 - beta.cos());
+            let yt = 0.12 / 0.2 * (
+                0.2969 * x.sqrt() - 0.1260 * x - 0.3516 * x.powi(2)
+                + 0.2843 * x.powi(3) - 0.1015 * x.powi(4)
+            );
+            pts.push((x, yt));
+        }
+        // Lower LE+1 -> TE
+        for i in 1..n {
+            let beta = std::f64::consts::PI * i as f64 / (n - 1) as f64;
+            let x = 0.5 * (1.0 - beta.cos());
+            let yt = 0.12 / 0.2 * (
+                0.2969 * x.sqrt() - 0.1260 * x - 0.3516 * x.powi(2)
+                + 0.2843 * x.powi(3) - 0.1015 * x.powi(4)
+            );
+            pts.push((x, -yt));
+        }
+        pts
+    }
+
+    #[test]
+    fn qdes_validate_requires_target() {
+        let spec = QdesSpec {
+            operating_point: AlphaSpec::AlphaDeg(0.0),
+            target_kind: QdesTargetKind::PressureCoefficient,
+            upper: None,
+            lower: None,
+        };
+        assert!(spec.validate().is_err());
+    }
+
+    #[test]
+    fn qdes_validate_rejects_mismatched_lengths() {
+        let spec = QdesSpec {
+            operating_point: AlphaSpec::AlphaDeg(0.0),
+            target_kind: QdesTargetKind::PressureCoefficient,
+            upper: Some(QdesTarget {
+                x: vec![0.1, 0.5],
+                values: vec![0.5], // wrong length
+            }),
+            lower: None,
+        };
+        assert!(spec.validate().is_err());
+    }
+
+    #[test]
+    fn qdes_validate_accepts_valid_spec() {
+        let spec = QdesSpec {
+            operating_point: AlphaSpec::AlphaDeg(0.0),
+            target_kind: QdesTargetKind::PressureCoefficient,
+            upper: Some(QdesTarget {
+                x: vec![0.1, 0.3, 0.5, 0.7],
+                values: vec![-0.5, -0.3, -0.1, 0.1],
+            }),
+            lower: None,
+        };
+        assert!(spec.validate().is_ok());
+    }
+
+    #[test]
+    fn interpolate_clamped_at_endpoints() {
+        let x = vec![0.0, 0.5, 1.0];
+        let y = vec![1.0, 2.0, 3.0];
+
+        assert!((interpolate_clamped(&x, &y, -0.5) - 1.0).abs() < 1e-10);
+        assert!((interpolate_clamped(&x, &y, 1.5) - 3.0).abs() < 1e-10);
+        assert!((interpolate_clamped(&x, &y, 0.25) - 1.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn leading_edge_index_finds_minimum_x() {
+        let pts = vec![
+            Point::new(1.0, 0.05),
+            Point::new(0.5, 0.06),
+            Point::new(0.0, 0.0),
+            Point::new(0.5, -0.06),
+            Point::new(1.0, -0.05),
+        ];
+        assert_eq!(leading_edge_index(&pts), 2);
+    }
+
+    #[test]
+    fn basis_functions_cover_targeted_surfaces() {
+        let spec = QdesSpec {
+            operating_point: AlphaSpec::AlphaDeg(0.0),
+            target_kind: QdesTargetKind::PressureCoefficient,
+            upper: Some(QdesTarget {
+                x: vec![0.1, 0.5, 0.9],
+                values: vec![-0.5, -0.2, 0.1],
+            }),
+            lower: None,
+        };
+        let basis = build_basis_functions(&spec, 4);
+        assert_eq!(basis.len(), 4); // 4 per targeted surface
+        for b in &basis {
+            assert!(matches!(b.surface, SurfaceId::Upper));
+        }
+    }
+
+    #[test]
+    fn solve_coords_qdes_runs_on_naca0012() {
+        let coords = naca0012_coords();
+        let spec = QdesSpec {
+            operating_point: AlphaSpec::AlphaDeg(0.0),
+            target_kind: QdesTargetKind::PressureCoefficient,
+            upper: Some(QdesTarget {
+                x: vec![0.1, 0.3, 0.5, 0.7, 0.9],
+                values: vec![-0.4, -0.2, -0.1, 0.0, 0.1],
+            }),
+            lower: None,
+        };
+        let options = QdesOptions {
+            outer_iterations: 2,
+            ..Default::default()
+        };
+
+        let result = solve_coords_qdes("NACA0012", &coords, spec, options);
+        assert!(result.is_ok(), "QDES should not error: {:?}", result.err());
+
+        let qr = result.unwrap();
+        assert!(!qr.output_coords.is_empty());
+        assert!(qr.iterations <= 3);
+        assert!(qr.rms_error.is_finite());
+    }
+
+    #[test]
+    fn session_rejects_too_few_coords() {
+        let spec = QdesSpec {
+            operating_point: AlphaSpec::AlphaDeg(0.0),
+            target_kind: QdesTargetKind::PressureCoefficient,
+            upper: Some(QdesTarget { x: vec![0.5], values: vec![0.0] }),
+            lower: None,
+        };
+        let result = InverseDesignSession::new("test", &[(0.0, 0.0), (1.0, 0.0)], spec, QdesOptions::default());
+        assert!(result.is_err());
+    }
+}

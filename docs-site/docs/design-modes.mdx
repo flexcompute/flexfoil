@@ -1,0 +1,222 @@
+---
+id: design-modes
+title: Inverse & Geometry Design (QDES / MDES / GDES)
+sidebar_label: Design Modes
+sidebar_position: 8
+description: FlexFoil's three airfoil design modes ported from XFOIL — mixed-inverse (QDES), full-inverse (MDES), and geometry editing (GDES).
+keywords: [inverse design, QDES, MDES, GDES, conformal mapping, airfoil design]
+---
+
+# Airfoil Design Modes
+
+FlexFoil exposes three design modes from XFOIL, each answering a different question:
+
+| Mode | Question it answers | Method |
+|------|-------------------|--------|
+| **QDES** | "What shape gives me *this* Cp distribution on a segment?" | Mixed-inverse via basis functions |
+| **MDES** | "What shape gives me *this* velocity distribution everywhere?" | Full-inverse via circle-plane conformal mapping |
+| **GDES** | "What happens if I deflect a flap / change the TE gap / scale thickness?" | Direct geometry transforms |
+
+All three run in the browser via RustFoil WASM — no server round-trip.
+
+---
+
+## QDES — Mixed-Inverse Design
+
+### Concept
+
+QDES lets you prescribe a **target pressure coefficient (Cp) or edge velocity** on the upper surface, lower surface, or both. The solver iterates, perturbing the airfoil geometry to match your target while keeping the rest of the airfoil fixed.
+
+This is called "mixed-inverse" because part of the boundary condition is the prescribed target (inverse) and part is the existing geometry (direct).
+
+### Algorithm
+
+The RustFoil implementation uses **Gaussian basis functions** with a **damped least-squares** update, which differs from XFOIL's original `MIXED` Newton solver:
+
+1. Place `N` Gaussian bump functions along each targeted surface
+2. Solve the current airfoil at the design operating point (alpha, Re, Mach)
+3. Compute the error between achieved and target Cp/Ue at each target x-location
+4. Build a sensitivity matrix via finite differences (perturb each basis, re-solve)
+5. Solve `(J^T J + λI) δa = -J^T e` for basis coefficients
+6. Update geometry: `y += Σ aᵢ · φᵢ(x)` with clamped step size
+7. Repeat until converged or iteration limit
+
+### Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| Target kind | `cp` | `"cp"` for pressure coefficient, `"velocity"` for edge velocity Ue |
+| Max iterations | 6 | Outer design loop iterations |
+| Damping | 0.6 | Step size damping (0.1 = very conservative, 1.0 = full Newton) |
+| Basis count | 4 per side | Number of Gaussian bumps per targeted surface |
+
+### Usage in the App
+
+1. Switch to **Inverse** mode in the Control panel
+2. Select **QDES (Mixed)** at the top
+3. Click **+ Upper** or **+ Lower** to initialize a target from the current Cp
+4. Drag the target knots to reshape the desired Cp distribution
+5. Click **Execute QDES** — the solver runs and shows the result as a green dashed overlay
+6. Click **Apply Result** to replace the current airfoil with the designed shape
+
+### Rust API
+
+```rust
+use rustfoil_xfoil::{solve_coords_qdes, QdesSpec, QdesTarget, QdesOptions, QdesTargetKind};
+use rustfoil_xfoil::oper::AlphaSpec;
+
+let spec = QdesSpec {
+    operating_point: AlphaSpec::AlphaDeg(4.0),
+    target_kind: QdesTargetKind::PressureCoefficient,
+    upper: Some(QdesTarget {
+        x: vec![0.05, 0.1, 0.2, 0.4, 0.6, 0.8],
+        values: vec![-1.5, -1.0, -0.6, -0.3, -0.1, 0.05],
+    }),
+    lower: None,
+};
+let result = solve_coords_qdes("my_airfoil", &coords, spec, QdesOptions::default())?;
+println!("Converged: {}, iterations: {}", result.converged, result.iterations);
+```
+
+---
+
+## MDES — Full-Inverse Design (Circle-Plane Mapping)
+
+### Concept
+
+MDES designs an **entire airfoil** from a velocity distribution using conformal mapping between the physical plane and a circle plane. This is the most powerful (and most complex) design mode.
+
+The key idea: any airfoil can be conformally mapped to a unit circle. In the circle plane, the velocity distribution `Q(w)` is related to the geometry through Fourier coefficients `Cn`. Modifying `Cn` and inverse-transforming recovers a new airfoil shape.
+
+### Algorithm
+
+The implementation ports XFOIL's circle-plane machinery:
+
+1. **EIWSET** — Set up circle-plane coordinate array `w` and complex exponentials `exp(inw)`
+2. **SCINIT** — Initialize the mapping `s(w)` from the current airfoil, computing initial `Cn`
+3. **FTP** — Slow Fourier Transform: `P(w) → Cn` via trapezoidal integration
+4. **PIQSUM** — Inverse transform: `Cn → P(w) + iQ(w)`
+5. **CNCALC** — Compute new `Cn` from a target velocity distribution `Q(w)`
+6. **CNFILT** — Optional Hanning filter to smooth high-order `Cn`
+7. **MAPGEN** — Core inverse: `Cn → z(w)` via:
+   - Inverse Fourier to get `P(w) + iQ(w)`
+   - Integration of `dz/dw` to get `z(w)` (airfoil coordinates)
+   - Newton iteration to enforce trailing-edge gap constraint
+   - Chord normalization
+
+### Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| nc | 129 | Circle-plane points (must be `2^n + 1`) |
+| alpha_deg | 0.0 | Design angle of attack |
+| symmetric | false | Force symmetric airfoil (zero camber Fourier terms) |
+| filter_strength | 0.0 | Hanning filter (0 = off, higher = more smoothing) |
+
+### Current Limitations
+
+- Chord normalization is approximate — output chord may differ from input
+- No interactive Fourier coefficient editing (planned)
+- CL computation is approximate; full Karman-Tsien integration not yet ported
+- The implementation is a first-pass port; numerical robustness needs further testing against XFOIL reference cases
+
+### Rust API
+
+```rust
+use rustfoil_xfoil::mdes::{solve_mdes, MdesOptions};
+
+let result = solve_mdes(&x, &y, None, &MdesOptions {
+    nc: 129,
+    alpha_deg: 2.0,
+    symmetric: false,
+    filter_strength: 0.0,
+});
+assert!(result.success);
+```
+
+---
+
+## GDES — Geometry Design
+
+### Concept
+
+GDES provides **direct geometry modifications** — no flow solve involved. These are common airfoil manipulations that modify the coordinate shape.
+
+### Available Operations
+
+| Operation | Function | Description |
+|-----------|----------|-------------|
+| **Flap deflection** | `deflectFlap(coords, hingeX, angleDeg)` | Rotate all points aft of hinge x-position |
+| **TE gap** | `setTeGap(coords, gap, blend)` | Set trailing-edge gap with blended ramp |
+| **LE radius** | `setLeRadius(coords, factor)` | Scale leading-edge radius (front 15% of chord) |
+| **Thickness scale** | `scaleThickness(coords, factor)` | Scale thickness while preserving camber line |
+| **Camber scale** | `scaleCamber(coords, factor)` | Scale camber while preserving thickness |
+| **Rotate** | `rotateAirfoil(coords, angleDeg, cx, cy)` | Rotate about a point |
+| **Scale** | `scaleAirfoil(coords, sx, sy, cx, cy)` | Scale about a point |
+| **Translate** | `translateAirfoil(coords, dx, dy)` | Shift position |
+
+### Usage in the App
+
+1. Switch to **Geometry** mode in the Control panel
+2. Adjust sliders for flap deflection, TE gap, or LE radius
+3. Click **Apply** — the geometry updates immediately
+4. Use undo (Cmd+Z) to revert
+
+### Flap Implementation Detail
+
+The flap operation rotates all points with `x > hinge_x` about the hinge point. The hinge y-coordinate is interpolated as the mean of upper and lower surface y at the hinge x-location:
+
+```
+For each point p where p.x > hinge_x:
+    dx = p.x - hinge_x
+    dy = p.y - hinge_y
+    p.x = hinge_x + dx·cos(δ) + dy·sin(δ)
+    p.y = hinge_y - dx·sin(δ) + dy·cos(δ)
+```
+
+### TE Gap Implementation Detail
+
+The TE gap is set by blending a parabolic ramp from the gap change into the aft portion of the airfoil. The blend fraction controls how far forward the modification extends:
+
+```
+For each point at normalized position η:
+    if η > (1 - blend):
+        ramp = ((η - (1 - blend)) / blend)²
+        Δy = ±0.5 · (target_gap·chord - current_gap) · ramp
+```
+
+---
+
+## Architecture
+
+All three modes follow the same integration pattern:
+
+```
+┌─────────────────────────────────────────────────┐
+│                   React UI                       │
+│  ControlModePanel → InverseDesignPanel           │
+│                   → GeometryDesignPanel           │
+└──────────────┬──────────────────────────────┬────┘
+               │                              │
+         wasm.ts                        wasm.ts
+    runInverseDesign()              deflectFlap()
+    runFullInverseDesign()         setTeGap() etc.
+               │                              │
+         ┌─────┴──────┐              ┌────────┴────────┐
+         │ rustfoil-   │              │   rustfoil-      │
+         │ wasm (WASM) │              │   wasm (WASM)    │
+         └─────┬──────┘              └────────┬────────┘
+               │                              │
+    ┌──────────┴──────────┐           Pure geometry
+    │   rustfoil-xfoil     │           transforms in
+    │   qdes.rs / mdes.rs  │           lib.rs
+    └──────────────────────┘
+```
+
+### Test Coverage
+
+| Module | Tests | What's covered |
+|--------|-------|----------------|
+| `mdes.rs` | 5 | EIWSET sanity, FTP↔PIQSUM roundtrip, CNFILT attenuation, solve_mdes on NACA 0012, input validation |
+| `qdes.rs` | 8 | Spec validation, interpolation, leading-edge detection, basis function generation, full QDES solve on NACA 0012, input rejection |
+| `lib.rs` (WASM) | 9 | GDES: rotate/flap/TE gap/thickness/camber/LE radius; QDES: empty target rejection; MDES: NACA 0012 end-to-end |

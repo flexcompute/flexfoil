@@ -19,6 +19,7 @@ import { PlotBuilderPanel } from './panels/PlotBuilderPanel';
 import { CaseLogsPanel } from './panels/CaseLogsPanel';
 import { MenuBar } from './MenuBar';
 import { FeedbackWidget } from './FeedbackWidget';
+import { SolverStatusIndicator } from './SolverStatusBar';
 import { MobileLayout } from './MobileLayout';
 import { LayoutProvider } from '../contexts/LayoutContext';
 import { defaultLayoutJson, PANELS } from '../layoutConfig';
@@ -46,6 +47,7 @@ function BrandFooter() {
         >
           Flexcompute.com
         </a>
+        <SolverStatusIndicator />
       </div>
     </footer>
   );
