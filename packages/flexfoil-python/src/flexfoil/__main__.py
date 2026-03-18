@@ -54,7 +54,7 @@ def main(argv: list[str] | None = None) -> None:
 def _print_info() -> None:
     from flexfoil.database import default_db_path
 
-    print("flexfoil v1.1.0")
+    print("flexfoil v1.1.1")
     print(f"  Database: {default_db_path()}")
     try:
         from flexfoil._rustfoil import analyze_faithful
