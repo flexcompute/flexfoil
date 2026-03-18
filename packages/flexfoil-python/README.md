@@ -17,13 +17,18 @@ print(result)
 pip install flexfoil
 ```
 
+Pre-built wheels are available for:
+- macOS (Apple Silicon and Intel)
+- Linux x86_64
+- Windows x86_64
+
 Optional extras:
 
 ```bash
-pip install flexfoil[all]       # server + matplotlib + pandas
-pip install flexfoil[plotting]  # matplotlib for polar.plot()
-pip install flexfoil[dataframe] # pandas for polar.to_dataframe()
-pip install flexfoil[server]    # starlette + uvicorn for flexfoil.serve()
+pip install "flexfoil[all]"       # server + matplotlib + pandas
+pip install "flexfoil[plotting]"  # matplotlib for polar.plot()
+pip install "flexfoil[dataframe]" # pandas for polar.to_dataframe()
+pip install "flexfoil[server]"    # starlette + uvicorn for flexfoil.serve()
 ```
 
 ## What is this?
@@ -112,8 +117,8 @@ result = foil.solve(alpha=5.0, viscous=False)
 
 ```python
 flexfoil.serve()
-# Opens http://localhost:8420 in your browser.
-# The full flexfoil web app reads from the same local SQLite database.
+# Opens the full flexfoil web app in your browser.
+# Defaults to port 8420; automatically picks the next free port if busy.
 ```
 
 Or from the command line:
@@ -123,9 +128,10 @@ flexfoil serve
 flexfoil serve --port 9000 --no-browser
 ```
 
-The browser-based WASM solver still works for interactive exploration. Any
-runs you solve from the web UI are also written to the shared SQLite, so
-`flexfoil.runs()` in Python will see them.
+The web UI reads from the same local SQLite database as the Python API.
+Runs you solve from the browser (via the built-in WASM solver) are also
+written to the shared database, so `flexfoil.runs()` in Python sees them
+and vice versa.
 
 ## Query the run database
 
@@ -268,19 +274,36 @@ See the [`examples/`](examples/) directory:
 | `08_batch_matrix.py` | Batch sweep: airfoils x Re x alpha |
 | `09_custom_coordinates.py` | Build airfoil from x, y arrays |
 
+## Supported platforms
+
+| Platform | Status |
+| --- | --- |
+| macOS Apple Silicon (arm64) | Pre-built wheel |
+| macOS Intel (x86_64) | Pre-built wheel |
+| Linux x86_64 | Pre-built wheel |
+| Windows x86_64 | Pre-built wheel |
+| Linux aarch64 (ARM) | Build from source (requires Rust toolchain) |
+
 ## Development
 
 ```bash
 cd packages/flexfoil-python
 
+# Create a venv
+python -m venv .venv
+source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+
 # Install Rust toolchain and maturin
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 pip install maturin
 
-# Build and install in development mode
-maturin develop --extras dev
+# Install dependencies
+pip install starlette 'uvicorn[standard]' matplotlib pandas pytest
 
-# Run tests
+# Build and install in development mode
+maturin develop
+
+# Run tests (28 tests)
 pytest tests/ -v
 
 # Bundle the web UI (optional, for `flexfoil serve`)
