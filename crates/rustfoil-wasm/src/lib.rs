@@ -3578,18 +3578,19 @@ mod tests {
     #[test]
     fn gdes_flap_deflects_te_downward() {
         let pts = diamond_pts();
-        let result = flap_impl(&pts, 0.75, 10.0);
+        let result = flap_impl(&pts, 0.75, 0.5, 10.0);
         // TE (first point, was at y=0) should have moved down for positive deflection
         assert!(result[0].y < -0.001, "positive flap should move TE down, got y={}", result[0].y);
-        // Points before hinge should be unchanged
-        assert!((result[4].x - 0.0).abs() < 1e-10, "LE should not move");
-        assert!((result[4].y - 0.0).abs() < 1e-10);
+        // LE (min-x point) should be unchanged
+        let le = result.iter().min_by(|a, b| a.x.partial_cmp(&b.x).unwrap()).unwrap();
+        assert!((le.x - 0.0).abs() < 1e-10, "LE should not move, got x={}", le.x);
+        assert!((le.y - 0.0).abs() < 1e-10, "LE should not move, got y={}", le.y);
     }
 
     #[test]
     fn gdes_flap_zero_deflection_is_identity() {
         let pts = diamond_pts();
-        let result = flap_impl(&pts, 0.75, 0.0);
+        let result = flap_impl(&pts, 0.75, 0.5, 0.0);
         for (a, b) in result.iter().zip(pts.iter()) {
             assert!((a.x - b.x).abs() < 1e-10);
             assert!((a.y - b.y).abs() < 1e-10);

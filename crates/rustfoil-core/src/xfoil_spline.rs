@@ -143,6 +143,25 @@ impl Spline1D {
         deval / ds
     }
 
+    /// Total arc-length range of the spline.
+    pub fn s_range(&self) -> f64 {
+        if self.s.len() < 2 { return 0.0; }
+        (self.s.last().unwrap() - self.s.first().unwrap()).abs()
+    }
+
+    /// Second derivative (D2VAL equivalent for 1D spline).
+    pub fn d2val(&self, ss: f64) -> f64 {
+        let n = self.s.len();
+        if n < 2 { return 0.0; }
+        let i = self.find_segment(ss);
+        let ds = self.s[i] - self.s[i - 1];
+        let t = (ss - self.s[i - 1]) / ds;
+        let cx1 = ds * self.fs[i - 1] - self.f[i] + self.f[i - 1];
+        let cx2 = ds * self.fs[i] - self.f[i] + self.f[i - 1];
+        let d2f = 2.0 * cx1 * (1.0 - 3.0 * t) - 2.0 * cx2 * (2.0 - 3.0 * t);
+        d2f / (ds * ds)
+    }
+
     /// Find segment index for parameter ss (binary search).
     fn find_segment(&self, ss: f64) -> usize {
         let n = self.s.len();

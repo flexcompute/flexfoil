@@ -78,6 +78,7 @@
 
 pub mod body;
 pub mod error;
+pub mod flap;
 pub mod naca;
 pub mod panel;
 pub mod point;

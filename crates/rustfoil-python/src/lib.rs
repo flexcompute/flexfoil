@@ -193,53 +193,8 @@ fn deflect_flap(
     if coords.len() < 8 || coords.len() % 2 != 0 {
         return vec![];
     }
-
     let pts = points_from_flat(&coords);
-
-    let le_idx = pts.iter().enumerate()
-        .min_by(|(_, a), (_, b)| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(i, _)| i).unwrap_or(0);
-
-    let x_min = pts[le_idx].x;
-    let x_max = pts.iter().fold(f64::NEG_INFINITY, |acc, p| acc.max(p.x));
-    let chord = (x_max - x_min).max(1e-10);
-    let hinge_x = x_min + hinge_x_frac * chord;
-
-    let upper: Vec<Point> = pts[..=le_idx].iter().rev().cloned().collect();
-    let lower: Vec<Point> = pts[le_idx..].iter().cloned().collect();
-
-    let y_upper = interp_y(&upper, hinge_x);
-    let y_lower = interp_y(&lower, hinge_x);
-    let hinge_y = y_lower + hinge_y_frac.clamp(0.0, 1.0) * (y_upper - y_lower);
-
-    let rad = deflection_deg.to_radians();
-    let cos_d = rad.cos();
-    let sin_d = rad.sin();
-
-    let rotate_surface = |surface: &[Point]| -> Vec<Point> {
-        let mut fore = Vec::new();
-        let mut aft = Vec::new();
-        for &p in surface {
-            if p.x <= hinge_x {
-                fore.push(p);
-            } else {
-                let dx = p.x - hinge_x;
-                let dy = p.y - hinge_y;
-                aft.push(point(
-                    hinge_x + dx * cos_d + dy * sin_d,
-                    hinge_y - dx * sin_d + dy * cos_d,
-                ));
-            }
-        }
-        fore.extend(aft);
-        fore
-    };
-
-    let upper_flapped = rotate_surface(&upper);
-    let lower_flapped = rotate_surface(&lower);
-
-    let mut result: Vec<Point> = upper_flapped.into_iter().rev().collect();
-    result.extend(lower_flapped.into_iter().skip(1));
+    let result = rustfoil_core::flap::xfoil_flap(&pts, hinge_x_frac, hinge_y_frac, deflection_deg);
     flat_from_points(&result)
 }
 
