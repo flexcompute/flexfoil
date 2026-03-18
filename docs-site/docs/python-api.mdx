@@ -11,19 +11,24 @@ The `flexfoil` Python package wraps the RustFoil solver in native bindings via
 [foil.flexcompute.com](https://foil.flexcompute.com/flexfoil/) can be launched
 locally with `flexfoil.serve()`, reading from the same database.
 
+**No data leaves your machine** unless you explicitly export it.
+
 ## Install
 
 ```bash
 pip install flexfoil
 ```
 
+Pre-built wheels are available for macOS (Apple Silicon and Intel), Linux x86\_64,
+and Windows x86\_64. Plotly is included by default for interactive plots.
+
 Optional extras:
 
 ```bash
-pip install flexfoil[all]       # server + matplotlib + pandas
-pip install flexfoil[plotting]  # matplotlib for polar.plot()
-pip install flexfoil[dataframe] # pandas for polar.to_dataframe()
-pip install flexfoil[server]    # starlette + uvicorn for flexfoil.serve()
+pip install "flexfoil[all]"        # server + matplotlib + pandas
+pip install "flexfoil[matplotlib]" # matplotlib for polar.plot(backend="matplotlib")
+pip install "flexfoil[dataframe]"  # pandas for polar.to_dataframe()
+pip install "flexfoil[server]"     # starlette + uvicorn for flexfoil.serve()
 ```
 
 ## Quick start
@@ -51,8 +56,13 @@ polar = foil.polar(alpha=(-5, 15, 0.5), Re=1e6)
 print(polar)
 # PolarResult('NACA 2412', Re=1e+06, 40/41 converged)
 
-polar.plot()  # 4-panel matplotlib figure: CL-α, CD-α, CL-CD, CM-α
+# Interactive plotly figure (default): CL-α, CD-α, CL-CD, CM-α
+polar.plot()
 
+# Or use matplotlib
+polar.plot(backend="matplotlib")
+
+# Export to pandas
 df = polar.to_dataframe()
 df.to_csv("polar.csv", index=False)
 ```
@@ -60,19 +70,23 @@ df.to_csv("polar.csv", index=False)
 ### Compare multiple airfoils
 
 ```python
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 import flexfoil
 
+fig = go.Figure()
 for naca in ["0012", "2412", "4412"]:
     foil = flexfoil.naca(naca)
     polar = foil.polar(alpha=(-4, 14, 1.0), Re=1e6)
-    plt.plot(polar.alpha, polar.cl, ".-", label=foil.name)
+    fig.add_trace(go.Scatter(
+        x=polar.alpha, y=polar.cl,
+        mode="lines+markers", name=foil.name,
+    ))
 
-plt.xlabel("α (°)")
-plt.ylabel("CL")
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.show()
+fig.update_layout(
+    xaxis_title="α (°)", yaxis_title="CL",
+    template="plotly_white",
+)
+fig.show()
 ```
 
 ### Load a .dat file
@@ -100,7 +114,8 @@ result = foil.solve(alpha=5.0, viscous=False)
 
 ```python
 flexfoil.serve()
-# Opens http://localhost:8420 in your browser.
+# Opens the full flexfoil web app in your browser.
+# Defaults to port 8420; automatically picks the next free port if busy.
 ```
 
 Or from the command line:
@@ -110,8 +125,9 @@ flexfoil serve
 flexfoil serve --port 9000 --no-browser
 ```
 
-The browser app reads from the same SQLite database as the Python API. Runs
-solved from the web UI appear in `flexfoil.runs()`, and vice versa.
+The web UI reads from the same local SQLite database as the Python API. Runs
+solved from the browser (via the built-in WASM solver) are also written to the
+shared database, so `flexfoil.runs()` in Python sees them and vice versa.
 
 ## Query the run database
 
@@ -145,7 +161,7 @@ flowchart LR
         serve --> starlette
     end
 
-    subgraph browser ["Browser (localhost:8420)"]
+    subgraph browser ["Browser (localhost)"]
         spa["React SPA"]
         wasm["WASM solver"]
         rest["REST API"]
@@ -225,7 +241,7 @@ are byte-identical.
 | `.results` | `list[SolveResult]` — all results |
 | `.to_dict()` | Export as `dict` |
 | `.to_dataframe()` | Export as `pandas.DataFrame` |
-| `.plot(show=True)` | 4-panel matplotlib figure |
+| `.plot(show=True, backend="plotly")` | 4-panel figure (plotly default, or `"matplotlib"`) |
 
 ### RunDatabase
 
@@ -242,6 +258,16 @@ are byte-identical.
 | `.export_bytes()` | Export SQLite as bytes |
 | `.import_bytes(data)` | Import SQLite from bytes |
 
+## Supported platforms
+
+| Platform | Status |
+| --- | --- |
+| macOS Apple Silicon (arm64) | Pre-built wheel |
+| macOS Intel (x86\_64) | Pre-built wheel |
+| Linux x86\_64 | Pre-built wheel |
+| Windows x86\_64 | Pre-built wheel |
+| Linux aarch64 (ARM) | Build from source (requires Rust toolchain) |
+
 ## Configuration
 
 | Environment variable | Default | Description |
@@ -250,7 +276,7 @@ are byte-identical.
 
 ## Examples
 
-The [`examples/`](https://github.com/flexfoil/flexfoil/tree/main/packages/flexfoil-python/examples) directory contains runnable scripts:
+The [`examples/`](https://github.com/flexcompute/flexfoil/tree/main/packages/flexfoil-python/examples) directory contains runnable scripts:
 
 | Script | What it does |
 | --- | --- |
