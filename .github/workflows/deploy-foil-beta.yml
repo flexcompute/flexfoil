@@ -54,7 +54,7 @@ jobs:
 
       - name: Build FlexFoil frontend
         working-directory: ./flexfoil-ui
-        run: npm run build
+        run: npx vite build
         env:
           NODE_OPTIONS: --max-old-space-size=4096
           BASE_URL: ${{ env.BASE_URL }}
