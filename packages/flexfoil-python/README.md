@@ -61,6 +61,9 @@ print(result.x_tr_upper)  # 0.315  (transition location, upper surface)
 
 ### Polar sweep
 
+Polar sweeps are **parallelized by default** using all available CPU cores
+(via Rust's rayon thread pool). A 41-point polar runs ~3x faster than sequential.
+
 ```python
 polar = foil.polar(alpha=(-5, 15, 0.5), Re=1e6)
 print(polar)
@@ -71,6 +74,9 @@ polar.plot()
 
 # Or use matplotlib
 polar.plot(backend="matplotlib")
+
+# Sequential mode (for debugging or progress output)
+polar = foil.polar(alpha=(-5, 15, 0.5), Re=1e6, parallel=False)
 
 # Export to pandas
 df = polar.to_dataframe()
@@ -179,7 +185,7 @@ flexfoil info                        # show config and DB location
 | `.panel_coords` | Repaneled coordinates `list[(x, y)]` |
 | `.hash` | SHA-256 hash of panel coords (cache key) |
 | `.solve(alpha, Re, mach, ncrit, max_iter, viscous, store)` | Single-point analysis |
-| `.polar(alpha, Re, mach, ncrit, max_iter, viscous, store)` | Sweep over alpha range |
+| `.polar(alpha, Re, mach, ncrit, max_iter, viscous, store, parallel)` | Sweep over alpha range (parallel by default) |
 
 ### `SolveResult`
 
