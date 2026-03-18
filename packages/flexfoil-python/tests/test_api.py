@@ -278,3 +278,95 @@ class TestParallelPolar:
         foil.polar(alpha=(0, 2, 1.0), Re=1e6, parallel=True)
         runs = flexfoil.runs()
         assert len(runs) >= 3
+
+
+# ---------------------------------------------------------------------------
+# Flap deflection
+# ---------------------------------------------------------------------------
+
+class TestFlap:
+    def test_with_flap_returns_new_airfoil(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        flapped = foil.with_flap(hinge_x=0.75, deflection=10)
+        assert "flap" in flapped.name
+        assert flapped.n_panels > 0
+        assert flapped is not foil
+
+    def test_flap_increases_cl(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        flapped = foil.with_flap(hinge_x=0.75, deflection=10)
+        r_clean = foil.solve(alpha=5, Re=1e6, store=False)
+        r_flap = flapped.solve(alpha=5, Re=1e6, store=False)
+        assert r_flap.cl > r_clean.cl
+
+    def test_zero_deflection_similar_to_clean(self):
+        import flexfoil
+        foil = flexfoil.naca("0012")
+        flapped = foil.with_flap(hinge_x=0.75, deflection=0.0)
+        r_clean = foil.solve(alpha=3, Re=1e6, store=False)
+        r_flap = flapped.solve(alpha=3, Re=1e6, store=False)
+        assert abs(r_flap.cl - r_clean.cl) < 0.05
+
+    def test_negative_deflection(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        flapped = foil.with_flap(hinge_x=0.75, deflection=-5)
+        r_clean = foil.solve(alpha=5, Re=1e6, store=False)
+        r_flap = flapped.solve(alpha=5, Re=1e6, store=False)
+        assert r_flap.cl < r_clean.cl
+
+    def test_flap_different_hinge(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        f60 = foil.with_flap(hinge_x=0.60, deflection=10)
+        f80 = foil.with_flap(hinge_x=0.80, deflection=10)
+        assert f60.hash != f80.hash
+
+    def test_flap_polar(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        flapped = foil.with_flap(hinge_x=0.75, deflection=10)
+        polar = flapped.polar(alpha=(0, 4, 2.0), Re=1e6)
+        assert len(polar.converged) >= 2
+        assert all(cl > 0 for cl in polar.cl)
+
+    def test_flap_repr(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        flapped = foil.with_flap(hinge_x=0.75, deflection=10)
+        r = repr(flapped)
+        assert "flap" in r
+        assert "NACA 2412" in r
+
+
+# ---------------------------------------------------------------------------
+# Matrix sweep (multi-Re)
+# ---------------------------------------------------------------------------
+
+class TestMatrixSweep:
+    def test_multi_re_sweep(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        results = {}
+        for Re in [2e5, 1e6]:
+            polar = foil.polar(alpha=(0, 4, 2.0), Re=Re, store=False)
+            results[Re] = polar
+        assert results[2e5].cd[0] > results[1e6].cd[0]
+
+    def test_flap_x_re_matrix(self):
+        import flexfoil
+        foil = flexfoil.naca("0012")
+        flapped = foil.with_flap(hinge_x=0.75, deflection=5)
+        for Re in [5e5, 1e6]:
+            polar = flapped.polar(alpha=(0, 4, 2.0), Re=Re, store=False)
+            assert len(polar.converged) >= 2
+
+    def test_matrix_results_stored(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        for Re in [5e5, 1e6]:
+            foil.polar(alpha=(0, 2, 1.0), Re=Re)
+        runs = flexfoil.runs()
+        assert len(runs) >= 6

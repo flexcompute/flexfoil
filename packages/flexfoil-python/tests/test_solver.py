@@ -243,6 +243,40 @@ class TestFaithfulBatch:
         assert not results[1]["success"]
 
 
+class TestDeflectFlap:
+    def _make_flat(self):
+        raw = generate_naca4(2412)
+        return [v for x, y in raw for v in (x, y)]
+
+    def test_returns_points(self):
+        from flexfoil._rustfoil import deflect_flap
+        flat = self._make_flat()
+        result = deflect_flap(flat, 0.75, 10.0)
+        assert len(result) > 50
+
+    def test_zero_deflection_preserves_shape(self):
+        from flexfoil._rustfoil import deflect_flap
+        flat = self._make_flat()
+        result = deflect_flap(flat, 0.75, 0.0)
+        original = list(zip(flat[::2], flat[1::2]))
+        assert len(result) == len(original)
+        for (rx, ry), (ox, oy) in zip(result, original):
+            assert abs(rx - ox) < 1e-8
+            assert abs(ry - oy) < 1e-8
+
+    def test_positive_deflection_moves_te_down(self):
+        from flexfoil._rustfoil import deflect_flap
+        flat = self._make_flat()
+        original_te_y = flat[1]
+        result = deflect_flap(flat, 0.75, 15.0)
+        flapped_te_y = result[0][1]
+        assert flapped_te_y < original_te_y
+
+    def test_invalid_coords(self):
+        from flexfoil._rustfoil import deflect_flap
+        assert deflect_flap([1.0, 0.0], 0.75, 10.0) == []
+
+
 class TestInviscidBatch:
     def _make_coords(self):
         raw = generate_naca4(2412)

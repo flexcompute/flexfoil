@@ -35,6 +35,15 @@ def repanel_xfoil(
     """Repanel airfoil using XFOIL's curvature-based algorithm."""
     ...
 
+def deflect_flap(
+    coords: list[float],
+    hinge_x_frac: float,
+    deflection_deg: float,
+    hinge_y_frac: float = 0.5,
+) -> list[tuple[float, float]]:
+    """Deflect a flap by rotating points aft of the hinge."""
+    ...
+
 def analyze_faithful_batch(
     coords: list[float],
     alphas: list[float],

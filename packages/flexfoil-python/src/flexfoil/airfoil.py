@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from flexfoil._rustfoil import (
     analyze_faithful,
     analyze_inviscid,
+    deflect_flap,
     generate_naca4,
     parse_dat_file,
     repanel_xfoil,
@@ -113,6 +114,33 @@ class Airfoil:
             flat.extend([xi, yi])
         paneled = repanel_xfoil(flat, n_panels)
         return cls(name, raw, paneled)
+
+    def with_flap(
+        self,
+        hinge_x: float = 0.75,
+        deflection: float = 10.0,
+        *,
+        hinge_y_frac: float = 0.5,
+        n_panels: int | None = None,
+    ) -> Airfoil:
+        """Return a new Airfoil with a plain flap deflected.
+
+        Parameters
+        ----------
+        hinge_x : hinge location as fraction of chord (0-1)
+        deflection : deflection angle in degrees (positive = down)
+        hinge_y_frac : vertical hinge position (0 = lower surface, 1 = upper)
+        n_panels : repanel count (default: same as current)
+        """
+        flat = self._flat_panels()
+        flapped = deflect_flap(flat, hinge_x, deflection, hinge_y_frac)
+        if not flapped:
+            raise ValueError("Flap deflection failed (bad geometry?)")
+        n = n_panels or self.n_panels
+        flat_flapped = [v for x, y in flapped for v in (x, y)]
+        paneled = repanel_xfoil(flat_flapped, n)
+        suffix = f"+flap({hinge_x:.0%}, {deflection:+.1f}°)"
+        return Airfoil(f"{self.name} {suffix}", flapped, paneled)
 
     @property
     def n_panels(self) -> int:

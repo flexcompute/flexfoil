@@ -179,6 +179,83 @@ fn repanel_xfoil(
     flat_from_points(&spline.resample_xfoil(n_panels, &params))
 }
 
+/// Deflect a flap on an airfoil by rotating points aft of the hinge.
+///
+/// Returns a list of (x, y) tuples with the flap applied.
+#[pyfunction]
+#[pyo3(signature = (coords, hinge_x_frac, deflection_deg, hinge_y_frac=0.5))]
+fn deflect_flap(
+    coords: Vec<f64>,
+    hinge_x_frac: f64,
+    deflection_deg: f64,
+    hinge_y_frac: f64,
+) -> Vec<(f64, f64)> {
+    if coords.len() < 8 || coords.len() % 2 != 0 {
+        return vec![];
+    }
+
+    let pts = points_from_flat(&coords);
+
+    let le_idx = pts.iter().enumerate()
+        .min_by(|(_, a), (_, b)| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i).unwrap_or(0);
+
+    let x_min = pts[le_idx].x;
+    let x_max = pts.iter().fold(f64::NEG_INFINITY, |acc, p| acc.max(p.x));
+    let chord = (x_max - x_min).max(1e-10);
+    let hinge_x = x_min + hinge_x_frac * chord;
+
+    let upper: Vec<Point> = pts[..=le_idx].iter().rev().cloned().collect();
+    let lower: Vec<Point> = pts[le_idx..].iter().cloned().collect();
+
+    let y_upper = interp_y(&upper, hinge_x);
+    let y_lower = interp_y(&lower, hinge_x);
+    let hinge_y = y_lower + hinge_y_frac.clamp(0.0, 1.0) * (y_upper - y_lower);
+
+    let rad = deflection_deg.to_radians();
+    let cos_d = rad.cos();
+    let sin_d = rad.sin();
+
+    let rotate_surface = |surface: &[Point]| -> Vec<Point> {
+        let mut fore = Vec::new();
+        let mut aft = Vec::new();
+        for &p in surface {
+            if p.x <= hinge_x {
+                fore.push(p);
+            } else {
+                let dx = p.x - hinge_x;
+                let dy = p.y - hinge_y;
+                aft.push(point(
+                    hinge_x + dx * cos_d + dy * sin_d,
+                    hinge_y - dx * sin_d + dy * cos_d,
+                ));
+            }
+        }
+        fore.extend(aft);
+        fore
+    };
+
+    let upper_flapped = rotate_surface(&upper);
+    let lower_flapped = rotate_surface(&lower);
+
+    let mut result: Vec<Point> = upper_flapped.into_iter().rev().collect();
+    result.extend(lower_flapped.into_iter().skip(1));
+    flat_from_points(&result)
+}
+
+fn interp_y(surface: &[Point], target_x: f64) -> f64 {
+    for i in 0..surface.len().saturating_sub(1) {
+        let (x0, x1) = (surface[i].x, surface[i + 1].x);
+        if (target_x >= x0 && target_x <= x1) || (target_x >= x1 && target_x <= x0) {
+            let dx = x1 - x0;
+            if dx.abs() < 1e-15 { return surface[i].y; }
+            let t = (target_x - x0) / dx;
+            return surface[i].y + t * (surface[i + 1].y - surface[i].y);
+        }
+    }
+    0.0
+}
+
 /// Parse a Selig/Lednicer .dat file and return coordinate tuples.
 ///
 /// Returns a list of (x, y) tuples. Skips header lines automatically.
@@ -390,6 +467,7 @@ fn _rustfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(analyze_inviscid_batch, m)?)?;
     m.add_function(wrap_pyfunction!(generate_naca4, m)?)?;
     m.add_function(wrap_pyfunction!(repanel_xfoil, m)?)?;
+    m.add_function(wrap_pyfunction!(deflect_flap, m)?)?;
     m.add_function(wrap_pyfunction!(parse_dat_file, m)?)?;
     Ok(())
 }
