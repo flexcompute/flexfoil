@@ -1,9 +1,10 @@
 [package]
 name = "rustfoil-inviscid"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
 description = "XFOIL-matching inviscid panel method solver"
-authors = ["RustFoil Contributors"]
 
 [dependencies]
 rustfoil-core = { path = "../rustfoil-core" }

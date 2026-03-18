@@ -21,9 +21,9 @@ jobs:
     timeout-minutes: 20
     env:
       AWS_REGION: us-east-1
-      AWS_ROLE: REDACTED_AWS_ROLE_ARN
-      DISTRIBUTION_ID: REDACTED_CLOUDFRONT_ID
-      S3_BUCKET: REDACTED_S3_BUCKET
+      AWS_ROLE: ${{ vars.AWS_DEPLOY_ROLE }}
+      DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+      S3_BUCKET: ${{ vars.S3_BUCKET }}
       S3_DEPLOY_PATH: /flexfoil
       BASE_URL: /flexfoil/
       PUBLIC_URL: https://foil.flexcompute.com/flexfoil/

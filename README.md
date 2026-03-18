@@ -153,85 +153,6 @@ const solution = foil.solve();
 - Inviscid solve: < 16ms for 200 panels (60 Hz capable)
 - WASM bundle: < 500 KB gzipped
 
-## XFOIL (Reference Implementation)
-
-This repository includes XFOIL 6.99 (Mac fork) for validation and comparison. XFOIL is Mark Drela's original Fortran implementation.
-
-### Prerequisites
-
-```bash
-# Install gfortran (via Homebrew on macOS)
-brew install gcc
-
-# Install X11 libraries (for graphics)
-brew install libx11 xorgproto
-
-# Optional: Install XQuartz for graphical output
-brew install --cask xquartz
-# (Requires logout/login after installation)
-```
-
-### Building XFOIL
-
-```bash
-# Build the plot library
-cd Xfoil/plotlib
-make libPlt.a
-
-# Build XFOIL and utilities
-cd ../bin
-make xfoil pplot pxplot
-```
-
-### Running XFOIL
-
-```bash
-# Run from the runs directory (recommended)
-cd Xfoil/runs
-../bin/xfoil
-
-# Or run from anywhere
-/path/to/Xfoil/bin/xfoil
-```
-
-### Basic XFOIL Commands
-
-```
-# Load a NACA airfoil
-naca 0012
-
-# Or load from file
-load ../runs/e387.dat
-
-# Enter operating point mode
-oper
-
-# Run inviscid analysis at 5° angle of attack
-alfa 5
-
-# Enable viscous mode (requires Reynolds number)
-visc 1e6
-
-# Run viscous analysis
-alfa 5
-
-# Save pressure distribution
-cpwr cp_output.dat
-
-# Exit
-quit
-```
-
-### Headless Mode (No Graphics)
-
-If XQuartz is not installed, disable graphics:
-
-```
-plop      # Enter plot options
-g         # Toggle graphics off
-          # Press Enter to exit menu
-```
-
 ## References
 
 1. Drela, M. "XFOIL: An Analysis and Design System for Low Reynolds Number Airfoils" (1989)
@@ -240,6 +161,10 @@ g         # Toggle graphics off
 
 ## License
 
-MIT (FlexFoil/RustFoil code)
+FlexFoil is licensed under the [MIT License](LICENSE).
 
-XFOIL is distributed under the GNU General Public License (GPL).
+Copyright (c) 2026 Flexcompute, Inc. and Harry Smith.
+
+This repository includes third-party components and references commercial
+dependencies. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for details
+on AG Grid Enterprise, the TWK Everett typeface, and other attributions.

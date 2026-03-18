@@ -1,7 +1,9 @@
 [package]
 name = "rustfoil-bl"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
 
 [dependencies]
 rustfoil-core = { path = "../rustfoil-core" }
