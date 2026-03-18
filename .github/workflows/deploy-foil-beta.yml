@@ -21,11 +21,12 @@ jobs:
     timeout-minutes: 20
     env:
       AWS_REGION: us-east-1
-      AWS_ROLE: arn:aws:iam::343549021813:role/github-frontend-assume-role
-      S3_BUCKET: flight-sciences-website-dev
-      S3_DEPLOY_PATH: /flexfoil
-      BASE_URL: /flexfoil/
-      PUBLIC_URL: https://flight-sciences.dev-simulation.cloud/flexfoil/
+      AWS_ROLE: REDACTED_AWS_ROLE_ARN
+      DISTRIBUTION_ID: REDACTED_CLOUDFRONT_ID
+      S3_BUCKET: REDACTED_S3_BUCKET
+      S3_DEPLOY_PATH: /flexfoil-beta
+      BASE_URL: /flexfoil-beta/
+      PUBLIC_URL: https://foil.flexcompute.com/flexfoil-beta/
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -90,6 +91,12 @@ jobs:
             --recursive --exclude "*.html" --exclude "*.json" --exclude "*.map" \
             --cache-control 'max-age=31536000, immutable' \
             --metadata "deploy-sha1=${GITHUB_SHA}"
+
+      - name: Invalidate CloudFront
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${DISTRIBUTION_ID}" \
+            --paths "/flexfoil-beta/*"
 
       - name: Deployment Summary
         run: |
