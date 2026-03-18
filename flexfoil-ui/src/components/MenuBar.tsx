@@ -8,7 +8,8 @@ import { useUndoRedo } from '../hooks/useUndoRedo';
 import { useOnboarding } from '../onboarding';
 import { FlexcomputeLogo } from './FlexcomputeLogo';
 import { AboutDialog } from './AboutDialog';
-import { ChangelogDialog } from './ChangelogDialog';
+import { ChangelogDialog, getLastSeenChangelogVersion } from './ChangelogDialog';
+import { CHANGELOG } from '../lib/version';
 
 const DOCUMENTATION_URL = 'https://foil.flexcompute.com/docs/';
 const FLEXCOMPUTE_URL = 'https://www.flexcompute.com/';
@@ -44,7 +45,8 @@ export function MenuBar({
   const { undo, redo, canUndo, canRedo } = useUndoRedo();
   
   // Onboarding
-  const { startTour, resetAllTours } = useOnboarding();
+  const { startTour, hasStartedTour, resetAllTours, isActive: tourIsActive } = useOnboarding();
+  const changelogAutoShownRef = useRef(false);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -56,6 +58,19 @@ export function MenuBar({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Auto-show What's New for returning users when there's a new version
+  useEffect(() => {
+    if (changelogAutoShownRef.current) return;
+    if (tourIsActive) return;
+    if (!hasStartedTour('welcome')) return;
+    const latest = CHANGELOG[0];
+    if (!latest?.tourSlides?.length) return;
+    if (getLastSeenChangelogVersion() === latest.version) return;
+    changelogAutoShownRef.current = true;
+    const timer = setTimeout(() => setShowChangelog(true), 600);
+    return () => clearTimeout(timer);
+  }, [tourIsActive, hasStartedTour]);
 
   const toggleMenu = (menuName: string) => {
     setActiveMenu(activeMenu === menuName ? null : menuName);
@@ -359,6 +374,7 @@ export function MenuBar({
       <ChangelogDialog
         open={showChangelog}
         onClose={() => setShowChangelog(false)}
+        onNavigateToPanel={handleTogglePanel}
       />
     </div>
   );
