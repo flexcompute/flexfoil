@@ -132,7 +132,7 @@ export function GeometryDesignPanel() {
   return (
     <div className="geometry-design-panel" style={{ overflow: 'auto', fontSize: '12px' }}>
       {/* Flaps */}
-      <fieldset style={fieldsetStyle}>
+      <fieldset style={fieldsetStyle} data-tour="gdes-flaps">
         <legend style={legendStyle}>Flaps</legend>
         {flaps.length === 0 && (
           <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginBottom: '6px' }}>
@@ -148,7 +148,7 @@ export function GeometryDesignPanel() {
             onRemove={removeFlap}
           />
         ))}
-        <button className="btn btn-xs" onClick={addFlap}>Add Flap</button>
+        <button className="btn btn-xs" onClick={addFlap} data-tour="gdes-add-flap">Add Flap</button>
       </fieldset>
 
       {/* TE Gap */}

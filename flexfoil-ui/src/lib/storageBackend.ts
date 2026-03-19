@@ -51,6 +51,8 @@ export interface StorageBackend {
   ): RunRow | null;
   queryAllRuns(): RunRow[];
   updateRunAirfoilName(id: number, newName: string): Promise<void>;
+  setRunOutlier(id: number, isOutlier: boolean): Promise<void>;
+  clearAllOutlierFlags(): Promise<void>;
   clearAllRuns(): Promise<void>;
   pruneOldRuns(): Promise<number>;
   exportDatabase(): Uint8Array;

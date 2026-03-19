@@ -29,8 +29,11 @@ The UI is organized as a set of dockable, rearrangeable panels.
 
 ### Airfoil Library
 
-Browse and load airfoils from the NACA 4-digit generator and the Selig
-database (over 1,500 airfoils). Select any airfoil to load it into the canvas.
+Browse and load airfoils from the NACA 4-digit generator, import `.dat` files,
+or search the UIUC Selig database (~1,600 airfoils). Type at least two
+characters in the Selig search box to filter by name or filename, then click an
+entry to fetch and load it. The **Random Foil** button picks a random airfoil
+from the database and loads it instantly.
 
 ### Airfoil Canvas
 
@@ -57,7 +60,8 @@ Visualize sweep results with configurable axes — CL, CD, CM, L/D, alpha,
 Reynolds, Mach, Ncrit, flap deflection, and flap hinge x/c. Overlay
 multiple series for direct comparison. Enable the **Outliers** checkbox to
 automatically remove statistical outliers (IQR method) from the displayed
-data.
+data. Right-click any data point to manually flag it as an outlier; flagged
+points appear as red X marks and are excluded when the outlier filter is on.
 
 ### Visualization
 
@@ -76,13 +80,44 @@ filter, and search across airfoils, operating conditions, and results. Includes
 a SPLOM (scatter plot matrix) correlogram for multivariate exploration. Custom
 computed columns let you define algebraic expressions over existing fields. The
 correlogram view supports automatic outlier removal via the **Outliers** toggle.
+Right-click a scatter point to manually flag it as an outlier; flagged runs are
+persisted in the database and excluded from all plots. The table includes a
+filterable **Outlier** column.
+
+**Row grouping and aggregation** — drag any column header (e.g. Airfoil, Re) into
+the row group panel above the grid. Grouped rows automatically aggregate their
+children: CL shows `max`, CD shows `min`, L/D shows `max`, etc. Change the
+aggregation function for any column via the sidebar (right-click a column header
+→ "Value Aggregation"). Custom aggregation functions include:
+
+- **at max(CL)** / **at min(CD)** / **at max(L/D)** — returns the value of the
+  current column at the row where the target column reaches its extremum.
+  For example, applying "at max(CL)" to the alpha column gives **α_stall**.
+- **median** — median aggregation (not available by default in AG Grid).
+
+Two predefined aerodynamic summary columns are available (hidden by default —
+show them via the sidebar):
+- **α_stall** — angle of attack at CL_max
+- **α @ L/D_max** — angle of attack at maximum lift-to-drag ratio
+
+Use the **Converged Only** button to quickly filter out non-converged solver
+points before grouping, which is particularly useful near stall where the
+solver may not converge reliably.
 
 ### Plot Builder
 
 Build custom charts from run data: scatter, line, bar, and histogram plots.
 Map any database field to axes, color, or size. Useful for parameter studies
 and trade-off visualization. Toggle **Outliers** to automatically exclude
-statistical outliers using the IQR method.
+statistical outliers using the IQR method. Right-click any plotted point to
+manually flag it as an outlier; flagged runs are persisted and excluded from
+the chart.
+
+The **Aggregated** data source (available when row grouping is active in the
+Data Explorer) lets you plot group-level statistics directly. For example, to
+plot L/D_max vs Reynolds number for multiple airfoils: group by Airfoil and Re
+in the Data Explorer, then select Data → Aggregated, X → Re, Y → L/D in the
+Plot Builder.
 
 ### Case Logs
 

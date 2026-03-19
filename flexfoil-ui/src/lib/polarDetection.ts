@@ -67,6 +67,8 @@ interface GroupMeta {
   n_panels: number;
   max_iter: number;
   solver_mode: RunRow['solver_mode'];
+  flap_deflection: number | null;
+  flap_hinge_x: number | null;
 }
 
 /**
@@ -87,6 +89,8 @@ function buildSmartLabels(
     'reynolds',
     'mach',
     'ncrit',
+    'flap_deflection',
+    'flap_hinge_x',
     'n_panels',
     'max_iter',
     'solver_mode',
@@ -176,6 +180,8 @@ function buildGroupMeta(row: RunRow): GroupMeta {
     n_panels: row.n_panels,
     max_iter: row.max_iter,
     solver_mode: row.solver_mode,
+    flap_deflection: row.flap_deflection,
+    flap_hinge_x: row.flap_hinge_x,
   };
 }
 
@@ -191,6 +197,10 @@ function formatLabelPart(field: keyof GroupMeta, value: GroupMeta[keyof GroupMet
       return `M=${String(value)}`;
     case 'ncrit':
       return `Nc=${String(value)}`;
+    case 'flap_deflection':
+      return value != null ? `δ=${value}°` : '';
+    case 'flap_hinge_x':
+      return value != null ? `x/c=${value}` : '';
     case 'n_panels':
       return `Panels=${String(value)}`;
     case 'max_iter':

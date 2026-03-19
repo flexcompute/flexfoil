@@ -15,6 +15,7 @@ interface ChangelogDialogProps {
   open: boolean;
   onClose: () => void;
   onNavigateToPanel?: (panelId: string) => void;
+  onStartTour?: (tourId: string) => void;
 }
 
 const CATEGORY_STYLES: Record<ChangeCategory, { label: string; color: string; bg: string }> = {
@@ -23,7 +24,7 @@ const CATEGORY_STYLES: Record<ChangeCategory, { label: string; color: string; bg
   fixed: { label: 'Fixed', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
 };
 
-export function ChangelogDialog({ open, onClose, onNavigateToPanel }: ChangelogDialogProps) {
+export function ChangelogDialog({ open, onClose, onNavigateToPanel, onStartTour }: ChangelogDialogProps) {
   const [mode, setMode] = useState<'tour' | 'list'>('tour');
   const [slideIndex, setSlideIndex] = useState(0);
 
@@ -48,6 +49,12 @@ export function ChangelogDialog({ open, onClose, onNavigateToPanel }: ChangelogD
     onClose();
     onNavigateToPanel?.(panelId);
   }, [latestEntry, onClose, onNavigateToPanel]);
+
+  const handleShowMe = useCallback((tourId: string) => {
+    if (latestEntry) setLastSeenChangelogVersion(latestEntry.version);
+    onClose();
+    setTimeout(() => onStartTour?.(tourId), 200);
+  }, [latestEntry, onClose, onStartTour]);
 
   useEffect(() => {
     if (!open) return;
@@ -107,6 +114,7 @@ export function ChangelogDialog({ open, onClose, onNavigateToPanel }: ChangelogD
             onClose={handleClose}
             onViewAll={() => setMode('list')}
             onGoTo={onNavigateToPanel ? handleGoTo : undefined}
+            onShowMe={onStartTour ? handleShowMe : undefined}
           />
         ) : (
           <ListView onClose={handleClose} onViewTour={hasTour ? () => setMode('tour') : undefined} />
@@ -126,6 +134,7 @@ function TourView({
   onClose,
   onViewAll,
   onGoTo,
+  onShowMe,
 }: {
   slides: TourSlide[];
   version: string;
@@ -134,6 +143,7 @@ function TourView({
   onClose: () => void;
   onViewAll: () => void;
   onGoTo?: (panelId: string) => void;
+  onShowMe?: (tourId: string) => void;
 }) {
   const slide = slides[slideIndex];
   const isLast = slideIndex === slides.length - 1;
@@ -258,27 +268,50 @@ function TourView({
             ))}
           </div>
 
-          {/* "Go to" action */}
-          {onGoTo && slide.goTo && (
-            <button
-              onClick={() => onGoTo(slide.goTo!.panel)}
-              style={{
-                marginTop: '16px',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                background: 'var(--bg-tertiary)',
-                border: '1px solid var(--border-color)',
-                borderRadius: '6px',
-                padding: '6px 12px',
-                fontSize: '12px',
-                fontWeight: 600,
-                color: 'var(--accent-primary)',
-                cursor: 'pointer',
-              }}
-            >
-              {slide.goTo.label} →
-            </button>
+          {/* Action buttons */}
+          {(slide.showMeTourId || slide.goTo) && (
+            <div style={{ marginTop: '16px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {onShowMe && slide.showMeTourId && (
+                <button
+                  onClick={() => onShowMe(slide.showMeTourId!)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    background: 'var(--accent-primary)',
+                    border: '1px solid var(--accent-primary)',
+                    borderRadius: '6px',
+                    padding: '6px 12px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    color: 'var(--bg-primary)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Show Me
+                </button>
+              )}
+              {onGoTo && slide.goTo && (
+                <button
+                  onClick={() => onGoTo(slide.goTo!.panel)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    background: 'var(--bg-tertiary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '6px',
+                    padding: '6px 12px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    color: 'var(--accent-primary)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {slide.goTo.label} →
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>

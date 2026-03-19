@@ -72,6 +72,7 @@ function apiRowToRunRow(obj: Record<string, unknown>): RunRow {
     solver_mode: (obj.solver_mode as SolverMode | null) ?? 'viscous',
     success: obj.success === 1 || obj.success === true,
     error: obj.error as string | null,
+    is_outlier: obj.is_outlier === 1 || obj.is_outlier === true,
     created_at: obj.created_at as string,
     session_id: obj.session_id as string | null,
     geometry_snapshot: parseGeometrySnapshot(obj.coordinates_json, obj.panels_json),
@@ -206,6 +207,16 @@ export const localApiBackend: StorageBackend = {
 
   async updateRunAirfoilName(_id: number, _newName: string): Promise<void> {
     // TODO: implement PATCH endpoint
+    _cachedRuns = await fetchAllRuns();
+  },
+
+  async setRunOutlier(_id: number, _isOutlier: boolean): Promise<void> {
+    // TODO: implement PATCH endpoint
+    _cachedRuns = await fetchAllRuns();
+  },
+
+  async clearAllOutlierFlags(): Promise<void> {
+    // TODO: implement endpoint
     _cachedRuns = await fetchAllRuns();
   },
 

@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "paths": {
+      "@showMe/*": ["./flexfoil-ui/src/onboarding/showMe/*"]
+    },
+    "baseUrl": "."
+  },
+  "include": ["e2e/**/*.ts", "playwright.config.ts"]
+}

@@ -253,6 +253,72 @@ describe('parseAirfoilDat', () => {
     const parsed = parseAirfoilDat('1.0 0.0\n0.0 0.1\n1.0 -0.0\n', 'my-foil.dat');
     expect(parsed.name).toBe('my foil');
   });
+
+  it('handles Lednicer format (two groups separated by blank line)', () => {
+    const lednicer = `CLARK X AIRFOIL
+       17.       17.
+
+ 0.0000000 0.0000000
+ 0.0125000 0.0186000
+ 0.0250000 0.0276000
+ 0.0500000 0.0416000
+ 0.1000000 0.0608000
+ 0.2000000 0.0808000
+ 0.4000000 0.0900000
+ 0.6000000 0.0755000
+ 0.8000000 0.0442000
+ 1.0000000 0.0012000
+
+ 0.0000000 0.0000000
+ 0.0125000 -.0163000
+ 0.0250000 -.0220000
+ 0.0500000 -.0272000
+ 0.1000000 -.0310000
+ 0.2000000 -.0317000
+ 0.4000000 -.0240000
+ 0.6000000 -.0160000
+ 0.8000000 -.0080000
+ 1.0000000 0.0000000
+`;
+    const parsed = parseAirfoilDat(lednicer, 'clarkx.dat');
+
+    expect(parsed.name).toBe('CLARK X AIRFOIL');
+    // Should be converted to Selig order: TE → upper → LE → lower → TE
+    expect(parsed.coordinates[0].x).toBeCloseTo(1.0);
+    expect(parsed.coordinates[0].surface).toBe('upper');
+    expect(parsed.coordinates.at(-1)!.x).toBeCloseTo(1.0);
+    expect(parsed.coordinates.at(-1)!.surface).toBe('lower');
+
+    const leIndex = parsed.coordinates.findIndex(
+      (p) => p.x === Math.min(...parsed.coordinates.map((q) => q.x)),
+    );
+    expect(leIndex).toBeGreaterThan(0);
+    expect(leIndex).toBeLessThan(parsed.coordinates.length - 1);
+  });
+
+  it('handles Lednicer format with decimal count line', () => {
+    const lednicer = `TEST FOIL
+      5.0      5.0
+
+ 0.0000 0.0000
+ 0.2500 0.0500
+ 0.5000 0.0700
+ 0.7500 0.0400
+ 1.0000 0.0000
+
+ 0.0000 0.0000
+ 0.2500 -0.0300
+ 0.5000 -0.0500
+ 0.7500 -0.0300
+ 1.0000 0.0000
+`;
+    const parsed = parseAirfoilDat(lednicer, 'test.dat');
+    expect(parsed.name).toBe('TEST FOIL');
+    // 5 upper reversed + 4 lower (skip dup LE) = 9 points
+    expect(parsed.coordinates.length).toBe(9);
+    expect(parsed.coordinates[0].x).toBeCloseTo(1.0);
+    expect(parsed.coordinates.at(-1)!.x).toBeCloseTo(1.0);
+  });
 });
 
 describe('prepareImportedAirfoil', () => {

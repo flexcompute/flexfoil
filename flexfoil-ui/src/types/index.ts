@@ -42,7 +42,7 @@ export interface SweepAxis {
   flapId?: string;
 }
 export type ChartType = 'scatter' | 'line' | 'bar' | 'histogram';
-export type DataSource = 'full' | 'filtered';
+export type DataSource = 'full' | 'filtered' | 'aggregated';
 export type AxisScale = 'linear' | 'log';
 export type DataExplorerViewMode = 'table' | 'correlogram';
 
@@ -221,6 +221,7 @@ export interface RunRow {
   solver_mode: SolverMode;
   success: boolean;
   error: string | null;
+  is_outlier: boolean;
   created_at: string;
   session_id: string | null;
   geometry_snapshot: RunGeometrySnapshot | null;

@@ -57,7 +57,19 @@ Polar sweeps are **parallelized by default** using all available CPU cores
 ```python
 polar = foil.polar(alpha=(-5, 15, 0.5), Re=1e6)
 print(polar)
-# PolarResult('NACA 2412', Re=1e+06, 40/41 converged)
+# PolarResult('NACA 2412', Re=1e+06, 40/41 converged, CLmax=1.4523, α_stall=12.5°, L/D_max=78.3)
+
+# Aggregate statistics
+polar.cl_max         # 1.4523
+polar.alpha_stall    # 12.5
+polar.ld_max         # 78.3
+polar.cd_min         # 0.00523
+polar.summary()      # dict with all aggregate statistics
+
+# Generic aggregation with optional outlier filtering
+polar.column_max('cl', filter_outliers=True)
+polar.argmax('ld', 'alpha')   # alpha at max L/D
+polar.argmin('cd', 'alpha')   # alpha at min CD
 
 # Interactive plotly figure (default): CL-α, CD-α, CL-CD, CM-α
 polar.plot()
@@ -68,8 +80,8 @@ polar.plot(backend="matplotlib")
 # Sequential mode (for debugging or progress output)
 polar = foil.polar(alpha=(-5, 15, 0.5), Re=1e6, parallel=False)
 
-# Export to pandas
-df = polar.to_dataframe()
+# Export to pandas (with summary statistics in df.attrs)
+df = polar.to_dataframe(summary=True)
 df.to_csv("polar.csv", index=False)
 ```
 
@@ -262,8 +274,23 @@ are byte-identical.
 | `.ld` | `list[float]` — lift-to-drag ratios |
 | `.converged` | `list[SolveResult]` — converged results only |
 | `.results` | `list[SolveResult]` — all results |
-| `.to_dict()` | Export as `dict` |
-| `.to_dataframe()` | Export as `pandas.DataFrame` |
+| `.cl_max` | `float \| None` — maximum CL |
+| `.cl_min` | `float \| None` — minimum CL |
+| `.cd_min` | `float \| None` — minimum CD |
+| `.ld_max` | `float \| None` — maximum L/D |
+| `.alpha_stall` | `float \| None` — alpha at CL_max |
+| `.alpha_at_ld_max` | `float \| None` — alpha at L/D_max |
+| `.alpha_at_cd_min` | `float \| None` — alpha at CD_min |
+| `.column_max(col, filter_outliers=False)` | Max of any column |
+| `.column_min(col, filter_outliers=False)` | Min of any column |
+| `.column_mean(col, filter_outliers=False)` | Mean of any column |
+| `.column_median(col, filter_outliers=False)` | Median of any column |
+| `.column_stdev(col, filter_outliers=False)` | Std deviation of any column |
+| `.argmax(target, return_col, filter_outliers=False)` | Value of *return_col* at max of *target* |
+| `.argmin(target, return_col, filter_outliers=False)` | Value of *return_col* at min of *target* |
+| `.summary()` | Dict of all aggregate statistics |
+| `.to_dict(summary=False)` | Export as `dict` (optionally include summary) |
+| `.to_dataframe(summary=False)` | Export as `pandas.DataFrame` (summary in `.attrs`) |
 | `.plot(show=True, backend="plotly")` | 4-panel figure (plotly default, or `"matplotlib"`) |
 
 ### RunDatabase

@@ -28,7 +28,7 @@ export const PLOT_FIELDS: PlotFieldMeta[] = [
   { key: 'residual', label: 'Residual', kind: 'numeric' },
   { key: 'x_tr_upper', label: 'Xtr Upper', kind: 'numeric' },
   { key: 'x_tr_lower', label: 'Xtr Lower', kind: 'numeric' },
-  { key: 'flap_deflection', label: 'Flap δ', kind: 'numeric' },
+  { key: 'flap_deflection', label: 'Flap δ', kind: 'numeric', autoGroupInvariant: true },
   { key: 'flap_hinge_x', label: 'Flap x/c', kind: 'numeric', autoGroupInvariant: true },
   { key: 'solver_mode', label: 'Solver', kind: 'categorical', autoGroupInvariant: true },
   { key: 'created_at', label: 'Created', kind: 'temporal' },

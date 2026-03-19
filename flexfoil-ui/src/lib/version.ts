@@ -11,6 +11,7 @@ export interface TourSlide {
   icon: string;
   items: string[];
   goTo?: { panel: string; label: string };
+  showMeTourId?: string;
 }
 
 export interface ChangelogEntry {
@@ -27,6 +28,15 @@ export const CHANGELOG: ChangelogEntry[] = [
     items: [
       { category: 'fixed', text: 'File menu actions (New NACA, Import .dat, Export .dat, Export SVG) were disabled and not connected to anything' },
       { category: 'added', text: 'Export airfoil geometry as .dat (standard Selig format) or SVG from the File menu' },
+      { category: 'added', text: 'Manually flag data points as outliers via right-click context menu in all plotting panels' },
+      { category: 'added', text: 'Row grouping with aggregation in Data Explorer — group by airfoil, Re, Mach to see CLmax, CDmin, L/D_max per group' },
+      { category: 'added', text: 'Custom aggregation functions: argmax/argmin for derived quantities like alpha_stall and alpha at L/D_max' },
+      { category: 'added', text: 'Aerodynamic summary columns (α_stall, α @ L/D_max) that activate when row grouping is enabled' },
+      { category: 'added', text: 'Aggregated data source in Plot Builder — plot group-level statistics (e.g. L/D_max vs Re) directly' },
+      { category: 'added', text: 'Converged Only quick-filter button in Data Explorer to exclude non-converged points before aggregation' },
+      { category: 'added', text: 'Python API: PolarResult now exposes cl_max, alpha_stall, ld_max, cd_min, and generic argmax/argmin/column_mean/column_median' },
+      { category: 'added', text: 'Selig airfoil database browser with ~1,600 airfoils from the UIUC database — search and load any airfoil' },
+      { category: 'added', text: 'Random Foil button to load a surprise airfoil from the Selig database' },
     ],
   },
   {
@@ -76,6 +86,7 @@ export const CHANGELOG: ChangelogEntry[] = [
           'Flap definitions saved with run data and included in shareable URLs',
         ],
         goTo: { panel: 'control', label: 'Open Geometry Control' },
+        showMeTourId: 'showMe:flapDesign',
       },
       {
         title: 'Multi-Parameter Sweeps',
@@ -88,6 +99,7 @@ export const CHANGELOG: ChangelogEntry[] = [
           'Solver caching skips already-computed points across sweeps',
         ],
         goTo: { panel: 'solve', label: 'Open Solve panel' },
+        showMeTourId: 'showMe:multiSweep',
       },
       {
         title: 'Solver Status Bar',
@@ -99,6 +111,7 @@ export const CHANGELOG: ChangelogEntry[] = [
           'Per-job progress bars, elapsed time, and cancel buttons',
           'Works for polar sweeps, multi-sweeps, and inverse design jobs',
         ],
+        showMeTourId: 'showMe:solverQueue',
       },
       {
         title: 'Enhanced Data Analysis',
@@ -109,6 +122,7 @@ export const CHANGELOG: ChangelogEntry[] = [
           'Custom computed columns with algebraic expressions over any data field',
         ],
         goTo: { panel: 'data-explorer', label: 'Open Data Explorer' },
+        showMeTourId: 'showMe:dataAnalysis',
       },
     ],
   },

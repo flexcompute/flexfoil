@@ -21,6 +21,8 @@ interface RunStoreState {
   allRuns: RunRow[];
   /** Subset filtered by the AG Grid (defaults to allRuns) */
   filteredRuns: RunRow[];
+  /** Group-level aggregated pseudo-rows extracted from AG Grid when grouping is active */
+  aggregatedRuns: RunRow[];
   /** Most recently restored historical run */
   selectedRunId: number | null;
   /** Increments when a historical run is restored */
@@ -34,6 +36,8 @@ interface RunStoreState {
   refresh: () => void;
   /** Update the filtered subset (called by DataExplorer on filter change) */
   setFilteredRuns: (rows: RunRow[]) => void;
+  /** Update aggregated rows (called by DataExplorer when grouping changes) */
+  setAggregatedRuns: (rows: RunRow[]) => void;
 
   /** Insert a new run (returns the cached-or-new row) */
   addRun: (run: RunInsert) => Promise<void>;
@@ -55,6 +59,10 @@ interface RunStoreState {
   restoreRunById: (id: number) => boolean;
   /** Rename the airfoil_name for a single run in the DB */
   renameRun: (id: number, newName: string) => Promise<void>;
+  /** Toggle is_outlier flag on a single run */
+  toggleOutlier: (id: number) => Promise<void>;
+  /** Clear all manual outlier flags */
+  clearAllOutlierFlags: () => Promise<void>;
 
   /** Delete every row and refresh */
   clearAll: () => Promise<void>;
@@ -67,6 +75,7 @@ interface RunStoreState {
 export const useRunStore = create<RunStoreState>()((set, get) => ({
   allRuns: [],
   filteredRuns: [],
+  aggregatedRuns: [],
   selectedRunId: null,
   restorationRevision: 0,
   ready: false,
@@ -88,6 +97,8 @@ export const useRunStore = create<RunStoreState>()((set, get) => ({
   },
 
   setFilteredRuns: (rows) => set({ filteredRuns: rows }),
+
+  setAggregatedRuns: (rows) => set({ aggregatedRuns: rows }),
 
   addRun: async (run) => {
     const backend = getBackend();
@@ -142,9 +153,21 @@ export const useRunStore = create<RunStoreState>()((set, get) => ({
     get().refresh();
   },
 
+  toggleOutlier: async (id) => {
+    const run = get().allRuns.find((r) => r.id === id);
+    if (!run) return;
+    await getBackend().setRunOutlier(id, !run.is_outlier);
+    get().refresh();
+  },
+
+  clearAllOutlierFlags: async () => {
+    await getBackend().clearAllOutlierFlags();
+    get().refresh();
+  },
+
   clearAll: async () => {
     await getBackend().clearAllRuns();
-    set({ allRuns: [], filteredRuns: [], selectedRunId: null, restorationRevision: 0 });
+    set({ allRuns: [], filteredRuns: [], aggregatedRuns: [], selectedRunId: null, restorationRevision: 0 });
   },
 
   exportDb: () => getBackend().exportDatabase(),

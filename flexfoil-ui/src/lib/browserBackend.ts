@@ -18,6 +18,8 @@ import {
   exportDatabase as dbExportDatabase,
   importDatabase as dbImportDatabase,
   updateRunAirfoilName as dbUpdateRunAirfoilName,
+  setRunOutlier as dbSetRunOutlier,
+  clearAllOutlierFlags as dbClearAllOutlierFlags,
   ensureRunDatabase,
 } from './runDatabase';
 
@@ -46,6 +48,14 @@ export const browserBackend: StorageBackend = {
 
   async updateRunAirfoilName(id: number, newName: string): Promise<void> {
     await dbUpdateRunAirfoilName(id, newName);
+  },
+
+  async setRunOutlier(id: number, isOutlier: boolean): Promise<void> {
+    await dbSetRunOutlier(id, isOutlier);
+  },
+
+  async clearAllOutlierFlags(): Promise<void> {
+    await dbClearAllOutlierFlags();
   },
 
   async clearAllRuns(): Promise<void> {

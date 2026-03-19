@@ -1,9 +1,15 @@
 /**
- * AirfoilLibraryPanel - NACA generator and file import
+ * AirfoilLibraryPanel - NACA generator, Selig database browser, and file import
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { parseAirfoilDat } from '../../lib/airfoilImport';
+import {
+  fetchSeligAirfoil,
+  getRandomCatalogEntry,
+  getSeligCatalog,
+  type SeligCatalogEntry,
+} from '../../lib/airfoilDatabase';
 import { useAirfoilStore } from '../../stores/airfoilStore';
 import { useRouteUiStore } from '../../stores/routeUiStore';
 
@@ -16,6 +22,42 @@ export function AirfoilLibraryPanel() {
   const nPoints = useRouteUiStore((state) => state.libraryNPoints);
   const setNacaCode = useRouteUiStore((state) => state.setLibraryNacaCode);
   const setNPoints = useRouteUiStore((state) => state.setLibraryNPoints);
+
+  // Selig database state
+  const [catalog, setCatalog] = useState<SeligCatalogEntry[]>([]);
+  const [seligSearch, setSeligSearch] = useState('');
+  const [seligLoading, setSeligLoading] = useState<string | null>(null);
+  const [seligError, setSeligError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getSeligCatalog().then(setCatalog);
+  }, []);
+
+  const filteredCatalog = seligSearch.length >= 2
+    ? catalog.filter((entry) => {
+        const q = seligSearch.toLowerCase();
+        return entry.file.toLowerCase().includes(q) || entry.name.toLowerCase().includes(q);
+      })
+    : [];
+
+  const loadSeligAirfoil = useCallback(async (entry: SeligCatalogEntry) => {
+    setSeligLoading(entry.file);
+    setSeligError(null);
+    try {
+      const parsed = await fetchSeligAirfoil(entry.file);
+      importAirfoil(parsed.name, parsed.coordinates);
+    } catch (err) {
+      setSeligError(err instanceof Error ? err.message : 'Failed to load airfoil');
+    } finally {
+      setSeligLoading(null);
+    }
+  }, [importAirfoil]);
+
+  const handleRandomFoil = useCallback(async () => {
+    if (catalog.length === 0) return;
+    const entry = getRandomCatalogEntry(catalog);
+    await loadSeligAirfoil(entry);
+  }, [catalog, loadSeligAirfoil]);
 
   const handleGenerateNaca = useCallback(() => {
     // Parse NACA code (e.g., "2412" -> m=0.02, p=0.4, t=0.12)
@@ -172,6 +214,99 @@ export function AirfoilLibraryPanel() {
                 {code}
               </button>
             ))}
+          </div>
+        </div>
+
+        {/* Selig Database */}
+        <div className="form-group">
+          <div className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Selig Database</span>
+            <span style={{ fontSize: '10px', color: 'var(--text-tertiary)', fontWeight: 400 }}>
+              {catalog.length > 0 ? `${catalog.length} airfoils` : ''}
+            </span>
+          </div>
+          <input
+            type="text"
+            value={seligSearch}
+            onChange={(e) => setSeligSearch(e.target.value)}
+            placeholder="Search airfoils (e.g. e387, clark, naca)…"
+            style={{ width: '100%', boxSizing: 'border-box', marginBottom: '6px' }}
+          />
+          {seligSearch.length >= 2 && (
+            <div style={{
+              maxHeight: '180px',
+              overflowY: 'auto',
+              border: '1px solid var(--border-color)',
+              borderRadius: '4px',
+              marginBottom: '6px',
+            }}>
+              {filteredCatalog.length === 0 ? (
+                <div style={{ padding: '8px 10px', fontSize: '11px', color: 'var(--text-tertiary)' }}>
+                  No matches
+                </div>
+              ) : (
+                filteredCatalog.slice(0, 100).map((entry) => (
+                  <button
+                    key={entry.file}
+                    onClick={() => loadSeligAirfoil(entry)}
+                    disabled={seligLoading !== null}
+                    style={{
+                      display: 'block',
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '5px 10px',
+                      fontSize: '11px',
+                      lineHeight: '1.4',
+                      background: seligLoading === entry.file ? 'var(--bg-tertiary)' : 'transparent',
+                      border: 'none',
+                      borderBottom: '1px solid var(--border-color)',
+                      cursor: seligLoading ? 'wait' : 'pointer',
+                      color: 'var(--text-primary)',
+                    }}
+                  >
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-primary)' }}>
+                      {entry.file}
+                    </span>
+                    {' '}
+                    <span style={{ color: 'var(--text-secondary)' }}>{entry.name}</span>
+                    {seligLoading === entry.file && (
+                      <span style={{ marginLeft: '6px', color: 'var(--text-tertiary)' }}>loading…</span>
+                    )}
+                  </button>
+                ))
+              )}
+              {filteredCatalog.length > 100 && (
+                <div style={{ padding: '6px 10px', fontSize: '10px', color: 'var(--text-tertiary)' }}>
+                  {filteredCatalog.length - 100} more — narrow your search
+                </div>
+              )}
+            </div>
+          )}
+          {seligError && (
+            <div style={{ fontSize: '11px', color: 'var(--error)', marginBottom: '6px' }}>
+              {seligError}
+            </div>
+          )}
+          <button
+            onClick={handleRandomFoil}
+            disabled={catalog.length === 0 || seligLoading !== null}
+            style={{
+              width: '100%',
+              fontStyle: catalog.length === 0 ? 'italic' : undefined,
+            }}
+          >
+            {seligLoading ? 'Loading…' : 'Random Foil'}
+          </button>
+          <div style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginTop: '6px', textAlign: 'center' }}>
+            Data from the{' '}
+            <a
+              href="https://m-selig.ae.illinois.edu/ads/coord_database.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: 'var(--text-secondary)' }}
+            >
+              UIUC Airfoil Coordinates Database
+            </a>
           </div>
         </div>
 

@@ -7,6 +7,8 @@
 
 import { useAirfoilStore } from '../stores/airfoilStore';
 import { useVisualizationStore } from '../stores/visualizationStore';
+import { useSolverJobStore } from '../stores/solverJobStore';
+import { useCustomColumnStore } from '../stores/customColumnStore';
 
 export interface Challenge {
   /** Unique identifier */
@@ -90,6 +92,12 @@ const ELEMENT_TO_PANEL: Record<string, string> = {
   '[data-tour="viz-psi"]': 'visualization',
   '[data-tour="viz-smoke"]': 'visualization',
   '[data-tour="panel-visualization"]': 'visualization',
+  // Geometry design elements
+  '[data-tour="gdes-flaps"]': 'control',
+  '[data-tour="gdes-add-flap"]': 'control',
+  '[data-tour="control-mode-gdes"]': 'control',
+  // Solver status
+  '[data-tour="solver-status"]': 'solve',
   // Other panels
   '[data-tour="panel-library"]': 'library',
   '[data-tour="panel-spacing"]': 'spacing',
@@ -179,7 +187,9 @@ export function buildElementNotVisibleHTML(panelId: string | null): string {
 function getState() {
   const airfoil = useAirfoilStore.getState();
   const viz = useVisualizationStore.getState();
-  return { airfoil, viz };
+  const solverJobs = useSolverJobStore.getState();
+  const customColumns = useCustomColumnStore.getState();
+  return { airfoil, viz, solverJobs, customColumns };
 }
 
 /**
@@ -410,6 +420,87 @@ export const challenges: Record<string, Challenge> = {
     },
     highlightElement: '[data-tour="viz-smoke"]',
     requiredPanel: 'visualization',
+  },
+
+  // --- Flap challenges ---
+
+  'add-flap': {
+    id: 'add-flap',
+    instruction: 'Add a flap to the airfoil',
+    hint: 'Click the "Add Flap" button in the Geometry tab',
+    validate: () => {
+      const { airfoil } = getState();
+      return airfoil.geometryDesign.flaps.length > 0;
+    },
+    highlightElement: '[data-tour="gdes-add-flap"]',
+    requiredPanel: 'control',
+  },
+
+  'deflect-flap': {
+    id: 'deflect-flap',
+    instruction: 'Deflect the flap',
+    hint: 'Drag the deflection slider or type a value (e.g. 10)',
+    targetValue: 'any non-zero deflection',
+    validate: () => {
+      const { airfoil } = getState();
+      return airfoil.geometryDesign.flaps.some(f => Math.abs(f.deflection) > 0.5);
+    },
+    highlightElement: '[data-tour="gdes-flaps"]',
+    requiredPanel: 'control',
+  },
+
+  // --- Sweep challenges ---
+
+  'configure-matrix-sweep': {
+    id: 'configure-matrix-sweep',
+    instruction: 'Enable a secondary sweep parameter',
+    hint: 'Click "Add Secondary Sweep" in the polar section of the Solve panel',
+    validate: () => {
+      const rows = document.querySelectorAll('[data-tour="solve-polar"] .sweep-param-row');
+      return rows.length >= 2;
+    },
+    highlightElement: '[data-tour="solve-polar"]',
+    requiredPanel: 'solve',
+  },
+
+  'run-sweep': {
+    id: 'run-sweep',
+    instruction: 'Run a polar sweep',
+    hint: 'Click "Generate Polar" to start the sweep',
+    validate: () => {
+      const { solverJobs } = getState();
+      return solverJobs.jobs.length > 0;
+    },
+    highlightElement: '[data-tour="solve-polar"]',
+    requiredPanel: 'solve',
+  },
+
+  // --- Data analysis challenges ---
+
+  'add-computed-column': {
+    id: 'add-computed-column',
+    instruction: 'Create a custom computed column',
+    hint: 'Click "Add Column" in the Data Explorer and enter an expression like cl/cd',
+    validate: () => {
+      const { customColumns } = getState();
+      return customColumns.columns.length > 0;
+    },
+    highlightElement: '[data-tour="de-column-chips"]',
+    requiredPanel: 'data-explorer',
+  },
+
+  // --- Control mode challenges ---
+
+  'switch-to-gdes': {
+    id: 'switch-to-gdes',
+    instruction: 'Switch to Geometry editing mode',
+    hint: 'Click the "Geometry" button in Geometry Control panel',
+    validate: () => {
+      const { airfoil } = getState();
+      return airfoil.controlMode === 'geometry-design';
+    },
+    highlightElement: '[data-tour="control-mode-gdes"]',
+    requiredPanel: 'control',
   },
 };
 

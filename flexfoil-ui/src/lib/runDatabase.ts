@@ -82,6 +82,7 @@ const REQUIRED_COLUMNS: Array<{ name: string; definition: string }> = [
   { name: 'coordinates_json', definition: 'TEXT' },
   { name: 'panels_json', definition: 'TEXT' },
   { name: 'flaps_json', definition: 'TEXT' },
+  { name: 'is_outlier', definition: 'INTEGER NOT NULL DEFAULT 0' },
 ];
 
 function ensureSchemaColumns(): void {
@@ -250,6 +251,18 @@ export async function updateRunAirfoilName(id: number, newName: string): Promise
   await persistToIdb();
 }
 
+export async function setRunOutlier(id: number, isOutlier: boolean): Promise<void> {
+  const d = getDb();
+  d.run('UPDATE runs SET is_outlier = ? WHERE id = ?', [isOutlier ? 1 : 0, id]);
+  await persistToIdb();
+}
+
+export async function clearAllOutlierFlags(): Promise<void> {
+  const d = getDb();
+  d.run('UPDATE runs SET is_outlier = 0 WHERE is_outlier = 1');
+  await persistToIdb();
+}
+
 export function queryAllRuns(): RunRow[] {
   const d = getDb();
   const rows = d.exec('SELECT * FROM runs ORDER BY id DESC');
@@ -382,6 +395,7 @@ function rowToRunRow(columns: string[], values: (string | number | null | Uint8A
     solver_mode: (obj.solver_mode as SolverMode | null) ?? 'viscous',
     success: (obj.success as number) === 1,
     error: obj.error as string | null,
+    is_outlier: (obj.is_outlier as number) === 1,
     created_at: obj.created_at as string,
     session_id: obj.session_id as string | null,
     geometry_snapshot: parseGeometrySnapshot(obj.coordinates_json, obj.panels_json),
