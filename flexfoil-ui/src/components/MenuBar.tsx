@@ -2,7 +2,7 @@
  * MenuBar - Top menu bar with File/Edit/Window/Help menus
  */
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { DarkModeToggle } from './DarkModeToggle';
 import { useUndoRedo } from '../hooks/useUndoRedo';
 import { useOnboarding } from '../onboarding';
@@ -10,6 +10,8 @@ import { FlexcomputeLogo } from './FlexcomputeLogo';
 import { AboutDialog } from './AboutDialog';
 import { ChangelogDialog, getLastSeenChangelogVersion } from './ChangelogDialog';
 import { CHANGELOG } from '../lib/version';
+import { useAirfoilStore } from '../stores/airfoilStore';
+import { parseAirfoilDat } from '../lib/airfoilImport';
 
 const DOCUMENTATION_URL = 'https://foil.flexcompute.com/docs/';
 const FLEXCOMPUTE_URL = 'https://www.flexcompute.com/';
@@ -42,9 +44,16 @@ export function MenuBar({
   const [showAbout, setShowAbout] = useState(false);
   const [showChangelog, setShowChangelog] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Undo/redo functionality
   const { undo, redo, canUndo, canRedo } = useUndoRedo();
+
+  // Airfoil state for file operations
+  const airfoilName = useAirfoilStore((s) => s.name);
+  const coordinates = useAirfoilStore((s) => s.coordinates);
+  const panels = useAirfoilStore((s) => s.panels);
+  const importAirfoil = useAirfoilStore((s) => s.importAirfoil);
   
   // Onboarding
   const { startTour, hasStartedTour, resetAllTours, isActive: tourIsActive } = useOnboarding();
@@ -98,6 +107,96 @@ export function MenuBar({
 
   const openDocumentation = () => {
     window.open(DOCUMENTATION_URL, '_blank', 'noopener,noreferrer');
+    setActiveMenu(null);
+  };
+
+  const handleNewNaca = () => {
+    onOpenPanel('library');
+    setActiveMenu(null);
+  };
+
+  const handleImportDat = () => {
+    fileInputRef.current?.click();
+    setActiveMenu(null);
+  };
+
+  const handleFileChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const text = String(event.target?.result ?? '');
+          const parsed = parseAirfoilDat(text, file.name);
+          importAirfoil(parsed.name, parsed.coordinates);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unknown import error.';
+          window.alert(`Could not import ${file.name}: ${message}`);
+        } finally {
+          e.target.value = '';
+        }
+      };
+      reader.readAsText(file);
+    },
+    [importAirfoil],
+  );
+
+  const handleExportDat = () => {
+    const coords = panels.length > 0 ? panels : coordinates;
+    if (coords.length === 0) return;
+
+    const lines = [airfoilName];
+    for (const pt of coords) {
+      lines.push(`  ${pt.x.toFixed(7)}  ${pt.y.toFixed(7)}`);
+    }
+    const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${airfoilName.replace(/\s+/g, '_')}.dat`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setActiveMenu(null);
+  };
+
+  const handleExportSvg = () => {
+    const coords = panels.length > 0 ? panels : coordinates;
+    if (coords.length === 0) return;
+
+    const xs = coords.map((p) => p.x);
+    const ys = coords.map((p) => p.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+
+    const margin = 0.05;
+    const vbX = minX - margin;
+    const vbY = -(maxY + margin);
+    const vbW = maxX - minX + 2 * margin;
+    const vbH = maxY - minY + 2 * margin;
+    const width = 800;
+    const height = Math.round(width * (vbH / vbW));
+
+    const pathD =
+      coords.map((pt, i) => `${i === 0 ? 'M' : 'L'}${pt.x},${-pt.y}`).join(' ') + ' Z';
+
+    const svg = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${vbX} ${vbY} ${vbW} ${vbH}">`,
+      `  <title>${airfoilName}</title>`,
+      `  <path d="${pathD}" fill="none" stroke="#000" stroke-width="${(vbW * 0.002).toFixed(6)}" />`,
+      '</svg>',
+    ].join('\n');
+
+    const blob = new Blob([svg], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${airfoilName.replace(/\s+/g, '_')}.svg`;
+    a.click();
+    URL.revokeObjectURL(url);
     setActiveMenu(null);
   };
 
@@ -164,11 +263,11 @@ export function MenuBar({
         />
         {activeMenu === 'file' && (
           <MenuDropdown>
-            <MenuItem label="New NACA..." disabled />
-            <MenuItem label="Import .dat..." disabled />
+            <MenuItem label="New NACA..." onClick={handleNewNaca} />
+            <MenuItem label="Import .dat..." onClick={handleImportDat} />
             <MenuDivider />
-            <MenuItem label="Export .dat..." disabled />
-            <MenuItem label="Export SVG..." disabled />
+            <MenuItem label="Export .dat..." onClick={handleExportDat} />
+            <MenuItem label="Export SVG..." onClick={handleExportSvg} />
           </MenuDropdown>
         )}
       </MenuGroup>
@@ -410,6 +509,15 @@ export function MenuBar({
       >
         <DarkModeToggle />
       </div>
+
+      {/* Hidden file input for .dat import */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".dat,.txt,.csv"
+        onChange={handleFileChange}
+        style={{ display: 'none' }}
+      />
 
       <AboutDialog
         open={showAbout}

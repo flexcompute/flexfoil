@@ -43,6 +43,8 @@ export const CHANGELOG: ChangelogEntry[] = [
       { category: 'added', text: "What's New feature tour shown automatically on version update" },
       { category: 'added', text: 'Automatic IQR-based outlier removal toggle in Polar plot, Plot Builder, and Data Explorer' },
       { category: 'added', text: 'Command palette (Cmd+K) — fuzzy search across panels, features, actions, and tutorials' },
+      { category: 'added', text: 'File menu — New NACA, Import .dat, Export .dat, and Export SVG are now fully functional' },
+      { category: 'added', text: 'Export airfoil geometry as .dat (standard Selig format) or SVG from the File menu' },
     ],
     tourSlides: [
       {
