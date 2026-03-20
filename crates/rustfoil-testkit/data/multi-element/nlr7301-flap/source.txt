@@ -1,0 +1,2 @@
+NLR experimental data
+NASA WIND validation archive: grc.nasa.gov/www/wind/valid/nlrflap/

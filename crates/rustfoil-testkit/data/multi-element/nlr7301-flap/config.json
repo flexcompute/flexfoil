@@ -1,0 +1,18 @@
+{
+  "description": "NLR 7301 + trailing-edge flap (V10 - two-element transonic)",
+  "source": "NLR experimental data; NASA WIND validation archive",
+  "main_element": {
+    "airfoil": "NLR 7301 supercritical (16.5% thick)",
+    "data_file": "main.dat"
+  },
+  "flap": {
+    "deflection_deg": 20,
+    "data_file": "flap.dat"
+  },
+  "flow": {
+    "Re": 2510000,
+    "Mach": 0.185,
+    "alpha_deg": 6.0
+  },
+  "status": "stub - geometry to be obtained from NLR/NASA WIND archive"
+}

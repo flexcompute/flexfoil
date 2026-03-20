@@ -1,0 +1,15 @@
+{
+  "description": "NACA 0012 main element + 0.3c NACA 0012 flap for V2 validation",
+  "main_element": {
+    "airfoil": "NACA 0012",
+    "chord": 1.0,
+    "position": {"x": 0.0, "y": 0.0, "angle": 0.0}
+  },
+  "flap": {
+    "airfoil": "NACA 0012",
+    "chord": 0.3,
+    "deflection_deg": -20,
+    "position": {"x": 2.0, "y": -0.05, "angle": -20.0}
+  },
+  "flow": {"alpha_deg": 0.0}
+}

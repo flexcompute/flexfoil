@@ -1,0 +1,7 @@
+{
+  "description": "Thin-airfoil theory reference for V2 validation",
+  "note": "ΔCL ≈ 2π·δ·√(c_f/c) ≈ 0.98 for δ=20°, c_f/c=0.3",
+  "delta_cl_estimate": 0.98,
+  "formula": "2π × 0.349 × 0.548",
+  "pass_criterion": "CL increment > 0.1 (order of magnitude correct)"
+}

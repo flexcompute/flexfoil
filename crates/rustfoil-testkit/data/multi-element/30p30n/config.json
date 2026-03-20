@@ -1,0 +1,33 @@
+{
+  "description": "30P30N three-element high-lift (V4 - primary benchmark)",
+  "source": "Chin et al., AIAA-93-3137; Rumsey et al.",
+  "elements": {
+    "slat": {
+      "chord_fraction": 0.1448,
+      "deflection_deg": -30,
+      "gap_percent": 2.95,
+      "overlap_percent": -2.50,
+      "data_file": "slat.dat"
+    },
+    "main": {
+      "data_file": "main.dat"
+    },
+    "flap": {
+      "chord_fraction": 0.30,
+      "deflection_deg": 30,
+      "gap_percent": 1.27,
+      "overlap_percent": 0.25,
+      "data_file": "flap.dat"
+    }
+  },
+  "flow": {
+    "Re": 9000000,
+    "Mach": 0.2
+  },
+  "target_cl": {
+    "alpha_0": 1.5,
+    "alpha_8": 2.8,
+    "alpha_16": 3.8
+  },
+  "status": "stub - geometry to be obtained from NASA/AIAA workshop"
+}
