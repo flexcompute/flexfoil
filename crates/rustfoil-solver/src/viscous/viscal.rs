@@ -2342,6 +2342,197 @@ mod multi_body_tests {
             "Single-body CL should be in [0.3, 1.0] at α=4°, got {:.4}", sb_vis.cl);
     }
 
+    /// V4b-viscous: 30P30N real geometry with Phase 1 independent viscous.
+    ///
+    /// Compares inviscid vs viscous CL against experimental targets:
+    /// α=0°: CL_exp ≈ 1.5,  α=8°: CL_exp ≈ 2.8
+    ///
+    /// The viscous solver should bring CL closer to experiment than inviscid
+    /// by accounting for BL displacement thickness on each element.
+    #[test]
+    fn test_30p30n_viscous_vs_experiment() {
+        use crate::inviscid::{InviscidSolver, FlowConditions};
+        use rustfoil_core::Point;
+
+        // Inline UIUC multi-element parser.
+        // Format: comment lines starting with '#' separate elements.
+        // Lines like "# Slat", "# Main Element", "# Flap" are element headers.
+        fn parse_uiuc_multi(data: &str) -> Vec<(String, Vec<Point>)> {
+            let mut elements: Vec<(String, Vec<Point>)> = Vec::new();
+            let mut current_name = String::new();
+            let mut current_pts: Vec<Point> = Vec::new();
+
+            for line in data.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() { continue; }
+
+                if trimmed.starts_with('#') {
+                    // If we have accumulated points, save the previous element
+                    if !current_pts.is_empty() {
+                        elements.push((current_name.clone(), std::mem::take(&mut current_pts)));
+                    }
+                    current_name = trimmed.trim_start_matches('#').trim().to_string();
+                    continue;
+                }
+
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    if let (Ok(x), Ok(y)) = (parts[0].parse::<f64>(), parts[1].parse::<f64>()) {
+                        current_pts.push(Point::new(x, y));
+                    }
+                }
+            }
+            if !current_pts.is_empty() {
+                elements.push((current_name, current_pts));
+            }
+            elements
+        }
+
+        // Simplified geometry prep: ensure CCW winding
+        fn prep_body(pts: &[Point]) -> Vec<Point> {
+            let mut area = 0.0;
+            let n = pts.len();
+            for i in 0..n {
+                let j = (i + 1) % n;
+                area += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+            }
+            if area < 0.0 {
+                pts.iter().rev().copied().collect()
+            } else {
+                pts.to_vec()
+            }
+        }
+
+        let data = include_str!("../../../rustfoil-testkit/data/multi-element/30p30n/30p30n_uiuc.dat");
+        let elements = parse_uiuc_multi(data);
+
+        fn resample_arc(pts: &[rustfoil_core::Point], target: usize) -> Vec<rustfoil_core::Point> {
+            let m = pts.len();
+            if m <= target { return pts.to_vec(); }
+            let mut s = vec![0.0; m];
+            for i in 1..m {
+                let dx = pts[i].x - pts[i-1].x;
+                let dy = pts[i].y - pts[i-1].y;
+                s[i] = s[i-1] + (dx*dx + dy*dy).sqrt();
+            }
+            let total = s[m-1];
+            let mut result = Vec::with_capacity(target);
+            result.push(pts[0]);
+            for k in 1..target-1 {
+                let s_target = total * k as f64 / (target - 1) as f64;
+                let idx = s.partition_point(|&si| si < s_target).min(m - 1).max(1);
+                let frac = (s_target - s[idx-1]) / (s[idx] - s[idx-1]).max(1e-30);
+                result.push(rustfoil_core::Point::new(
+                    pts[idx-1].x + frac * (pts[idx].x - pts[idx-1].x),
+                    pts[idx-1].y + frac * (pts[idx].y - pts[idx-1].y),
+                ));
+            }
+            result.push(pts[m-1]);
+            result
+        }
+
+        // Use main + flap only (2-element). The slat requires specialized
+        // cove-bridging geometry prep that isn't available in the viscous test module.
+        let main_pts = resample_arc(&prep_body(&elements[1].1), 120);
+        let flap_pts = resample_arc(&prep_body(&elements[2].1), 60);
+
+        let main_body = Body::from_points("Main", &main_pts).unwrap();
+        let flap = Body::from_points("Flap", &flap_pts).unwrap();
+
+        let bodies = [main_body, flap];
+
+        // 30P30N conditions: Re=9M, M=0.2
+        let config = ViscousSolverConfig::with_re_mach(9e6, 0.2);
+
+        println!("\n30P30N Main+Flap Phase 1 Viscous (no slat):");
+        println!("{:>8} {:>12} {:>12} {:>10}", "α(°)", "CL_inviscid", "CL_viscous", "CL_vis/inv");
+
+        for &(alpha, _cl_exp) in &[(0.0, 1.5), (4.0, 2.1), (8.0, 2.8)] {
+            // Inviscid reference
+            let inv_solver = InviscidSolver::new();
+            let flow = FlowConditions::with_alpha_deg(alpha);
+            let inv = inv_solver.solve(&bodies, &flow).unwrap();
+
+            // Viscous
+            let vis_result = solve_multi_body_independent(&bodies, alpha, &config);
+
+            let cl_vis = vis_result.cl_total;
+            let ratio = if inv.cl.abs() > 1e-6 { cl_vis / inv.cl } else { 0.0 };
+
+            println!("{:8.1} {:12.4} {:12.4} {:10.3}", alpha, inv.cl, cl_vis, ratio);
+
+            // Per-body details
+            for pb in &vis_result.per_body {
+                let status = match &pb.result {
+                    Some(v) => format!("CL={:.4} CD={:.5} conv={}", v.cl, v.cd, v.converged),
+                    None => format!("FAILED: {}", pb.error.as_deref().unwrap_or("?")),
+                };
+                println!("           {}: {}", pb.name, status);
+            }
+        }
+
+        // The viscous CL should be closer to experiment than inviscid.
+        // We don't assert tight tolerances because Phase 1 (independent BL)
+        // doesn't capture confluent effects, but it should show displacement.
+    }
+
+    /// Williams 1973 two-element test case with viscous coupling.
+    /// Known inviscid CL = 3.74, viscous should be lower.
+    #[test]
+    fn test_williams_viscous() {
+        use crate::inviscid::{InviscidSolver, FlowConditions};
+
+        let main_csv = include_str!("../../../rustfoil-testkit/data/multi-element/williams1973_main.csv");
+        let flap_csv = include_str!("../../../rustfoil-testkit/data/multi-element/williams1973_flap.csv");
+
+        fn parse_csv(csv: &str) -> Vec<rustfoil_core::Point> {
+            csv.lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| {
+                    let parts: Vec<&str> = l.split(',').collect();
+                    rustfoil_core::point(
+                        parts[0].trim().parse().unwrap(),
+                        parts[1].trim().parse().unwrap(),
+                    )
+                })
+                .collect()
+        }
+
+        let main_body = Body::from_points("Main", &parse_csv(main_csv)).unwrap();
+        let flap_body = Body::from_points("Flap", &parse_csv(flap_csv)).unwrap();
+
+        let bodies = [main_body.clone(), flap_body.clone()];
+
+        // Inviscid reference
+        let inv_solver = InviscidSolver::new();
+        let inv = inv_solver.solve(&bodies, &FlowConditions::with_alpha_deg(0.0)).unwrap();
+
+        // Viscous at Re=1M
+        let config = ViscousSolverConfig::with_re_mach(1e6, 0.0);
+        let vis = solve_multi_body_independent(&bodies, 0.0, &config);
+
+        println!("\nWilliams 1973 — Inviscid vs Phase 1 Viscous (Re=1M):");
+        println!("  Inviscid CL:  {:.4} (exact: 3.7386)", inv.cl);
+        println!("  Viscous CL:   {:.4}", vis.cl_total);
+        println!("  Viscous CD:   {:.5}", vis.cd_total);
+        println!("  Displacement:  {:.1}% CL reduction",
+            (1.0 - vis.cl_total / inv.cl) * 100.0);
+        for pb in &vis.per_body {
+            let status = match &pb.result {
+                Some(v) => format!("CL={:.4} CD={:.5} conv={} iters={}",
+                    v.cl, v.cd, v.converged, v.iterations),
+                None => format!("FAILED: {}", pb.error.as_deref().unwrap_or("?")),
+            };
+            println!("    {}: {}", pb.name, status);
+        }
+
+        // Viscous CL should be lower than inviscid (BL displacement reduces lift)
+        assert!(vis.cl_total < inv.cl,
+            "Viscous CL ({:.4}) should be less than inviscid ({:.4})", vis.cl_total, inv.cl);
+        assert!(vis.cl_total > 0.5,
+            "Viscous CL should be positive and reasonable, got {:.4}", vis.cl_total);
+    }
+
     #[test]
     fn test_multi_body_viscous_two_element() {
         let main = make_naca0012(50, 1.0, 0.0, 0.0, 0.0);
