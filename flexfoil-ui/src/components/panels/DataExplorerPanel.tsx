@@ -766,6 +766,7 @@ export function DataExplorerPanel() {
         {view === 'table' && (
           <>
             <button
+              data-tour="de-smart-group"
               onClick={smartGroupActive ? clearGroups : applySmartGroup}
               style={{
                 ...btnStyle,

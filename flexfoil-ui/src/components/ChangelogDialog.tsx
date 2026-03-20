@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { CHANGELOG, type ChangeCategory, type TourSlide } from '../lib/version';
+import { CHANGELOG, type ChangeCategory, type ChangelogItem, type TourSlide } from '../lib/version';
 
 const CHANGELOG_SEEN_KEY = 'flexfoil-changelog-seen';
 
@@ -117,7 +117,11 @@ export function ChangelogDialog({ open, onClose, onNavigateToPanel, onStartTour 
             onShowMe={onStartTour ? handleShowMe : undefined}
           />
         ) : (
-          <ListView onClose={handleClose} onViewTour={hasTour ? () => setMode('tour') : undefined} />
+          <ListView
+            onClose={handleClose}
+            onViewTour={hasTour ? () => setMode('tour') : undefined}
+            onShowMe={onStartTour ? handleShowMe : undefined}
+          />
         )}
       </div>
     </div>
@@ -398,9 +402,11 @@ function TourView({
 function ListView({
   onClose,
   onViewTour,
+  onShowMe,
 }: {
   onClose: () => void;
   onViewTour?: () => void;
+  onShowMe?: (tourId: string) => void;
 }) {
   return (
     <>
@@ -453,42 +459,78 @@ function ListView({
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              {entry.items.map((item, i) => {
-                const style = CATEGORY_STYLES[item.category];
-                return (
-                  <div
-                    key={i}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'flex-start',
-                      gap: '8px',
-                      fontSize: '12px',
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    <span
-                      style={{
-                        flexShrink: 0,
-                        padding: '1px 6px',
-                        borderRadius: '4px',
-                        fontSize: '10px',
-                        fontWeight: 600,
-                        background: style.bg,
-                        color: style.color,
-                        marginTop: '1px',
-                      }}
-                    >
-                      {style.label}
-                    </span>
-                    <span style={{ color: 'var(--text-secondary)' }}>{item.text}</span>
-                  </div>
-                );
-              })}
+              {entry.items.map((item, i) => (
+                <ChangelogItemRow key={i} item={item} onShowMe={onShowMe} />
+              ))}
             </div>
           </div>
         ))}
       </div>
     </>
+  );
+}
+
+function ChangelogItemRow({
+  item,
+  onShowMe,
+}: {
+  item: ChangelogItem;
+  onShowMe?: (tourId: string) => void;
+}) {
+  const catStyle = CATEGORY_STYLES[item.category];
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: '8px',
+        fontSize: '12px',
+        lineHeight: 1.5,
+      }}
+    >
+      <span
+        style={{
+          flexShrink: 0,
+          padding: '1px 6px',
+          borderRadius: '4px',
+          fontSize: '10px',
+          fontWeight: 600,
+          background: catStyle.bg,
+          color: catStyle.color,
+          marginTop: '1px',
+        }}
+      >
+        {catStyle.label}
+      </span>
+      <span style={{ color: 'var(--text-secondary)', flex: 1 }}>
+        {item.text}
+        {onShowMe && item.showMeTourId && (
+          <>
+            {' '}
+            <button
+              onClick={() => onShowMe(item.showMeTourId!)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '3px',
+                background: 'none',
+                border: '1px solid var(--accent-primary)',
+                borderRadius: '4px',
+                padding: '0px 6px',
+                fontSize: '10px',
+                fontWeight: 600,
+                color: 'var(--accent-primary)',
+                cursor: 'pointer',
+                verticalAlign: 'middle',
+                lineHeight: '18px',
+              }}
+            >
+              Show Me
+            </button>
+          </>
+        )}
+      </span>
+    </div>
   );
 }
 

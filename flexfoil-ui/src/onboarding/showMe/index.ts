@@ -12,12 +12,23 @@ import { flapDesignShowMe } from './flapDesign';
 import { multiSweepShowMe } from './multiSweep';
 import { dataAnalysisShowMe } from './dataAnalysis';
 import { solverQueueShowMe } from './solverQueue';
+import { seligDatabaseShowMe } from './seligDatabase';
+import { smartGroupShowMe } from './smartGroup';
 
 export const showMeTours: Record<string, TourStep[]> = {
   'showMe:flapDesign': flapDesignShowMe,
   'showMe:multiSweep': multiSweepShowMe,
   'showMe:dataAnalysis': dataAnalysisShowMe,
   'showMe:solverQueue': solverQueueShowMe,
+  'showMe:seligDatabase': seligDatabaseShowMe,
+  'showMe:smartGroup': smartGroupShowMe,
 };
 
-export { flapDesignShowMe, multiSweepShowMe, dataAnalysisShowMe, solverQueueShowMe };
+export {
+  flapDesignShowMe,
+  multiSweepShowMe,
+  dataAnalysisShowMe,
+  solverQueueShowMe,
+  seligDatabaseShowMe,
+  smartGroupShowMe,
+};
