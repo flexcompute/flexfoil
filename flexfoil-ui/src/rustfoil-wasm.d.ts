@@ -39,4 +39,6 @@ declare module 'rustfoil-wasm' {
   export const gdes_scale_thickness: (...args: any[]) => any;
   export const gdes_scale_camber: (...args: any[]) => any;
   export const full_inverse_design_mdes: (...args: any[]) => any;
+  export const analyze_multi_element: (bodies_json: string, alpha_deg: number) => any;
+  export const analyze_multi_element_viscous: (bodies_json: string, alpha_deg: number, reynolds: number, mach: number, ncrit: number, max_iterations: number) => any;
 }

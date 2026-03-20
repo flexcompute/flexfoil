@@ -48,4 +48,5 @@ pub use setup::{
 pub use state::{XfoilBlIndex, XfoilLikeViscousState, XfoilSurface};
 pub use viscal::{
     solve_viscous, solve_viscous_polar_parallel, solve_viscous_two_surfaces, ViscousResult,
+    solve_multi_body_independent, MultiBodyViscousResult, PerBodyViscousResult,
 };

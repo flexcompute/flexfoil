@@ -33,6 +33,8 @@ import init, {
     gdes_scale_thickness,
     gdes_scale_camber,
     full_inverse_design_mdes,
+    analyze_multi_element as analyze_multi_element_wasm,
+    analyze_multi_element_viscous as analyze_multi_element_viscous_wasm,
 } from 'rustfoil-wasm';
 
 let initialized = false;
@@ -981,6 +983,104 @@ export function runFullInverseDesign(
         targetQ,
         nc,
     ) as MdesDesignResult;
+}
+
+// ============================================================================
+// Multi-Element Analysis
+// ============================================================================
+
+export interface MultiElementBodyInput {
+    name: string;
+    coords: { x: number; y: number }[];
+    position?: { x: number; y: number; angle: number };
+}
+
+export interface PerBodyResult {
+    name: string;
+    cl: number;
+    cp: number[];
+    cp_x: number[];
+    gamma: number[];
+}
+
+export interface MultiElementResult {
+    cl_total: number;
+    cm_total: number;
+    per_body: PerBodyResult[];
+    success: boolean;
+    error?: string;
+}
+
+/**
+ * Run multi-element inviscid panel method analysis.
+ *
+ * Each body is defined by its coordinates and an optional position transform
+ * (translation + rotation about leading edge).
+ */
+export function analyzeMultiElement(
+    bodies: MultiElementBodyInput[],
+    alphaDeg: number,
+): MultiElementResult {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+
+    const bodiesJson = JSON.stringify(bodies.map(b => ({
+        name: b.name,
+        coords: b.coords.flatMap(p => [p.x, p.y]),
+        position: b.position ?? { x: 0, y: 0, angle: 0 },
+    })));
+
+    return analyze_multi_element_wasm(bodiesJson, alphaDeg) as MultiElementResult;
+}
+
+export interface PerBodyViscousResult {
+    name: string;
+    cl: number;
+    cd: number;
+    cm: number;
+    converged: boolean;
+    success: boolean;
+    error?: string;
+}
+
+export interface MultiElementViscousResult {
+    cl_total: number;
+    cd_total: number;
+    cm_total: number;
+    per_body: PerBodyViscousResult[];
+    all_converged: boolean;
+    success: boolean;
+    error?: string;
+}
+
+/**
+ * Run multi-element viscous analysis (Phase 1: independent per-body BL).
+ *
+ * Each body runs its own viscous solver independently. No cross-body
+ * viscous coupling. Suitable for well-separated elements.
+ */
+export function analyzeMultiElementViscous(
+    bodies: MultiElementBodyInput[],
+    alphaDeg: number,
+    reynolds: number = 1e6,
+    mach: number = 0,
+    ncrit: number = 9,
+    maxIterations: number = 100,
+): MultiElementViscousResult {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+
+    const bodiesJson = JSON.stringify(bodies.map(b => ({
+        name: b.name,
+        coords: b.coords.flatMap(p => [p.x, p.y]),
+        position: b.position ?? { x: 0, y: 0, angle: 0 },
+    })));
+
+    return analyze_multi_element_viscous_wasm(
+        bodiesJson, alphaDeg, reynolds, mach, ncrit, maxIterations
+    ) as MultiElementViscousResult;
 }
 
 // Re-export the RustFoil class and WasmSmokeSystem for advanced usage

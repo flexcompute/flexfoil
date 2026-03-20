@@ -187,6 +187,8 @@ impl CanonicalBlRow {
             is_laminar,
             is_wake,
             is_turbulent,
+            layer_mode: rustfoil_bl::LayerMode::Single,
+            outer_layer: None,
             derivs: self.derivs.clone(),
         }
     }

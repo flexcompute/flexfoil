@@ -650,6 +650,8 @@ export function AirfoilCanvas() {
     removeThicknessControlPoint,
     // Inverse design overlay
     inverseDesignResultCoords,
+    // Multi-element
+    multiElement,
   } = useAirfoilStore(
     useShallow((state) => ({
       name: state.name,
@@ -671,6 +673,7 @@ export function AirfoilCanvas() {
       addThicknessControlPoint: state.addThicknessControlPoint,
       removeThicknessControlPoint: state.removeThicknessControlPoint,
       inverseDesignResultCoords: state.inverseDesign.resultCoords,
+      multiElement: state.multiElement,
     }))
   );
 
@@ -1896,6 +1899,42 @@ export function AirfoilCanvas() {
       ctx.globalAlpha = 1; // Reset alpha
     }
 
+    // Draw multi-element additional bodies
+    if (multiElement.enabled && multiElement.bodies.length > 0) {
+      for (const body of multiElement.bodies) {
+        const pts = body.panels;
+        if (pts.length < 2) continue;
+
+        const cosA = Math.cos(body.position.angle * Math.PI / 180);
+        const sinA = Math.sin(body.position.angle * Math.PI / 180);
+
+        const leIdx = pts.reduce((best, p, i) => (p.x < pts[best].x ? i : best), 0);
+        const le = pts[leIdx];
+
+        const transformBodyPoint = (p: { x: number; y: number }) => {
+          const dx = p.x - le.x;
+          const dy = p.y - le.y;
+          return rotatePoint({
+            x: le.x + dx * cosA - dy * sinA + body.position.x,
+            y: le.y + dx * sinA + dy * cosA + body.position.y,
+          });
+        };
+
+        ctx.beginPath();
+        ctx.strokeStyle = body.color;
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.9;
+
+        const first = toCanvas(transformBodyPoint(pts[0]));
+        ctx.moveTo(first.x, first.y);
+        for (let i = 1; i < pts.length; i++) {
+          const p = toCanvas(transformBodyPoint(pts[i]));
+          ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    }
 
     // Draw camber line and control points (if in camber-spline mode)
     if (showControls && controlMode === 'camber-spline' && camberControlPoints.length > 0) {
@@ -2603,7 +2642,7 @@ export function AirfoilCanvas() {
 
   // NOTE: Smoke state (smokePositions, etc.) intentionally NOT in dependencies
   // Smoke is drawn on separate overlay canvas to avoid expensive redraws
-  }, [viewport, morphState, splineCurve, controlMode, camberControlPoints, thicknessControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showPsiContours, psiContours, displayAlpha, toCanvas, isDark, showCp, showForces, cpDisplayMode, cpBarScale, forceScale, showBoundaryLayer, showWake, showDisplacementThickness, blVisData, blThicknessScale, blHoverInfo, inverseDesignResultCoords]);
+  }, [viewport, morphState, splineCurve, controlMode, camberControlPoints, thicknessControlPoints, hoveredPoint, showGrid, showCurve, showPanels, showPoints, showControls, showStreamlines, showPsiContours, psiContours, displayAlpha, toCanvas, isDark, showCp, showForces, cpDisplayMode, cpBarScale, forceScale, showBoundaryLayer, showWake, showDisplacementThickness, blVisData, blThicknessScale, blHoverInfo, inverseDesignResultCoords, multiElement]);
 
   // Draw grid
   const drawGrid = useCallback((ctx: CanvasRenderingContext2D) => {

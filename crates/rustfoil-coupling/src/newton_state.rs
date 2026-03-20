@@ -61,6 +61,8 @@ impl CanonicalNewtonRow {
             is_laminar,
             is_turbulent,
             is_wake,
+            layer_mode: rustfoil_bl::LayerMode::Single,
+            outer_layer: None,
             derivs: self.derivs.clone(),
         }
     }

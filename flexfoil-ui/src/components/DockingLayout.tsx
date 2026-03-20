@@ -18,6 +18,7 @@ import { DataExplorerPanel } from './panels/DataExplorerPanel';
 import { PlotBuilderPanel } from './panels/PlotBuilderPanel';
 import { CaseLogsPanel } from './panels/CaseLogsPanel';
 import { DistributionPanel } from './panels/DistributionPanel';
+import { MultiElementPanel } from './panels/MultiElementPanel';
 import { MenuBar } from './MenuBar';
 import { CommandPalette } from './CommandPalette';
 import { FeedbackWidget } from './FeedbackWidget';
@@ -388,6 +389,12 @@ function DesktopLayout({ wasmStatus }: DockingLayoutProps) {
         return (
           <div data-tour="panel-distributions" style={{ width: '100%', height: '100%' }}>
             <DistributionPanel />
+          </div>
+        );
+      case 'multi-element':
+        return (
+          <div data-tour="panel-multi-element" style={{ width: '100%', height: '100%' }}>
+            <MultiElementPanel />
           </div>
         );
       default:

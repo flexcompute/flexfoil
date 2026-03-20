@@ -31,4 +31,4 @@ pub use equations::{
     bldif, bldif_debug, bldif_with_terms, blvar, blvar_debug, trdif_turb_terms, BldifTerms,
     BlJacobian, BlResiduals, FlowType,
 };
-pub use state::{BlDerivatives, BlStation};
+pub use state::{BlDerivatives, BlStation, LayerMode, OuterLayerState};

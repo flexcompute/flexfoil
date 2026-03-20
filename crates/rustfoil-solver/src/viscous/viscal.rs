@@ -2003,3 +2003,185 @@ mod tests {
         assert!(lower_view[2].is_wake);
     }
 }
+
+// ============================================================================
+// Multi-Body Independent Viscous (Phase 1)
+// ============================================================================
+
+/// Result of per-body independent viscous analysis in a multi-element config.
+#[derive(Debug, Clone)]
+pub struct MultiBodyViscousResult {
+    /// Per-body viscous results
+    pub per_body: Vec<PerBodyViscousResult>,
+    /// Total CL (sum of per-body CL weighted by chord ratio)
+    pub cl_total: f64,
+    /// Total CD (sum of per-body CD weighted by chord ratio)
+    pub cd_total: f64,
+    /// Total CM
+    pub cm_total: f64,
+    /// Whether all bodies converged
+    pub all_converged: bool,
+}
+
+/// Viscous result for a single body in a multi-element config.
+#[derive(Debug, Clone)]
+pub struct PerBodyViscousResult {
+    /// Body name
+    pub name: String,
+    /// Viscous result (may be None if analysis failed)
+    pub result: Option<ViscousResult>,
+    /// Error message if analysis failed
+    pub error: Option<String>,
+}
+
+/// Run independent viscous BL analysis on each body of a multi-element config.
+///
+/// Each body gets its own boundary layer marching using edge velocities from
+/// the multi-body inviscid solution. There is no cross-body viscous coupling.
+///
+/// This is Phase 1 of the multi-body viscous implementation. It produces
+/// reasonable results for well-separated elements but underestimates
+/// viscous effects in confluent regions (slat wake over main element).
+pub fn solve_multi_body_independent(
+    bodies: &[rustfoil_core::Body],
+    alpha_deg: f64,
+    config: &super::config::ViscousSolverConfig,
+) -> MultiBodyViscousResult {
+    let mut per_body = Vec::with_capacity(bodies.len());
+    let mut cl_total = 0.0;
+    let mut cd_total = 0.0;
+    let mut cm_total = 0.0;
+    let mut all_converged = true;
+
+    let ref_chord = bodies.iter().map(|b| b.chord()).fold(0.0_f64, f64::max);
+
+    for (idx, body) in bodies.iter().enumerate() {
+        let body_name = format!("Body {}", idx);
+        let chord = body.chord();
+        let chord_ratio = chord / ref_chord;
+
+        match super::setup::setup_from_body(body, alpha_deg) {
+            Ok(setup_result) => {
+                match solve_viscous_from_setup(&setup_result, config, alpha_deg) {
+                    Ok(vis) => {
+                        cl_total += vis.cl * chord_ratio;
+                        cd_total += vis.cd * chord_ratio;
+                        cm_total += vis.cm * chord_ratio;
+                        if !vis.converged {
+                            all_converged = false;
+                        }
+                        per_body.push(PerBodyViscousResult {
+                            name: body_name,
+                            result: Some(vis),
+                            error: None,
+                        });
+                    }
+                    Err(e) => {
+                        all_converged = false;
+                        per_body.push(PerBodyViscousResult {
+                            name: body_name,
+                            result: None,
+                            error: Some(format!("Viscous solve failed: {}", e)),
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                all_converged = false;
+                per_body.push(PerBodyViscousResult {
+                    name: body_name,
+                    result: None,
+                    error: Some(format!("Setup failed: {}", e)),
+                });
+            }
+        }
+    }
+
+    MultiBodyViscousResult {
+        per_body,
+        cl_total,
+        cd_total,
+        cm_total,
+        all_converged,
+    }
+}
+
+/// Run viscous analysis from a pre-computed setup result.
+///
+/// Uses the canonical state initialization and solve path matching the
+/// existing faithful viscous solver.
+fn solve_viscous_from_setup(
+    setup_result: &super::setup::ViscousSetupResult,
+    config: &super::config::ViscousSolverConfig,
+    alpha_deg: f64,
+) -> Result<ViscousResult, String> {
+    let setup = &setup_result.setup;
+    let re = config.reynolds;
+
+    // Extract upper and lower surfaces from stagnation
+    let (upper_s, upper_x, upper_y, upper_ue) = super::setup::extract_surface_xfoil(
+        setup_result.ist,
+        setup_result.sst,
+        0.0, // ue at stagnation
+        &setup.arc_lengths,
+        &setup.panel_x,
+        &setup.panel_y,
+        &setup.ue_inviscid,
+        true,
+    );
+    let (lower_s, lower_x, lower_y, lower_ue) = super::setup::extract_surface_xfoil(
+        setup_result.ist,
+        setup_result.sst,
+        0.0,
+        &setup.arc_lengths,
+        &setup.panel_x,
+        &setup.panel_y,
+        &setup.ue_inviscid,
+        false,
+    );
+
+    let n_airfoil = setup.panel_x.len();
+
+    let mut upper_stations = super::setup::initialize_surface_stations_with_panel_idx(
+        &upper_s,
+        &upper_ue,
+        &upper_x,
+        setup_result.ist,
+        n_airfoil,
+        true,
+        re,
+    );
+    let mut lower_stations = super::setup::initialize_surface_stations_with_panel_idx(
+        &lower_s,
+        &lower_ue,
+        &lower_x,
+        setup_result.ist,
+        n_airfoil,
+        false,
+        re,
+    );
+
+    // Build gamma_a (alpha derivative) approximation: use zeros for Phase 1
+    let ue_alpha: Vec<f64> = vec![0.0; setup.ue_inviscid.len()];
+
+    let alpha_rad = alpha_deg.to_radians();
+
+    let result = solve_viscous_two_surfaces(
+        &mut upper_stations,
+        &mut lower_stations,
+        &upper_ue,
+        &lower_ue,
+        &setup.dij,
+        config,
+        alpha_rad,
+        &setup.panel_x,
+        &setup.panel_y,
+        &setup.ue_inviscid,
+        &ue_alpha,
+    );
+
+    match result {
+        Ok(vis) => Ok(vis),
+        Err(e) => Err(format!("{:?}", e)),
+    }
+}

@@ -321,6 +321,44 @@ export interface GeometryDesignState {
   leRadiusFactor: number;
 }
 
+// ============================================================================
+// Multi-Element Configuration
+// ============================================================================
+
+/** Position and rotation of one element in a multi-element configuration */
+export interface ElementPosition {
+  x: number;
+  y: number;
+  angle: number;
+}
+
+/** One element (body) in a multi-element airfoil configuration */
+export interface MultiElementBody {
+  id: string;
+  name: string;
+  coordinates: AirfoilPoint[];
+  panels: AirfoilPoint[];
+  position: ElementPosition;
+  color: string;
+}
+
+/** Per-body result from multi-element analysis */
+export interface MultiElementPerBodyResult {
+  name: string;
+  cl: number;
+  cp: number[];
+  cp_x: number[];
+}
+
+/** Result from multi-element analysis */
+export interface MultiElementAnalysisResult {
+  cl_total: number;
+  cm_total: number;
+  per_body: MultiElementPerBodyResult[];
+  success: boolean;
+  error?: string;
+}
+
 /** Performance metrics for visualization */
 export interface PerfMetrics {
   /** Last frame duration in milliseconds */

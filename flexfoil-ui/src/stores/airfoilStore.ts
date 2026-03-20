@@ -26,13 +26,17 @@ import type {
   InverseDesignSurfaceTarget,
   GeometryDesignState,
   FlapDefinition,
+  MultiElementBody,
+  ElementPosition,
+  MultiElementAnalysisResult,
 } from '../types';
 import {
   generateNaca4 as wasmGenerateNaca4,
   generateNaca4Xfoil,
   repanelWithSpacingAndCurvature,
   repanelXfoil,
-  isWasmReady
+  isWasmReady,
+  analyzeMultiElement,
 } from '../lib/wasm';
 import { evaluateBSpline, evaluateBezierCurve } from '../lib/bspline';
 import { prepareImportedAirfoil } from '../lib/airfoilImport';
@@ -131,6 +135,15 @@ const DEFAULT_GEOMETRY_DESIGN: GeometryDesignState = {
   leRadiusFactor: 1.0,
 };
 
+const ELEMENT_COLORS = [
+  '#4a9eff', // blue (main)
+  '#ff6b6b', // red (slat/flap)
+  '#51cf66', // green
+  '#fcc419', // yellow
+  '#cc5de8', // purple
+  '#20c997', // teal
+];
+
 interface AirfoilStore extends AirfoilState {
   // Actions
   setCoordinates: (coords: AirfoilPoint[]) => void;
@@ -226,6 +239,26 @@ interface AirfoilStore extends AirfoilState {
   addFlap: () => void;
   updateFlap: (id: string, updates: Partial<Omit<FlapDefinition, 'id'>>) => void;
   removeFlap: (id: string) => void;
+  
+  // Multi-element state
+  multiElement: {
+    enabled: boolean;
+    bodies: MultiElementBody[];
+    selectedBodyId: string | null;
+    lastResult: MultiElementAnalysisResult | null;
+  };
+  
+  // Multi-element actions
+  setMultiElementEnabled: (enabled: boolean) => void;
+  addBody: (name: string, coords: AirfoilPoint[]) => void;
+  removeBody: (id: string) => void;
+  updateBodyPosition: (id: string, position: Partial<ElementPosition>) => void;
+  renameBody: (id: string, name: string) => void;
+  selectBody: (id: string | null) => void;
+  setMultiElementResult: (result: MultiElementAnalysisResult | null) => void;
+  runMultiElementAnalysis: (alphaDeg: number) => MultiElementAnalysisResult | null;
+  importBodyFromDat: (name: string, coords: AirfoilPoint[]) => void;
+  promoteToMultiElement: () => void;
   
   // Reset
   reset: () => void;
@@ -1034,6 +1067,146 @@ export const useAirfoilStore = create<AirfoilStore>()(
         },
       })),
       
+      // Multi-element state
+      multiElement: {
+        enabled: false,
+        bodies: [],
+        selectedBodyId: null,
+        lastResult: null,
+      },
+      
+      setMultiElementEnabled: (enabled) => set((state) => ({
+        multiElement: { ...state.multiElement, enabled },
+      })),
+      
+      addBody: (name, coords) => set((state) => {
+        const id = `body_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+        const color = ELEMENT_COLORS[state.multiElement.bodies.length % ELEMENT_COLORS.length];
+        let panels = coords;
+        if (isWasmReady()) {
+          try {
+            const nPanels = state.nPanels || 160;
+            const repaneled = repanelXfoil(coords, nPanels);
+            if (repaneled.length > 0) {
+              panels = repaneled.map(pt => ({ x: pt.x, y: pt.y }));
+            }
+          } catch { /* use raw coords */ }
+        }
+        const body: MultiElementBody = {
+          id,
+          name,
+          coordinates: coords,
+          panels,
+          position: { x: 0, y: 0, angle: 0 },
+          color,
+        };
+        return {
+          multiElement: {
+            ...state.multiElement,
+            enabled: true,
+            bodies: [...state.multiElement.bodies, body],
+            selectedBodyId: id,
+          },
+        };
+      }),
+      
+      removeBody: (id) => set((state) => {
+        const bodies = state.multiElement.bodies.filter(b => b.id !== id);
+        const selectedBodyId = state.multiElement.selectedBodyId === id
+          ? (bodies.length > 0 ? bodies[0].id : null)
+          : state.multiElement.selectedBodyId;
+        return {
+          multiElement: {
+            ...state.multiElement,
+            bodies,
+            selectedBodyId,
+            enabled: bodies.length > 1,
+          },
+        };
+      }),
+      
+      updateBodyPosition: (id, posUpdate) => set((state) => ({
+        multiElement: {
+          ...state.multiElement,
+          bodies: state.multiElement.bodies.map(b =>
+            b.id === id ? { ...b, position: { ...b.position, ...posUpdate } } : b
+          ),
+        },
+      })),
+      
+      renameBody: (id, name) => set((state) => ({
+        multiElement: {
+          ...state.multiElement,
+          bodies: state.multiElement.bodies.map(b =>
+            b.id === id ? { ...b, name } : b
+          ),
+        },
+      })),
+      
+      selectBody: (id) => set((state) => ({
+        multiElement: { ...state.multiElement, selectedBodyId: id },
+      })),
+      
+      setMultiElementResult: (result) => set((state) => ({
+        multiElement: { ...state.multiElement, lastResult: result },
+      })),
+      
+      runMultiElementAnalysis: (alphaDeg) => {
+        const state = useAirfoilStore.getState();
+        if (!isWasmReady() || state.multiElement.bodies.length < 1) return null;
+        
+        try {
+          const result = analyzeMultiElement(
+            state.multiElement.bodies.map(b => ({
+              name: b.name,
+              coords: b.panels,
+              position: b.position,
+            })),
+            alphaDeg,
+          );
+          set((s) => ({
+            multiElement: { ...s.multiElement, lastResult: result },
+          }));
+          return result;
+        } catch (e) {
+          console.error('Multi-element analysis failed:', e);
+          return null;
+        }
+      },
+      
+      importBodyFromDat: (name, coords) => {
+        const state = useAirfoilStore.getState();
+        const imported = prepareImportedAirfoil(
+          { name, coordinates: coords },
+          state.nPanels,
+          isWasmReady()
+            ? (coordinates, nPanels) => repanelXfoil(coordinates, nPanels).map(pt => ({ x: pt.x, y: pt.y }))
+            : undefined,
+        );
+        state.addBody(imported.name, imported.coordinates);
+      },
+      
+      promoteToMultiElement: () => set((state) => {
+        if (state.multiElement.bodies.length > 0) return state;
+        const id = `body_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+        const body: MultiElementBody = {
+          id,
+          name: state.name || 'Main',
+          coordinates: state.coordinates,
+          panels: state.panels,
+          position: { x: 0, y: 0, angle: 0 },
+          color: ELEMENT_COLORS[0],
+        };
+        return {
+          multiElement: {
+            enabled: true,
+            bodies: [body],
+            selectedBodyId: id,
+            lastResult: null,
+          },
+        };
+      }),
+      
       reset: () => set({
         name: 'NACA 0012',
         coordinates: DEFAULT_NACA0012,
@@ -1060,6 +1233,7 @@ export const useAirfoilStore = create<AirfoilStore>()(
         baseCoordinates: DEFAULT_NACA0012,
         inverseDesign: { ...DEFAULT_INVERSE_DESIGN },
         geometryDesign: { ...DEFAULT_GEOMETRY_DESIGN },
+        multiElement: { enabled: false, bodies: [], selectedBodyId: null, lastResult: null },
       }),
       
       initializeDefaultAirfoil: () => {

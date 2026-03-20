@@ -1297,6 +1297,137 @@ fn multi_element_error(msg: impl Into<String>) -> MultiElementResult {
     }
 }
 
+/// Multi-element viscous analysis result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiElementViscousResult {
+    pub cl_total: f64,
+    pub cd_total: f64,
+    pub cm_total: f64,
+    pub per_body: Vec<PerBodyViscousResultJs>,
+    pub all_converged: bool,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerBodyViscousResultJs {
+    pub name: String,
+    pub cl: f64,
+    pub cd: f64,
+    pub cm: f64,
+    pub converged: bool,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+/// Multi-element viscous analysis (Phase 1: independent per-body BL).
+///
+/// Each body runs its own viscous solver independently using single-body
+/// inviscid edge velocities. No cross-body viscous coupling.
+#[wasm_bindgen]
+pub fn analyze_multi_element_viscous(
+    bodies_json: &str,
+    alpha_deg: f64,
+    reynolds: f64,
+    mach: f64,
+    ncrit: f64,
+    max_iterations: usize,
+) -> JsValue {
+    use rustfoil_solver::viscous::{
+        solve_multi_body_independent,
+        ViscousSolverConfig,
+    };
+
+    let body_inputs: Vec<BodyInput> = match serde_json::from_str(bodies_json) {
+        Ok(b) => b,
+        Err(e) => {
+            let result = MultiElementViscousResult {
+                cl_total: 0.0, cd_total: 0.0, cm_total: 0.0,
+                per_body: vec![], all_converged: false,
+                success: false, error: Some(format!("JSON parse error: {}", e)),
+            };
+            return serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL);
+        }
+    };
+
+    if body_inputs.is_empty() {
+        let result = MultiElementViscousResult {
+            cl_total: 0.0, cd_total: 0.0, cm_total: 0.0,
+            per_body: vec![], all_converged: false,
+            success: false, error: Some("No bodies provided".into()),
+        };
+        return serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL);
+    }
+
+    let mut bodies: Vec<Body> = Vec::with_capacity(body_inputs.len());
+    for input in &body_inputs {
+        if input.coords.len() < 6 || input.coords.len() % 2 != 0 {
+            let result = MultiElementViscousResult {
+                cl_total: 0.0, cd_total: 0.0, cm_total: 0.0,
+                per_body: vec![], all_converged: false,
+                success: false,
+                error: Some(format!("Body '{}': need at least 3 points", input.name)),
+            };
+            return serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL);
+        }
+
+        let points: Vec<Point> = input.coords.chunks(2)
+            .map(|c| point(c[0], c[1]))
+            .collect();
+
+        match Body::from_points(&input.name, &points) {
+            Ok(b) => bodies.push(b),
+            Err(e) => {
+                let result = MultiElementViscousResult {
+                    cl_total: 0.0, cd_total: 0.0, cm_total: 0.0,
+                    per_body: vec![], all_converged: false,
+                    success: false,
+                    error: Some(format!("Body '{}': {}", input.name, e)),
+                };
+                return serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL);
+            }
+        }
+    }
+
+    let mut config = ViscousSolverConfig::with_re_mach(reynolds, mach)
+        .with_max_iterations(max_iterations);
+    config.ncrit = ncrit;
+
+    let mb_result = solve_multi_body_independent(&bodies, alpha_deg, &config);
+
+    let per_body: Vec<PerBodyViscousResultJs> = mb_result.per_body.iter().map(|pb| {
+        match &pb.result {
+            Some(vis) => PerBodyViscousResultJs {
+                name: pb.name.clone(),
+                cl: vis.cl,
+                cd: vis.cd,
+                cm: vis.cm,
+                converged: vis.converged,
+                success: true,
+                error: None,
+            },
+            None => PerBodyViscousResultJs {
+                name: pb.name.clone(),
+                cl: 0.0, cd: 0.0, cm: 0.0,
+                converged: false, success: false,
+                error: pb.error.clone(),
+            },
+        }
+    }).collect();
+
+    let result = MultiElementViscousResult {
+        cl_total: mb_result.cl_total,
+        cd_total: mb_result.cd_total,
+        cm_total: mb_result.cm_total,
+        per_body,
+        all_converged: mb_result.all_converged,
+        success: true,
+        error: None,
+    };
+
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
 #[wasm_bindgen]
 pub fn analyze_airfoil_faithful(
     coords: &[f64],

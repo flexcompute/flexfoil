@@ -107,6 +107,80 @@ pub struct BlDerivatives {
 /// - `delta_star` → D1/D2 (displacement thickness δ*)
 /// - `ctau` → S1/S2 (shear stress coefficient √Cτ)
 /// - `ampl` → AMPL1/AMPL2 (amplification factor N)
+
+/// Layer mode for confluent BL regions (Phase 2).
+///
+/// When an upstream element's wake passes over a downstream element,
+/// the flow near the wall has two shear layers: the inner wall BL and
+/// the outer wake layer. The existing BL model is the `Single` case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LayerMode {
+    /// Normal single-layer BL (inner layer only)
+    #[default]
+    Single,
+    /// Confluent two-layer: inner wall BL + outer wake layer
+    Confluent,
+}
+
+/// State of the outer (wake) layer in a confluent BL region.
+///
+/// This represents the wake from an upstream element passing over
+/// a downstream element's surface. The outer layer has its own
+/// momentum thickness, displacement thickness, and shear stress.
+///
+/// Based on MSES's two-layer formulation (Drela, MIT).
+#[derive(Debug, Clone)]
+pub struct OuterLayerState {
+    /// Edge velocity of the outer layer (inviscid freestream at outer edge)
+    pub u_outer: f64,
+    /// Momentum thickness of the outer (wake) layer
+    pub theta_outer: f64,
+    /// Displacement thickness of the outer (wake) layer
+    pub delta_star_outer: f64,
+    /// Shear stress coefficient of the outer layer
+    pub ctau_outer: f64,
+    /// Shape factor of outer layer H_outer = δ*_outer / θ_outer
+    pub h_outer: f64,
+    /// Kinematic shape factor Hk for outer layer
+    pub hk_outer: f64,
+    /// Dissipation coefficient for outer layer (wake: no wall, Cf=0)
+    pub cd_outer: f64,
+    /// Source body index (which upstream element shed this wake)
+    pub source_body: usize,
+}
+
+impl OuterLayerState {
+    /// Create an outer layer state initialized from upstream wake conditions.
+    pub fn from_wake(
+        theta_wake: f64,
+        delta_star_wake: f64,
+        ctau_wake: f64,
+        u_outer: f64,
+        source_body: usize,
+    ) -> Self {
+        let h_outer = if theta_wake > 1e-12 {
+            delta_star_wake / theta_wake
+        } else {
+            1.0
+        };
+        Self {
+            u_outer,
+            theta_outer: theta_wake,
+            delta_star_outer: delta_star_wake,
+            ctau_outer: ctau_wake,
+            h_outer,
+            hk_outer: h_outer, // incompressible limit
+            cd_outer: 0.0,
+            source_body,
+        }
+    }
+
+    /// Combined displacement thickness (inner + outer).
+    pub fn combined_delta_star(&self, inner_delta_star: f64) -> f64 {
+        inner_delta_star + self.delta_star_outer
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BlStation {
     // === Primary Variables (Newton unknowns) ===
@@ -164,6 +238,13 @@ pub struct BlStation {
     /// True if boundary layer is turbulent
     pub is_turbulent: bool,
 
+    // === Confluent Layer (Phase 2: outer layer from upstream wake) ===
+    /// Layer mode: Single (normal) or Confluent (two-layer)
+    pub layer_mode: LayerMode,
+    /// Outer layer (wake from upstream element) state.
+    /// Only populated when `layer_mode == Confluent`.
+    pub outer_layer: Option<OuterLayerState>,
+
     // === Partial Derivatives ===
     /// All partial derivatives for Jacobian construction
     pub derivs: BlDerivatives,
@@ -203,6 +284,8 @@ impl BlStation {
             is_laminar: true,
             is_wake: false,
             is_turbulent: false,
+            layer_mode: LayerMode::Single,
+            outer_layer: None,
             derivs: BlDerivatives::default(),
         }
     }

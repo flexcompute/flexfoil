@@ -61,6 +61,7 @@
 
 pub mod inviscid;
 pub mod viscous;
+pub mod wake_interaction;
 
 // Re-export main types for convenience
 pub use inviscid::{SolverError, SolverResult};
@@ -74,4 +75,6 @@ pub use viscous::{
     ViscousSolverConfig, ViscousSetup,
     // New integration with rustfoil-inviscid
     setup_from_body, setup_from_coords, SetupError, ViscousSetupResult,
+    // Multi-body viscous (Phase 1)
+    solve_multi_body_independent, MultiBodyViscousResult, PerBodyViscousResult,
 };
