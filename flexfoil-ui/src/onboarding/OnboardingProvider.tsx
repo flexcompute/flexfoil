@@ -314,9 +314,8 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
   }, [clearChallengePolling, buildChallengeHTML, openPanel]);
 
   // Delegated click handler for "Show Panel" buttons injected into tour popovers.
-  // MUST register before driver.js's own capture-phase handler (which calls
-  // stopImmediatePropagation on all popover clicks). We use a ref for openPanel
-  // so this effect only re-runs on isActive change, keeping our listener first.
+  // Registered on `window` (not document) in capture phase so it fires BEFORE
+  // driver.js's document-level capture handlers which call stopImmediatePropagation.
   useEffect(() => {
     if (!isActive) return;
 
@@ -333,8 +332,8 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
       }
     };
 
-    document.addEventListener('click', handleShowPanel, true);
-    return () => document.removeEventListener('click', handleShowPanel, true);
+    window.addEventListener('click', handleShowPanel, true);
+    return () => window.removeEventListener('click', handleShowPanel, true);
   }, [isActive]);
 
   // Cleanup on unmount
