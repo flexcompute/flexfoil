@@ -14,7 +14,7 @@ import {
   isWasmReady,
 } from '../../lib/wasm';
 import { applyFlapsToBase, repanelBoth } from '../../lib/flapGeometry';
-import type { AirfoilPoint, FlapDefinition } from '../../types';
+import type { FlapDefinition } from '../../types';
 
 const sliderRow: React.CSSProperties = { display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '6px' };
 const labelStyle: React.CSSProperties = { color: 'var(--text-muted)', minWidth: '70px' };
@@ -24,7 +24,7 @@ const fieldsetStyle: React.CSSProperties = {
 };
 const legendStyle: React.CSSProperties = { fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', padding: '0 4px' };
 
-function FlapRow({ flap, index, onChange, onRemove }: {
+function FlapRow({ flap, index: _index, onChange, onRemove }: {
   flap: FlapDefinition;
   index: number;
   onChange: (id: string, updates: Partial<Omit<FlapDefinition, 'id'>>) => void;

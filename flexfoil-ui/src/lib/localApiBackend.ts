@@ -240,7 +240,7 @@ export const localApiBackend: StorageBackend = {
     await fetch(`${base}/api/db/import`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/octet-stream' },
-      body: _data,
+      body: _data as unknown as BodyInit,
     });
     _cachedRuns = await fetchAllRuns();
   },

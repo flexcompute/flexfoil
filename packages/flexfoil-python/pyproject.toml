@@ -47,6 +47,7 @@ all = [
 dev = [
     "flexfoil[all]",
     "pytest>=7",
+    "httpx>=0.24",
     "maturin>=1.5",
 ]
 

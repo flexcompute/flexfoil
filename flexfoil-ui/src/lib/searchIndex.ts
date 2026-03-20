@@ -1,4 +1,6 @@
 import type { PanelId } from '../layoutConfig';
+import type { ControlMode } from '../types';
+import type { TourId } from '../onboarding';
 
 export type SearchCategory = 'panel' | 'feature' | 'action' | 'tour';
 
@@ -17,8 +19,8 @@ export interface SearchItem {
 }
 
 export function buildSearchIndex(deps: {
-  setControlMode: (mode: string) => void;
-  startTour: (id: string, force?: boolean) => void;
+  setControlMode: (mode: ControlMode) => void;
+  startTour: (id: TourId, force?: boolean) => void;
   toggleTheme: () => void;
   undo: () => void;
   redo: () => void;

@@ -29,4 +29,14 @@ declare module 'rustfoil-wasm' {
   export const lerp_array: (...args: any[]) => any;
   export const lerp_streamlines: (...args: any[]) => any;
   export const lerp_morph_state: (...args: any[]) => any;
+  export const inverse_design_qdes: (...args: any[]) => any;
+  export const gdes_rotate: (...args: any[]) => any;
+  export const gdes_scale: (...args: any[]) => any;
+  export const gdes_translate: (...args: any[]) => any;
+  export const gdes_set_te_gap: (...args: any[]) => any;
+  export const gdes_flap: (...args: any[]) => any;
+  export const gdes_set_le_radius: (...args: any[]) => any;
+  export const gdes_scale_thickness: (...args: any[]) => any;
+  export const gdes_scale_camber: (...args: any[]) => any;
+  export const full_inverse_design_mdes: (...args: any[]) => any;
 }

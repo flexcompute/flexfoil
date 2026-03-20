@@ -39,10 +39,6 @@ export const NUMERIC_PLOT_FIELDS = PLOT_FIELDS.filter(
   (field) => field.kind === 'numeric',
 );
 
-const DISCRETE_PLOT_FIELDS = PLOT_FIELDS.filter(
-  (field) => field.kind !== 'numeric',
-);
-
 export const ENCODING_PLOT_FIELDS = PLOT_FIELDS;
 
 export const AUTO_GROUP_INVARIANT_FIELDS = PLOT_FIELDS.filter(
@@ -69,8 +65,4 @@ export function getPlotFieldLabel(key: keyof RunRow): string {
 
 export function isNumericPlotField(key: keyof RunRow): boolean {
   return getPlotFieldMeta(key)?.kind === 'numeric';
-}
-
-function isDiscretePlotField(key: keyof RunRow): boolean {
-  return !isNumericPlotField(key);
 }

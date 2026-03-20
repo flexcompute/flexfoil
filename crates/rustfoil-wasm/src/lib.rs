@@ -1133,6 +1133,170 @@ fn analyze_airfoil_impl(coords: &[f64], alpha_deg: f64) -> AnalysisResult {
     }
 }
 
+/// Result of a multi-element aerodynamic analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiElementResult {
+    /// Total lift coefficient (normalized by first body's chord)
+    pub cl_total: f64,
+    /// Total moment coefficient (about first body's quarter-chord)
+    pub cm_total: f64,
+    /// Per-body results
+    pub per_body: Vec<PerBodyResult>,
+    /// Whether the analysis succeeded
+    pub success: bool,
+    /// Error message (if any)
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerBodyResult {
+    /// Body name
+    pub name: String,
+    /// Per-body lift coefficient (normalized by that body's chord)
+    pub cl: f64,
+    /// Pressure coefficient at each node
+    pub cp: Vec<f64>,
+    /// X-coordinates of Cp sample points (node positions)
+    pub cp_x: Vec<f64>,
+    /// Gamma (vorticity) values at each node
+    pub gamma: Vec<f64>,
+}
+
+/// Multi-element inviscid analysis.
+///
+/// # Arguments
+/// * `bodies_json` - JSON array of body definitions:
+///   ```json
+///   [
+///     {"name": "main", "coords": [x0,y0,x1,y1,...], "position": {"x": 0, "y": 0, "angle": 0}},
+///     {"name": "flap", "coords": [x0,y0,...], "position": {"x": 0.85, "y": -0.05, "angle": 30}}
+///   ]
+///   ```
+///   Position fields are optional (default to 0). The `angle` field rotates the body
+///   by the specified degrees about its own leading edge.
+/// * `alpha_deg` - Angle of attack in degrees
+///
+/// # Returns
+/// Analysis result as a JavaScript object with `cl_total`, `cm_total`, and `per_body` array.
+#[wasm_bindgen]
+pub fn analyze_multi_element(bodies_json: &str, alpha_deg: f64) -> JsValue {
+    let result = analyze_multi_element_impl(bodies_json, alpha_deg);
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+#[derive(Debug, Deserialize)]
+struct BodyInput {
+    name: String,
+    coords: Vec<f64>,
+    #[serde(default)]
+    position: PositionInput,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct PositionInput {
+    #[serde(default)]
+    x: f64,
+    #[serde(default)]
+    y: f64,
+    #[serde(default)]
+    angle: f64,
+}
+
+fn analyze_multi_element_impl(bodies_json: &str, alpha_deg: f64) -> MultiElementResult {
+    let body_inputs: Vec<BodyInput> = match serde_json::from_str(bodies_json) {
+        Ok(b) => b,
+        Err(e) => return multi_element_error(format!("JSON parse error: {}", e)),
+    };
+
+    if body_inputs.is_empty() {
+        return multi_element_error("No bodies provided".to_string());
+    }
+
+    let mut bodies: Vec<Body> = Vec::with_capacity(body_inputs.len());
+
+    for input in &body_inputs {
+        if input.coords.len() < 6 || input.coords.len() % 2 != 0 {
+            return multi_element_error(format!(
+                "Body '{}': need at least 3 points (6 values)", input.name
+            ));
+        }
+
+        let mut points: Vec<Point> = input.coords.chunks(2)
+            .map(|c| point(c[0], c[1]))
+            .collect();
+
+        // Apply position transform (rotation about LE, then translation)
+        if input.position.angle != 0.0 || input.position.x != 0.0 || input.position.y != 0.0 {
+            let angle_rad = input.position.angle.to_radians();
+            let cos_a = angle_rad.cos();
+            let sin_a = angle_rad.sin();
+
+            // Find LE (min x point)
+            let le_idx = points.iter().enumerate()
+                .min_by(|(_, a), (_, b)| a.x.partial_cmp(&b.x).unwrap())
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            let le = points[le_idx];
+
+            for p in &mut points {
+                // Rotate about LE
+                let dx = p.x - le.x;
+                let dy = p.y - le.y;
+                p.x = le.x + dx * cos_a - dy * sin_a + input.position.x;
+                p.y = le.y + dx * sin_a + dy * cos_a + input.position.y;
+            }
+        }
+
+        match Body::from_points(&input.name, &points) {
+            Ok(b) => bodies.push(b),
+            Err(e) => return multi_element_error(format!(
+                "Body '{}': geometry error: {}", input.name, e
+            )),
+        }
+    }
+
+    let solver = InviscidSolver::new();
+    let flow = FlowConditions::with_alpha_deg(alpha_deg);
+
+    match solver.solve(&bodies, &flow) {
+        Ok(solution) => {
+            let mut per_body = Vec::with_capacity(bodies.len());
+
+            for (b, body) in bodies.iter().enumerate() {
+                let nodes: Vec<Point> = body.panels().iter().map(|p| p.p1).collect();
+                let cp_x: Vec<f64> = nodes.iter().map(|n| n.x).collect();
+
+                per_body.push(PerBodyResult {
+                    name: body_inputs[b].name.clone(),
+                    cl: solution.cl_per_body[b],
+                    cp: solution.cp_per_body[b].clone(),
+                    cp_x,
+                    gamma: solution.gamma_per_body[b].clone(),
+                });
+            }
+
+            MultiElementResult {
+                cl_total: solution.cl,
+                cm_total: solution.cm,
+                per_body,
+                success: true,
+                error: None,
+            }
+        }
+        Err(e) => multi_element_error(format!("Solver error: {}", e)),
+    }
+}
+
+fn multi_element_error(msg: impl Into<String>) -> MultiElementResult {
+    MultiElementResult {
+        cl_total: 0.0,
+        cm_total: 0.0,
+        per_body: vec![],
+        success: false,
+        error: Some(msg.into()),
+    }
+}
+
 #[wasm_bindgen]
 pub fn analyze_airfoil_faithful(
     coords: &[f64],

@@ -1,0 +1,18 @@
+{
+  "description": "GA(W)-1 + 30% Fowler flap (V3 - two-element experimental Cp)",
+  "source": "NASA CR-2833, McGhee & Beasley, 1977",
+  "main_element": {
+    "airfoil": "GA(W)-1 (17% thick general aviation)",
+    "data_file": "main.dat"
+  },
+  "flap": {
+    "chord_fraction": 0.30,
+    "deflections_deg": [10, 20, 30, 40],
+    "data_file": "flap.dat"
+  },
+  "flow": {
+    "Re": 2200000,
+    "Mach": 0.13
+  },
+  "status": "stub - geometry to be digitized from NASA CR-2833"
+}

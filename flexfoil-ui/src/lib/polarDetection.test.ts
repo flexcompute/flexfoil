@@ -33,6 +33,10 @@ function makeRow(overrides: Partial<RunRow> = {}): RunRow {
     created_at: '2025-01-01T00:00:00',
     session_id: 's_abc',
     geometry_snapshot: null,
+    flaps: null,
+    ld: null,
+    flap_deflection: null,
+    flap_hinge_x: null,
     ...overrides,
   };
 }

@@ -1,0 +1,5 @@
+Chin, V.D. et al., "Flowfield Measurements about a Multi-Element
+Airfoil at High Reynolds Numbers", AIAA-93-3137, 1993.
+
+Rumsey, C.L. et al., "Summary of the First AIAA CFD High-Lift
+Prediction Workshop", Journal of Aircraft, Vol. 48, No. 6, 2011.
