@@ -37,6 +37,7 @@ function makeRow(overrides: Partial<RunRow> = {}): RunRow {
     ld: null,
     flap_deflection: null,
     flap_hinge_x: null,
+    is_outlier: false,
     ...overrides,
   };
 }

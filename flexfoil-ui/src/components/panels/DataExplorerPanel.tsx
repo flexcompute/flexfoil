@@ -170,7 +170,7 @@ function buildColumnDefs(): ColDef<RunRow>[] {
       field: 'is_outlier', headerName: 'Outlier', width: 80,
       chartDataType: 'category' as const, enableRowGroup: true,
       valueFormatter: (p) => p.value ? 'Yes' : '',
-      cellStyle: (p) => p.value ? { color: '#ef4444', fontWeight: 600 } : {},
+      cellStyle: (p) => p.value ? { color: '#ef4444', fontWeight: 600 } : undefined,
     },
     // Aerodynamic summary columns — show the alpha at which CL or L/D is maximized.
     // Hidden by default; become meaningful when row grouping is active.
@@ -662,7 +662,7 @@ export function DataExplorerPanel() {
     if (col < n && row < n) {
       hoveredCellRef.current = { xKey: splomKeys[col], yKey: splomKeys[row] };
     }
-    const cd = point.customdata as Array<string | number> | undefined;
+    const cd = point.customdata as unknown as Array<string | number> | undefined;
     const runId = cd?.[10];
     hoveredRunIdRef.current = typeof runId === 'number' ? runId : null;
   }, [splomKeys]);

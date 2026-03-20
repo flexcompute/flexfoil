@@ -1251,6 +1251,7 @@ const SWEEP_DEFAULTS: Record<SweepParam, { start: number; end: number; step: num
 };
 
 /** Text input that commits a parsed number on blur/Enter, supporting scientific notation (e.g. 6e6). */
+// @ts-expect-error kept for future sweep-row inline editing
 function NumericTextInput({ value, onCommit, min, placeholder }: {
   value: number;
   onCommit: (v: number) => void;

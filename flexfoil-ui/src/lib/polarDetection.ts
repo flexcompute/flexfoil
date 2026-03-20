@@ -7,7 +7,7 @@
  */
 
 import type { RunRow } from '../types';
-import { ALL_INPUT_PARAMETER_FIELDS, AUTO_GROUP_INVARIANT_FIELDS } from './plotFields';
+import { ALL_INPUT_PARAMETER_FIELDS } from './plotFields';
 import { valueKey } from './plotStyling';
 
 export interface PolarGroup {
