@@ -414,6 +414,96 @@ fn analyze_inviscid_batch(
         .collect()
 }
 
+/// Compute boundary-layer distributions for a viscous operating point.
+///
+/// Returns a dict with keys: x_upper, x_lower, theta_upper, theta_lower,
+/// delta_star_upper, delta_star_lower, h_upper, h_lower, cf_upper, cf_lower,
+/// ue_upper, ue_lower, x_tr_upper, x_tr_lower, converged, iterations,
+/// residual, success, error.
+#[pyfunction]
+#[pyo3(signature = (coords, alpha_deg, reynolds=1.0e6, mach=0.0, ncrit=9.0, max_iterations=100))]
+fn get_bl_distribution(
+    py: Python<'_>,
+    coords: Vec<f64>,
+    alpha_deg: f64,
+    reynolds: f64,
+    mach: f64,
+    ncrit: f64,
+    max_iterations: usize,
+) -> PyResult<Py<PyDict>> {
+    use rustfoil_xfoil::oper::{build_state_from_coords, solve_operating_point_from_state, coords_from_body, AlphaSpec};
+    use rustfoil_xfoil::XfoilOptions;
+
+    let d = PyDict::new(py);
+
+    if coords.len() < 6 || coords.len() % 2 != 0 {
+        d.set_item("success", false)?;
+        d.set_item("error", "Invalid coordinates")?;
+        return Ok(d.into());
+    }
+
+    let points = points_from_flat(&coords);
+    let body = match Body::from_points("airfoil", &points) {
+        Ok(b) => b,
+        Err(e) => {
+            d.set_item("success", false)?;
+            d.set_item("error", format!("Geometry error: {e}"))?;
+            return Ok(d.into());
+        }
+    };
+
+    let body_coords = coords_from_body(&body);
+    let options = XfoilOptions {
+        reynolds, mach, ncrit, max_iterations,
+        ..Default::default()
+    };
+
+    let (mut state, factorized) = match build_state_from_coords(
+        "airfoil", &body_coords, AlphaSpec::AlphaDeg(alpha_deg), &options,
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            d.set_item("success", false)?;
+            d.set_item("error", format!("{e}"))?;
+            return Ok(d.into());
+        }
+    };
+
+    match solve_operating_point_from_state(&mut state, &factorized, &options) {
+        Ok(result) => {
+            let iblte_upper = state.iblte_upper.min(state.upper_rows.len().saturating_sub(1));
+            let iblte_lower = state.iblte_lower.min(state.lower_rows.len().saturating_sub(1));
+            let upper = &state.upper_rows[..=iblte_upper];
+            let lower = &state.lower_rows[..=iblte_lower];
+
+            d.set_item("x_upper", upper.iter().map(|r| r.x_coord).collect::<Vec<_>>())?;
+            d.set_item("x_lower", lower.iter().map(|r| r.x_coord).collect::<Vec<_>>())?;
+            d.set_item("theta_upper", upper.iter().map(|r| r.theta).collect::<Vec<_>>())?;
+            d.set_item("theta_lower", lower.iter().map(|r| r.theta).collect::<Vec<_>>())?;
+            d.set_item("delta_star_upper", upper.iter().map(|r| r.dstr).collect::<Vec<_>>())?;
+            d.set_item("delta_star_lower", lower.iter().map(|r| r.dstr).collect::<Vec<_>>())?;
+            d.set_item("h_upper", upper.iter().map(|r| r.h).collect::<Vec<_>>())?;
+            d.set_item("h_lower", lower.iter().map(|r| r.h).collect::<Vec<_>>())?;
+            d.set_item("cf_upper", upper.iter().map(|r| r.cf).collect::<Vec<_>>())?;
+            d.set_item("cf_lower", lower.iter().map(|r| r.cf).collect::<Vec<_>>())?;
+            d.set_item("ue_upper", upper.iter().map(|r| r.uedg).collect::<Vec<_>>())?;
+            d.set_item("ue_lower", lower.iter().map(|r| r.uedg).collect::<Vec<_>>())?;
+            d.set_item("x_tr_upper", result.x_tr_upper)?;
+            d.set_item("x_tr_lower", result.x_tr_lower)?;
+            d.set_item("converged", result.converged)?;
+            d.set_item("iterations", result.iterations)?;
+            d.set_item("residual", result.residual)?;
+            d.set_item("success", true)?;
+            d.set_item("error", py.None())?;
+        }
+        Err(e) => {
+            d.set_item("success", false)?;
+            d.set_item("error", format!("{e}"))?;
+        }
+    }
+    Ok(d.into())
+}
+
 #[pymodule]
 fn _rustfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(analyze_faithful, m)?)?;
@@ -424,5 +514,6 @@ fn _rustfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(repanel_xfoil, m)?)?;
     m.add_function(wrap_pyfunction!(deflect_flap, m)?)?;
     m.add_function(wrap_pyfunction!(parse_dat_file, m)?)?;
+    m.add_function(wrap_pyfunction!(get_bl_distribution, m)?)?;
     Ok(())
 }

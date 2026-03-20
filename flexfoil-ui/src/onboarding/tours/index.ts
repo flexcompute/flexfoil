@@ -7,8 +7,11 @@ import { welcomeTour } from './welcomeTour';
 import { airfoilEditingTour } from './airfoilEditingTour';
 import { solvingTour } from './solvingTour';
 import { dataExplorerTour } from './dataExplorerTour';
+import { showMeTours } from '../showMe';
 
-export type TourId = 'welcome' | 'airfoilEditing' | 'solving' | 'dataExplorer';
+export type TourId =
+  | 'welcome' | 'airfoilEditing' | 'solving' | 'dataExplorer'
+  | `showMe:${string}`;
 
 /**
  * Extended tour step that can include a challenge and panel focus
@@ -27,6 +30,8 @@ export const tours: Record<TourId, TourStep[]> = {
   airfoilEditing: airfoilEditingTour,
   solving: solvingTour,
   dataExplorer: dataExplorerTour,
+  ...showMeTours,
 };
 
 export { welcomeTour, airfoilEditingTour, solvingTour, dataExplorerTour };
+export { showMeTours } from '../showMe';

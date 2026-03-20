@@ -1,0 +1,6486 @@
+[
+  {
+    "file": "2032c",
+    "name": "Dillner 20-32-C low Reynolds number airfoil"
+  },
+  {
+    "file": "a18",
+    "name": "Archer A18 F1C free flight airfoil(original)"
+  },
+  {
+    "file": "a18sm",
+    "name": "Archer A18 F1C free flight airfoil (smoothed)"
+  },
+  {
+    "file": "a63a108c",
+    "name": "NASA/AMES modification of the NACA 63A-108 airfoil"
+  },
+  {
+    "file": "ag03",
+    "name": "Drela AG03 (flat aft bottom) airfoil"
+  },
+  {
+    "file": "ag04",
+    "name": "Drela AG04 airfoil"
+  },
+  {
+    "file": "ag08",
+    "name": "Drela AG08 airfoil"
+  },
+  {
+    "file": "ag09",
+    "name": "Drela AG09 airfoil"
+  },
+  {
+    "file": "ag10",
+    "name": "Drela AG10 airfoil"
+  },
+  {
+    "file": "ag11",
+    "name": "Drela AG11 airfoil"
+  },
+  {
+    "file": "ag12",
+    "name": "Drela AG12 airfoil"
+  },
+  {
+    "file": "ag13",
+    "name": "Drela AG13 airfoil"
+  },
+  {
+    "file": "ag14",
+    "name": "Drela AG14 airfoil"
+  },
+  {
+    "file": "ag16",
+    "name": "Drela AG16 airfoil"
+  },
+  {
+    "file": "ag17",
+    "name": "Drela AG17 airfoil"
+  },
+  {
+    "file": "ag18",
+    "name": "Drela AG18 airfoil"
+  },
+  {
+    "file": "ag19",
+    "name": "Drela AG19 airfoil"
+  },
+  {
+    "file": "ag23",
+    "name": "Drela AG23 airfoil used on the XC Bubble Dancer"
+  },
+  {
+    "file": "ag24",
+    "name": "Drela AG24 airfoil used on the Bubble Dancer R/C DLG"
+  },
+  {
+    "file": "ag25",
+    "name": "Drela AG25 airfoil used on the Bubble Dancer R/C DLG"
+  },
+  {
+    "file": "ag26",
+    "name": "Drela AG26 airfoil used on the Bubble Dancer R/C DLG"
+  },
+  {
+    "file": "ag27",
+    "name": "Drela AG27 airfoil used on the Bubble Dancer R/C DLG"
+  },
+  {
+    "file": "ag35",
+    "name": "Drela AG35 airfoil"
+  },
+  {
+    "file": "ag36",
+    "name": "Drela AG36 airfoil"
+  },
+  {
+    "file": "ag37",
+    "name": "Drela AG37 airfoil"
+  },
+  {
+    "file": "ag38",
+    "name": "Drela AG38 airfoil"
+  },
+  {
+    "file": "ag44ct02r",
+    "name": "Drela AG44ct -02f airfoil"
+  },
+  {
+    "file": "ag455ct02r",
+    "name": "Drela AG455ct -02f airfoil"
+  },
+  {
+    "file": "ag45c03",
+    "name": "Drela AG45c -03f airfoil"
+  },
+  {
+    "file": "ag45ct02r",
+    "name": "Drela AG45ct -02f airfoil"
+  },
+  {
+    "file": "ag46c03",
+    "name": "Drela AG46c -03f airfoil"
+  },
+  {
+    "file": "ag46ct02r",
+    "name": "Drela AG46ct -02f airfoil"
+  },
+  {
+    "file": "ag47c03",
+    "name": "Drela AG47c -03f airfoil"
+  },
+  {
+    "file": "ag47ct02r",
+    "name": "Drela AG47ct -02f airfoil"
+  },
+  {
+    "file": "ag52",
+    "name": "Drela AG52 airfoil"
+  },
+  {
+    "file": "ag53",
+    "name": "Drela AG53 airfoil"
+  },
+  {
+    "file": "ag54",
+    "name": "Drela AG54 airfoil"
+  },
+  {
+    "file": "ag55",
+    "name": "Drela AG55 airfoil"
+  },
+  {
+    "file": "ah21-7",
+    "name": "Andrew Hollom AH 21 airfoil (7% version)"
+  },
+  {
+    "file": "ah21-9",
+    "name": "Andrew Hollom AH 21 airfoil (original 9% version)"
+  },
+  {
+    "file": "ah63k127",
+    "name": "Althaus AH 63-K-127/24 airfoil for use with flaps (K)"
+  },
+  {
+    "file": "ah6407",
+    "name": "Althaus AH 6-407 airfoil"
+  },
+  {
+    "file": "ah7476",
+    "name": "Althaus AH 7-476 airfoil"
+  },
+  {
+    "file": "ah79100a",
+    "name": "Althaus AH 79-100A airfoil"
+  },
+  {
+    "file": "ah79100b",
+    "name": "Althaus AH 79-100B airfoil"
+  },
+  {
+    "file": "ah79100c",
+    "name": "Althaus AH 79-100C airfoil"
+  },
+  {
+    "file": "ah79k132",
+    "name": "Althaus AH 79-K-132/20 airfoil for use with flaps (K)"
+  },
+  {
+    "file": "ah79k135",
+    "name": "Althaus AH 79-K-135/20 airfoil for use with flaps (K)"
+  },
+  {
+    "file": "ah79k143",
+    "name": "Althaus AH 79-K-143/18 airfoil for use with flaps (K)"
+  },
+  {
+    "file": "ah80129",
+    "name": "Althaus AH 80-129 airfoil"
+  },
+  {
+    "file": "ah80136",
+    "name": "Althaus AH 80-136 airfoil"
+  },
+  {
+    "file": "ah80140",
+    "name": "Althaus AH 80-140 airfoil"
+  },
+  {
+    "file": "ah81131",
+    "name": "Althaus AH 81-131 airfoil"
+  },
+  {
+    "file": "ah81k144",
+    "name": "Althaus AH 81-K-144/17 airfoil for use with flaps (K)"
+  },
+  {
+    "file": "ah81k144wfKlappe",
+    "name": "Althaus AH 81-K-144 W-F KLAPPE airfoil for use with flaps (K)"
+  },
+  {
+    "file": "ah82150a",
+    "name": "Althaus AH 82-150 A airfoil"
+  },
+  {
+    "file": "ah82150f",
+    "name": "Althaus AH 82-150 F airfoil"
+  },
+  {
+    "file": "ah83150q",
+    "name": "Althaus AH 83-150 Q airfoil"
+  },
+  {
+    "file": "ah83159",
+    "name": "Althaus AH 83-159 airfoil"
+  },
+  {
+    "file": "ah85l120",
+    "name": "Althaus AH 85-L-120/17 symmetrical airfoil"
+  },
+  {
+    "file": "ah88k130",
+    "name": "Althaus AH 88-K-130/20 airfoil for use with flaps (K)"
+  },
+  {
+    "file": "ah88k136",
+    "name": "Althaus AH 88-K-136/16 airfoil for use with flaps (K)"
+  },
+  {
+    "file": "ah93156",
+    "name": "Althaus AH 93-156 airfoil"
+  },
+  {
+    "file": "ah93157",
+    "name": "Althaus AH 93-157 airfoil"
+  },
+  {
+    "file": "ah93k130",
+    "name": "Althaus AH 93-K-130/15 airfoil for use with flaps (K)"
+  },
+  {
+    "file": "ah93k131",
+    "name": "Althaus AH 93-K-131/15 airfoil for use with flaps (K)"
+  },
+  {
+    "file": "ah93k132",
+    "name": "Althaus AH 93-K-132/15 airfoil for use with flaps (K)"
+  },
+  {
+    "file": "ah93w145",
+    "name": "Althaus AH 93-W-145 airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "ah93w174",
+    "name": "Althaus AH 93-W-174 airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "ah93w215",
+    "name": "Althaus AH 93-W-215 airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "ah93w257",
+    "name": "Althaus AH 93-W-257 airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "ah93w300",
+    "name": "Althaus AH 93-W-300 airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "ah93w480b",
+    "name": "Althaus AH 93-W-480B airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "ah94145",
+    "name": "Althaus AH 94-145 airfoil"
+  },
+  {
+    "file": "ah94156",
+    "name": "Althaus AH 94-156 airfoil"
+  },
+  {
+    "file": "ah94w301",
+    "name": "Althaus AH 94-W-301 airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "ah95160",
+    "name": "Althaus AH 95-160 airfoil"
+  },
+  {
+    "file": "ames01",
+    "name": "NASA/AMES/Hicks A-01 transonic rotorcraft airfoil"
+  },
+  {
+    "file": "ames02",
+    "name": "NASA/AMES/Hicks A-02 transonic rotorcraft airfoil"
+  },
+  {
+    "file": "ames03",
+    "name": "NASA/AMES/Kennelly A-03 transonic rotorcraft airfoil"
+  },
+  {
+    "file": "amsoil1",
+    "name": "Rutan AMSOIL racer canard airfoil"
+  },
+  {
+    "file": "amsoil2",
+    "name": "Rutan AMSOIL racer wing airfoil"
+  },
+  {
+    "file": "apex16",
+    "name": "Drela Apex 16 low Reynolds number transonic research airfoil"
+  },
+  {
+    "file": "aquilasm",
+    "name": "AQUILA R/C sailplane airfoil"
+  },
+  {
+    "file": "arad10",
+    "name": "Aeronautical Research Association/Bocci-Dowty Rotol ARA-D 10% thick propeller airfoil"
+  },
+  {
+    "file": "arad13",
+    "name": "Aeronautical Research Association/Bocci-Dowty Rotol ARA-D 13% thick propeller airfoil"
+  },
+  {
+    "file": "arad20",
+    "name": "Aeronautical Research Association/Bocci-Dowty Rotol ARA-D 20% thick propeller airfoil"
+  },
+  {
+    "file": "arad6",
+    "name": "Aeronautical Research Association/Bocci-Dowty Rotol ARA-D 6% thick propeller airfoil"
+  },
+  {
+    "file": "as5045",
+    "name": "AS5045 airfoil Ashok Gopalarathnam/Selig 15% airfoil"
+  },
+  {
+    "file": "as5046",
+    "name": "AS5046 airfoil Ashok Gopalarathnam/Selig 16% airfoil"
+  },
+  {
+    "file": "as5048",
+    "name": "AS5048 airfoil Ashok Gopalarathnam/Selig 18% airfoil"
+  },
+  {
+    "file": "atr72sm",
+    "name": "ATR 72 wing airfoil (from NTSB report)"
+  },
+  {
+    "file": "august160",
+    "name": "AUGUST 160 airfoil"
+  },
+  {
+    "file": "avistar",
+    "name": "Hobbico R/C Avistar trainer airfoil"
+  },
+  {
+    "file": "b29root",
+    "name": "Boeing B-29 root airfoil"
+  },
+  {
+    "file": "b29tip",
+    "name": "Boeing B-29 tip airfoil"
+  },
+  {
+    "file": "b540ols",
+    "name": "Bell AH-1 rotor blade airfoil (operational loads survey)"
+  },
+  {
+    "file": "b707a",
+    "name": "Boeing Commercial Airplane Company model 707 airfoils"
+  },
+  {
+    "file": "b707b",
+    "name": "continued"
+  },
+  {
+    "file": "b707c",
+    "name": "continued"
+  },
+  {
+    "file": "b707d",
+    "name": "continued"
+  },
+  {
+    "file": "b707e",
+    "name": "continued"
+  },
+  {
+    "file": "b737a",
+    "name": "Boeing Commercial Airplane Company model 737 airfoils"
+  },
+  {
+    "file": "b737b",
+    "name": "continued"
+  },
+  {
+    "file": "b737c",
+    "name": "continued"
+  },
+  {
+    "file": "b737d",
+    "name": "continued"
+  },
+  {
+    "file": "bacj",
+    "name": "Boeing Commercial Airplane Company airfoil J"
+  },
+  {
+    "file": "bacnlf",
+    "name": "Boeing high speed natural laminar flow airfoil from a European patent (EP 0111785A1)"
+  },
+  {
+    "file": "bacxxx",
+    "name": "Boeing Commercial Airplane Company BACXXX Energy Efficient Transport Program airfoil"
+  },
+  {
+    "file": "bambino6",
+    "name": "Bambino 6 airfoil"
+  },
+  {
+    "file": "be50",
+    "name": "Verbitsky BE50 free flight airfoil (original)"
+  },
+  {
+    "file": "be50sm",
+    "name": "Verbitsky BE50 free flight airfoil (original)"
+  },
+  {
+    "file": "boe103",
+    "name": "Boeing 103 airfoil"
+  },
+  {
+    "file": "boe106",
+    "name": "Boeing 106 airfoil"
+  },
+  {
+    "file": "bqm34",
+    "name": "Ryan BQM-34 Firebee wing airfoil (NACA 63-014A W/NACA 0014 nose and thinned to .09899 to account for sweep)"
+  },
+  {
+    "file": "bw050209",
+    "name": "Barnaby Wainfan's BW 05 02 09 digitized from plans"
+  },
+  {
+    "file": "bw3",
+    "name": "Bergey BW-3 wind turbine airfoil (smoothed)"
+  },
+  {
+    "file": "c141a",
+    "name": "Lockheed-Georgia C-141 transonic wing airfoils"
+  },
+  {
+    "file": "c141b",
+    "name": "continued"
+  },
+  {
+    "file": "c141c",
+    "name": "continued"
+  },
+  {
+    "file": "c141d",
+    "name": "continued"
+  },
+  {
+    "file": "c141e",
+    "name": "continued"
+  },
+  {
+    "file": "c141f",
+    "name": "continued"
+  },
+  {
+    "file": "c5a",
+    "name": "Lockheed-Georgia C-5A transonic wing airfoils"
+  },
+  {
+    "file": "c5b",
+    "name": "continued"
+  },
+  {
+    "file": "c5c",
+    "name": "continued"
+  },
+  {
+    "file": "c5d",
+    "name": "continued"
+  },
+  {
+    "file": "c5e",
+    "name": "continued"
+  },
+  {
+    "file": "cap21c",
+    "name": "CAP 21 (TraCFoil) airfoil"
+  },
+  {
+    "file": "cast102",
+    "name": "CAST 10-2/DOA 2 transonic airfoil"
+  },
+  {
+    "file": "ch10sm",
+    "name": "Chuch Hollinger CH 10-48-13 high lift low Reynolds number airfoil"
+  },
+  {
+    "file": "chen",
+    "name": "University of Illinois at Urbana-Champaign / Chen high lift airfoil"
+  },
+  {
+    "file": "clarkk",
+    "name": "CLARK K airfoil"
+  },
+  {
+    "file": "clarkv",
+    "name": "CLARK V airfoil"
+  },
+  {
+    "file": "clarkw",
+    "name": "CLARK W airfoil"
+  },
+  {
+    "file": "clarkx",
+    "name": "CLARK X airfoil"
+  },
+  {
+    "file": "clarky",
+    "name": "CLARK Y airfoil"
+  },
+  {
+    "file": "clarkyh",
+    "name": "CLARK YH airfoil"
+  },
+  {
+    "file": "clarkys",
+    "name": "CLARK YS airfoil"
+  },
+  {
+    "file": "clarkysm",
+    "name": "CLARK Y airfoil (smoothed)"
+  },
+  {
+    "file": "clarkz",
+    "name": "CLARK Z airfoil"
+  },
+  {
+    "file": "clarym15",
+    "name": "CLARK YM15 airfoil"
+  },
+  {
+    "file": "clarym18",
+    "name": "CLARK YM18 airfoil"
+  },
+  {
+    "file": "coanda1",
+    "name": "Coanda 1 airfoil"
+  },
+  {
+    "file": "coanda2",
+    "name": "Coanda 2 airfoil"
+  },
+  {
+    "file": "coanda3",
+    "name": "Coanda 3 airfoil"
+  },
+  {
+    "file": "cootie",
+    "name": "Waco Cootie airfoil"
+  },
+  {
+    "file": "cr001sm",
+    "name": "Cody Robertson CR 001 R/C hand-launch low Reynolds number airfoil (smoothed)"
+  },
+  {
+    "file": "cr1",
+    "name": "Curtiss CR-1 general aviation airfoil"
+  },
+  {
+    "file": "curtisc72",
+    "name": "Curtis C-72 airfoil"
+  },
+  {
+    "file": "dae11",
+    "name": "Drela DAE11 low Reynolds number airfoil"
+  },
+  {
+    "file": "dae21",
+    "name": "Drela DAE21 low Reynolds number airfoil"
+  },
+  {
+    "file": "dae31",
+    "name": "Drela DAE31 low Reynolds number airfoil"
+  },
+  {
+    "file": "dae41",
+    "name": "Drela DAE41 airfoil (Daedalus, design Re=150K, wingtip)"
+  },
+  {
+    "file": "dae51",
+    "name": "Drela DAE51 low Reynolds number airfoil"
+  },
+  {
+    "file": "dai1238",
+    "name": "Drela DAI1238 airfoil (Light Eagle, tip)"
+  },
+  {
+    "file": "dai1335",
+    "name": "Drela DAI1335 airfoil (Light Eagle, center panel, mid-panel inner end)"
+  },
+  {
+    "file": "dai1336",
+    "name": "Drela DAI1336 airfoil (Light Eagle, mid-panel outer end)"
+  },
+  {
+    "file": "davis",
+    "name": "Consolidated/Davis airfoil (B-24 wing?)"
+  },
+  {
+    "file": "davis_corrected",
+    "name": "Davis basic B-24 wing airfoil"
+  },
+  {
+    "file": "davissm",
+    "name": "Davis 3R F1B free flight airfoil (smoothed)"
+  },
+  {
+    "file": "daytonwright6",
+    "name": "Dayton-Wright 6 airfoil"
+  },
+  {
+    "file": "daytonwrightt1",
+    "name": "Dayton-Wright T-1 airfoil"
+  },
+  {
+    "file": "dbln526",
+    "name": "Sikorsky DBLN-526 double ended rotorcraft airfoil"
+  },
+  {
+    "file": "defcnd1",
+    "name": "Rutan DEFIANT canard BL20 airfoil"
+  },
+  {
+    "file": "defcnd2",
+    "name": "Rutan DEFIANT canard BL110 airfoil"
+  },
+  {
+    "file": "defcnd3",
+    "name": "Rutan DEFIANT canard BL145 airfoil"
+  },
+  {
+    "file": "df101",
+    "name": "David Fraser DF 101 low Reynolds number airfoil"
+  },
+  {
+    "file": "df102",
+    "name": "David Fraser DF 102 low Reynolds number airfoil"
+  },
+  {
+    "file": "dfvlrr4",
+    "name": "DFVLR R-4 transonic airfoil"
+  },
+  {
+    "file": "dga1138",
+    "name": "D.G.A. 1138 airfoil"
+  },
+  {
+    "file": "dga1182",
+    "name": "D.G.A. 1182 airfoil"
+  },
+  {
+    "file": "dh4009sm",
+    "name": "Dale House DH4009 (smoothed) used on the Storm R/C aerobatic aircraft"
+  },
+  {
+    "file": "doa5",
+    "name": "Dornier A-5 airfoil (reconstruction) (DO 228 wing)"
+  },
+  {
+    "file": "dormoy",
+    "name": "Dormoy airfoil"
+  },
+  {
+    "file": "drgnfly",
+    "name": "Dragonfly Canard airfoil"
+  },
+  {
+    "file": "dsma523a",
+    "name": "McDonnell/Douglas DSMA-523 transonic airfoil with sharp trailing edge"
+  },
+  {
+    "file": "dsma523b",
+    "name": "McDonnell/Douglas DSMA-523 transonic airfoil with blunt trailing edge"
+  },
+  {
+    "file": "du84132v",
+    "name": "Delft DU84-132V3 (measured from an ASW22 wing)"
+  },
+  {
+    "file": "du8608418",
+    "name": "Deflt University DU 86-084/18 low Reynolds number airfoil"
+  },
+  {
+    "file": "du861372",
+    "name": "Delft University DU 86-137/25 Airfoil"
+  },
+  {
+    "file": "e1098",
+    "name": "Eppler E1098 general aviation airfoil"
+  },
+  {
+    "file": "e1200",
+    "name": "Eppler E1200 general aviation airfoil"
+  },
+  {
+    "file": "e1210",
+    "name": "Eppler E1210 general aviation airfoil"
+  },
+  {
+    "file": "e1211",
+    "name": "Eppler E1211 general aviation airfoil"
+  },
+  {
+    "file": "e1212",
+    "name": "Eppler E1212 general aviation airfoil"
+  },
+  {
+    "file": "e1212mod",
+    "name": "Eppler E1212 general aviation airfoil (as modified for use as Quickie wing airfoil)"
+  },
+  {
+    "file": "e1213",
+    "name": "Eppler E1213 general aviation airfoil"
+  },
+  {
+    "file": "e1214",
+    "name": "Eppler E1214 general aviation airfoil"
+  },
+  {
+    "file": "e1230",
+    "name": "Eppler E1230 general aviation airfoil (Long-EZ and Defiant wing airfoil)"
+  },
+  {
+    "file": "e1233",
+    "name": "Eppler E1233 general aviation airfoil"
+  },
+  {
+    "file": "e168",
+    "name": "Eppler E168 low Reynolds number airfoil"
+  },
+  {
+    "file": "e169",
+    "name": "Eppler E169 low Reynolds number airfoil"
+  },
+  {
+    "file": "e171",
+    "name": "Eppler E171 low Reynolds number airfoil"
+  },
+  {
+    "file": "e174",
+    "name": "Eppler E174 low Reynolds number airfoil"
+  },
+  {
+    "file": "e176",
+    "name": "Eppler E176 low Reynolds number airfoil"
+  },
+  {
+    "file": "e178",
+    "name": "Eppler E178 low Reynolds number airfoil"
+  },
+  {
+    "file": "e180",
+    "name": "Eppler E180 low Reynolds number airfoil"
+  },
+  {
+    "file": "e182",
+    "name": "Eppler E182 low Reynolds number airfoil"
+  },
+  {
+    "file": "e184",
+    "name": "Eppler E184 low Reynolds number airfoil"
+  },
+  {
+    "file": "e186",
+    "name": "Eppler E186 low Reynolds number airfoil"
+  },
+  {
+    "file": "e193",
+    "name": "Eppler E193 low Reynolds number airfoil"
+  },
+  {
+    "file": "e195",
+    "name": "Eppler E195 low Reynolds number airfoil"
+  },
+  {
+    "file": "e197",
+    "name": "Eppler E197 low Reynolds number airfoil"
+  },
+  {
+    "file": "e201",
+    "name": "Eppler E201 low Reynolds number airfoil"
+  },
+  {
+    "file": "e203",
+    "name": "Eppler E203 low Reynolds number airfoil"
+  },
+  {
+    "file": "e205",
+    "name": "Eppler E205 low Reynolds number airfoil"
+  },
+  {
+    "file": "e207",
+    "name": "Eppler E207 low Reynolds number airfoil"
+  },
+  {
+    "file": "e209",
+    "name": "Eppler E209 low Reynolds number airfoil"
+  },
+  {
+    "file": "e210",
+    "name": "Eppler E210 low Reynolds number airfoil"
+  },
+  {
+    "file": "e211",
+    "name": "Eppler E211 low Reynolds number airfoil"
+  },
+  {
+    "file": "e212",
+    "name": "Eppler E212 low Reynolds number airfoil"
+  },
+  {
+    "file": "e214",
+    "name": "Eppler E214 low Reynolds number airfoil"
+  },
+  {
+    "file": "e216",
+    "name": "Eppler E216 low Reynolds number airfoil"
+  },
+  {
+    "file": "e220",
+    "name": "Eppler E220 low Reynolds number airfoil"
+  },
+  {
+    "file": "e221",
+    "name": "Eppler E221 low Reynolds number airfoil"
+  },
+  {
+    "file": "e222",
+    "name": "Eppler E222 low Reynolds number airfoil"
+  },
+  {
+    "file": "e224",
+    "name": "Eppler E224 low Reynolds number airfoil"
+  },
+  {
+    "file": "e226",
+    "name": "Eppler E226 low Reynolds number airfoil"
+  },
+  {
+    "file": "e228",
+    "name": "Eppler E228 low Reynolds number airfoil"
+  },
+  {
+    "file": "e230",
+    "name": "Eppler E230 airfoil"
+  },
+  {
+    "file": "e231",
+    "name": "Eppler E231 R/C sailplane airfoil"
+  },
+  {
+    "file": "e266",
+    "name": "Eppler E266 general purpose airfoil"
+  },
+  {
+    "file": "e297",
+    "name": "Eppler E297 tailplane airfoil"
+  },
+  {
+    "file": "e325",
+    "name": "Eppler E325 flying wing airfoil"
+  },
+  {
+    "file": "e326",
+    "name": "Eppler E326 flying wing airfoil"
+  },
+  {
+    "file": "e327",
+    "name": "Eppler E327 flying wing airfoil"
+  },
+  {
+    "file": "e328",
+    "name": "Eppler E328 flying wing airfoil"
+  },
+  {
+    "file": "e329",
+    "name": "Eppler E329 flying wing airfoil"
+  },
+  {
+    "file": "e330",
+    "name": "Eppler E330 flying wing airfoil"
+  },
+  {
+    "file": "e331",
+    "name": "Eppler E331 flying wing airfoil"
+  },
+  {
+    "file": "e332",
+    "name": "Eppler E332 flying wing airfoil"
+  },
+  {
+    "file": "e333",
+    "name": "Eppler E333 flying wing airfoil"
+  },
+  {
+    "file": "e334",
+    "name": "Eppler E334 flying wing airfoil"
+  },
+  {
+    "file": "e335",
+    "name": "Eppler E335 flying wing airfoil"
+  },
+  {
+    "file": "e336",
+    "name": "Eppler E336 flying wing airfoil"
+  },
+  {
+    "file": "e337",
+    "name": "Eppler E337 flying wing airfoil"
+  },
+  {
+    "file": "e338",
+    "name": "Eppler E338 flying wing airfoil"
+  },
+  {
+    "file": "e339",
+    "name": "Eppler E339 flying wing airfoil"
+  },
+  {
+    "file": "e340",
+    "name": "Eppler E340 flying wing airfoil"
+  },
+  {
+    "file": "e341",
+    "name": "Eppler E341 flying wing airfoil"
+  },
+  {
+    "file": "e342",
+    "name": "Eppler E342 flying wing airfoil"
+  },
+  {
+    "file": "e343",
+    "name": "Eppler E343 flying wing airfoil"
+  },
+  {
+    "file": "e344",
+    "name": "Eppler E344 flying wing airfoil"
+  },
+  {
+    "file": "e360",
+    "name": "Eppler E360 rotorcraft airfoil"
+  },
+  {
+    "file": "e361",
+    "name": "Eppler E361 rotorcraft airfoil"
+  },
+  {
+    "file": "e374",
+    "name": "Eppler E374 low Reynolds number airfoil"
+  },
+  {
+    "file": "e376",
+    "name": "Eppler E376 ultralight airfoil"
+  },
+  {
+    "file": "e377",
+    "name": "Eppler E377 ultralight airfoil"
+  },
+  {
+    "file": "e377m",
+    "name": "Eppler E377 (modified) ultralight airfoil"
+  },
+  {
+    "file": "e378",
+    "name": "Eppler E378 ultralight airfoil"
+  },
+  {
+    "file": "e379",
+    "name": "Eppler E379 ultralight airfoil"
+  },
+  {
+    "file": "e385",
+    "name": "Eppler E385 airfoil"
+  },
+  {
+    "file": "e387",
+    "name": "Eppler E387 low Reynolds number airfoil"
+  },
+  {
+    "file": "e392",
+    "name": "Eppler E392 low Reynolds number airfoil"
+  },
+  {
+    "file": "e393",
+    "name": "Eppler E393 airfoil"
+  },
+  {
+    "file": "e395",
+    "name": "Eppler E395 human powered aircraft airfoil"
+  },
+  {
+    "file": "e396",
+    "name": "Eppler E396 human powered aircraft airfoil"
+  },
+  {
+    "file": "e397",
+    "name": "Eppler E397 human powered aircraft airfoil"
+  },
+  {
+    "file": "e398",
+    "name": "Eppler E398 human powered aircraft airfoil"
+  },
+  {
+    "file": "e399",
+    "name": "Eppler E399 human powered aircraft airfoil"
+  },
+  {
+    "file": "e403",
+    "name": "Eppler E403 general purpose airfoil"
+  },
+  {
+    "file": "e407",
+    "name": "Eppler E407 sailplane airfoil"
+  },
+  {
+    "file": "e417",
+    "name": "Eppler E417 general purpose airfoil"
+  },
+  {
+    "file": "e420",
+    "name": "Eppler E420 high lift airfoil"
+  },
+  {
+    "file": "e421",
+    "name": "Eppler E421 high lift airfoil"
+  },
+  {
+    "file": "e422",
+    "name": "Eppler E422 high lift airfoil"
+  },
+  {
+    "file": "e423",
+    "name": "Eppler E423 high lift airfoil"
+  },
+  {
+    "file": "e426",
+    "name": "Eppler E426 airfoil"
+  },
+  {
+    "file": "e428",
+    "name": "Eppler E428 airfoil"
+  },
+  {
+    "file": "e431",
+    "name": "Eppler E431 sailplane airfoil"
+  },
+  {
+    "file": "e432",
+    "name": "Eppler E432 sailplane airfoil"
+  },
+  {
+    "file": "e433",
+    "name": "Eppler E433 sailplane airfoil"
+  },
+  {
+    "file": "e434",
+    "name": "Eppler E434 sailplane airfoil"
+  },
+  {
+    "file": "e435",
+    "name": "Eppler E435 sailplane airfoil"
+  },
+  {
+    "file": "e471",
+    "name": "Eppler E471 airfoil"
+  },
+  {
+    "file": "e472",
+    "name": "Eppler E472 aerobatic aircraft airfoil"
+  },
+  {
+    "file": "e473",
+    "name": "Eppler E473 aerobatic aircraft airfoil"
+  },
+  {
+    "file": "e474",
+    "name": "Eppler E474 aerobatic aircraft airfoil"
+  },
+  {
+    "file": "e475",
+    "name": "Eppler E475 aerobatic aircraft airfoil"
+  },
+  {
+    "file": "e479",
+    "name": "Eppler E479 aerobatic aircraft airfoil"
+  },
+  {
+    "file": "e485",
+    "name": "Eppler E485 tailplane airfoil"
+  },
+  {
+    "file": "e49",
+    "name": "Eppler E49 low Reynolds number airfoil"
+  },
+  {
+    "file": "e502",
+    "name": "Eppler E502 general purpose airfoil"
+  },
+  {
+    "file": "e520",
+    "name": "Eppler E520 tailplane airfoil"
+  },
+  {
+    "file": "e521",
+    "name": "Eppler E521 tailplane airfoil"
+  },
+  {
+    "file": "e540",
+    "name": "Eppler E540 general aviation airfoil"
+  },
+  {
+    "file": "e541",
+    "name": "Eppler E541 general aviation airfoil"
+  },
+  {
+    "file": "e542",
+    "name": "Eppler E542 general aviation airfoil"
+  },
+  {
+    "file": "e543",
+    "name": "Eppler E543 general aviation airfoil"
+  },
+  {
+    "file": "e544",
+    "name": "Eppler E544 general aviation airfoil"
+  },
+  {
+    "file": "e545",
+    "name": "Eppler E545 general aviation airfoil"
+  },
+  {
+    "file": "e546",
+    "name": "Eppler E546 general aviation airfoil"
+  },
+  {
+    "file": "e547",
+    "name": "Eppler E547 general aviation airfoil"
+  },
+  {
+    "file": "e548",
+    "name": "Eppler E548 general aviation airfoil"
+  },
+  {
+    "file": "e549",
+    "name": "Eppler E549 general aviation airfoil"
+  },
+  {
+    "file": "e550",
+    "name": "Eppler E550 general aviation airfoil"
+  },
+  {
+    "file": "e551",
+    "name": "Eppler E551 general aviation airfoil"
+  },
+  {
+    "file": "e552",
+    "name": "Eppler E552 general aviation airfoil"
+  },
+  {
+    "file": "e553",
+    "name": "Eppler E553 general aviation airfoil"
+  },
+  {
+    "file": "e554",
+    "name": "Eppler E554 general aviation airfoil"
+  },
+  {
+    "file": "e555",
+    "name": "Eppler E555 general aviation airfoil"
+  },
+  {
+    "file": "e556",
+    "name": "Eppler E556 general aviation airfoil"
+  },
+  {
+    "file": "e557",
+    "name": "Eppler E557 general aviation airfoil"
+  },
+  {
+    "file": "e558",
+    "name": "Eppler E558 general aviation airfoil"
+  },
+  {
+    "file": "e559",
+    "name": "Eppler E559 general aviation airfoil"
+  },
+  {
+    "file": "e560",
+    "name": "Eppler E560 general aviation airfoil"
+  },
+  {
+    "file": "e561",
+    "name": "Eppler E561 general aviation airfoil"
+  },
+  {
+    "file": "e562",
+    "name": "Eppler E562 general aviation airfoil"
+  },
+  {
+    "file": "e58",
+    "name": "Eppler E58 low Reynolds number airfoil"
+  },
+  {
+    "file": "e580",
+    "name": "Eppler E580 general purpose airfoil"
+  },
+  {
+    "file": "e582",
+    "name": "Eppler E582 sailplane airfoil"
+  },
+  {
+    "file": "e583",
+    "name": "Eppler E583 sailplane airfoil"
+  },
+  {
+    "file": "e584",
+    "name": "Eppler E584 sailplane airfoil"
+  },
+  {
+    "file": "e585",
+    "name": "Eppler E585 sailplane airfoil"
+  },
+  {
+    "file": "e587",
+    "name": "Eppler E587 sailplane airfoil"
+  },
+  {
+    "file": "e59",
+    "name": "Eppler E59 low Reynolds number airfoil"
+  },
+  {
+    "file": "e591",
+    "name": "Eppler E591 airfoil"
+  },
+  {
+    "file": "e593",
+    "name": "Eppler E593 airfoil"
+  },
+  {
+    "file": "e598",
+    "name": "Eppler E598 airfoil"
+  },
+  {
+    "file": "e603",
+    "name": "Eppler E603 general purpose airfoil"
+  },
+  {
+    "file": "e604",
+    "name": "Eppler E604 sailplane airfoil"
+  },
+  {
+    "file": "e61",
+    "name": "Eppler E61 low Reynolds number airfoil"
+  },
+  {
+    "file": "e62",
+    "name": "Eppler E62 low Reynolds number airfoil"
+  },
+  {
+    "file": "e625",
+    "name": "Eppler E625 airfoil"
+  },
+  {
+    "file": "e63",
+    "name": "Eppler E63 low Reynolds number airfoil"
+  },
+  {
+    "file": "e635",
+    "name": "Eppler E635 airfoil"
+  },
+  {
+    "file": "e636",
+    "name": "Eppler E636 airfoil"
+  },
+  {
+    "file": "e637",
+    "name": "Eppler E637 airfoil"
+  },
+  {
+    "file": "e638",
+    "name": "Eppler E638 airfoil"
+  },
+  {
+    "file": "e639",
+    "name": "Eppler E639 airfoil"
+  },
+  {
+    "file": "e64",
+    "name": "Eppler E64 low Reynolds number airfoil"
+  },
+  {
+    "file": "e642",
+    "name": "Eppler E642 sailplane airfoil"
+  },
+  {
+    "file": "e654",
+    "name": "Eppler E654 sailplane airfoil"
+  },
+  {
+    "file": "e655",
+    "name": "Eppler E655 sailplane airfoil"
+  },
+  {
+    "file": "e656",
+    "name": "Eppler E656 sailplane airfoil"
+  },
+  {
+    "file": "e657",
+    "name": "Eppler E657 sailplane airfoil"
+  },
+  {
+    "file": "e66",
+    "name": "Eppler E66 low Reynolds number airfoil"
+  },
+  {
+    "file": "e662",
+    "name": "Eppler E662 sailplane airfoil"
+  },
+  {
+    "file": "e664",
+    "name": "Eppler E664 variable geometry sailplane airfoil"
+  },
+  {
+    "file": "e664ex",
+    "name": "Eppler E664 (extended) variable geometry sailplane airfoil"
+  },
+  {
+    "file": "e668",
+    "name": "Eppler E668 sailplane airfoil"
+  },
+  {
+    "file": "e67",
+    "name": "Eppler E67 low Reynolds number airfoil"
+  },
+  {
+    "file": "e678",
+    "name": "Eppler E678 sailplane airfoil"
+  },
+  {
+    "file": "e68",
+    "name": "Eppler E68 low Reynolds number airfoil"
+  },
+  {
+    "file": "e682",
+    "name": "Eppler E682 sailplane airfoil"
+  },
+  {
+    "file": "e694",
+    "name": "Eppler E694 sailplane airfoil"
+  },
+  {
+    "file": "e71",
+    "name": "Eppler E71 low Reynolds number airfoil"
+  },
+  {
+    "file": "e715",
+    "name": "Eppler E715 tailplane airfoil"
+  },
+  {
+    "file": "e748",
+    "name": "Eppler E748 sailplane airfoil"
+  },
+  {
+    "file": "e793",
+    "name": "Eppler E793 general purpose airfoil (gyroflug speed canard canard)"
+  },
+  {
+    "file": "e817",
+    "name": "Eppler E817 hydrofoil"
+  },
+  {
+    "file": "e818",
+    "name": "Eppler E818 hydrofoil"
+  },
+  {
+    "file": "e836",
+    "name": "Eppler E836 hydrofoil"
+  },
+  {
+    "file": "e837",
+    "name": "Eppler E837 hydrofoil"
+  },
+  {
+    "file": "e838",
+    "name": "Eppler E838 hydrofoil"
+  },
+  {
+    "file": "e850",
+    "name": "Eppler E850 propeller airfoil"
+  },
+  {
+    "file": "e851",
+    "name": "Eppler E851 propeller airfoil"
+  },
+  {
+    "file": "e852",
+    "name": "Eppler E852 propeller airfoil"
+  },
+  {
+    "file": "e853",
+    "name": "Eppler E853 propeller airfoil"
+  },
+  {
+    "file": "e854",
+    "name": "Eppler E854 propeller airfoil"
+  },
+  {
+    "file": "e855",
+    "name": "Eppler E855 propeller airfoil"
+  },
+  {
+    "file": "e856",
+    "name": "Eppler E856 propeller airfoil"
+  },
+  {
+    "file": "e857",
+    "name": "Eppler E857 propeller airfoil"
+  },
+  {
+    "file": "e858",
+    "name": "Eppler E858 propeller airfoil"
+  },
+  {
+    "file": "e862",
+    "name": "Eppler E862 strut airfoil"
+  },
+  {
+    "file": "e863",
+    "name": "Eppler E863 strut airfoil"
+  },
+  {
+    "file": "e864",
+    "name": "Eppler E864 strut airfoil"
+  },
+  {
+    "file": "e874",
+    "name": "Eppler E874 hydrofoil"
+  },
+  {
+    "file": "e904",
+    "name": "Eppler E904 hydrofoil"
+  },
+  {
+    "file": "e908",
+    "name": "Eppler E908 hydrofoil"
+  },
+  {
+    "file": "ea61009",
+    "name": "Eppler EA 6(-1)-009 airfoil"
+  },
+  {
+    "file": "ea61012",
+    "name": "Eppler EA 6(-1)-012 airfoil"
+  },
+  {
+    "file": "ea81006",
+    "name": "Eppler EA 8(-1)-006 airfoil"
+  },
+  {
+    "file": "ebambino7",
+    "name": "E. Bambino airfoil"
+  },
+  {
+    "file": "ec863914",
+    "name": "Eppler EC 86(-3)-914 airfoil"
+  },
+  {
+    "file": "eh0009",
+    "name": "John Yost EH 0.0/9.0 for tailless R/C aircraft"
+  },
+  {
+    "file": "eh1070",
+    "name": "John Yost EH 1.0/7.0 for tailless R/C aircraft"
+  },
+  {
+    "file": "eh1090",
+    "name": "John Yost EH 1.0/9.0 for tailless R/C aircraft"
+  },
+  {
+    "file": "eh1590",
+    "name": "John Yost EH 1.5/9.0 for tailless R/C aircraft"
+  },
+  {
+    "file": "eh2010",
+    "name": "John Yost EH 2.0/10 for tailless R/C aircraft"
+  },
+  {
+    "file": "eh2012",
+    "name": "John Yost EH 2.0/12 for tailless R/C aircraft"
+  },
+  {
+    "file": "eh2070",
+    "name": "John Yost EH 2.0/7.0 for tailless R/C aircraft"
+  },
+  {
+    "file": "eh2510",
+    "name": "John Yost EH 2.5/10 for tailless R/C aircraft"
+  },
+  {
+    "file": "eh3012",
+    "name": "John Yost EH 3.0/12 for tailless R/C aircraft"
+  },
+  {
+    "file": "eiffel10",
+    "name": "Eiffel 10 (Wright) - 1903 Wright Flyer airfoil"
+  },
+  {
+    "file": "eiffel371",
+    "name": "Eiffel 371 (Monge) airfoil"
+  },
+  {
+    "file": "eiffel385",
+    "name": "Eiffel 385 (S.T. Ae) airfoil"
+  },
+  {
+    "file": "eiffel428",
+    "name": "Eiffel 428 (Bleriot) airfoil"
+  },
+  {
+    "file": "eiffel430",
+    "name": "Eiffel 430 (Lachassgne) airfoil"
+  },
+  {
+    "file": "esa40",
+    "name": "Evans Simitar Airfoil ESA40 for R/C tailless aircraft"
+  },
+  {
+    "file": "falcon",
+    "name": "Falcon airfoil used on the Carl Goldberg Falcon 56 Mk II R/C powerplane"
+  },
+  {
+    "file": "fauvel",
+    "name": "Fauvel 14% flying wing airfoil"
+  },
+  {
+    "file": "fg1",
+    "name": "Fage & Collins 1 airfoil"
+  },
+  {
+    "file": "fg2",
+    "name": "Fage & Collins 2 airfoil"
+  },
+  {
+    "file": "fg3",
+    "name": "Fage & Collins 3 airfoil"
+  },
+  {
+    "file": "fg4",
+    "name": "Fage & Collins 4 airfoil"
+  },
+  {
+    "file": "fx049915",
+    "name": "Wortmann FX 049-915 airfoil"
+  },
+  {
+    "file": "fx05188",
+    "name": "Wortmann FX 05-188 airfoil"
+  },
+  {
+    "file": "fx05191",
+    "name": "Wortmann FX 05-191 airfoil"
+  },
+  {
+    "file": "fx057816",
+    "name": "Wortmann FX 057-816 airfoil"
+  },
+  {
+    "file": "fx05h126",
+    "name": "Wortmann FX 05-H-126 rotorcraft airfoil"
+  },
+  {
+    "file": "fx082512",
+    "name": "Wortmann FX 082-512 airfoil"
+  },
+  {
+    "file": "fx08s176",
+    "name": "Wortmann FX 08-S-176 airfoil"
+  },
+  {
+    "file": "fx2",
+    "name": "Wortmann FX 2 airfoil"
+  },
+  {
+    "file": "fx3",
+    "name": "Wortmann FX 3 airfoil"
+  },
+  {
+    "file": "fx38153",
+    "name": "Wortmann FX 38-153 airfoil"
+  },
+  {
+    "file": "fx60100",
+    "name": "Wortmann FX 60-100 airfoil"
+  },
+  {
+    "file": "fx601001",
+    "name": "Wortmann FX 60-100 (126) airfoil"
+  },
+  {
+    "file": "fx60100sm",
+    "name": "Wortmann FX 60-100 airfoil (smoothed)"
+  },
+  {
+    "file": "fx60126",
+    "name": "Wortmann FX 60-126 airfoil"
+  },
+  {
+    "file": "fx601261",
+    "name": "Wortmann FX 60-126/1 airfoil"
+  },
+  {
+    "file": "fx60157",
+    "name": "Wortmann FX 60-157 airfoil"
+  },
+  {
+    "file": "fx60160",
+    "name": "Wortmann FX 60-160 airfoil"
+  },
+  {
+    "file": "fx60177",
+    "name": "Wortmann FX 60-177 airfoil"
+  },
+  {
+    "file": "fx61140",
+    "name": "Wortmann FX 61-140 airfoil"
+  },
+  {
+    "file": "fx61147",
+    "name": "Wortmann FX 61-147 airfoil"
+  },
+  {
+    "file": "fx61163",
+    "name": "Wortmann FX 61-163 airfoil"
+  },
+  {
+    "file": "fx61168",
+    "name": "Wortmann FX 61-168 airfoil"
+  },
+  {
+    "file": "fx61184",
+    "name": "Wortmann FX 61-184 airfoil"
+  },
+  {
+    "file": "fx62k131",
+    "name": "Wortmann FX 62-K-131/17 airfoil"
+  },
+  {
+    "file": "fx62k153",
+    "name": "Wortmann FX 62-K-153/20 airfoil"
+  },
+  {
+    "file": "fx63100",
+    "name": "Wortmann FX 63-100 airfoil"
+  },
+  {
+    "file": "fx63110",
+    "name": "Wortmann FX 63-110 airfoil"
+  },
+  {
+    "file": "fx63120",
+    "name": "Wortmann FX 63-120 airfoil"
+  },
+  {
+    "file": "fx63137",
+    "name": "Wortmann FX 63-137 human power aircraft airfoil (Puffin II and Liverpuffin) airfoil"
+  },
+  {
+    "file": "fx63137sm",
+    "name": "Wortmann FX 63-137 airfoil (smoothed)"
+  },
+  {
+    "file": "fx63143",
+    "name": "Wortmann FX 63-143 airfoil"
+  },
+  {
+    "file": "fx63145",
+    "name": "Wortmann FX 63-145 airfoil"
+  },
+  {
+    "file": "fx63147",
+    "name": "Wortmann FX 63-147 airfoil"
+  },
+  {
+    "file": "fx63158",
+    "name": "Wortmann FX 63-158 airfoil"
+  },
+  {
+    "file": "fx6617a2",
+    "name": "Wortmann FX 66-17AII-182 airfoil"
+  },
+  {
+    "file": "fx6617ai",
+    "name": "Wortmann FX 66-17AII-182 airfoil (as tested at NASA)"
+  },
+  {
+    "file": "fx66182",
+    "name": "Wortmann FX 66-182 airfoil"
+  },
+  {
+    "file": "fx66196v",
+    "name": "Wortmann FX 66-S-196 V1 airfoil"
+  },
+  {
+    "file": "fx66a175",
+    "name": "Wortmann FX 66-17A-175 airfoil"
+  },
+  {
+    "file": "fx66h60",
+    "name": "Wortmann FX 66-H-60 airfoil"
+  },
+  {
+    "file": "fx66h80",
+    "name": "Wortmann FX 66-H-80 airfoil"
+  },
+  {
+    "file": "fx66s161",
+    "name": "Wortmann FX 66-S-161 airfoil"
+  },
+  {
+    "file": "fx66s171",
+    "name": "Wortmann FX 66-S-171 airfoil"
+  },
+  {
+    "file": "fx66s196",
+    "name": "Wortmann FX 66-S-196 airfoil"
+  },
+  {
+    "file": "fx67k150",
+    "name": "Wortmann FX 67-K-150/17 airfoil"
+  },
+  {
+    "file": "fx67k170",
+    "name": "Wortmann FX 67-K-170/17 airfoil"
+  },
+  {
+    "file": "fx68h120",
+    "name": "Wortmann FX 68-H-120 airfoil"
+  },
+  {
+    "file": "fx69274",
+    "name": "Wortmann FX 69-274 airfoil"
+  },
+  {
+    "file": "fx69h083",
+    "name": "Bell/Wortmann FX 69-H-083 rotorcraft airfoil"
+  },
+  {
+    "file": "fx69h098",
+    "name": "Bell/Wortmann FX 69-H-098 rotorcraft airfoil"
+  },
+  {
+    "file": "fx69pr281",
+    "name": "Wortmann FX 69-PR-281 airfoil"
+  },
+  {
+    "file": "fx71089a",
+    "name": "Wortmann FX 71-089A airfoil"
+  },
+  {
+    "file": "fx71120",
+    "name": "Wortmann FX 71-120 airfoil"
+  },
+  {
+    "file": "fx711520",
+    "name": "Wortmann FX 71-L-150/20 airfoil"
+  },
+  {
+    "file": "fx711525",
+    "name": "Wortmann FX 71-L-150/25 airfoil"
+  },
+  {
+    "file": "fx711530",
+    "name": "Wortmann FX 71-L-150/30 airfoil"
+  },
+  {
+    "file": "fx71l150",
+    "name": "Wortmann FX 71-L-150/30 airfoil"
+  },
+  {
+    "file": "fx72150a",
+    "name": "Wortmann FX 72-MS-150A airfoil"
+  },
+  {
+    "file": "fx72150b",
+    "name": "Wortmann FX 72-MS-150B airfoil"
+  },
+  {
+    "file": "fx72ls160",
+    "name": "Wortmann FX 72-LS-160 airfoil"
+  },
+  {
+    "file": "fx73170",
+    "name": "Wortmann FX 73-170 airfoil"
+  },
+  {
+    "file": "fx73170a",
+    "name": "Wortmann FX 73-170 A airfoil"
+  },
+  {
+    "file": "fx73cl1152",
+    "name": "Wortmann FX 73-CL1-152 airfoil"
+  },
+  {
+    "file": "fx73cl2152",
+    "name": "Wortmann FX 73-CL2-152 airfoil"
+  },
+  {
+    "file": "fx73cl3152",
+    "name": "Wortmann FX 73-CL3-152 airfoil"
+  },
+  {
+    "file": "fx73k170",
+    "name": "Wortmann FX 73-K-170/22 airfoil for use with flaps (K)"
+  },
+  {
+    "file": "fx74080",
+    "name": "Wortmann FX 74-080 airfoil"
+  },
+  {
+    "file": "fx74130wp1",
+    "name": "Wortmann FX 74-130 WP1 airfoil"
+  },
+  {
+    "file": "fx74130wp2",
+    "name": "Wortmann 74-130 WP2 airfoil"
+  },
+  {
+    "file": "fx74130wp2mod",
+    "name": "Wortmann 74-130 WP2 MOD airfoil"
+  },
+  {
+    "file": "fx74cl5140",
+    "name": "Wortmann FX 74-CL5-140 high lift airfoil"
+  },
+  {
+    "file": "fx74cl6140",
+    "name": "Wortmann FX 74-CL6-140 airfoil"
+  },
+  {
+    "file": "fx74modsm",
+    "name": "Modified Wortmann FX 74-CL5-140 high lift airfoil"
+  },
+  {
+    "file": "fx75141",
+    "name": "Wortmann FX 75-141 airfoil"
+  },
+  {
+    "file": "fx75193",
+    "name": "Wortmann FX 75-193 airfoil"
+  },
+  {
+    "file": "fx75vg166",
+    "name": "Wortmann FX 75-VG-166/22 variable geometry airfoil"
+  },
+  {
+    "file": "fx76100",
+    "name": "Wortmann FX 76-100 symmetrical airfoil"
+  },
+  {
+    "file": "fx76120",
+    "name": "Wortmann FX 76-120 symmetrical airfoil"
+  },
+  {
+    "file": "fx76mp120",
+    "name": "Wortmann FX 76-MP-120 airfoil"
+  },
+  {
+    "file": "fx76mp140",
+    "name": "Wortmann FX 76-MP-140 airfoil"
+  },
+  {
+    "file": "fx76mp160",
+    "name": "Wortmann FX 76-MP-160 airfoil"
+  },
+  {
+    "file": "fx77080",
+    "name": "Wortmann FX 77-080 symmetrical airfoil"
+  },
+  {
+    "file": "fx77w121",
+    "name": "Wortmann FX 77-W-121 airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "fx77w153",
+    "name": "Wortmann FX 77-W-153 wind turbine airfoil"
+  },
+  {
+    "file": "fx77w258",
+    "name": "Wortmann FX 77-W-258 wind turbine airfoil"
+  },
+  {
+    "file": "fx77w270",
+    "name": "Wortmann FX 77-W-270 airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "fx77w270s",
+    "name": "Wortmann FX 77-W-270S airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "fx77w343",
+    "name": "Wortmann FX 77-W-343 wind turbine airfoil"
+  },
+  {
+    "file": "fx78k140",
+    "name": "Wortmann FX 78-K-140/20 airfoil for use with flaps (K)"
+  },
+  {
+    "file": "fx78k140a20",
+    "name": "Wortmann FX 78-K-140 airfoil for use with flaps (K) A/20"
+  },
+  {
+    "file": "fx78k150",
+    "name": "Wortmann FX 78-K-150/20 airfoil for use with flaps (K)"
+  },
+  {
+    "file": "fx78k161",
+    "name": "Wortmann FX 78-K-161 airfoil for use with flaps (K)"
+  },
+  {
+    "file": "fx78pk188",
+    "name": "Wortmann FX 78-PK-188/20 variable geometry airfoil"
+  },
+  {
+    "file": "fx79k144",
+    "name": "Wortmann FX 79-K-144/17 sailplane airfoil"
+  },
+  {
+    "file": "fx79l100",
+    "name": "Wortmann FX 79-L-100 symmetrical airfoil"
+  },
+  {
+    "file": "fx79l120",
+    "name": "Wortmann FX 79-L-120 symmetrical airfoil"
+  },
+  {
+    "file": "fx79w151a",
+    "name": "Wortmann FX 79-W-151 airfoil for use on wind turbines (W) A"
+  },
+  {
+    "file": "fx79w470a",
+    "name": "Wortmann FX 79-W-470A airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "fx79w660a",
+    "name": "Wortman FX 79-W-660A airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "fx80080",
+    "name": "Wortmann FX 80-080 airfoil"
+  },
+  {
+    "file": "fx83w108",
+    "name": "Wortmann FX 83-W-108 airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "fx83w160",
+    "name": "Wortmann FX 83-W-160 airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "fx83w227",
+    "name": "Wortmann FX 83-W-227 airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "fx84w097",
+    "name": "Wortmann FX 84-W-097 airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "fx84w127",
+    "name": "Wortmann FX 84-W-127 airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "fx84w140",
+    "name": "Wortmann FX 84-W-140 airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "fx84w150",
+    "name": "Wortmann FX 84-W-150 airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "fx84w175",
+    "name": "Wortmann FX 84-W-175 airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "fx84w218",
+    "name": "Wortmann FX 84-W-218 airfoil for use on wind turbines (W)"
+  },
+  {
+    "file": "fxl142k",
+    "name": "Wortmann FX LIII-142 K 25 airfoil"
+  },
+  {
+    "file": "fxlv152",
+    "name": "Wortmann FX L V-152 airfoil"
+  },
+  {
+    "file": "fxm2",
+    "name": "Wortmann FX M2 airfoil"
+  },
+  {
+    "file": "fxs02196",
+    "name": "Wortmann FX S 02-196 airfoil"
+  },
+  {
+    "file": "fxs03182",
+    "name": "Wortmann FX S 03-182 airfoil"
+  },
+  {
+    "file": "fxs21158",
+    "name": "Wortmann FX S 02/1-158 airfoil"
+  },
+  {
+    "file": "geminism",
+    "name": "GEMINI R/C sailplane airfoil (smoothed)"
+  },
+  {
+    "file": "giiia",
+    "name": "Grumman/Gulfstream GIII transonic airfoils"
+  },
+  {
+    "file": "giiib",
+    "name": "continued"
+  },
+  {
+    "file": "giiic",
+    "name": "continued"
+  },
+  {
+    "file": "giiid",
+    "name": "continued"
+  },
+  {
+    "file": "giiie",
+    "name": "continued"
+  },
+  {
+    "file": "giiif",
+    "name": "continued"
+  },
+  {
+    "file": "giiig",
+    "name": "continued"
+  },
+  {
+    "file": "giiih",
+    "name": "continued"
+  },
+  {
+    "file": "giiii",
+    "name": "continued"
+  },
+  {
+    "file": "giiij",
+    "name": "continued"
+  },
+  {
+    "file": "giiik",
+    "name": "continued"
+  },
+  {
+    "file": "giiil",
+    "name": "continued"
+  },
+  {
+    "file": "giiim",
+    "name": "continued"
+  },
+  {
+    "file": "giiin",
+    "name": "continued"
+  },
+  {
+    "file": "glennmartin2",
+    "name": "Glenn Martin 2 airfoil"
+  },
+  {
+    "file": "glennmartin3",
+    "name": "Glenn Martin 3 airfoil"
+  },
+  {
+    "file": "glennmartin4",
+    "name": "Glenn Martin 4 airfoil"
+  },
+  {
+    "file": "gm15sm",
+    "name": "Gilbert Morris GM15 F1C class free flight flapper airfoil"
+  },
+  {
+    "file": "goe05k",
+    "name": "Gottingen 5K airfoil"
+  },
+  {
+    "file": "goe06k",
+    "name": "Gottingen 6K airfoil"
+  },
+  {
+    "file": "goe07k",
+    "name": "Gottingen 7K airfoil"
+  },
+  {
+    "file": "goe08k",
+    "name": "Gottingen 8K airfoil"
+  },
+  {
+    "file": "goe09k",
+    "name": "Gottingen 9K airfoil"
+  },
+  {
+    "file": "goe100",
+    "name": "Gottingen 100 (Sopwith) airfoil"
+  },
+  {
+    "file": "goe101",
+    "name": "Gottingen 101 airfoil"
+  },
+  {
+    "file": "goe10k",
+    "name": "Gottingen 10K airfoil"
+  },
+  {
+    "file": "goe113",
+    "name": "Gottingen 113 airfoil"
+  },
+  {
+    "file": "goe114",
+    "name": "Gottingen 114 (MVA MK.1) airfoil"
+  },
+  {
+    "file": "goe115",
+    "name": "Gottingen 115 (MVA MK.2) airfoil"
+  },
+  {
+    "file": "goe116",
+    "name": "Gottingen 116 (MVA MK.3) airfoil"
+  },
+  {
+    "file": "goe117",
+    "name": "Gottingen 117 (MVA MK.4) airfoil"
+  },
+  {
+    "file": "goe118",
+    "name": "Gottingen 118 (MVA MK.7) airfoil"
+  },
+  {
+    "file": "goe11k",
+    "name": "Gottingen 11K airfoil"
+  },
+  {
+    "file": "goe121",
+    "name": "Gottingen 121 (MVA H.1) airfoil"
+  },
+  {
+    "file": "goe122",
+    "name": "Gottingen 122 (MVA H.2) airfoil"
+  },
+  {
+    "file": "goe123",
+    "name": "Gottingen 123 airfoil"
+  },
+  {
+    "file": "goe124",
+    "name": "Gottingen 124 (MVA H.4) airfoil"
+  },
+  {
+    "file": "goe12k",
+    "name": "Gottingen 12K airfoil"
+  },
+  {
+    "file": "goe133",
+    "name": "Gottingen 133 (MVA H.11) airfoil"
+  },
+  {
+    "file": "goe134",
+    "name": "Gottingen 134 (MVA H.12) airfoil"
+  },
+  {
+    "file": "goe137",
+    "name": "Gottingen 137 (MVA H.15) airfoil"
+  },
+  {
+    "file": "goe13k",
+    "name": "Gottingen 13K airfoil"
+  },
+  {
+    "file": "goe14",
+    "name": "Gottingen 14 airfoil"
+  },
+  {
+    "file": "goe140",
+    "name": "Gottingen 140 (MVA H.17) airfoil"
+  },
+  {
+    "file": "goe142",
+    "name": "Gottingen 142 (MVA H.19) airfoil"
+  },
+  {
+    "file": "goe143",
+    "name": "Gottingen 143 (MVA H.20) airfoil"
+  },
+  {
+    "file": "goe144",
+    "name": "Gottingen 144 (MVA H.21) airfoil"
+  },
+  {
+    "file": "goe147",
+    "name": "Gottingen 147 (MVA H.6) airfoil"
+  },
+  {
+    "file": "goe14k",
+    "name": "Gottingen 14K airfoil"
+  },
+  {
+    "file": "goe15",
+    "name": "Gottingen 15 airfoil"
+  },
+  {
+    "file": "goe155",
+    "name": "Gottingen 155 (SSW D.1) airfoil"
+  },
+  {
+    "file": "goe15k",
+    "name": "Gottingen 15K airfoil"
+  },
+  {
+    "file": "goe164",
+    "name": "Gottingen 164 (MVA MK.10) airfoil"
+  },
+  {
+    "file": "goe165",
+    "name": "Gottingen 165 (MVA MK.11) airfoil"
+  },
+  {
+    "file": "goe167",
+    "name": "Gottingen 167 (V.Karman PROP.2) airfoil"
+  },
+  {
+    "file": "goe16k",
+    "name": "Gottingen 16K airfoil"
+  },
+  {
+    "file": "goe173",
+    "name": "Gottingen 173 (Albatros 6020) airfoil"
+  },
+  {
+    "file": "goe174",
+    "name": "Gottingen 174 (Albatros 5020) airfoil"
+  },
+  {
+    "file": "goe176",
+    "name": "Gottingen 176 (Albatros 7020) airfoil"
+  },
+  {
+    "file": "goe177",
+    "name": "Gottingen 177 airfoil"
+  },
+  {
+    "file": "goe178",
+    "name": "Gottingen 178 airfoil"
+  },
+  {
+    "file": "goe180",
+    "name": "Gottingen 180 (MVA H.26) airfoil"
+  },
+  {
+    "file": "goe182",
+    "name": "Gottingen 182 (MVA H.27) airfoil"
+  },
+  {
+    "file": "goe184",
+    "name": "Gottingen 184 (MVA H.29) airfoil"
+  },
+  {
+    "file": "goe187",
+    "name": "Gottingen 187 (Schatte-Lanz 2U10) airfoil"
+  },
+  {
+    "file": "goe188",
+    "name": "Gottingen 188 (Schatte-Lanz 3U10) airfoil"
+  },
+  {
+    "file": "goe190",
+    "name": "Gottingen 190 (MVA MK.18) airfoil"
+  },
+  {
+    "file": "goe195",
+    "name": "Gottingen 195 airfoil"
+  },
+  {
+    "file": "goe198",
+    "name": "Gottingen 198 (L.F.G. 5294) airfoil"
+  },
+  {
+    "file": "goe199",
+    "name": "Gottingen 199 (L.F.G. 5406) airfoil"
+  },
+  {
+    "file": "goe207",
+    "name": "Gottingen 207 (AVIATIK V8) airfoil"
+  },
+  {
+    "file": "goe210",
+    "name": "Gottingen 210 (DAIMLER) airfoil"
+  },
+  {
+    "file": "goe217",
+    "name": "Gottingen 217 (MVA MK.12) airfoil"
+  },
+  {
+    "file": "goe222",
+    "name": "Gottingen 222 (MVA H.33) airfoil"
+  },
+  {
+    "file": "goe223",
+    "name": "Gottingen 223 (MVA H.34) airfoil"
+  },
+  {
+    "file": "goe225",
+    "name": "Gottingen 225 (MVA H.35) airfoil"
+  },
+  {
+    "file": "goe226",
+    "name": "Gottingen 226 (MVA H.36) airfoil"
+  },
+  {
+    "file": "goe227",
+    "name": "Gottingen 227 (MVA H.37) airfoil"
+  },
+  {
+    "file": "goe228",
+    "name": "Gottingen 228 (MVA H.38) airfoil"
+  },
+  {
+    "file": "goe229",
+    "name": "Gottingen 229 (MVA H.39) airfoil"
+  },
+  {
+    "file": "goe233",
+    "name": "Gottingen 233 (MVA CA4) airfoil"
+  },
+  {
+    "file": "goe234",
+    "name": "Gottingen 234 (MVA CA5) airfoil"
+  },
+  {
+    "file": "goe235",
+    "name": "Gottingen 235 (SCHATTE-LANZ) airfoil"
+  },
+  {
+    "file": "goe238",
+    "name": "Gottingen 238 (HANSA-BRANDENBURG) airfoil"
+  },
+  {
+    "file": "goe239",
+    "name": "Gottingen 239 (MVA H.31) airfoil"
+  },
+  {
+    "file": "goe240",
+    "name": "Gottingen 240 (KOLLER) airfoil"
+  },
+  {
+    "file": "goe241",
+    "name": "Gottingen 241 (MVA PR.1) airfoil"
+  },
+  {
+    "file": "goe242",
+    "name": "Gottingen 242 (MVA PR.2) airfoil"
+  },
+  {
+    "file": "goe243",
+    "name": "Gottingen 243 (MVA PR.3) airfoil"
+  },
+  {
+    "file": "goe244",
+    "name": "Gottingen 244 (MVA PR.4) airfoil"
+  },
+  {
+    "file": "goe255",
+    "name": "Gottingen 255 (MVA CA.6) airfoil"
+  },
+  {
+    "file": "goe256",
+    "name": "Gottingen 256 (JUNKERS E) airfoil"
+  },
+  {
+    "file": "goe257",
+    "name": "Gottingen 257 airfoil"
+  },
+  {
+    "file": "goe264",
+    "name": "Gottingen 264 airfoil"
+  },
+  {
+    "file": "goe265",
+    "name": "Gottingen 265 airfoil"
+  },
+  {
+    "file": "goe269",
+    "name": "Gottingen 269 airfoil"
+  },
+  {
+    "file": "goe274",
+    "name": "Gottingen 274 (DAIMLER V) airfoil"
+  },
+  {
+    "file": "goe275",
+    "name": "Gottingen 275 (DAIMLER VI) airfoil"
+  },
+  {
+    "file": "goe276",
+    "name": "Gottingen 276 (DAIMLER VII) airfoil"
+  },
+  {
+    "file": "goe277",
+    "name": "Gottingen 277 (DAIMLER VIII) airfoil"
+  },
+  {
+    "file": "goe278",
+    "name": "Gottingen 278 (DAIMLER IX) airfoil"
+  },
+  {
+    "file": "goe279",
+    "name": "Gottingen 279 (DAIMLER X) airfoil"
+  },
+  {
+    "file": "goe280",
+    "name": "Gottingen 280 (DAIMLER XI) airfoil"
+  },
+  {
+    "file": "goe281",
+    "name": "Gottingen 281 (DAIMLER XII) airfoil"
+  },
+  {
+    "file": "goe282",
+    "name": "Gottingen 282 (DAIMLER XIII) airfoil"
+  },
+  {
+    "file": "goe284",
+    "name": "Gottingen 284 airfoil"
+  },
+  {
+    "file": "goe285",
+    "name": "Gottingen 285 airfoil"
+  },
+  {
+    "file": "goe286",
+    "name": "Gottingen 286 airfoil"
+  },
+  {
+    "file": "goe287",
+    "name": "Gottingen 287 airfoil"
+  },
+  {
+    "file": "goe288",
+    "name": "Gottingen 288 airfoil"
+  },
+  {
+    "file": "goe289",
+    "name": "Gottingen 289 (MVA 289) airfoil"
+  },
+  {
+    "file": "goe290",
+    "name": "Gottingen 290 (MVA 290) airfoil"
+  },
+  {
+    "file": "goe298",
+    "name": "Gottingen 298 airfoil"
+  },
+  {
+    "file": "goe29b",
+    "name": "Gottingen 29B airfoil"
+  },
+  {
+    "file": "goe300",
+    "name": "Gottingen 300 (Friedrichshafen G20) airfoil"
+  },
+  {
+    "file": "goe301",
+    "name": "Gottingen 301 (Friedrichshafen G 13) airfoil"
+  },
+  {
+    "file": "goe303",
+    "name": "Gottingen 303 (Friedrichshafen G03) airfoil"
+  },
+  {
+    "file": "goe304",
+    "name": "Gottingen 304 (Friedrichshafen G02) airfoil"
+  },
+  {
+    "file": "goe308",
+    "name": "Gottingen 308 (MVA H.40) airfoil"
+  },
+  {
+    "file": "goe309",
+    "name": "Gottingen 309 (MVA H.41) airfoil"
+  },
+  {
+    "file": "goe310",
+    "name": "Gottingen 310 (MVA H.42) airfoil"
+  },
+  {
+    "file": "goe311",
+    "name": "Gottingen 311 (MVA H.43) airfoil"
+  },
+  {
+    "file": "goe314",
+    "name": "Gottingen 314 (Hansa-Brandenburg) airfoil"
+  },
+  {
+    "file": "goe315",
+    "name": "Gottingen 315 (Hansa-Brandenburg III.5) airfoil"
+  },
+  {
+    "file": "goe316",
+    "name": "Gottingen 316 (Hansa-Brandenburg IV.5) airfoil"
+  },
+  {
+    "file": "goe318",
+    "name": "Gottingen 318 (Hansa-Brandenburg VI.5) airfoil"
+  },
+  {
+    "file": "goe319",
+    "name": "Gottingen 319 (Hansa-Brandenburg II) airfoil"
+  },
+  {
+    "file": "goe320",
+    "name": "Gottingen 320 (Hansa-Brandenburg II.1) airfoil"
+  },
+  {
+    "file": "goe321",
+    "name": "Gottingen 321 (Hansa-Brandenburg III.1) airfoil"
+  },
+  {
+    "file": "goe322",
+    "name": "Gottingen 322 (Hansa-Brandenburg IV.1) airfoil"
+  },
+  {
+    "file": "goe323",
+    "name": "Gottingen 323 (Hansa-Brandenburg V.1) airfoil"
+  },
+  {
+    "file": "goe324",
+    "name": "Gottingen 324 (Hansa-Brandenburg) airfoil"
+  },
+  {
+    "file": "goe325",
+    "name": "Gottingen 325 (Pfalz 54) airfoil"
+  },
+  {
+    "file": "goe326",
+    "name": "Gottingen 326 (Pfalz 55) airfoil"
+  },
+  {
+    "file": "goe328",
+    "name": "Gottingen 328 airfoil"
+  },
+  {
+    "file": "goe329",
+    "name": "Gottingen 329 (Pfalz 58) airfoil"
+  },
+  {
+    "file": "goe330",
+    "name": "Gottingen 330 (Pfalz 59) airfoil"
+  },
+  {
+    "file": "goe331",
+    "name": "Gottingen 331 (Pfalz 60) airfoil"
+  },
+  {
+    "file": "goe332",
+    "name": "Gottingen 332 (Pfalz 61) airfoil"
+  },
+  {
+    "file": "goe335",
+    "name": "Gottingen 335 (D.F.W.) airfoil"
+  },
+  {
+    "file": "goe336",
+    "name": "Gottingen 336 (MVA H.44) airfoil"
+  },
+  {
+    "file": "goe342",
+    "name": "Gottingen 342 airfoil"
+  },
+  {
+    "file": "goe344",
+    "name": "Gottingen 344 (Pfalz 71) airfoil"
+  },
+  {
+    "file": "goe346",
+    "name": "Gottingen 346 (Friedrichshafen-Staaken) airfoil"
+  },
+  {
+    "file": "goe358",
+    "name": "Gottingen 358 airfoil"
+  },
+  {
+    "file": "goe359",
+    "name": "Gottingen 359 airfoil"
+  },
+  {
+    "file": "goe360",
+    "name": "Gottingen 360 airfoil"
+  },
+  {
+    "file": "goe361",
+    "name": "Gottingen 361 airfoil"
+  },
+  {
+    "file": "goe362",
+    "name": "Gottingen 362 airfoil"
+  },
+  {
+    "file": "goe363",
+    "name": "Gottingen 363 airfoil"
+  },
+  {
+    "file": "goe364",
+    "name": "Gottingen 364 airfoil"
+  },
+  {
+    "file": "goe365",
+    "name": "Gottingen 365 airfoil"
+  },
+  {
+    "file": "goe366",
+    "name": "Gottingen 366 airfoil"
+  },
+  {
+    "file": "goe367",
+    "name": "Gottingen 367 airfoil"
+  },
+  {
+    "file": "goe368",
+    "name": "Gottingen 368 airfoil"
+  },
+  {
+    "file": "goe369",
+    "name": "Gottingen 369 airfoil"
+  },
+  {
+    "file": "goe370",
+    "name": "Gottingen 370 airfoil"
+  },
+  {
+    "file": "goe371",
+    "name": "Gottingen 371 airfoil"
+  },
+  {
+    "file": "goe372",
+    "name": "Gottingen 372 airfoil"
+  },
+  {
+    "file": "goe373",
+    "name": "Gottingen 373 airfoil"
+  },
+  {
+    "file": "goe374",
+    "name": "Gottingen 374 airfoil"
+  },
+  {
+    "file": "goe375",
+    "name": "Gottingen 375 airfoil"
+  },
+  {
+    "file": "goe376",
+    "name": "Gottingen 376 airfoil"
+  },
+  {
+    "file": "goe377",
+    "name": "Gottingen 377 airfoil"
+  },
+  {
+    "file": "goe379",
+    "name": "Gottingen 379 airfoil"
+  },
+  {
+    "file": "goe380",
+    "name": "Gottingen 380 airfoil"
+  },
+  {
+    "file": "goe381",
+    "name": "Gottingen 381 airfoil"
+  },
+  {
+    "file": "goe382",
+    "name": "Gottingen 382 airfoil"
+  },
+  {
+    "file": "goe383",
+    "name": "Gottingen 383 airfoil"
+  },
+  {
+    "file": "goe384",
+    "name": "Gottingen 384 airfoil"
+  },
+  {
+    "file": "goe385",
+    "name": "Gottingen 385 airfoil"
+  },
+  {
+    "file": "goe386",
+    "name": "Gottingen 386 airfoil"
+  },
+  {
+    "file": "goe387",
+    "name": "Gottingen 387 airfoil"
+  },
+  {
+    "file": "goe388",
+    "name": "Gottingen 388 airfoil"
+  },
+  {
+    "file": "goe389",
+    "name": "Gottingen 389 airfoil"
+  },
+  {
+    "file": "goe390",
+    "name": "Gottingen 390 airfoil"
+  },
+  {
+    "file": "goe391",
+    "name": "Gottingen 391 airfoil"
+  },
+  {
+    "file": "goe392",
+    "name": "Gottingen 392 airfoil"
+  },
+  {
+    "file": "goe393",
+    "name": "Gottingen 393 airfoil"
+  },
+  {
+    "file": "goe394",
+    "name": "Gottingen 394 airfoil"
+  },
+  {
+    "file": "goe395",
+    "name": "Gottingen 395 airfoil"
+  },
+  {
+    "file": "goe396",
+    "name": "Gottingen 396 airfoil"
+  },
+  {
+    "file": "goe397",
+    "name": "Gottingen 397 airfoil"
+  },
+  {
+    "file": "goe398",
+    "name": "Gottingen 398 airfoil"
+  },
+  {
+    "file": "goe399",
+    "name": "Gottingen 399 airfoil"
+  },
+  {
+    "file": "goe400",
+    "name": "Gottingen 400 airfoil"
+  },
+  {
+    "file": "goe401",
+    "name": "Gottingen 401 airfoil"
+  },
+  {
+    "file": "goe402",
+    "name": "Gottingen 402 airfoil"
+  },
+  {
+    "file": "goe403",
+    "name": "Gottingen 403 airfoil"
+  },
+  {
+    "file": "goe404",
+    "name": "Gottingen 404 airfoil"
+  },
+  {
+    "file": "goe405",
+    "name": "Gottingen 405 airfoil"
+  },
+  {
+    "file": "goe406",
+    "name": "Gottingen 406 airfoil"
+  },
+  {
+    "file": "goe407",
+    "name": "Gottingen 407 airfoil"
+  },
+  {
+    "file": "goe408",
+    "name": "Gottingen 408 airfoil"
+  },
+  {
+    "file": "goe409",
+    "name": "Gottingen 409 airfoil"
+  },
+  {
+    "file": "goe410",
+    "name": "Gottingen 410 airfoil"
+  },
+  {
+    "file": "goe411",
+    "name": "Gottingen 411 airfoil"
+  },
+  {
+    "file": "goe412",
+    "name": "Gottingen 412 airfoil"
+  },
+  {
+    "file": "goe413",
+    "name": "Gottingen 413 airfoil"
+  },
+  {
+    "file": "goe414",
+    "name": "Gottingen 414 airfoil"
+  },
+  {
+    "file": "goe415",
+    "name": "Gottingen 415 airfoil"
+  },
+  {
+    "file": "goe416a",
+    "name": "Gottingen 416A airfoil"
+  },
+  {
+    "file": "goe417",
+    "name": "Gottingen 417 airfoil"
+  },
+  {
+    "file": "goe417a",
+    "name": "Gottingen 417A (GEW. PLATTE) airfoil"
+  },
+  {
+    "file": "goe418",
+    "name": "Gottingen 418 airfoil"
+  },
+  {
+    "file": "goe419",
+    "name": "Gottingen 419 airfoil"
+  },
+  {
+    "file": "goe420",
+    "name": "Gottingen 420 airfoil"
+  },
+  {
+    "file": "goe421",
+    "name": "Gottingen 421 airfoil"
+  },
+  {
+    "file": "goe422",
+    "name": "Gottingen 422 airfoil"
+  },
+  {
+    "file": "goe423",
+    "name": "Gottingen 423 airfoil"
+  },
+  {
+    "file": "goe424",
+    "name": "Gottingen 424 airfoil"
+  },
+  {
+    "file": "goe425",
+    "name": "Gottingen 425 airfoil"
+  },
+  {
+    "file": "goe426",
+    "name": "Gottingen 426 airfoil"
+  },
+  {
+    "file": "goe427",
+    "name": "Gottingen 427 airfoil"
+  },
+  {
+    "file": "goe428",
+    "name": "Gottingen 428 airfoil"
+  },
+  {
+    "file": "goe429",
+    "name": "Gottingen 429 airfoil"
+  },
+  {
+    "file": "goe430",
+    "name": "Gottingen 430 airfoil"
+  },
+  {
+    "file": "goe431",
+    "name": "Gottingen 431 airfoil"
+  },
+  {
+    "file": "goe432",
+    "name": "Gottingen 432 airfoil"
+  },
+  {
+    "file": "goe433",
+    "name": "Gottingen 433 airfoil"
+  },
+  {
+    "file": "goe434",
+    "name": "Gottingen 434 airfoil"
+  },
+  {
+    "file": "goe435",
+    "name": "Gottingen 435 airfoil"
+  },
+  {
+    "file": "goe436",
+    "name": "Gottingen 436 airfoil"
+  },
+  {
+    "file": "goe437",
+    "name": "Gottingen 437 airfoil"
+  },
+  {
+    "file": "goe438",
+    "name": "Gottingen 438 airfoil"
+  },
+  {
+    "file": "goe439",
+    "name": "Gottingen 439 airfoil"
+  },
+  {
+    "file": "goe440",
+    "name": "Gottingen 440 airfoil"
+  },
+  {
+    "file": "goe441",
+    "name": "Gottingen 441 airfoil"
+  },
+  {
+    "file": "goe442",
+    "name": "Gottingen 442 airfoil"
+  },
+  {
+    "file": "goe443",
+    "name": "Gottingen 443 airfoil"
+  },
+  {
+    "file": "goe444",
+    "name": "Gottingen 444 airfoil"
+  },
+  {
+    "file": "goe445",
+    "name": "Gottingen 445 airfoil"
+  },
+  {
+    "file": "goe446",
+    "name": "Gottingen 446 airfoil"
+  },
+  {
+    "file": "goe447",
+    "name": "Gottingen 447 airfoil"
+  },
+  {
+    "file": "goe448",
+    "name": "Gottingen 448 airfoil"
+  },
+  {
+    "file": "goe449",
+    "name": "Gottingen 449 airfoil"
+  },
+  {
+    "file": "goe450",
+    "name": "Gottingen 450 airfoil"
+  },
+  {
+    "file": "goe451",
+    "name": "Gottingen 451 airfoil"
+  },
+  {
+    "file": "goe456",
+    "name": "Gottingen 456 airfoil"
+  },
+  {
+    "file": "goe457",
+    "name": "Gottingen 457 airfoil"
+  },
+  {
+    "file": "goe458",
+    "name": "Gottingen 458 airfoil"
+  },
+  {
+    "file": "goe459",
+    "name": "Gottingen 459 airfoil"
+  },
+  {
+    "file": "goe460",
+    "name": "Gottingen 460 airfoil"
+  },
+  {
+    "file": "goe462",
+    "name": "Gottingen 462 airfoil"
+  },
+  {
+    "file": "goe464",
+    "name": "Gottingen 464 airfoil"
+  },
+  {
+    "file": "goe474",
+    "name": "Gottingen 474 airfoil"
+  },
+  {
+    "file": "goe476",
+    "name": "Gottingen 476 airfoil"
+  },
+  {
+    "file": "goe477",
+    "name": "Gottingen 477 airfoil"
+  },
+  {
+    "file": "goe478",
+    "name": "Gottingen 478 airfoil"
+  },
+  {
+    "file": "goe479",
+    "name": "Gottingen 479 airfoil"
+  },
+  {
+    "file": "goe480",
+    "name": "Gottingen 480 airfoil"
+  },
+  {
+    "file": "goe481",
+    "name": "Gottingen 481 airfoil"
+  },
+  {
+    "file": "goe481a",
+    "name": "Gottingen 481A airfoil"
+  },
+  {
+    "file": "goe482",
+    "name": "Gottingen 482 airfoil"
+  },
+  {
+    "file": "goe483",
+    "name": "Gottingen 483 airfoil"
+  },
+  {
+    "file": "goe484",
+    "name": "Gottingen 484 airfoil"
+  },
+  {
+    "file": "goe488",
+    "name": "Gottingen 488 airfoil"
+  },
+  {
+    "file": "goe490",
+    "name": "Gottingen 490 airfoil"
+  },
+  {
+    "file": "goe491",
+    "name": "Gottingen 491 airfoil"
+  },
+  {
+    "file": "goe492",
+    "name": "Gottingen 492 airfoil"
+  },
+  {
+    "file": "goe493",
+    "name": "Gottingen 493 airfoil"
+  },
+  {
+    "file": "goe494",
+    "name": "Gottingen 494 airfoil"
+  },
+  {
+    "file": "goe495",
+    "name": "Gottingen 495 airfoil"
+  },
+  {
+    "file": "goe496",
+    "name": "Gottingen 496 airfoil"
+  },
+  {
+    "file": "goe497",
+    "name": "Gottingen 497 airfoil"
+  },
+  {
+    "file": "goe498",
+    "name": "Gottingen 498 airfoil"
+  },
+  {
+    "file": "goe499",
+    "name": "Gottingen 499 airfoil"
+  },
+  {
+    "file": "goe500",
+    "name": "Gottingen 500 airfoil"
+  },
+  {
+    "file": "goe501",
+    "name": "Gottingen 501 airfoil"
+  },
+  {
+    "file": "goe502",
+    "name": "Gottingen 502 airfoil"
+  },
+  {
+    "file": "goe503",
+    "name": "Gottingen 503 airfoil"
+  },
+  {
+    "file": "goe504",
+    "name": "Gottingen 504 airfoil"
+  },
+  {
+    "file": "goe505",
+    "name": "Gottingen 505 airfoil"
+  },
+  {
+    "file": "goe506",
+    "name": "Gottingen 506 airfoil"
+  },
+  {
+    "file": "goe507",
+    "name": "Gottingen 507 airfoil"
+  },
+  {
+    "file": "goe508",
+    "name": "Gottingen 508 airfoil"
+  },
+  {
+    "file": "goe509",
+    "name": "Gottingen 509 airfoil"
+  },
+  {
+    "file": "goe510",
+    "name": "Gottingen 510 airfoil"
+  },
+  {
+    "file": "goe511",
+    "name": "Gottingen 511 airfoil"
+  },
+  {
+    "file": "goe512",
+    "name": "Gottingen 512 airfoil"
+  },
+  {
+    "file": "goe513",
+    "name": "Gottingen 513 airfoil"
+  },
+  {
+    "file": "goe514",
+    "name": "Gottingen 514 airfoil"
+  },
+  {
+    "file": "goe515",
+    "name": "Gottingen 515 airfoil"
+  },
+  {
+    "file": "goe517",
+    "name": "Gottingen 517 airfoil"
+  },
+  {
+    "file": "goe518",
+    "name": "Gottingen 518 airfoil"
+  },
+  {
+    "file": "goe522",
+    "name": "Gottingen 522 airfoil"
+  },
+  {
+    "file": "goe523",
+    "name": "Gottingen 523 airfoil"
+  },
+  {
+    "file": "goe525",
+    "name": "Gottingen 525 airfoil"
+  },
+  {
+    "file": "goe526",
+    "name": "Gottingen 526 airfoil"
+  },
+  {
+    "file": "goe527",
+    "name": "Gottingen 527 airfoil"
+  },
+  {
+    "file": "goe528",
+    "name": "Gottingen 528 airfoil"
+  },
+  {
+    "file": "goe529",
+    "name": "Gottingen 529 airfoil"
+  },
+  {
+    "file": "goe530",
+    "name": "Gottingen 530 airfoil"
+  },
+  {
+    "file": "goe531",
+    "name": "Gottingen 531 airfoil"
+  },
+  {
+    "file": "goe532",
+    "name": "Gottingen 532 airfoil"
+  },
+  {
+    "file": "goe533",
+    "name": "Gottingen 533 airfoil"
+  },
+  {
+    "file": "goe534",
+    "name": "Gottingen 534 airfoil"
+  },
+  {
+    "file": "goe535",
+    "name": "Gottingen 535 airfoil"
+  },
+  {
+    "file": "goe54",
+    "name": "Gottingen 54 airfoil"
+  },
+  {
+    "file": "goe546",
+    "name": "Gottingen 546 airfoil"
+  },
+  {
+    "file": "goe547",
+    "name": "Gottingen 547 airfoil"
+  },
+  {
+    "file": "goe548",
+    "name": "Gottingen 548 airfoil"
+  },
+  {
+    "file": "goe549",
+    "name": "Gottingen 549 airfoil"
+  },
+  {
+    "file": "goe55",
+    "name": "Gottingen 55 airfoil"
+  },
+  {
+    "file": "goe550",
+    "name": "Gottingen 550 airfoil"
+  },
+  {
+    "file": "goe553",
+    "name": "Gottingen 553 airfoil"
+  },
+  {
+    "file": "goe559",
+    "name": "Gottingen 559 airfoil"
+  },
+  {
+    "file": "goe561",
+    "name": "Gottingen 561 airfoil"
+  },
+  {
+    "file": "goe562",
+    "name": "Gottingen 562 airfoil"
+  },
+  {
+    "file": "goe563",
+    "name": "Gottingen 563 airfoil"
+  },
+  {
+    "file": "goe564",
+    "name": "Gottingen 564 airfoil"
+  },
+  {
+    "file": "goe565",
+    "name": "Gottingen 565 airfoil"
+  },
+  {
+    "file": "goe566",
+    "name": "Gottingen 566 airfoil"
+  },
+  {
+    "file": "goe567",
+    "name": "Gottingen 567 airfoil"
+  },
+  {
+    "file": "goe57",
+    "name": "Gottingen 57 airfoil"
+  },
+  {
+    "file": "goe570",
+    "name": "Gottingen 570 airfoil"
+  },
+  {
+    "file": "goe571",
+    "name": "Gottingen 571 airfoil"
+  },
+  {
+    "file": "goe572",
+    "name": "Gottingen 572 airfoil"
+  },
+  {
+    "file": "goe573",
+    "name": "Gottingen 573 airfoil"
+  },
+  {
+    "file": "goe574",
+    "name": "Gottingen 574 airfoil"
+  },
+  {
+    "file": "goe575",
+    "name": "Gottingen 575 airfoil"
+  },
+  {
+    "file": "goe584",
+    "name": "Gottingen 584 airfoil"
+  },
+  {
+    "file": "goe585",
+    "name": "Gottingen 585 airfoil"
+  },
+  {
+    "file": "goe587",
+    "name": "Gottingen 587 airfoil"
+  },
+  {
+    "file": "goe590",
+    "name": "Gottingen 590 airfoil"
+  },
+  {
+    "file": "goe591",
+    "name": "Gottingen 591 airfoil"
+  },
+  {
+    "file": "goe592",
+    "name": "Gottingen 592 airfoil"
+  },
+  {
+    "file": "goe593",
+    "name": "Gottingen 593 airfoil"
+  },
+  {
+    "file": "goe595",
+    "name": "Gottingen 595 airfoil"
+  },
+  {
+    "file": "goe596",
+    "name": "Gottingen 596 airfoil"
+  },
+  {
+    "file": "goe598",
+    "name": "Gottingen 598 airfoil"
+  },
+  {
+    "file": "goe599",
+    "name": "Gottingen 599 airfoil"
+  },
+  {
+    "file": "goe600",
+    "name": "Gottingen 600 airfoil"
+  },
+  {
+    "file": "goe601",
+    "name": "Gottingen 601 airfoil"
+  },
+  {
+    "file": "goe602",
+    "name": "Gottingen 602 airfoil"
+  },
+  {
+    "file": "goe602m",
+    "name": "Gottingen 602 MOD airfoil"
+  },
+  {
+    "file": "goe604",
+    "name": "Gottingen 604 airfoil"
+  },
+  {
+    "file": "goe610b",
+    "name": "Gottingen 610 B airfoil"
+  },
+  {
+    "file": "goe610bm",
+    "name": "Gottingen 610-B MOD airfoil"
+  },
+  {
+    "file": "goe611",
+    "name": "Gottingen 611 airfoil"
+  },
+  {
+    "file": "goe612",
+    "name": "Gottingen 612 airfoil"
+  },
+  {
+    "file": "goe613",
+    "name": "Gottingen 613 airfoil"
+  },
+  {
+    "file": "goe614",
+    "name": "Gottingen 614 airfoil"
+  },
+  {
+    "file": "goe615",
+    "name": "Gottingen 615 airfoil"
+  },
+  {
+    "file": "goe617",
+    "name": "Gottingen 617 airfoil"
+  },
+  {
+    "file": "goe619",
+    "name": "Gottingen 619 airfoil"
+  },
+  {
+    "file": "goe620",
+    "name": "Gottingen 620 airfoil"
+  },
+  {
+    "file": "goe621",
+    "name": "Gottingen 621 airfoil"
+  },
+  {
+    "file": "goe622",
+    "name": "Gottingen 622 airfoil"
+  },
+  {
+    "file": "goe623",
+    "name": "Gottingen 623 airfoil"
+  },
+  {
+    "file": "goe624",
+    "name": "Gottingen 624 airfoil"
+  },
+  {
+    "file": "goe625",
+    "name": "Gottingen 625 airfoil"
+  },
+  {
+    "file": "goe626",
+    "name": "Gottingen 626 airfoil"
+  },
+  {
+    "file": "goe627",
+    "name": "Gottingen 627 airfoil"
+  },
+  {
+    "file": "goe628",
+    "name": "Gottingen 628 airfoil"
+  },
+  {
+    "file": "goe629",
+    "name": "Gottingen 629 airfoil"
+  },
+  {
+    "file": "goe63",
+    "name": "Gottingen 63 airfoil"
+  },
+  {
+    "file": "goe630",
+    "name": "Gottingen 630 airfoil"
+  },
+  {
+    "file": "goe632",
+    "name": "Gottingen 632 airfoil"
+  },
+  {
+    "file": "goe633",
+    "name": "Gottingen 633 airfoil"
+  },
+  {
+    "file": "goe645",
+    "name": "Gottingen 645 airfoil"
+  },
+  {
+    "file": "goe646",
+    "name": "Gottingen 646 airfoil"
+  },
+  {
+    "file": "goe647",
+    "name": "Gottingen 647 airfoil"
+  },
+  {
+    "file": "goe648",
+    "name": "Gottingen 648 airfoil"
+  },
+  {
+    "file": "goe650",
+    "name": "Gottingen 650 airfoil"
+  },
+  {
+    "file": "goe652",
+    "name": "Gottingen 652 airfoil"
+  },
+  {
+    "file": "goe654",
+    "name": "Gottingen 654 airfoil"
+  },
+  {
+    "file": "goe655",
+    "name": "Gottingen 655 airfoil"
+  },
+  {
+    "file": "goe670",
+    "name": "Gottingen 670 airfoil"
+  },
+  {
+    "file": "goe673",
+    "name": "Gottingen 673 airfoil"
+  },
+  {
+    "file": "goe675",
+    "name": "Gottingen 675 airfoil"
+  },
+  {
+    "file": "goe676",
+    "name": "Gottingen 676 (= M 12) airfoil"
+  },
+  {
+    "file": "goe677",
+    "name": "Gottingen 677 (= M 6) airfoil"
+  },
+  {
+    "file": "goe679",
+    "name": "Gottingen 679 airfoil"
+  },
+  {
+    "file": "goe681",
+    "name": "Gottingen 681 airfoil"
+  },
+  {
+    "file": "goe682",
+    "name": "Gottingen 682 airfoil"
+  },
+  {
+    "file": "goe683",
+    "name": "Gottingen 683 airfoil"
+  },
+  {
+    "file": "goe685",
+    "name": "Gottingen 685 airfoil"
+  },
+  {
+    "file": "goe692",
+    "name": "Gottingen 692 airfoil"
+  },
+  {
+    "file": "goe693",
+    "name": "Gottingen 693 airfoil"
+  },
+  {
+    "file": "goe701",
+    "name": "Gottingen 701 airfoil"
+  },
+  {
+    "file": "goe702",
+    "name": "Gottingen 702 airfoil"
+  },
+  {
+    "file": "goe703",
+    "name": "Gottingen 703 airfoil"
+  },
+  {
+    "file": "goe704",
+    "name": "Gottingen 704 airfoil"
+  },
+  {
+    "file": "goe711",
+    "name": "Gottingen 711 airfoil"
+  },
+  {
+    "file": "goe723",
+    "name": "Gottingen 723 airfoil"
+  },
+  {
+    "file": "goe735",
+    "name": "Gottingen 735 airfoil"
+  },
+  {
+    "file": "goe738",
+    "name": "Gottingen 738 airfoil"
+  },
+  {
+    "file": "goe741",
+    "name": "Gottingen 741 airfoil"
+  },
+  {
+    "file": "goe744",
+    "name": "Gottingen 744 airfoil"
+  },
+  {
+    "file": "goe746",
+    "name": "Gottingen 746 airfoil"
+  },
+  {
+    "file": "goe758",
+    "name": "Gottingen 758 airfoil"
+  },
+  {
+    "file": "goe765",
+    "name": "Gottingen 765 airfoil (Me 163 Komet)"
+  },
+  {
+    "file": "goe766",
+    "name": "Gottingen 766 airfoil"
+  },
+  {
+    "file": "goe767",
+    "name": "Gottingen 767 airfoil"
+  },
+  {
+    "file": "goe769",
+    "name": "Gottingen 769 airfoil"
+  },
+  {
+    "file": "goe770",
+    "name": "Gottingen 770 airfoil"
+  },
+  {
+    "file": "goe775",
+    "name": "Gottingen 775 airfoil"
+  },
+  {
+    "file": "goe776",
+    "name": "Gottingen 776 airfoil"
+  },
+  {
+    "file": "goe777",
+    "name": "Gottingen 777 airfoil"
+  },
+  {
+    "file": "goe780",
+    "name": "Gottingen 780 airfoil"
+  },
+  {
+    "file": "goe79",
+    "name": "Gottingen 79 (Pfalz 11) airfoil"
+  },
+  {
+    "file": "goe795",
+    "name": "Gottingen 795 airfoil"
+  },
+  {
+    "file": "goe795sm",
+    "name": "Gottingen 795 airfoil (smoothed)"
+  },
+  {
+    "file": "goe796",
+    "name": "Gottingen 796 airfoil"
+  },
+  {
+    "file": "goe797",
+    "name": "Gottingen 797 airfoil"
+  },
+  {
+    "file": "goe798",
+    "name": "Gottingen 798 airfoil"
+  },
+  {
+    "file": "goe801",
+    "name": "Gottingen 801 (MVA 301) airfoil"
+  },
+  {
+    "file": "goe802",
+    "name": "Gottingen 802 airfoil"
+  },
+  {
+    "file": "goe802a",
+    "name": "Gottingen 802 A airfoil"
+  },
+  {
+    "file": "goe802b",
+    "name": "Gottingen 802 B airfoil"
+  },
+  {
+    "file": "goe803h",
+    "name": "Gottingen 803 (Hacklinger) airfoil"
+  },
+  {
+    "file": "goe804",
+    "name": "Gottingen 804 (EA 8) airfoil"
+  },
+  {
+    "file": "goe81",
+    "name": "Gottingen 81 airfoil"
+  },
+  {
+    "file": "goe92",
+    "name": "Gottingen 92 airfoil"
+  },
+  {
+    "file": "griffith30SymSuction",
+    "name": "Griffith 30% suction airfoil"
+  },
+  {
+    "file": "gs1",
+    "name": "Gluharoff/Sikorsky GS-1 airfoil"
+  },
+  {
+    "file": "gu255118",
+    "name": "University of Glasgow GU 25-5(11)8 canard airfoil (Quickie, Varieze and Long-EZ canard airfoil)"
+  },
+  {
+    "file": "gw19",
+    "name": "Drela GW19 airfoil (Predator root, design Re*sqrt(CL)=1500K)"
+  },
+  {
+    "file": "gw25",
+    "name": "Drela GW25 airfoil (Predator tip / Gnat root, design Re*sqrt(CL)=600K)"
+  },
+  {
+    "file": "gw27",
+    "name": "Drela GW27 airfoil (Gnat tip, design Re*sqrt(CL)=300K)"
+  },
+  {
+    "file": "gw30",
+    "name": "Drela GW30 airfoil (design Re*sqrt(CL)=150K)"
+  },
+  {
+    "file": "gw31",
+    "name": "Drela GW31 airfoil (design Re*sqrt(CL)=75K)"
+  },
+  {
+    "file": "hh02",
+    "name": "Hughes helicopters HH-02 rotorcraft airfoil"
+  },
+  {
+    "file": "hobie",
+    "name": "Hobie Hawk airfoil (Hobie Hawk R/C sailplane)"
+  },
+  {
+    "file": "hobiesm",
+    "name": "Hobie Hawk airfoil (Hobie Hawk R/C sailplane)"
+  },
+  {
+    "file": "hor04",
+    "name": "Onera HOR 04 propeller blade airfoil from US Patent 4,773,825"
+  },
+  {
+    "file": "hor07",
+    "name": "Onera HOR 07 propeller blade airfoil from US Patent 4,773,825"
+  },
+  {
+    "file": "hor12",
+    "name": "Onera HOR 12 propeller blade airfoil from US Patent 4,773,825"
+  },
+  {
+    "file": "hor20",
+    "name": "Onera HOR 20 propeller blade airfoil from US Patent 4,773,825"
+  },
+  {
+    "file": "hq010",
+    "name": "Quabeck HQ 0/10 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq07",
+    "name": "Quabeck HQ 0/7 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq09",
+    "name": "Quabeck HQ 0/9 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq1010",
+    "name": "Quabeck HQ 1.0/10 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq1012",
+    "name": "Quabeck HQ 1.0/12 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq108",
+    "name": "Quabeck HQ 1.0/8 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq109",
+    "name": "Quabeck HQ 1.0/9 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq1510",
+    "name": "Quabeck HQ 1.5/10 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq1511",
+    "name": "Quabeck HQ 1.5/11 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq1512",
+    "name": "Quabeck HQ 1.5/12 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq158",
+    "name": "Quabeck HQ 1.5/8 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq1585",
+    "name": "Quabeck HQ 1.5/8.5 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq159",
+    "name": "Quabeck HQ 1.5/9 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq159b",
+    "name": "Quabeck HQ 1.5/9 B R/C sailplane airfoil"
+  },
+  {
+    "file": "hq17",
+    "name": "Horstmann and Quast HQ-17/14.38 (measured from an ASW22 wing)"
+  },
+  {
+    "file": "hq2010",
+    "name": "Quabeck HQ 2.0/10 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq2012",
+    "name": "Quabeck HQ 2.0/12 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq208",
+    "name": "Quabeck HQ 2.0/8 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq209",
+    "name": "Quabeck HQ 2.0/9 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq2090sm",
+    "name": "Quabeck HQ 2.0/9 R/C sailplane airfoil (smoothed)"
+  },
+  {
+    "file": "hq2195",
+    "name": "Quabeck HQ 2.1/9.5 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq2510",
+    "name": "Quabeck HQ 2.5/10 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq2511",
+    "name": "Quabeck HQ 2.5/11 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq2512",
+    "name": "Quabeck HQ 2.5/12 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq258",
+    "name": "Quabeck HQ 2.5/8 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq259",
+    "name": "Quabeck HQ 2.5/9 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq2590sm",
+    "name": "Quabeck HQ 2.5/9 R/C sailplane airfoil (smoothed)"
+  },
+  {
+    "file": "hq259b",
+    "name": "Quabeck HQ 2.5/9 B R/C sailplane airfoil"
+  },
+  {
+    "file": "hq300gd2",
+    "name": "DFVLR/Braunschweig Horstmann and Quast HQ-300 GD(MOD 2) sailplane airfoil"
+  },
+  {
+    "file": "hq3010",
+    "name": "Quabeck HQ 3.0/10 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq3011",
+    "name": "Quabeck HQ 3.0/11 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq3012",
+    "name": "Quabeck HQ 3.0/12 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq3013",
+    "name": "Quabeck HQ 3.0/13 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq3014",
+    "name": "Quabeck HQ 3.0/14 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq3015",
+    "name": "Quabeck HQ 3.0/15 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq308",
+    "name": "Quabeck HQ 3.0/8 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq309",
+    "name": "Quabeck HQ 3.0/9 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq3510",
+    "name": "Quabeck HQ 3.5/10 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq3512",
+    "name": "Quabeck HQ 3.5/12 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq3513",
+    "name": "Quabeck HQ 3.5/13 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq3514",
+    "name": "Quabeck HQ 3.5/14 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq3518",
+    "name": "Quabeck HQ 3.5/18 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq358",
+    "name": "Quabeck HQ 3.5/8 R/C sailplane airfoil"
+  },
+  {
+    "file": "hq359",
+    "name": "Quabeck HQ 3.5/9 R/C sailplane airfoil"
+  },
+  {
+    "file": "hs1404",
+    "name": "HS1-404 propeller blade airfoil from US Patent No. 4,519,746"
+  },
+  {
+    "file": "hs1430",
+    "name": "HS1-430 propeller blade airfoil from US Patent No. 4,519,746"
+  },
+  {
+    "file": "hs1606",
+    "name": "HS1-606 propeller blade airfoil from US Patent No. 4,519,746"
+  },
+  {
+    "file": "hs1620",
+    "name": "HS1-620 propeller blade airfoil from US Patent No. 4,519,746"
+  },
+  {
+    "file": "hs1708",
+    "name": "HS1-708 propeller blade airfoil from US Patent No. 4,519,746"
+  },
+  {
+    "file": "hs1712",
+    "name": "HS1-712 propeller blade airfoil from US Patent No. 4,519,746"
+  },
+  {
+    "file": "hsnlf213",
+    "name": "NASA/Langley HSNLF(1)-0213 high speed natural laminar flow airfoil"
+  },
+  {
+    "file": "ht05",
+    "name": "Drela HT05 airfoil"
+  },
+  {
+    "file": "ht08",
+    "name": "Drela HT08 airfoil"
+  },
+  {
+    "file": "ht12",
+    "name": "Drela HT12 airfoil"
+  },
+  {
+    "file": "ht13",
+    "name": "Drela HT13 airfoil"
+  },
+  {
+    "file": "ht14",
+    "name": "Drela HT14 airfoil"
+  },
+  {
+    "file": "ht21",
+    "name": "Drela HT21 airfoil"
+  },
+  {
+    "file": "ht22",
+    "name": "Drela HT22 airfoil"
+  },
+  {
+    "file": "ht23",
+    "name": "Drela HT23 airfoil"
+  },
+  {
+    "file": "ht33",
+    "name": "Drela HT33 airfoil"
+  },
+  {
+    "file": "ht34",
+    "name": "Drela HT34 airfoil"
+  },
+  {
+    "file": "ht35",
+    "name": "Drela HT35 airfoil"
+  },
+  {
+    "file": "isa571",
+    "name": "I.S.A. 571 airfoil"
+  },
+  {
+    "file": "isa960",
+    "name": "I.S.A. 960 airfoil"
+  },
+  {
+    "file": "isa961",
+    "name": "I.S.A. 961 airfoil"
+  },
+  {
+    "file": "isa962",
+    "name": "I.S.A. 962 airfoil"
+  },
+  {
+    "file": "j5012",
+    "name": "Jef Raskin (originator of the Apple Macintosh Project) J5012 airfoil"
+  },
+  {
+    "file": "jn153",
+    "name": "Narramore JN153 airfoil"
+  },
+  {
+    "file": "joukowsk",
+    "name": "12% Joukowski airfoil"
+  },
+  {
+    "file": "jx-gs-04",
+    "name": "Jochen G&#252;nzel JX-GS-04 airfoil for F3F slope racing"
+  },
+  {
+    "file": "jx-gs-06",
+    "name": "Jochen G&#252;nzel JX-GS-06 airfoil for F3F slope racing"
+  },
+  {
+    "file": "jx-gs-10",
+    "name": "Jochen G&#252;nzel JX-GS-10 airfoil for F3F slope racing"
+  },
+  {
+    "file": "jx-gs-15",
+    "name": "Jochen G&#252;nzel JX-GS-15 airfoil for F3F slope racing"
+  },
+  {
+    "file": "k1",
+    "name": "NYU/Grumman K-1 transonic airfoil (GAC .75-.63-11.6)"
+  },
+  {
+    "file": "k2",
+    "name": "Grumman K-2 transonic airfoil (GAC .80-.53-10.3)"
+  },
+  {
+    "file": "k3",
+    "name": "Grumman K-3 transonic airfoil (GAC .70-.83-17.5)"
+  },
+  {
+    "file": "k3311",
+    "name": "Leon Kincaid K3311 airfoil (original)"
+  },
+  {
+    "file": "k3311sm",
+    "name": "Leon Kincaid K3311 airfoil (smoothed)"
+  },
+  {
+    "file": "kc135a",
+    "name": "Boeing KC-135 transonic airfoils"
+  },
+  {
+    "file": "kc135b",
+    "name": "continued"
+  },
+  {
+    "file": "kc135c",
+    "name": "continued"
+  },
+  {
+    "file": "kc135d",
+    "name": "continued"
+  },
+  {
+    "file": "kc135winglet",
+    "name": "Boeing KC-135 winglet airfoil designed by Richard T. Whitcomb"
+  },
+  {
+    "file": "kenmar",
+    "name": "University of Alberta/Kennedy and Marsden high lift airfoil"
+  },
+  {
+    "file": "l1003",
+    "name": "Liebeck L1003 high lift airfoil"
+  },
+  {
+    "file": "l188root",
+    "name": "Lockheed L-188/P-3 root airfoil NACA 0014 -1.10 40/1.051 Cli=.3 a=.8"
+  },
+  {
+    "file": "l188tip",
+    "name": "Lockheed L-188/P-3 tip airfoil NACA 0012 -1.10 40/1.051 Cli=.4 a=.8"
+  },
+  {
+    "file": "l7769",
+    "name": "Lissaman 7769 human powered aircraft airfoil"
+  },
+  {
+    "file": "la203a",
+    "name": "Douglas/Liebeck LA203A high lift airfoil"
+  },
+  {
+    "file": "la2573a",
+    "name": "Liebeck LA2573A airfoil"
+  },
+  {
+    "file": "la5055",
+    "name": "Liebeck LA5055 high lift airfoil"
+  },
+  {
+    "file": "lds2",
+    "name": "LDS-2 airfoil"
+  },
+  {
+    "file": "lg10sc",
+    "name": "Lockheed-Georgia/NASA/Blackwell rotorcraft airfoil"
+  },
+  {
+    "file": "lnv109a",
+    "name": "Douglas/Liebeck LNV109A high lift airfoil"
+  },
+  {
+    "file": "lrn1007",
+    "name": "LRN(1)-1007 low Reynolds number airfoil"
+  },
+  {
+    "file": "lrn1015",
+    "name": "LRN 1015 airfoil used on the Northrop Grumman RQ-4 Global Hawk airfoil"
+  },
+  {
+    "file": "ls013",
+    "name": "NASA/Langley LS(1)-0013 general aviation airfoil"
+  },
+  {
+    "file": "ls413",
+    "name": "NASA/Langley LS(1)-0413 (GA(W)-2) general aviation airfoil"
+  },
+  {
+    "file": "ls413mod",
+    "name": "NASA/Langley LS(1)-0413MOD general aviation airfoil"
+  },
+  {
+    "file": "ls417",
+    "name": "NASA/Langley/Whitcomb LS(1)-0417 (GA(W)-1) general aviation airfoil"
+  },
+  {
+    "file": "ls417mod",
+    "name": "NASA/Langley LS(1)-0417MOD general aviation airfoil"
+  },
+  {
+    "file": "ls421",
+    "name": "NASA/Langley LS(1)-0421 general aviation airfoil"
+  },
+  {
+    "file": "ls421mod",
+    "name": "NASA/Langley LS(1)-0421MOD general aviation airfoil"
+  },
+  {
+    "file": "lwk79100",
+    "name": "LWK 79-100 symmetrical airfoil"
+  },
+  {
+    "file": "lwk80080",
+    "name": "LWK 80-080 symmetrical airfoil"
+  },
+  {
+    "file": "lwk80100",
+    "name": "LWK 80-100 symmetrical airfoil"
+  },
+  {
+    "file": "lwk80120k25",
+    "name": "LWK 80-120/K25 symmetrical airfoil"
+  },
+  {
+    "file": "lwk80150k25",
+    "name": "LWK 80-150/K25 symmetrical airfoil"
+  },
+  {
+    "file": "m1",
+    "name": "NACA/Munk M-1 airfoil"
+  },
+  {
+    "file": "m10",
+    "name": "NACA/Munk M-10 airfoil"
+  },
+  {
+    "file": "m11",
+    "name": "NACA/Munk M-11 airfoil"
+  },
+  {
+    "file": "m12",
+    "name": "NACA/Munk M-12 airfoil"
+  },
+  {
+    "file": "m13",
+    "name": "NACA/Munk M-13 airfoil"
+  },
+  {
+    "file": "m14",
+    "name": "NACA/Munk M-14 airfoil"
+  },
+  {
+    "file": "m15",
+    "name": "NACA/Munk M-15 airfoil"
+  },
+  {
+    "file": "m16",
+    "name": "NACA/Munk M-16 airfoil"
+  },
+  {
+    "file": "m17",
+    "name": "NACA/Munk M-17 airfoil"
+  },
+  {
+    "file": "m18",
+    "name": "NACA/Munk M-18 airfoil"
+  },
+  {
+    "file": "m19",
+    "name": "NACA/Munk M-19 airfoil"
+  },
+  {
+    "file": "m2",
+    "name": "NACA/Munk M-2 airfoil"
+  },
+  {
+    "file": "m20",
+    "name": "NACA/Munk M-20 airfoil"
+  },
+  {
+    "file": "m21",
+    "name": "NACA/Munk M-21 airfoil"
+  },
+  {
+    "file": "m22",
+    "name": "NACA/Munk M-22 airfoil"
+  },
+  {
+    "file": "m23",
+    "name": "NACA/Munk M-23 airfoil"
+  },
+  {
+    "file": "m24",
+    "name": "NACA/Munk M-24 airfoil"
+  },
+  {
+    "file": "m25",
+    "name": "NACA/Munk M-25 airfoil"
+  },
+  {
+    "file": "m26",
+    "name": "NACA/Munk M-26 airfoil"
+  },
+  {
+    "file": "m27",
+    "name": "NACA/Munk M-27 airfoil"
+  },
+  {
+    "file": "m3",
+    "name": "NACA/Munk M-3 airfoil"
+  },
+  {
+    "file": "m4",
+    "name": "NACA/Munk M-4 airfoil"
+  },
+  {
+    "file": "m5",
+    "name": "NACA/Munk M-5 airfoil"
+  },
+  {
+    "file": "m6",
+    "name": "NACA/Munk M-6 airfoil"
+  },
+  {
+    "file": "m665",
+    "name": "NACA/Munk M6 (65%)"
+  },
+  {
+    "file": "m685",
+    "name": "NACA/Munk M6 (85%)"
+  },
+  {
+    "file": "m7",
+    "name": "NACA/Munk M-7 airfoil"
+  },
+  {
+    "file": "m8",
+    "name": "NACA/Munk M-8 airfoil"
+  },
+  {
+    "file": "m9",
+    "name": "NACA/Munk M-9 airfoil"
+  },
+  {
+    "file": "ma409",
+    "name": "Michael Achterberg MA409 F1C class free flight airfoil (original)"
+  },
+  {
+    "file": "ma409sm",
+    "name": "Michael Achterberg MA409 F1C class free flight airfoil (smoothed)"
+  },
+  {
+    "file": "marsden",
+    "name": "Marsden airfoil"
+  },
+  {
+    "file": "marske1",
+    "name": "Marske XM-1D airfoil (F14-3.0)"
+  },
+  {
+    "file": "marske2",
+    "name": "Marske Pioneer IA airfoil (NACA 23112/43012A hybrid)"
+  },
+  {
+    "file": "marske3",
+    "name": "Marske Pioneer IID root airfoil (NACA 43012A/24112 hybrid)"
+  },
+  {
+    "file": "marske4",
+    "name": "Marske Pioneer IID tip airfoil (NACA 43012A*.833 hybrid)"
+  },
+  {
+    "file": "marske5",
+    "name": "Marske Monarch airfoil (NACA 43012A)"
+  },
+  {
+    "file": "marske7",
+    "name": "Roncz/Marske-7 low drag flying wing airfoil"
+  },
+  {
+    "file": "mb253515sm",
+    "name": "Mike Bame MB253515 low Reynolds number airfoil"
+  },
+  {
+    "file": "mh102",
+    "name": "Martin Hepperle MH 102 for stall controlled wind turbines (root)"
+  },
+  {
+    "file": "mh104",
+    "name": "Martin Hepperle MH 104 for stall controlled wind turbines"
+  },
+  {
+    "file": "mh106",
+    "name": "Martin Hepperle MH 106 for stall controlled wind turbines"
+  },
+  {
+    "file": "mh108",
+    "name": "Martin Hepperle MH 108 for stall controlled wind turbines"
+  },
+  {
+    "file": "mh110",
+    "name": "Martin Hepperle MH 110 for stall controlled wind turbines (tip)"
+  },
+  {
+    "file": "mh112",
+    "name": "Martin Hepperle MH 112 for a propeller for ultralight (root)"
+  },
+  {
+    "file": "mh113",
+    "name": "Martin Hepperle MH 113 for a propeller for ultralight"
+  },
+  {
+    "file": "mh114",
+    "name": "Martin Hepperle MH 114 for a propeller for ultralight"
+  },
+  {
+    "file": "mh115",
+    "name": "Martin Hepperle MH 115 for a propeller for ultralight"
+  },
+  {
+    "file": "mh116",
+    "name": "Martin Hepperle MH 116 for a propeller for ultralight"
+  },
+  {
+    "file": "mh117",
+    "name": "Martin Hepperle MH 117 for a propeller for ultralight (tip)"
+  },
+  {
+    "file": "mh120",
+    "name": "Martin Hepperle MH 120 for tip section of a propeller"
+  },
+  {
+    "file": "mh121",
+    "name": "Martin Hepperle MH 121 for tip section of a propeller"
+  },
+  {
+    "file": "mh122",
+    "name": "Martin Hepperle MH 122 for tip section of a propeller"
+  },
+  {
+    "file": "mh126",
+    "name": "Martin Hepperle MH 126 for the root region of propellers"
+  },
+  {
+    "file": "mh150",
+    "name": "Martin Hepperle MH 150 for marine ruddershaft for torque reduction (schottel units)"
+  },
+  {
+    "file": "mh18",
+    "name": "Martin Hepperle MH 18 for F3D Pylon Racing"
+  },
+  {
+    "file": "mh20",
+    "name": "Martin Hepperle MH 20 for F3D Pylon Racing"
+  },
+  {
+    "file": "mh200",
+    "name": "Martin Hepperle MH 200 for a canard airplane (main wing)"
+  },
+  {
+    "file": "mh201",
+    "name": "Martin Hepperle MH 201 for a canard airplane (canard)"
+  },
+  {
+    "file": "mh22",
+    "name": "Martin Hepperle MH 22 for F3D Pylon Racing"
+  },
+  {
+    "file": "mh23",
+    "name": "Martin Hepperle MH 23 for F3D Pylon Racing (extended laminar flow)"
+  },
+  {
+    "file": "mh24",
+    "name": "Martin Hepperle MH 24 for F3D Pylon Racing (extended laminar flow)"
+  },
+  {
+    "file": "mh25",
+    "name": "Martin Hepperle MH 25 for F3D Pylon Racing (extended laminar flow)"
+  },
+  {
+    "file": "mh26",
+    "name": "Martin Hepperle MH 26 for F3D Pylon Racing (extended laminar flow)"
+  },
+  {
+    "file": "mh27",
+    "name": "Martin Hepperle MH 27 for F3D Pylon Racing (extended laminar flow)"
+  },
+  {
+    "file": "mh30",
+    "name": "Martin Hepperle MH 30 for F3E and F3B"
+  },
+  {
+    "file": "mh32",
+    "name": "Martin Hepperle MH 32 for F3E and F3B"
+  },
+  {
+    "file": "mh33",
+    "name": "Martin Hepperle MH 33 for F3E and F3B"
+  },
+  {
+    "file": "mh38",
+    "name": "Martin Hepperle MH 38 for Endurance Model"
+  },
+  {
+    "file": "mh42",
+    "name": "Martin Hepperle MH 42 low Reynolds number airfoil"
+  },
+  {
+    "file": "mh43",
+    "name": "Martin Hepperle MH 43 for F3B and F3E"
+  },
+  {
+    "file": "mh44",
+    "name": "Martin Hepperle MH 44 for flying wings"
+  },
+  {
+    "file": "mh45",
+    "name": "Martin Hepperle MH 45 for flying wings"
+  },
+  {
+    "file": "mh46",
+    "name": "Martin Hepperle MH 46 for flying wings"
+  },
+  {
+    "file": "mh60",
+    "name": "Martin Hepperle MH 60 for flying wings"
+  },
+  {
+    "file": "mh61",
+    "name": "Martin Hepperle MH 61 for flying wings"
+  },
+  {
+    "file": "mh62",
+    "name": "Martin Hepperle MH 62 for flying wings"
+  },
+  {
+    "file": "mh64",
+    "name": "Martin Hepperle MH 64 for flying wings"
+  },
+  {
+    "file": "mh70",
+    "name": "Martin Hepperle MH 70 for fying wing (full size)"
+  },
+  {
+    "file": "mh78",
+    "name": "Martin Hepperle MH 78 for flying wings (hang glider)"
+  },
+  {
+    "file": "mh80",
+    "name": "Martin Hepperle MH 80 for flying wings (hang glider)"
+  },
+  {
+    "file": "mh81",
+    "name": "Martin Hepperle MH 81 for flying wings (hang glider)"
+  },
+  {
+    "file": "mh82",
+    "name": "Martin Hepperle MH 82 for flying wings (hang glider)"
+  },
+  {
+    "file": "mh83",
+    "name": "Martin Hepperle MH 83 for flying wings (hang glider)"
+  },
+  {
+    "file": "mh84",
+    "name": "Martin Hepperle MH 84 for flying wings (hang glider)"
+  },
+  {
+    "file": "mh91",
+    "name": "Martin Hepperle MH 91 parafoil"
+  },
+  {
+    "file": "mh92",
+    "name": "Martin Hepperle MH 92 parafoil"
+  },
+  {
+    "file": "mh93",
+    "name": "Martin Hepperle MH 93 parafoil"
+  },
+  {
+    "file": "mh94",
+    "name": "Martin Hepperle MH 94 parafoil"
+  },
+  {
+    "file": "mh95",
+    "name": "Martin Hepperle MH 95 parafoil"
+  },
+  {
+    "file": "miley",
+    "name": "Miley MO6-13-128 airfoil"
+  },
+  {
+    "file": "mrc-16",
+    "name": "Drela MRC-16"
+  },
+  {
+    "file": "mrc-20",
+    "name": "Drela MRC-20"
+  },
+  {
+    "file": "mrc12",
+    "name": "Drela MRC12 hydrofoil (Decavitator, design Re=300K, v.1 takeoff and high-speed wings)"
+  },
+  {
+    "file": "mrc15",
+    "name": "Drela MRC15 hydrofoil (Decavitator, design Re=150K, front stabilizers)"
+  },
+  {
+    "file": "mrc16-85",
+    "name": "Drela MRC16-85 hydrofoil (Decavitator, design Re*sqrt(CL)=175K, v.2 takeoff wing tip)"
+  },
+  {
+    "file": "mrc16-95",
+    "name": "Drela MRC16-95 hydrofoil (Decavitator, design Re*sqrt(CL)=200K, v.2 takeoff wing 80% semispan)"
+  },
+  {
+    "file": "mrc20-700",
+    "name": "Drela MRC20-700 hydrofoil (Decavitator, v.2 high-speed wing tip)"
+  },
+  {
+    "file": "mrc20-846",
+    "name": "Drela MRC20-846 hydrofoil (Decavitator, v.2 high-speed wing 80% semispan)"
+  },
+  {
+    "file": "ms313",
+    "name": "NASA/Langley MS(1)-0313 general aviation airfoil (buggy, shows the 0413 instead)"
+  },
+  {
+    "file": "ms317",
+    "name": "NASA/Langley MS(1)-0317 general aviation airfoil"
+  },
+  {
+    "file": "mue139",
+    "name": "MUE 139 airfoil"
+  },
+  {
+    "file": "n0009sm",
+    "name": "NACA 0009 airfoil (smoothed)"
+  },
+  {
+    "file": "n0011sc",
+    "name": "NASA/Langley 11% symmetrical supercritical airfoil"
+  },
+  {
+    "file": "n0012",
+    "name": "NACA 0012 airfoil"
+  },
+  {
+    "file": "n10",
+    "name": "N-10 airfoil"
+  },
+  {
+    "file": "n11",
+    "name": "N-11 airfoil"
+  },
+  {
+    "file": "n11h9",
+    "name": "NACA 11-H-9 rotorcraft airfoil"
+  },
+  {
+    "file": "n12",
+    "name": "N-12 airfoil"
+  },
+  {
+    "file": "n13",
+    "name": "N-13 airfoil"
+  },
+  {
+    "file": "n14",
+    "name": "N-14 airfoil"
+  },
+  {
+    "file": "n1h15",
+    "name": "NACA 1-H-15 rotorcraft airfoil"
+  },
+  {
+    "file": "n22",
+    "name": "N-22 airfoil"
+  },
+  {
+    "file": "n24",
+    "name": "N-24 airfoil"
+  },
+  {
+    "file": "n2414",
+    "name": "NACA 2414 airfoil"
+  },
+  {
+    "file": "n2415",
+    "name": "NACA 2415 airfoil"
+  },
+  {
+    "file": "n2h15",
+    "name": "NACA 2-H-15 rotorcraft airfoil"
+  },
+  {
+    "file": "n5h10",
+    "name": "NACA 5-H-10 rotorcraft airfoil"
+  },
+  {
+    "file": "n5h15",
+    "name": "NACA 5-H-15 rotorcraft airfoil"
+  },
+  {
+    "file": "n5h20",
+    "name": "NACA 5-H-20 rotorcraft airfoil"
+  },
+  {
+    "file": "n63010a",
+    "name": "NACA 63-010A airfoil"
+  },
+  {
+    "file": "n63012a",
+    "name": "NACA 63-012A airfoil"
+  },
+  {
+    "file": "n63015a",
+    "name": "NACA 63-015A airfoil"
+  },
+  {
+    "file": "n63210",
+    "name": "NACA 63-210 airfoil"
+  },
+  {
+    "file": "n63212",
+    "name": "NACA 63(1)-212 airfoil"
+  },
+  {
+    "file": "n63215",
+    "name": "NACA 63(2)-215 airfoil"
+  },
+  {
+    "file": "n63215b",
+    "name": "NACA-NASA/AMES/Hicks 63(2)-215 MOD B airfoil"
+  },
+  {
+    "file": "n63412",
+    "name": "NACA 63(1)-412 airfoil"
+  },
+  {
+    "file": "n63415",
+    "name": "NACA 63(2)-415 airfoil"
+  },
+  {
+    "file": "n64008a",
+    "name": "NACA 64-008A airfoil"
+  },
+  {
+    "file": "n64012",
+    "name": "NACA 64(1)-012 airfoil"
+  },
+  {
+    "file": "n64012a",
+    "name": "NACA 64(1)-012A airfoil"
+  },
+  {
+    "file": "n64015",
+    "name": "NACA 64(2)-015 airfoil"
+  },
+  {
+    "file": "n64015a",
+    "name": "NACA 64(2)-015A airfoil"
+  },
+  {
+    "file": "n6409",
+    "name": "NACA 6409"
+  },
+  {
+    "file": "n64108",
+    "name": "NACA 64-108 airfoil"
+  },
+  {
+    "file": "n64110",
+    "name": "NACA 64-110 airfoil"
+  },
+  {
+    "file": "n64212",
+    "name": "NACA 64(1)-212 airfoil"
+  },
+  {
+    "file": "n64212ma",
+    "name": "NACA-NASA/AMES/Hicks 63(1)-212 MOD A airfoil"
+  },
+  {
+    "file": "n64212mb",
+    "name": "NACA-NASA/AMES/Hicks 63(1)-212 MOD B airfoil"
+  },
+  {
+    "file": "n64215",
+    "name": "NACA 64(2)-215 airfoil"
+  },
+  {
+    "file": "n642415",
+    "name": "NACA 64(2)-415 [NACA 6a series from Theory of Wing Sections]"
+  },
+  {
+    "file": "n66021",
+    "name": "NACA 66(4)-021 airfoil"
+  },
+  {
+    "file": "n6h10",
+    "name": "NACA 6-H-10 rotorcraft airfoil"
+  },
+  {
+    "file": "n6h15",
+    "name": "NACA 6-H-15 rotorcraft airfoil"
+  },
+  {
+    "file": "n6h20",
+    "name": "NACA 6-H-20 rotorcraft airfoil"
+  },
+  {
+    "file": "n8h12",
+    "name": "NACA 8-H-12 rotorcraft airfoil"
+  },
+  {
+    "file": "n9",
+    "name": "N-9 airfoil"
+  },
+  {
+    "file": "naca0006",
+    "name": "NACA 0006 airfoil"
+  },
+  {
+    "file": "naca0008",
+    "name": "NACA 0008 airfoil"
+  },
+  {
+    "file": "naca000834",
+    "name": "NACA 0008-34 airfoil"
+  },
+  {
+    "file": "naca0010",
+    "name": "NACA 0010 airfoil"
+  },
+  {
+    "file": "naca001034",
+    "name": "NACA 0010-34 airfoil"
+  },
+  {
+    "file": "naca001034a08cli0.2",
+    "name": "NACA 0010-34 a=0.8 c(li)=0.2 airfoil"
+  },
+  {
+    "file": "naca001035",
+    "name": "NACA 0010-35 airfoil"
+  },
+  {
+    "file": "naca001064",
+    "name": "NACA 0010-64 airfoil"
+  },
+  {
+    "file": "naca001065",
+    "name": "NACA 0010-65 airfoil"
+  },
+  {
+    "file": "naca001066",
+    "name": "NACA 0010-66 airfoil"
+  },
+  {
+    "file": "naca001234",
+    "name": "NACA 0012-34 airfoil"
+  },
+  {
+    "file": "naca001264",
+    "name": "NACA 0012-64 airfoil"
+  },
+  {
+    "file": "naca001264a08cli0.2",
+    "name": "NACA 0012-64 a=0.8 c(li)=0.2 airfoil"
+  },
+  {
+    "file": "naca0015",
+    "name": "NACA 0015 airfoil"
+  },
+  {
+    "file": "naca0018",
+    "name": "NACA 0018 airfoil"
+  },
+  {
+    "file": "naca0021",
+    "name": "NACA 0021 airfoil"
+  },
+  {
+    "file": "naca0024",
+    "name": "NACA 0024 airfoil"
+  },
+  {
+    "file": "naca1",
+    "name": "NACA-1 COWL"
+  },
+  {
+    "file": "naca1408",
+    "name": "NACA 1408 airfoil"
+  },
+  {
+    "file": "naca1410",
+    "name": "NACA 1410 airfoil"
+  },
+  {
+    "file": "naca1412",
+    "name": "NACA 1412 airfoil"
+  },
+  {
+    "file": "naca16006",
+    "name": "NACA 16-006 airfoil"
+  },
+  {
+    "file": "naca16009",
+    "name": "NACA 16009 airfoil"
+  },
+  {
+    "file": "naca16012",
+    "name": "NACA 16-012 airfoil"
+  },
+  {
+    "file": "naca16015",
+    "name": "NACA 16-015 airfoil"
+  },
+  {
+    "file": "naca16018",
+    "name": "NACA 16-018 airfoil"
+  },
+  {
+    "file": "naca16021",
+    "name": "NACA 16-021 airfoil"
+  },
+  {
+    "file": "naca23012",
+    "name": "NACA 23012 airfoil"
+  },
+  {
+    "file": "naca23015",
+    "name": "NACA 23015 airfoil"
+  },
+  {
+    "file": "naca23018",
+    "name": "NACA 23018 airfoil"
+  },
+  {
+    "file": "naca23021",
+    "name": "NACA 23021 airfoil"
+  },
+  {
+    "file": "naca23024",
+    "name": "NACA 23024 airfoil"
+  },
+  {
+    "file": "naca2408",
+    "name": "NACA 2408 airfoil"
+  },
+  {
+    "file": "naca2410",
+    "name": "NACA 2410 airfoil"
+  },
+  {
+    "file": "naca2411",
+    "name": "NACA 2411 airfoil"
+  },
+  {
+    "file": "naca2412",
+    "name": "NACA 2412 airfoil"
+  },
+  {
+    "file": "naca2415",
+    "name": "NACA 2415 airfoil"
+  },
+  {
+    "file": "naca2418",
+    "name": "NACA 2418 airfoil"
+  },
+  {
+    "file": "naca2421",
+    "name": "NACA 2421 airfoil"
+  },
+  {
+    "file": "naca2424",
+    "name": "NACA 2424 airfoil"
+  },
+  {
+    "file": "naca4412",
+    "name": "NACA 4412 airfoil"
+  },
+  {
+    "file": "naca4415",
+    "name": "NACA 4415 airfoil"
+  },
+  {
+    "file": "naca4418",
+    "name": "NACA 4418 airfoil"
+  },
+  {
+    "file": "naca4421",
+    "name": "NACA 4421 airfoil"
+  },
+  {
+    "file": "naca4424",
+    "name": "NACA 4424 airfoil"
+  },
+  {
+    "file": "naca63206",
+    "name": "NACA 63-206 airfoil"
+  },
+  {
+    "file": "naca63209",
+    "name": "NACA 63-209 airfoil"
+  },
+  {
+    "file": "naca632615",
+    "name": "NACA 63(2)-615 airfoil"
+  },
+  {
+    "file": "naca632a015",
+    "name": "NACA 63(2)A-015 airfoil"
+  },
+  {
+    "file": "naca633018",
+    "name": "NACA 63(3)-018 airfoil"
+  },
+  {
+    "file": "naca633218",
+    "name": "NACA 63(3)-218 airfoil"
+  },
+  {
+    "file": "naca633418",
+    "name": "NACA 63,3-418 airfoil"
+  },
+  {
+    "file": "naca633618",
+    "name": "NACA 63(3)-618 airfoil"
+  },
+  {
+    "file": "naca634221",
+    "name": "NACA 63(4)-221 airfoil"
+  },
+  {
+    "file": "naca634421",
+    "name": "NACA 63(4)-421 airfoil"
+  },
+  {
+    "file": "naca63a210",
+    "name": "NACA 63A210 airfoil"
+  },
+  {
+    "file": "naca641112",
+    "name": "NACA 64(1)-112 airfoil"
+  },
+  {
+    "file": "naca6412",
+    "name": "NACA 6412 airfoil"
+  },
+  {
+    "file": "naca64206",
+    "name": "NACA 64-206 airfoil"
+  },
+  {
+    "file": "naca64208",
+    "name": "NACA 64-208 airfoil"
+  },
+  {
+    "file": "naca64209",
+    "name": "NACA 64-209 airfoil"
+  },
+  {
+    "file": "naca64210",
+    "name": "NACA 64-210 airfoil"
+  },
+  {
+    "file": "naca642215",
+    "name": "NACA 64(2)-215 airfoil"
+  },
+  {
+    "file": "naca642415",
+    "name": "NACA 64(2)-415 airfoil"
+  },
+  {
+    "file": "naca643218",
+    "name": "NACA 64(3)-218 airfoil"
+  },
+  {
+    "file": "naca643418",
+    "name": "NACA 64(3)-418 airfoil"
+  },
+  {
+    "file": "naca643618",
+    "name": "NACA 64(3)-618 airfoil"
+  },
+  {
+    "file": "naca644221",
+    "name": "NACA 64(4)-221 airfoil"
+  },
+  {
+    "file": "naca644421",
+    "name": "NACA 64(4)-421 airfoil"
+  },
+  {
+    "file": "naca64a010",
+    "name": "NACA 64A010 airfoil"
+  },
+  {
+    "file": "naca64a210",
+    "name": "NACA 64A210 airfoil"
+  },
+  {
+    "file": "naca64a410",
+    "name": "NACA 64A410 airfoil"
+  },
+  {
+    "file": "naca651212",
+    "name": "NACA 65(1)-212 airfoil"
+  },
+  {
+    "file": "naca651212a06",
+    "name": "NACA 65(1)-212 a=0.6 airfoil"
+  },
+  {
+    "file": "naca651412",
+    "name": "NACA 65(1)-412 airfoil"
+  },
+  {
+    "file": "naca65206",
+    "name": "NACA 65-206 airfoil"
+  },
+  {
+    "file": "naca65209",
+    "name": "NACA 65-209 airfoil"
+  },
+  {
+    "file": "naca65210",
+    "name": "NACA 65-210 airfoil"
+  },
+  {
+    "file": "naca652215",
+    "name": "NACA 65(2)-215 airfoil"
+  },
+  {
+    "file": "naca652415",
+    "name": "NACA 65(2)-415 airfoil"
+  },
+  {
+    "file": "naca652415a05",
+    "name": "NACA 65(2)-415 a=0.5 airfoil"
+  },
+  {
+    "file": "naca653218",
+    "name": "NACA 65(3)-218 airfoil"
+  },
+  {
+    "file": "naca653618",
+    "name": "NACA 65(3)-618 airfoil"
+  },
+  {
+    "file": "naca65410",
+    "name": "NACA 65-410 airfoil"
+  },
+  {
+    "file": "naca654221",
+    "name": "NACA 65(4)-221 airfoil"
+  },
+  {
+    "file": "naca654421",
+    "name": "NACA 65(4)-421 airfoil"
+  },
+  {
+    "file": "naca654421a05",
+    "name": "NACA 65(4)-421 a=0.5 airfoil"
+  },
+  {
+    "file": "naca66-018",
+    "name": "NACA 66-018 airfoil"
+  },
+  {
+    "file": "naca661212",
+    "name": "NACA 66(1)-212 airfoil"
+  },
+  {
+    "file": "naca66206",
+    "name": "NACA 66-206 airfoil"
+  },
+  {
+    "file": "naca66209",
+    "name": "NACA 66-209 airfoil"
+  },
+  {
+    "file": "naca66210",
+    "name": "NACA 66-210 airfoil"
+  },
+  {
+    "file": "naca662215",
+    "name": "NACA 66(2)-215 airfoil"
+  },
+  {
+    "file": "naca662415",
+    "name": "NACA 66(2)-415 airfoil"
+  },
+  {
+    "file": "naca663218",
+    "name": "NACA 66(3)-218 airfoil"
+  },
+  {
+    "file": "naca663418",
+    "name": "NACA 66(3)-418 airfoil"
+  },
+  {
+    "file": "naca664221",
+    "name": "NACA 66(4)-221 airfoil"
+  },
+  {
+    "file": "naca671215",
+    "name": "NACA 67,1-215 airfoil"
+  },
+  {
+    "file": "naca747a315",
+    "name": "NACA 747A315 airfoil"
+  },
+  {
+    "file": "naca747a415",
+    "name": "NACA 747A415 airfoil"
+  },
+  {
+    "file": "nacacyh",
+    "name": "NACA CYH airfoil"
+  },
+  {
+    "file": "nacam12",
+    "name": "NACA M12 airfoil"
+  },
+  {
+    "file": "nacam18",
+    "name": "NACA M18 airfoil"
+  },
+  {
+    "file": "nacam2",
+    "name": "NACA M2 airfoil"
+  },
+  {
+    "file": "nacam3",
+    "name": "NACA M3 airfoil"
+  },
+  {
+    "file": "nacam6",
+    "name": "NACA M6 airfoil"
+  },
+  {
+    "file": "nasasc2-0714",
+    "name": "NASA SC(2)-0714 airfoil (Ref. NASA TP-2890)"
+  },
+  {
+    "file": "ncambre",
+    "name": "ONERA/Aerospatiale NACA-CAMBRE rotorcraft airfoil"
+  },
+  {
+    "file": "nl722343",
+    "name": "NLR NLR-7223-43 transonic rotorcraft airfoil"
+  },
+  {
+    "file": "nl722362",
+    "name": "NLR NLR-7223-62 transonic rotorcraft airfoil"
+  },
+  {
+    "file": "nlf0115",
+    "name": "NASA/Langley/Somers-Selig-Maughmer NLF(1)-0115 natural laminar flow airfoil"
+  },
+  {
+    "file": "nlf0215f",
+    "name": "NASA/Langley/Somers NLF(1)-0215F natural laminar flow airfoil"
+  },
+  {
+    "file": "nlf1015",
+    "name": "NASA/Langley/Somers-Maughmer NLF(1)-1015 natural laminar flow airfoil"
+  },
+  {
+    "file": "nlf414f",
+    "name": "NASA/Langley/Viken NLF(1)-0414F natural laminar flow airfoil"
+  },
+  {
+    "file": "nlf415",
+    "name": "NASA/Langley-DFVLR/Somers(NASA)-Horstmann(DFVLR) NLF(2)-0415 natural laminar flow airfoil"
+  },
+  {
+    "file": "nlf416",
+    "name": "NASA/Langley/Somers NLF(1)-0416 natural laminar flow airfoil"
+  },
+  {
+    "file": "nlr1t",
+    "name": "Bell/NASA/NLR NLR-1T rotorcraft airfoil"
+  },
+  {
+    "file": "nlr7301",
+    "name": "NLR NLR-7301 transonic airfoil"
+  },
+  {
+    "file": "nn7mk20",
+    "name": "NN7 MK20 airfoil"
+  },
+  {
+    "file": "npl9510",
+    "name": "NPL 9510 transonic airfoil"
+  },
+  {
+    "file": "npl9615",
+    "name": "NPL 9615 rotorcraft airfoil"
+  },
+  {
+    "file": "npl9626",
+    "name": "NPL 9626 rotorcraft airfoil"
+  },
+  {
+    "file": "npl9627",
+    "name": "NPL 9627 rotorcraft airfoil"
+  },
+  {
+    "file": "npl9660",
+    "name": "NPL 9660 rotorcraft airfoil"
+  },
+  {
+    "file": "nplx",
+    "name": "NPL transonic airfoil FROM ARC CP 1372"
+  },
+  {
+    "file": "oa206",
+    "name": "ONERA/Aerospatiale OA206 rotorcraft airfoil (Constructed from patent and smoothed)"
+  },
+  {
+    "file": "oa209",
+    "name": "ONERA/Aerospatiale OA209 rotorcraft airfoil (Constructed from patent and smoothed)"
+  },
+  {
+    "file": "oa212",
+    "name": "ONERA/Aerospatiale OA212 rotorcraft airfoil (Constructed from patent and smoothed)"
+  },
+  {
+    "file": "oa213",
+    "name": "ONERA/Aerospatiale OA213 rotorcraft airfoil (Constructed from patent and smoothed)"
+  },
+  {
+    "file": "oaf095",
+    "name": "ONERA/Aerospatiale OAF095 Fenestron airfoil"
+  },
+  {
+    "file": "oaf102",
+    "name": "ONERA/Aerospatiale OAF102 Fenestron airfoil"
+  },
+  {
+    "file": "oaf117",
+    "name": "ONERA/Aerospatiale OAF117 Fenestron airfoil"
+  },
+  {
+    "file": "oaf128",
+    "name": "ONERA/Aerospatiale OAF128 Fenestron airfoil"
+  },
+  {
+    "file": "oaf139",
+    "name": "ONERA/Aerospatiale OAF139 Fenestron airfoil"
+  },
+  {
+    "file": "p51droot",
+    "name": "P-51D root (BL17.5) airfoil"
+  },
+  {
+    "file": "p51dtip",
+    "name": "P-51D tip (BL215) airfoil"
+  },
+  {
+    "file": "p51hroot",
+    "name": "NACA 66,2-(1.8)15.5 A=.6 P-51H root airfoil"
+  },
+  {
+    "file": "p51htip",
+    "name": "NACA 66,2-(1.8)12 A=.6 P-51H tip airfoil"
+  },
+  {
+    "file": "pfcm",
+    "name": "Propfan Cruise Missile wing airfoil"
+  },
+  {
+    "file": "pmc19sm",
+    "name": "PMC19"
+  },
+  {
+    "file": "psu-90-125wl",
+    "name": "PSU-90-125WL sailplane winglet airfoil"
+  },
+  {
+    "file": "psu94097",
+    "name": "Maughmer PSU 94-097 winglet airfoil"
+  },
+  {
+    "file": "pt40",
+    "name": "Great Plane PT-40 trainer airfoil"
+  },
+  {
+    "file": "r1046",
+    "name": "Roncz 1046 Voyager canard airfoil"
+  },
+  {
+    "file": "r1080",
+    "name": "Roncz 1080 Voyager inner aft wing airfoil"
+  },
+  {
+    "file": "r1082",
+    "name": "Roncz 1082 Voyager root outer aft wing airfoil"
+  },
+  {
+    "file": "r1082t",
+    "name": "Roncz 1082T Voyager tip outer aft wing airfoil"
+  },
+  {
+    "file": "r1145ms",
+    "name": "Roncz R1145MS VariEze canard airfoil"
+  },
+  {
+    "file": "r1145msf",
+    "name": "Roncz R1145MSF VariEze canard flap airfoil from the R1145MS"
+  },
+  {
+    "file": "r1145msm",
+    "name": "Roncz R1145MSM VariEze canard main airfoil from the R1145MS"
+  },
+  {
+    "file": "r140",
+    "name": "R140 Quickee 500 airfoil (original)"
+  },
+  {
+    "file": "r140sm",
+    "name": "R140 Quickee 500 airfoil (smoothed)"
+  },
+  {
+    "file": "rae100",
+    "name": "RAE 100 airfoil"
+  },
+  {
+    "file": "rae101",
+    "name": "RAE 101 airfoil"
+  },
+  {
+    "file": "rae102",
+    "name": "RAE 102 airfoil"
+  },
+  {
+    "file": "rae103",
+    "name": "RAE 103 airfoil"
+  },
+  {
+    "file": "rae104",
+    "name": "RAE 104 airfoil"
+  },
+  {
+    "file": "rae2822",
+    "name": "RAE 2822 transonic airfoil"
+  },
+  {
+    "file": "rae5212",
+    "name": "RAE(NPL) 5212 transonic airfoil"
+  },
+  {
+    "file": "rae5213",
+    "name": "RAE(NPL) 5213 transonic airfoil"
+  },
+  {
+    "file": "rae5214",
+    "name": "RAE 5214 transonic airfoil"
+  },
+  {
+    "file": "rae5215",
+    "name": "RAE 5215 transonic airfoil"
+  },
+  {
+    "file": "rae69ck",
+    "name": "RAE6-9CK transonic airfoil"
+  },
+  {
+    "file": "raf15",
+    "name": "RAF-15 airfoil"
+  },
+  {
+    "file": "raf19",
+    "name": "RAF-19 airfoil"
+  },
+  {
+    "file": "raf25",
+    "name": "RAF-25 airfoil"
+  },
+  {
+    "file": "raf26",
+    "name": "RAF-26 airfoil"
+  },
+  {
+    "file": "raf27",
+    "name": "RAF-27 airfoil"
+  },
+  {
+    "file": "raf28",
+    "name": "RAF-28 airfoil"
+  },
+  {
+    "file": "raf30",
+    "name": "RAF-30 airfoil"
+  },
+  {
+    "file": "raf30md",
+    "name": "RAF-30 MOD airfoil"
+  },
+  {
+    "file": "raf31",
+    "name": "RAF-31 airfoil"
+  },
+  {
+    "file": "raf32",
+    "name": "RAF-32 airfoil"
+  },
+  {
+    "file": "raf32md",
+    "name": "RAF-32 MOD airfoil"
+  },
+  {
+    "file": "raf33",
+    "name": "RAF-33 airfoil"
+  },
+  {
+    "file": "raf34",
+    "name": "RAF-34 airfoil"
+  },
+  {
+    "file": "raf38",
+    "name": "RAF-38 airfoil"
+  },
+  {
+    "file": "raf48",
+    "name": "RAF-48 airfoil"
+  },
+  {
+    "file": "raf6",
+    "name": "RAF-6 airfoil"
+  },
+  {
+    "file": "raf69",
+    "name": "RAF-69 airfoil"
+  },
+  {
+    "file": "raf89",
+    "name": "RAF-89 airfoil"
+  },
+  {
+    "file": "rc0864c",
+    "name": "NASA/Langley 08-64C rotorcraft airfoil"
+  },
+  {
+    "file": "rc08b3",
+    "name": "NASA/Langley RC-08(B)3 rotorcraft airfoil"
+  },
+  {
+    "file": "rc08n1",
+    "name": "NASA/Langley RC-08(N)1 rotorcraft airfoil"
+  },
+  {
+    "file": "rc1064c",
+    "name": "NASA/Langley 10-64C rotorcraft airfoil"
+  },
+  {
+    "file": "rc10b3",
+    "name": "NASA/Langley RC-10(B)3 rotorcraft airfoil"
+  },
+  {
+    "file": "rc10n1",
+    "name": "NASA/Langley RC-10(N)1 rotorcraft airfoil"
+  },
+  {
+    "file": "rc1264c",
+    "name": "NASA/Langley 12-64C rotorcraft airfoil"
+  },
+  {
+    "file": "rc12b3",
+    "name": "NASA/Langley RC-12(B)3 rotorcraft airfoil"
+  },
+  {
+    "file": "rc12n1",
+    "name": "NASA/Langley RC-12(N)1 rotorcraft airfoil"
+  },
+  {
+    "file": "rc410",
+    "name": "NASA/Langley RC(4)-10 rotorcraft airfoil"
+  },
+  {
+    "file": "rc510",
+    "name": "NASA/Langley RC(5)-10 rotorcraft airfoil"
+  },
+  {
+    "file": "rcsc2",
+    "name": "NASA/Langley RC-SC2 rotorcraft airfoil"
+  },
+  {
+    "file": "rg12",
+    "name": "Rolf Girsberger RG 12 airfoil"
+  },
+  {
+    "file": "rg12a",
+    "name": "Rolf Girsberger RG 12A airfoil"
+  },
+  {
+    "file": "rg12a189",
+    "name": "Rolf Girsberger RG 12A-1.8/9.0 airfoil"
+  },
+  {
+    "file": "rg14",
+    "name": "Rolf Girsberger RG 14 airfoil"
+  },
+  {
+    "file": "rg1410",
+    "name": "Rolf Girsberger RG 14 (10%) airfoil"
+  },
+  {
+    "file": "rg149",
+    "name": "Rolf Girsberger RG 14 (9%) airfoil"
+  },
+  {
+    "file": "rg1495",
+    "name": "Rolf Girsberger RG 14 (9.5%) airfoil"
+  },
+  {
+    "file": "rg14a147",
+    "name": "Rolf Girsberger RG 14A-1.4/7.0 airfoil"
+  },
+  {
+    "file": "rg15",
+    "name": "Rolf Girsberger RG 15 low Reynolds number airfoil"
+  },
+  {
+    "file": "rg15a111",
+    "name": "Rolf Girsberger RG 15A-1.8/11.0 airfoil"
+  },
+  {
+    "file": "rg15a213",
+    "name": "Rolf Girsberger RG 15A 2.5/13.0 airfoil"
+  },
+  {
+    "file": "rg8",
+    "name": "Rolf Girsberger RG 8 airfoil"
+  },
+  {
+    "file": "rhodesg30",
+    "name": "Rhode St. Genese 30 airfoil"
+  },
+  {
+    "file": "rhodesg32",
+    "name": "Rhode St. Genese 32 airfoil"
+  },
+  {
+    "file": "rhodesg34",
+    "name": "Rhode St. Genese 34 airfoil"
+  },
+  {
+    "file": "rhodesg36",
+    "name": "Rhode St. Genese 36 airfoil"
+  },
+  {
+    "file": "s1010",
+    "name": "Selig S1010 HPV airfoil, Wayback Machine:"
+  },
+  {
+    "file": "s1012",
+    "name": "Selig S1012 HPV airfoil, Wayback Machine:"
+  },
+  {
+    "file": "s1014",
+    "name": "Selig S1014 HPV airfoil, Wayback Machine:"
+  },
+  {
+    "file": "s1016",
+    "name": "Selig S1016 HPV airfoil, Wayback Machine:"
+  },
+  {
+    "file": "s1020",
+    "name": "Selig S1020 ornithopter airfoil"
+  },
+  {
+    "file": "s102b",
+    "name": "Dan Somers S102 (blunt) airfoil from US Patent 6,607,164"
+  },
+  {
+    "file": "s102s",
+    "name": "Dan Somers S102 (sharp) airfoil from US Patent 6,607,164"
+  },
+  {
+    "file": "s1046",
+    "name": "Selig S1046 airfoil"
+  },
+  {
+    "file": "s1048",
+    "name": "Selig S1048 airfoil"
+  },
+  {
+    "file": "s1091",
+    "name": "Selig S1091 airfoil"
+  },
+  {
+    "file": "s1210",
+    "name": "Selig S1210 high lift low Reynolds number airfoil"
+  },
+  {
+    "file": "s1221",
+    "name": "Selig S1221 airfoil"
+  },
+  {
+    "file": "s1223",
+    "name": "Selig S1223 high lift low Reynolds number airfoil"
+  },
+  {
+    "file": "s1223rtl",
+    "name": "Richard T. LaSalle modification of the S1223 to S1223RTL"
+  },
+  {
+    "file": "s2027",
+    "name": "Selig S2027 low Reynolds number airfoil"
+  },
+  {
+    "file": "s2046",
+    "name": "Selig S2046 low Reynolds number airfoil"
+  },
+  {
+    "file": "s2048",
+    "name": "Selig S2048 low Reynolds number airfoil"
+  },
+  {
+    "file": "s2050",
+    "name": "Selig S2050 low Reynolds number airfoil"
+  },
+  {
+    "file": "s2055",
+    "name": "Selig S2055 low Reynolds number airfoil"
+  },
+  {
+    "file": "s2060",
+    "name": "Selig S2060 low Reynolds number airfoil"
+  },
+  {
+    "file": "s2062",
+    "name": "Selig S2062 low Reynolds number airfoil"
+  },
+  {
+    "file": "s2091",
+    "name": "Selig S2091 low Reynolds number airfoil"
+  },
+  {
+    "file": "s3",
+    "name": "Republic S-3 airfoil (P-47 wing airfoil)"
+  },
+  {
+    "file": "s3002",
+    "name": "Selig S3002 low Reynolds number airfoil"
+  },
+  {
+    "file": "s3010",
+    "name": "Selig S3010 low Reynolds number airfoil"
+  },
+  {
+    "file": "s3014",
+    "name": "Selig S3014 low Reynolds number airfoil"
+  },
+  {
+    "file": "s3016",
+    "name": "Selig S3016 low Reynolds number airfoil"
+  },
+  {
+    "file": "s3021",
+    "name": "Selig S3021 low Reynolds number airfoil"
+  },
+  {
+    "file": "s3024",
+    "name": "Selig S3024 low Reynolds number airfoil"
+  },
+  {
+    "file": "s3025",
+    "name": "Selig S3025 low Reynolds number airfoil"
+  },
+  {
+    "file": "s4022",
+    "name": "Selig S4022 low Reynolds number airfoil"
+  },
+  {
+    "file": "s4053",
+    "name": "Selig S4053 low Reynolds number airfoil"
+  },
+  {
+    "file": "s4061",
+    "name": "Selig S4061 low Reynolds number airfoil"
+  },
+  {
+    "file": "s4062",
+    "name": "Selig S4062 low Reynolds number airfoil"
+  },
+  {
+    "file": "s4083",
+    "name": "Selig S4083 low Reynolds number airfoil"
+  },
+  {
+    "file": "s4094",
+    "name": "Selig S4094 airfoil used on the E-flite UMX ASK-21 scale RC sailplane:"
+  },
+  {
+    "file": "s4095",
+    "name": "Selig S4095 airfoil used on the E-flite UMX ASK-21 scale RC sailplane:"
+  },
+  {
+    "file": "s4096",
+    "name": "Selig S4096 airfoil used on the E-flite UMX ASK-21 scale RC sailplane:"
+  },
+  {
+    "file": "s4110",
+    "name": "Selig S4110 low Reynolds number airfoil"
+  },
+  {
+    "file": "s4158",
+    "name": "Selig S4158 low Reynolds number airfoil"
+  },
+  {
+    "file": "s4180",
+    "name": "Selig S4180 low Reynolds number airfoil"
+  },
+  {
+    "file": "s4233",
+    "name": "Selig S4233 low Reynolds number airfoil"
+  },
+  {
+    "file": "s4310",
+    "name": "Selig S4310 low Reynolds number airfoil"
+  },
+  {
+    "file": "s4320",
+    "name": "Selig S4320 low Reynolds number airfoil"
+  },
+  {
+    "file": "s5010",
+    "name": "Selig S5010 low Reynolds number airfoil"
+  },
+  {
+    "file": "s5020",
+    "name": "Selig S5020 low Reynolds number airfoil"
+  },
+  {
+    "file": "s6061",
+    "name": "Selig S6061 low Reynolds number airfoil"
+  },
+  {
+    "file": "s6062",
+    "name": "Selig S6062 low Reynolds number airfoil"
+  },
+  {
+    "file": "s6063",
+    "name": "Selig S6063 low Reynolds number airfoil"
+  },
+  {
+    "file": "s7012",
+    "name": "Selig S7012 low Reynolds number airfoil"
+  },
+  {
+    "file": "s7055",
+    "name": "Selig S7055 low Reynolds number airfoil"
+  },
+  {
+    "file": "s7075",
+    "name": "Selig S7075 low Reynolds number airfoil"
+  },
+  {
+    "file": "s8023",
+    "name": "Selig S8023 symmetrical low Reynolds number airfoil"
+  },
+  {
+    "file": "s8025",
+    "name": "Selig S8025 low Reynolds number airfoil"
+  },
+  {
+    "file": "s8035",
+    "name": "Selig S8035 low Reynolds number airfoil"
+  },
+  {
+    "file": "s8036",
+    "name": "Selig S8036 low Reynolds number airfoil"
+  },
+  {
+    "file": "s8037",
+    "name": "Selig S8037 low Reynolds number airfoil"
+  },
+  {
+    "file": "s8038",
+    "name": "Selig S8038 (13%) low Reynolds number airfoil"
+  },
+  {
+    "file": "s8052",
+    "name": "Selig S8052 low Reynolds number airfoil"
+  },
+  {
+    "file": "s8055",
+    "name": "Selig S8055 (12%) low Reynolds number airfoil"
+  },
+  {
+    "file": "s8064",
+    "name": "Selig S8064 airfoil for Q-500 (Q500) pylon racing (12.33%)"
+  },
+  {
+    "file": "s8065",
+    "name": "Selig S8065 airfoil for Q-40 pylon racing (11%)"
+  },
+  {
+    "file": "s8066",
+    "name": "Selig S8066 airfoil for Q-40 pylon racing (10%)"
+  },
+  {
+    "file": "s9000",
+    "name": "Selig S9000 (9%) low Reynolds number airfoil used on the Blackhawk R/C sailplane"
+  },
+  {
+    "file": "s9026",
+    "name": "Selig S9026 (9.5%) symmetrical horizontal stab airfoil used on the Opus R/C sailplane"
+  },
+  {
+    "file": "s9027",
+    "name": "Selig S9027 (8%) symmetrical vertical stab airfoil used on the Opus R/C sailplane"
+  },
+  {
+    "file": "s9032",
+    "name": "Selig S9032 (9%) symmetrical horizontal stab airfoil used on the Blackhawk R/C sailplane"
+  },
+  {
+    "file": "s9033",
+    "name": "Selig S9033 (7.5%) symmetrical vertical stab airfoil used on the Blackhawk R/C sailplane"
+  },
+  {
+    "file": "s9037",
+    "name": "Selig S9037 (9%) low Reynolds number airfoil used on the Opus R/C sailplane"
+  },
+  {
+    "file": "s9104",
+    "name": "Selig S9104 high lift low Reynolds number airfoil"
+  },
+  {
+    "file": "s9104BTE",
+    "name": "Selig S9104BTE high lift low Reynolds number airfoil"
+  },
+  {
+    "file": "sa7024",
+    "name": "Selig / Ashok Gopalarathnam SA7024 low Reynolds number airfoil"
+  },
+  {
+    "file": "sa7025",
+    "name": "Selig / Ashok Gopalarathnam SA7025 low Reynolds number airfoil"
+  },
+  {
+    "file": "sa7026",
+    "name": "Selig / Ashok Gopalarathnam SA7026 low Reynolds number airfoil"
+  },
+  {
+    "file": "sa7035",
+    "name": "Selig / Ashok Gopalarathnam SA7035"
+  },
+  {
+    "file": "sa7036",
+    "name": "Selig / Ashok Gopalarathnam SA7036"
+  },
+  {
+    "file": "sa7038",
+    "name": "Selig / Ashok Gopalarathnam SA7038"
+  },
+  {
+    "file": "saratov",
+    "name": "Saratov R/C sailplane airfoil"
+  },
+  {
+    "file": "sc1012r8",
+    "name": "Sikorsky SC1012 R8 rotorcraft airfoil"
+  },
+  {
+    "file": "sc1094r8",
+    "name": "Sikorsky/Velkoff SC1094 R8 rotorcraft airfoil"
+  },
+  {
+    "file": "sc1095",
+    "name": "Sikorsky/Balch SC1095 rotorcraft airfoil"
+  },
+  {
+    "file": "sc1095r8",
+    "name": "Sikorsky/Velkoff SC1095 R8 rotorcraft airfoil"
+  },
+  {
+    "file": "sc20010",
+    "name": "NASA SC(2)-0010 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20012",
+    "name": "NASA SC(2)-0012 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20402",
+    "name": "NASA SC(2)-0402 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20403",
+    "name": "NASA SC(2)-0403 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20404",
+    "name": "NASA SC(2)-0404 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20406",
+    "name": "NASA SC(2)-0406 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20410",
+    "name": "NASA SC(2)-0410 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20412",
+    "name": "NASA SC(2)-0412 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20414",
+    "name": "NASA SC(2)-0414 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20503",
+    "name": "NASA SC(2)-0503 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20518",
+    "name": "NASA SC(2)-0518 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20606",
+    "name": "NASA SC(2)-0606 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20610",
+    "name": "NASA SC(2)-0610 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20612",
+    "name": "NASA SC(2)-0612 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20614",
+    "name": "NASA SC(2)-0614 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20706",
+    "name": "NASA SC(2)-0706 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20710",
+    "name": "NASA SC(2)-0710 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20712",
+    "name": "NASA SC(2)-0712 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc20714",
+    "name": "NASA SC(2)-0714 airfoil (NASA TP-2969)"
+  },
+  {
+    "file": "sc21006",
+    "name": "NASA SC(2)-1006 airfoil"
+  },
+  {
+    "file": "sc21010",
+    "name": "NASA SC(2)-1010 airfoil"
+  },
+  {
+    "file": "sc2110",
+    "name": "Sikorsky/Lednicer & Owen SC2110 rotorcraft airfoil (SC5410)"
+  },
+  {
+    "file": "sd2030",
+    "name": "Selig / Donovan SD2030 low Reynolds number airfoil"
+  },
+  {
+    "file": "sd2083",
+    "name": "Selig / Donovan SD2083 low Reynolds number airfoil"
+  },
+  {
+    "file": "sd5060",
+    "name": "Selig / Donovan SD5060 low Reynolds number airfoil"
+  },
+  {
+    "file": "sd6060",
+    "name": "Selig / Donovan SD6060 low Reynolds number airfoil"
+  },
+  {
+    "file": "sd6080",
+    "name": "Selig / Donovan SD6080 low Reynolds number airfoil"
+  },
+  {
+    "file": "sd7003",
+    "name": "Selig / Donovan SD7003 low Reynolds number airfoil"
+  },
+  {
+    "file": "sd7032",
+    "name": "Selig / Donovan SD7032 low Reynolds number airfoil"
+  },
+  {
+    "file": "sd7034",
+    "name": "Selig / Donovan SD7034 low Reynolds number airfoil"
+  },
+  {
+    "file": "sd7037",
+    "name": "Selig / Donovan SD7037 low Reynolds number airfoil"
+  },
+  {
+    "file": "sd7043",
+    "name": "Selig / Donovan SD7043 low Reynolds number airfoil"
+  },
+  {
+    "file": "sd7062",
+    "name": "Selig / Donovan SD7062 low Reynolds number airfoil"
+  },
+  {
+    "file": "sd7080",
+    "name": "Selig / Donovan SD7080 low Reynolds number airfoil"
+  },
+  {
+    "file": "sd7084",
+    "name": "Selig / Donovan SD7084 low Reynolds number airfoil"
+  },
+  {
+    "file": "sd7090",
+    "name": "Selig / Donovan SD7090 low Reynolds number airfoil"
+  },
+  {
+    "file": "sd8000",
+    "name": "Selig / Donovan SD8000 low Reynolds number airfoil"
+  },
+  {
+    "file": "sd8020",
+    "name": "Selig / Donovan SD8020 low Reynolds number airfoil"
+  },
+  {
+    "file": "sd8040",
+    "name": "Selig / Donovan SD8040 low Reynolds number airfoil"
+  },
+  {
+    "file": "sg6040",
+    "name": "Selig / Giguere SG6040 wind turbine airfoil"
+  },
+  {
+    "file": "sg6041",
+    "name": "Selig / Giguere SG6041 wind turbine airfoil (high L/D)"
+  },
+  {
+    "file": "sg6042",
+    "name": "Selig / Giguere SG6042 wind turbine airfoil (high L/D)"
+  },
+  {
+    "file": "sg6043",
+    "name": "Selig / Giguere SG6043 wind turbine airfoil (high L/D)"
+  },
+  {
+    "file": "sg6050",
+    "name": "Selig / Giguere SG6050 wind turbine airfoil"
+  },
+  {
+    "file": "sg6051",
+    "name": "Selig / Giguere SG6051 wind turbine airfoil"
+  },
+  {
+    "file": "sm701",
+    "name": "Somers / Maughmer SM701 airfoil"
+  },
+  {
+    "file": "sokolov",
+    "name": "Sokolov R/C sailplane airfoil"
+  },
+  {
+    "file": "spicasm",
+    "name": "Anderson SPICA R/C sailplane airfoil (smoothed)"
+  },
+  {
+    "file": "ssca07",
+    "name": "Sikorsky/Flemming SSC-A07 transonic rotorcraft airfoil"
+  },
+  {
+    "file": "ssca09",
+    "name": "Sikorsky/Flemming SSC-A09 transonic rotorcraft airfoil"
+  },
+  {
+    "file": "stcyr171",
+    "name": "St. CYR 171 (Royer) airfoil"
+  },
+  {
+    "file": "stcyr172",
+    "name": "St. CYR 172 (Royer) airfoil"
+  },
+  {
+    "file": "stcyr234",
+    "name": "St. CYR 234 (Bartel 17-IC) airfoil"
+  },
+  {
+    "file": "stcyr24",
+    "name": "St. CYR 24 (Bartel 35-IIIC) airfoil"
+  },
+  {
+    "file": "ste87151",
+    "name": "Eppler STE 871-514 airfoil"
+  },
+  {
+    "file": "ste87391",
+    "name": "Eppler STE 87(-3)-914 airfoil"
+  },
+  {
+    "file": "stf86361",
+    "name": "Eppler STF 863-615 airfoil"
+  },
+  {
+    "file": "strand",
+    "name": "Strand high lift airfoil"
+  },
+  {
+    "file": "supermarine371i",
+    "name": "Supermarine 371-I root airfoil"
+  },
+  {
+    "file": "supermarine371ii",
+    "name": "Supermarine 371-II tip airfoil"
+  },
+  {
+    "file": "tempest1",
+    "name": "Hawker Tempest 37.5% semispan airfoil (NPL?)"
+  },
+  {
+    "file": "tempest2",
+    "name": "Hawker Tempest 61% semispan airfoil (NPL?)"
+  },
+  {
+    "file": "tempest3",
+    "name": "Hawker Tempest 96.77% semispan airfoil (NPL?)"
+  },
+  {
+    "file": "th25816",
+    "name": "Naval Air Development Center/Doug Hall high altitude, long endurance vehicle airfoil"
+  },
+  {
+    "file": "trainer60",
+    "name": "Great Planes R/C Trainer 60 airfoil"
+  },
+  {
+    "file": "tsagi_r3a",
+    "name": "TsAGI R-3a (12%) used on Russian ultra light aircraft (12%)."
+  },
+  {
+    "file": "tsagi12",
+    "name": "TsAGI 12% airfoil"
+  },
+  {
+    "file": "tsagi8",
+    "name": "TsAGI 8% airfoil"
+  },
+  {
+    "file": "ua2-180",
+    "name": "UA(2)-180 airfoil for ultralight category aircraft"
+  },
+  {
+    "file": "ua2-180sm",
+    "name": "UA(2)-180 (smoothed) airfoil for ultralight category aircraft"
+  },
+  {
+    "file": "ua79sf18",
+    "name": "University of Alberta/Marsden UA 79-SF-187 FLAPPED sailplane airfoil"
+  },
+  {
+    "file": "ua79sff",
+    "name": "University of Alberta/Marsden UA 79-SF-187 sailplane airfoil FLAP"
+  },
+  {
+    "file": "ua79sfm",
+    "name": "University of Alberta/Marsden UA 79-SF-187 sailplane airfoil MAIN ELEMENT"
+  },
+  {
+    "file": "uag8814320",
+    "name": "UAG 88-143/20 airfoil"
+  },
+  {
+    "file": "ui1720",
+    "name": "University of Illinois UI-1720 high lift airfoil"
+  },
+  {
+    "file": "ultimate",
+    "name": "Carl Goldberg R/C Ultimate Bipe airfoil"
+  },
+  {
+    "file": "us1000root",
+    "name": "Great Planes R/C Ultra-Sport 1000 airfoil"
+  },
+  {
+    "file": "usa22",
+    "name": "USA-22 airfoil"
+  },
+  {
+    "file": "usa25",
+    "name": "USA-25 airfoil"
+  },
+  {
+    "file": "usa26",
+    "name": "USA-26 airfoil"
+  },
+  {
+    "file": "usa27",
+    "name": "USA-27 airfoil"
+  },
+  {
+    "file": "usa27m2",
+    "name": "USA-27MOD airfoil"
+  },
+  {
+    "file": "usa28",
+    "name": "USA-28 airfoil"
+  },
+  {
+    "file": "usa29",
+    "name": "USA-29 airfoil"
+  },
+  {
+    "file": "usa31",
+    "name": "USA-31 airfoil"
+  },
+  {
+    "file": "usa32",
+    "name": "USA-32 airfoil"
+  },
+  {
+    "file": "usa33",
+    "name": "USA-33 airfoil"
+  },
+  {
+    "file": "usa34",
+    "name": "USA-34 airfoil"
+  },
+  {
+    "file": "usa35",
+    "name": "USA-35 airfoil"
+  },
+  {
+    "file": "usa35a",
+    "name": "USA-35A airfoil"
+  },
+  {
+    "file": "usa35b",
+    "name": "USA-35B airfoil"
+  },
+  {
+    "file": "usa40",
+    "name": "USA-40 airfoil"
+  },
+  {
+    "file": "usa40b",
+    "name": "USA-40B airfoil"
+  },
+  {
+    "file": "usa41",
+    "name": "USA-41 airfoil"
+  },
+  {
+    "file": "usa45",
+    "name": "USA-45 airfoil"
+  },
+  {
+    "file": "usa45m",
+    "name": "USA-45M airfoil"
+  },
+  {
+    "file": "usa46",
+    "name": "USA-46 airfoil"
+  },
+  {
+    "file": "usa48",
+    "name": "USA-48 airfoil"
+  },
+  {
+    "file": "usa49",
+    "name": "USA-49 airfoil"
+  },
+  {
+    "file": "usa5",
+    "name": "USA-5 airfoil"
+  },
+  {
+    "file": "usa50",
+    "name": "USA-50 airfoil"
+  },
+  {
+    "file": "usa51",
+    "name": "USA-51 airfoil"
+  },
+  {
+    "file": "usa98",
+    "name": "USA-98 airfoil"
+  },
+  {
+    "file": "usnps4",
+    "name": "Jacobs USNPS4 (smoothed) 17.5 kW wind turbine airfoil"
+  },
+  {
+    "file": "v13006",
+    "name": "Boeing-Vertol V13006-.7 rotorcraft airfoil"
+  },
+  {
+    "file": "v13009",
+    "name": "Boeing-Vertol V(1.9)3006-1.25 rotorcraft airfoil"
+  },
+  {
+    "file": "v23010",
+    "name": "Boeing-Vertol V23010-1.58 rotorcraft airfoil"
+  },
+  {
+    "file": "v43012",
+    "name": "Boeing-Vertol V43012-1.58 rotorcraft airfoil"
+  },
+  {
+    "file": "v43015",
+    "name": "Boeing-Vertol V43015-2.48 rotorcraft airfoil"
+  },
+  {
+    "file": "vr1",
+    "name": "Boeing-Vertol VR-1 rotorcraft airfoil"
+  },
+  {
+    "file": "vr11x",
+    "name": "Boeing-Vertol/NASA/Dadone VR-11X transonic rotorcraft airfoil"
+  },
+  {
+    "file": "vr12",
+    "name": "Boeing-Vertol/Dadone VR-12 rotorcraft airfoil"
+  },
+  {
+    "file": "vr13",
+    "name": "Boeing-Vertol/Dadone VR-13 rotorcraft airfoil"
+  },
+  {
+    "file": "vr14",
+    "name": "Boeing-Vertol/Dadone VR-14 rotorcraft airfoil"
+  },
+  {
+    "file": "vr15",
+    "name": "Boeing-Vertol/Dadone VR-15 transonic rotorcraft airfoil"
+  },
+  {
+    "file": "vr5",
+    "name": "Boeing-Vertol VR-5 rotorcraft airfoil"
+  },
+  {
+    "file": "vr7",
+    "name": "Boeing-Vertol VR-7 rotorcraft airfoil"
+  },
+  {
+    "file": "vr7b",
+    "name": "Boeing-Vertol VR-7 rotorcraft airfoil with tab"
+  },
+  {
+    "file": "vr8",
+    "name": "Boeing-Vertol VR-8 rotorcraft airfoil"
+  },
+  {
+    "file": "vr8b",
+    "name": "Boeing-Vertol VR-8 rotorcraft airfoil with tab"
+  },
+  {
+    "file": "vr9",
+    "name": "Boeing-Vertol VR-9 rotorcraft airfoil"
+  },
+  {
+    "file": "w1011",
+    "name": "Gregory Williamson W1011 airfoil"
+  },
+  {
+    "file": "w1015",
+    "name": "Gregory Williamson W1015 airfoil"
+  },
+  {
+    "file": "waspsm",
+    "name": "Mike Fox WASP low Reynolds number airfoil"
+  },
+  {
+    "file": "wb13535sm",
+    "name": "Woody Blanchard WB135/35 R/C sailplane airfoil"
+  },
+  {
+    "file": "wb140",
+    "name": "Woody Blanchard WB140/35/FB R/C sailplane airfoil"
+  },
+  {
+    "file": "whitcomb",
+    "name": "NASA/Langley Whitcomb integral supercritical airfoil"
+  },
+  {
+    "file": "ys900",
+    "name": "YS900 hyrdofoil (Shen / Eppler)"
+  },
+  {
+    "file": "ys915",
+    "name": "YS915 hydrofoil (Shen / Eppler)"
+  },
+  {
+    "file": "ys920",
+    "name": "YS920 hydrofoil (Shen / Eppler)"
+  },
+  {
+    "file": "ys930",
+    "name": "YS930 hydrofoil (Shen / Eppler)"
+  }
+]

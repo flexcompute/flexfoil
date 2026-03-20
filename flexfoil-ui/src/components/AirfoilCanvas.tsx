@@ -629,6 +629,7 @@ export function AirfoilCanvas() {
   
   // State from store (use shallow equality to prevent unnecessary re-renders)
   const { 
+    name: airfoilName,
     coordinates, 
     panels, 
     controlMode,
@@ -651,6 +652,7 @@ export function AirfoilCanvas() {
     inverseDesignResultCoords,
   } = useAirfoilStore(
     useShallow((state) => ({
+      name: state.name,
       coordinates: state.coordinates,
       panels: state.panels,
       controlMode: state.controlMode,
@@ -813,6 +815,9 @@ export function AirfoilCanvas() {
   }>({ cp: [], cpX: [], cl: 0, cd: 0, cm: 0 });
   
   // Stable viewport for adaptive streamlines - only updates after zooming settles
+  // HUD collapse state
+  const [hudCollapsed, setHudCollapsed] = useState(false);
+
   // This prevents expensive streamline recalculation on every scroll tick
   const lastZoomRef = useRef(viewport.zoom);
   const [stableViewport, setStableViewport] = useState(viewport);
@@ -3417,10 +3422,9 @@ export function AirfoilCanvas() {
           top: '12px',
           left: '12px',
           zIndex: 10,
-          pointerEvents: 'none',
+          pointerEvents: 'auto',
           background: 'var(--bg-secondary, rgba(15,20,35,0.88))',
           backdropFilter: 'blur(10px)',
-          padding: '8px 12px',
           borderRadius: '6px',
           border: '1px solid var(--border-color, rgba(255,255,255,0.08))',
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
@@ -3428,24 +3432,64 @@ export function AirfoilCanvas() {
           lineHeight: '1.7',
           color: 'var(--text-primary, #edf2ff)',
           minWidth: '120px',
+          overflow: 'hidden',
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-          <span style={{ opacity: 0.5 }}>α</span>
-          <span>{displayAlpha.toFixed(2)}°</span>
+        <div
+          onClick={() => setHudCollapsed((c) => !c)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '6px 12px',
+            cursor: 'pointer',
+            userSelect: 'none',
+            borderBottom: hudCollapsed ? 'none' : '1px solid var(--border-color, rgba(255,255,255,0.08))',
+          }}
+        >
+          <svg
+            width="8" height="8" viewBox="0 0 8 8"
+            style={{
+              transform: hudCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
+              transition: 'transform 0.15s ease',
+              opacity: 0.4,
+              flexShrink: 0,
+            }}
+          >
+            <path d="M1 2.5L4 5.5L7 2.5" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span style={{
+            fontSize: '10px',
+            fontWeight: 600,
+            letterSpacing: '0.04em',
+            opacity: 0.7,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}>
+            {airfoilName}
+          </span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-          <span style={{ opacity: 0.5 }}>C<sub>L</sub></span>
-          <span style={{ color: 'var(--accent-primary, #61dafb)' }}>{morphState.cl.toFixed(4)}</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-          <span style={{ opacity: 0.5 }}>C<sub>D</sub></span>
-          <span style={{ color: 'var(--accent-secondary, #f472b6)' }}>{morphState.cd.toFixed(5)}</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-          <span style={{ opacity: 0.5 }}>C<sub>M</sub></span>
-          <span>{morphState.cm.toFixed(4)}</span>
-        </div>
+        {!hudCollapsed && (
+          <div style={{ padding: '4px 12px 8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+              <span style={{ opacity: 0.5 }}>α</span>
+              <span>{displayAlpha.toFixed(2)}°</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+              <span style={{ opacity: 0.5 }}>C<sub>L</sub></span>
+              <span style={{ color: 'var(--accent-primary, #61dafb)' }}>{morphState.cl.toFixed(4)}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+              <span style={{ opacity: 0.5 }}>C<sub>D</sub></span>
+              <span style={{ color: 'var(--accent-secondary, #f472b6)' }}>{morphState.cd.toFixed(5)}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+              <span style={{ opacity: 0.5 }}>C<sub>M</sub></span>
+              <span>{morphState.cm.toFixed(4)}</span>
+            </div>
+          </div>
+        )}
       </div>
       {/* Overlay controls - simplified, full controls in Visualization panel */}
       <div

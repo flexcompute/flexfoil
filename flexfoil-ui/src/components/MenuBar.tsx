@@ -5,7 +5,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { DarkModeToggle } from './DarkModeToggle';
 import { useUndoRedo } from '../hooks/useUndoRedo';
-import { useOnboarding } from '../onboarding';
+import { useOnboarding, type TourId } from '../onboarding';
 import { FlexcomputeLogo } from './FlexcomputeLogo';
 import { AboutDialog } from './AboutDialog';
 import { ChangelogDialog, getLastSeenChangelogVersion } from './ChangelogDialog';
@@ -528,6 +528,7 @@ export function MenuBar({
         open={showChangelog}
         onClose={() => setShowChangelog(false)}
         onNavigateToPanel={handleTogglePanel}
+        onStartTour={(tourId) => startTour(tourId as TourId, true)}
       />
     </div>
   );

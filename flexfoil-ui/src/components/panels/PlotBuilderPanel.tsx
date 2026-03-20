@@ -11,6 +11,7 @@ import { buildMarkerEncoding, colorForKey, colorForValue } from '../../lib/plotS
 import { useSavedPlotStore, type SavedPlot } from '../../stores/savedPlotStore';
 import { useAllPlotFields } from '../../hooks/useAllPlotFields';
 import { filterOutliers } from '../../lib/outlierFilter';
+import { OutlierContextMenu } from '../OutlierContextMenu';
 import type { AxisScale, ChartType, DataSource, RunRow } from '../../types';
 
 const CHART_TYPES: { value: ChartType; label: string }[] = [
@@ -31,8 +32,9 @@ type PlotBuilderView = 'build' | 'saved';
 
 export function PlotBuilderPanel() {
   const plotAreaRef = useRef<HTMLDivElement | null>(null);
+  const hoveredRunIdRef = useRef<number | null>(null);
   const { isDark } = useTheme();
-  const { allRuns, filteredRuns, restoreRunById, selectedRunId } = useRunStore();
+  const { allRuns, filteredRuns, aggregatedRuns, restoreRunById, selectedRunId, toggleOutlier } = useRunStore();
 
   const dataSource = useRouteUiStore((state) => state.plotDataSource);
   const setDataSource = useRouteUiStore((state) => state.setPlotDataSource);
@@ -59,6 +61,7 @@ export function PlotBuilderPanel() {
 
   const { savedPlots, addPlot, deletePlot } = useSavedPlotStore();
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; runId: number } | null>(null);
 
   const {
     numericFields: mergedNumericFields,
@@ -70,8 +73,9 @@ export function PlotBuilderPanel() {
   const outlierFilter = useRouteUiStore((state) => state.outlierFilterEnabled);
   const setOutlierFilter = useRouteUiStore((state) => state.setOutlierFilterEnabled);
 
-  const data = dataSource === 'full' ? allRuns : filteredRuns;
-  const successOnlyRaw = useMemo(() => data.filter(r => r.success), [data]);
+  const data = dataSource === 'aggregated' ? aggregatedRuns : dataSource === 'filtered' ? filteredRuns : allRuns;
+  const successNoOutliers = useMemo(() => data.filter(r => r.success && !r.is_outlier), [data]);
+  const successOnlyRaw = successNoOutliers;
   const getLabel = useCallback((key: keyof RunRow) => mergedGetLabel(key as string), [mergedGetLabel]);
 
   const successOnly = useMemo(() => {
@@ -229,6 +233,23 @@ export function PlotBuilderPanel() {
     }
   }, [restoreRunById]);
 
+  const handlePlotHover = useCallback((event: Readonly<Plotly.PlotHoverEvent>) => {
+    const rawRunId = event.points?.[0]?.customdata;
+    hoveredRunIdRef.current = typeof rawRunId === 'number' ? rawRunId : null;
+  }, []);
+
+  const handlePlotUnhover = useCallback(() => {
+    hoveredRunIdRef.current = null;
+  }, []);
+
+  const handlePlotContextMenu = useCallback((e: React.MouseEvent) => {
+    const runId = hoveredRunIdRef.current;
+    if (runId == null) return;
+    e.preventDefault();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setCtxMenu({ x: e.clientX - rect.left, y: e.clientY - rect.top, runId });
+  }, []);
+
   const handleSavePlot = useCallback(() => {
     const title = saveTitle.trim() || `${getLabel(yField)} vs ${getLabel(xField)}`;
     addPlot({
@@ -366,6 +387,9 @@ export function PlotBuilderPanel() {
               <select value={dataSource} onChange={e => setDataSource(e.target.value as DataSource)} style={selectStyle}>
                 <option value="full">All ({allRuns.length})</option>
                 <option value="filtered">Grid Filter ({filteredRuns.length})</option>
+                {aggregatedRuns.length > 0 && (
+                  <option value="aggregated">Aggregated ({aggregatedRuns.length})</option>
+                )}
               </select>
             </div>
 
@@ -458,7 +482,7 @@ export function PlotBuilderPanel() {
           </div>
 
           {/* Plot area */}
-          <div data-tour="pb-plot-area" ref={plotAreaRef} style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+          <div data-tour="pb-plot-area" ref={plotAreaRef} style={{ flex: 1, minHeight: 0, position: 'relative' }} onContextMenu={handlePlotContextMenu}>
             {successOnly.length === 0 ? (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: '13px' }}>
                 No data. Run some analyses in the Solve panel.
@@ -469,8 +493,19 @@ export function PlotBuilderPanel() {
                 layout={layout as Partial<Plotly.Layout>}
                 config={plotConfig}
                 onClick={handlePlotClick}
+                onHover={handlePlotHover}
+                onUnhover={handlePlotUnhover}
                 useResizeHandler
                 style={{ width: '100%', height: '100%' }}
+              />
+            )}
+            {ctxMenu && (
+              <OutlierContextMenu
+                x={ctxMenu.x}
+                y={ctxMenu.y}
+                isFlagged={false}
+                onToggle={() => toggleOutlier(ctxMenu.runId)}
+                onDismiss={() => setCtxMenu(null)}
               />
             )}
           </div>
@@ -481,7 +516,7 @@ export function PlotBuilderPanel() {
             color: 'var(--text-muted)',
             flexShrink: 0,
           }}>
-            Click a plotted point to restore its historical flowfield.
+            Click a point to restore its flowfield. Right-click to flag as outlier.
             {selectedRunId != null ? ` Current restored run: #${selectedRunId}` : ''}
           </div>
         </>

@@ -171,6 +171,7 @@ export function SolverStatusIndicator() {
       {/* Inline indicator */}
       <button
         onClick={() => setOpen((o) => !o)}
+        data-tour="solver-status"
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 6,
           background: 'none', border: 'none',

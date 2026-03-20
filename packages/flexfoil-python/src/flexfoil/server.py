@@ -10,10 +10,14 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import webbrowser
+from functools import lru_cache
 from pathlib import Path
 from typing import AsyncGenerator
+from urllib.request import urlopen, Request as UrlRequest
+from urllib.error import URLError
 
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
@@ -181,6 +185,37 @@ async def lookup_cache(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# UIUC Selig database proxy — avoids CORS issues for the frontend
+# ---------------------------------------------------------------------------
+
+_UIUC_BASE = "https://m-selig.ae.illinois.edu/ads/coord/"
+_SAFE_FILENAME = re.compile(r"^[\w\-]+\.dat$")
+
+
+@lru_cache(maxsize=256)
+def _fetch_uiuc_dat(filename: str) -> str:
+    req = UrlRequest(
+        _UIUC_BASE + filename,
+        headers={"User-Agent": "flexfoil/1.0"},
+    )
+    with urlopen(req, timeout=15) as resp:
+        return resp.read().decode("utf-8", errors="replace")
+
+
+async def uiuc_proxy(request: Request) -> Response:
+    filename = request.path_params["filename"]
+    if not _SAFE_FILENAME.match(filename):
+        return JSONResponse({"error": "Invalid filename"}, status_code=400)
+    try:
+        text = await asyncio.to_thread(_fetch_uiuc_dat, filename)
+    except URLError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=502)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    return Response(text, media_type="text/plain")
+
+
+# ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
 
@@ -223,6 +258,7 @@ def _build_routes() -> list:
         Route("/api/airfoils", save_airfoil, methods=["POST"]),
         Route("/api/db/export", export_db),
         Route("/api/db/import", import_db, methods=["POST"]),
+        Route("/api/uiuc-proxy/{filename:path}", uiuc_proxy),
         Route("/api/events", sse_endpoint),
     ]
     if STATIC_DIR.is_dir():

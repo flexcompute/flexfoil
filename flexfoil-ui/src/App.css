@@ -717,30 +717,25 @@ button.primary:hover {
   color: #ffc107;
 }
 
-/* Element not visible warning (when tour element is hidden behind a tab) */
+/* Panel-hidden warning (when tour element is behind a closed/inactive tab) */
 .tour-element-warning {
   margin-bottom: 12px;
-  padding: 12px;
-  background: rgba(255, 152, 0, 0.15);
-  border: 1px solid rgba(255, 152, 0, 0.4);
-  border-radius: 6px;
+  padding: 12px 14px;
+  background: rgba(255, 152, 0, 0.12);
+  border: 1px solid rgba(255, 152, 0, 0.35);
+  border-radius: 8px;
   border-left: 3px solid #ff9800;
 }
 
 [data-theme="light"] .tour-element-warning {
-  background: rgba(255, 152, 0, 0.1);
+  background: rgba(255, 152, 0, 0.08);
 }
 
 .tour-element-warning__header {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
-}
-
-.tour-element-warning__icon {
-  font-size: 16px;
-  color: #ff9800;
+  margin-bottom: 6px;
 }
 
 .tour-element-warning__label {
@@ -755,19 +750,60 @@ button.primary:hover {
   font-size: 13px;
   color: var(--text-secondary);
   line-height: 1.5;
+  margin-bottom: 10px;
 }
 
 .tour-element-warning__message strong {
   color: var(--text-primary);
 }
 
-.tour-element-warning__message ul {
-  margin: 8px 0 0 0;
-  padding-left: 20px;
+/* Animated cursor SVG inside the warning header */
+.tour-animated-cursor {
+  color: #ff9800;
+  animation: tour-cursor-click 1.6s ease-in-out infinite;
+  flex-shrink: 0;
 }
 
-.tour-element-warning__message li {
-  margin-bottom: 4px;
+@keyframes tour-cursor-click {
+  0%, 100% { transform: translate(0, 0) scale(1); opacity: 1; }
+  40%       { transform: translate(2px, 3px) scale(0.92); opacity: 0.8; }
+  55%       { transform: translate(2px, 3px) scale(0.92); opacity: 0.8; }
+  70%       { transform: translate(0, 0) scale(1); opacity: 1; }
+}
+
+/* "Show Panel" button */
+.tour-show-panel-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: #e68a00;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.tour-show-panel-btn:hover {
+  background: #cc7a00;
+}
+
+.tour-show-panel-btn:active {
+  transform: scale(0.97);
+}
+
+[data-theme="light"] .tour-show-panel-btn {
+  background: #f59e0b;
+  color: #1a1a1a;
+}
+
+[data-theme="light"] .tour-show-panel-btn:hover {
+  background: #d97706;
 }
 
 /* ── Command Palette ───────────────────────────────── */

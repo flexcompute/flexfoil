@@ -144,6 +144,8 @@ function AppContent() {
       dataExplorerSplomKeys: state.dataExplorerSplomKeys,
       dataExplorerColorBy: state.dataExplorerColorBy,
       dataExplorerFilterModel: state.dataExplorerFilterModel,
+      dataExplorerSmartGroup: state.dataExplorerSmartGroup,
+      dataExplorerDataSource: state.dataExplorerDataSource,
       sweepPrimary: state.sweepPrimary,
       sweepSecondary: state.sweepSecondary,
       outlierFilterEnabled: state.outlierFilterEnabled,

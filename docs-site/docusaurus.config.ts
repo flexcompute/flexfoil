@@ -14,7 +14,7 @@ const config: Config = {
   url: 'https://foil.flexcompute.com',
   baseUrl: '/docs/',
 
-  organizationName: 'flexfoil',
+  organizationName: 'flexcompute',
   projectName: 'flexfoil',
 
   onBrokenLinks: 'throw',
@@ -37,7 +37,7 @@ const config: Config = {
         docs: {
           routeBasePath: '/',
           sidebarPath: './sidebars.ts',
-          editUrl: 'https://github.com/flexfoil/flexfoil/tree/main/docs-site/',
+          editUrl: 'https://github.com/flexcompute/flexfoil/tree/main/docs-site/',
         },
         blog: false,
         theme: {
@@ -69,7 +69,7 @@ const config: Config = {
           label: 'Documentation',
         },
         {
-          href: 'https://github.com/flexfoil/flexfoil',
+          href: 'https://github.com/flexcompute/flexfoil',
           label: 'GitHub',
           position: 'right',
         },
@@ -104,7 +104,7 @@ const config: Config = {
             },
             {
               label: 'GitHub',
-              href: 'https://github.com/flexfoil/flexfoil',
+              href: 'https://github.com/flexcompute/flexfoil',
             },
           ],
         },

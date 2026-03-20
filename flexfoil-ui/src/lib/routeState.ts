@@ -455,6 +455,8 @@ export function parseRouteStateFromLocation(
       dataExplorerSplomKeys: splom ? (splom.split(',').filter(Boolean) as (keyof RunRow)[]) : undefined,
       dataExplorerColorBy: (params.get('colorBy') as keyof RunRow | null) ?? undefined,
       dataExplorerFilterModel: filterModel,
+      dataExplorerSmartGroup: params.get('smartGroup') === '1' ? true : undefined,
+      dataExplorerDataSource: (params.get('deData') as RouteUiSnapshot['dataExplorerDataSource'] | null) ?? undefined,
       activePanel: panel,
       viewport: Object.keys(viewport).length > 0 ? (viewport as RouteViewportState) : undefined,
       layoutJson: layoutJson ?? undefined,

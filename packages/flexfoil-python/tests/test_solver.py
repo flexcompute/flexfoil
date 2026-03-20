@@ -277,6 +277,104 @@ class TestDeflectFlap:
         assert deflect_flap([1.0, 0.0], 0.75, 10.0) == []
 
 
+class TestBLDistribution:
+    def _make_coords(self):
+        raw = generate_naca4(2412)
+        flat = [v for x, y in raw for v in (x, y)]
+        paneled = repanel_xfoil(flat, 160)
+        return [v for x, y in paneled for v in (x, y)]
+
+    def test_returns_bl_data(self):
+        from flexfoil._rustfoil import get_bl_distribution
+        coords = self._make_coords()
+        result = get_bl_distribution(coords, 5.0, 1e6, 0.0, 9.0, 100)
+        assert result["success"]
+        assert result["converged"]
+        assert len(result["x_upper"]) > 0
+        assert len(result["x_lower"]) > 0
+        assert len(result["cf_upper"]) == len(result["x_upper"])
+        assert len(result["delta_star_upper"]) == len(result["x_upper"])
+        assert len(result["theta_upper"]) == len(result["x_upper"])
+        assert len(result["h_upper"]) == len(result["x_upper"])
+        assert len(result["ue_upper"]) == len(result["x_upper"])
+
+    def test_bl_transition_locations(self):
+        from flexfoil._rustfoil import get_bl_distribution
+        coords = self._make_coords()
+        result = get_bl_distribution(coords, 5.0, 1e6, 0.0, 9.0, 100)
+        assert result["success"]
+        assert 0.0 < result["x_tr_upper"] < 1.0
+
+    def test_bl_invalid_coords(self):
+        from flexfoil._rustfoil import get_bl_distribution
+        result = get_bl_distribution([1.0, 0.0], 0.0, 1e6, 0.0, 9.0, 100)
+        assert not result["success"]
+
+
+class TestPythonAPI:
+    """Tests for the Python-level Airfoil API enhancements."""
+
+    def test_solve_returns_cp(self):
+        from flexfoil import Airfoil
+        foil = Airfoil.from_naca("2412")
+        r = foil.solve(5.0, viscous=False)
+        assert r.success
+        assert r.cp is not None
+        assert r.cp_x is not None
+        assert len(r.cp) > 0
+        assert len(r.cp_x) > 0
+
+    def test_solve_viscous_returns_cp(self):
+        from flexfoil import Airfoil
+        foil = Airfoil.from_naca("2412")
+        r = foil.solve(5.0, Re=1e6)
+        assert r.success
+        assert r.cp is not None
+        assert len(r.cp) > 0
+
+    def test_polar_explicit_alphas(self):
+        from flexfoil import Airfoil
+        foil = Airfoil.from_naca("0012")
+        polar = foil.polar(alpha=[0.0, 5.0, 10.0])
+        assert len(polar.results) == 3
+
+    def test_polar_matrix_sweep(self):
+        from flexfoil import Airfoil
+        foil = Airfoil.from_naca("0012")
+        polars = foil.polar(alpha=[0.0, 5.0], Re=[1e5, 1e6])
+        assert isinstance(polars, list)
+        assert len(polars) == 2
+        assert polars[0].reynolds == 1e5
+        assert polars[1].reynolds == 1e6
+
+    def test_polar_matrix_re_mach(self):
+        from flexfoil import Airfoil
+        foil = Airfoil.from_naca("0012")
+        polars = foil.polar(alpha=[0.0, 5.0], Re=[1e5, 1e6], mach=[0.0, 0.3])
+        assert len(polars) == 4
+
+    def test_polar_scalar_returns_single(self):
+        from flexfoil import Airfoil
+        foil = Airfoil.from_naca("0012")
+        polar = foil.polar(alpha=[0.0, 5.0], Re=1e6)
+        from flexfoil.polar import PolarResult
+        assert isinstance(polar, PolarResult)
+
+    def test_bl_distribution(self):
+        from flexfoil import Airfoil
+        foil = Airfoil.from_naca("2412")
+        bl = foil.bl_distribution(5.0, Re=1e6)
+        assert bl.success
+        assert bl.converged
+        assert len(bl.x_upper) > 0
+        assert len(bl.cf_upper) == len(bl.x_upper)
+        assert len(bl.delta_star_upper) == len(bl.x_upper)
+        assert len(bl.theta_upper) == len(bl.x_upper)
+        assert len(bl.h_upper) == len(bl.x_upper)
+        assert len(bl.ue_upper) == len(bl.x_upper)
+        assert 0.0 < bl.x_tr_upper < 1.0
+
+
 class TestInviscidBatch:
     def _make_coords(self):
         raw = generate_naca4(2412)

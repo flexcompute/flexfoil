@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { CHANGELOG, type ChangeCategory, type TourSlide } from '../lib/version';
+import { CHANGELOG, type ChangeCategory, type ChangelogItem, type TourSlide } from '../lib/version';
 
 const CHANGELOG_SEEN_KEY = 'flexfoil-changelog-seen';
 
@@ -15,6 +15,7 @@ interface ChangelogDialogProps {
   open: boolean;
   onClose: () => void;
   onNavigateToPanel?: (panelId: string) => void;
+  onStartTour?: (tourId: string) => void;
 }
 
 const CATEGORY_STYLES: Record<ChangeCategory, { label: string; color: string; bg: string }> = {
@@ -23,7 +24,7 @@ const CATEGORY_STYLES: Record<ChangeCategory, { label: string; color: string; bg
   fixed: { label: 'Fixed', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
 };
 
-export function ChangelogDialog({ open, onClose, onNavigateToPanel }: ChangelogDialogProps) {
+export function ChangelogDialog({ open, onClose, onNavigateToPanel, onStartTour }: ChangelogDialogProps) {
   const [mode, setMode] = useState<'tour' | 'list'>('tour');
   const [slideIndex, setSlideIndex] = useState(0);
 
@@ -48,6 +49,12 @@ export function ChangelogDialog({ open, onClose, onNavigateToPanel }: ChangelogD
     onClose();
     onNavigateToPanel?.(panelId);
   }, [latestEntry, onClose, onNavigateToPanel]);
+
+  const handleShowMe = useCallback((tourId: string) => {
+    if (latestEntry) setLastSeenChangelogVersion(latestEntry.version);
+    onClose();
+    setTimeout(() => onStartTour?.(tourId), 200);
+  }, [latestEntry, onClose, onStartTour]);
 
   useEffect(() => {
     if (!open) return;
@@ -107,9 +114,14 @@ export function ChangelogDialog({ open, onClose, onNavigateToPanel }: ChangelogD
             onClose={handleClose}
             onViewAll={() => setMode('list')}
             onGoTo={onNavigateToPanel ? handleGoTo : undefined}
+            onShowMe={onStartTour ? handleShowMe : undefined}
           />
         ) : (
-          <ListView onClose={handleClose} onViewTour={hasTour ? () => setMode('tour') : undefined} />
+          <ListView
+            onClose={handleClose}
+            onViewTour={hasTour ? () => setMode('tour') : undefined}
+            onShowMe={onStartTour ? handleShowMe : undefined}
+          />
         )}
       </div>
     </div>
@@ -126,6 +138,7 @@ function TourView({
   onClose,
   onViewAll,
   onGoTo,
+  onShowMe,
 }: {
   slides: TourSlide[];
   version: string;
@@ -134,6 +147,7 @@ function TourView({
   onClose: () => void;
   onViewAll: () => void;
   onGoTo?: (panelId: string) => void;
+  onShowMe?: (tourId: string) => void;
 }) {
   const slide = slides[slideIndex];
   const isLast = slideIndex === slides.length - 1;
@@ -258,27 +272,50 @@ function TourView({
             ))}
           </div>
 
-          {/* "Go to" action */}
-          {onGoTo && slide.goTo && (
-            <button
-              onClick={() => onGoTo(slide.goTo!.panel)}
-              style={{
-                marginTop: '16px',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                background: 'var(--bg-tertiary)',
-                border: '1px solid var(--border-color)',
-                borderRadius: '6px',
-                padding: '6px 12px',
-                fontSize: '12px',
-                fontWeight: 600,
-                color: 'var(--accent-primary)',
-                cursor: 'pointer',
-              }}
-            >
-              {slide.goTo.label} →
-            </button>
+          {/* Action buttons */}
+          {(slide.showMeTourId || slide.goTo) && (
+            <div style={{ marginTop: '16px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {onShowMe && slide.showMeTourId && (
+                <button
+                  onClick={() => onShowMe(slide.showMeTourId!)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    background: 'var(--accent-primary)',
+                    border: '1px solid var(--accent-primary)',
+                    borderRadius: '6px',
+                    padding: '6px 12px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    color: 'var(--bg-primary)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Show Me
+                </button>
+              )}
+              {onGoTo && slide.goTo && (
+                <button
+                  onClick={() => onGoTo(slide.goTo!.panel)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    background: 'var(--bg-tertiary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '6px',
+                    padding: '6px 12px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    color: 'var(--accent-primary)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {slide.goTo.label} →
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -365,9 +402,11 @@ function TourView({
 function ListView({
   onClose,
   onViewTour,
+  onShowMe,
 }: {
   onClose: () => void;
   onViewTour?: () => void;
+  onShowMe?: (tourId: string) => void;
 }) {
   return (
     <>
@@ -420,42 +459,78 @@ function ListView({
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              {entry.items.map((item, i) => {
-                const style = CATEGORY_STYLES[item.category];
-                return (
-                  <div
-                    key={i}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'flex-start',
-                      gap: '8px',
-                      fontSize: '12px',
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    <span
-                      style={{
-                        flexShrink: 0,
-                        padding: '1px 6px',
-                        borderRadius: '4px',
-                        fontSize: '10px',
-                        fontWeight: 600,
-                        background: style.bg,
-                        color: style.color,
-                        marginTop: '1px',
-                      }}
-                    >
-                      {style.label}
-                    </span>
-                    <span style={{ color: 'var(--text-secondary)' }}>{item.text}</span>
-                  </div>
-                );
-              })}
+              {entry.items.map((item, i) => (
+                <ChangelogItemRow key={i} item={item} onShowMe={onShowMe} />
+              ))}
             </div>
           </div>
         ))}
       </div>
     </>
+  );
+}
+
+function ChangelogItemRow({
+  item,
+  onShowMe,
+}: {
+  item: ChangelogItem;
+  onShowMe?: (tourId: string) => void;
+}) {
+  const catStyle = CATEGORY_STYLES[item.category];
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: '8px',
+        fontSize: '12px',
+        lineHeight: 1.5,
+      }}
+    >
+      <span
+        style={{
+          flexShrink: 0,
+          padding: '1px 6px',
+          borderRadius: '4px',
+          fontSize: '10px',
+          fontWeight: 600,
+          background: catStyle.bg,
+          color: catStyle.color,
+          marginTop: '1px',
+        }}
+      >
+        {catStyle.label}
+      </span>
+      <span style={{ color: 'var(--text-secondary)', flex: 1 }}>
+        {item.text}
+        {onShowMe && item.showMeTourId && (
+          <>
+            {' '}
+            <button
+              onClick={() => onShowMe(item.showMeTourId!)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '3px',
+                background: 'none',
+                border: '1px solid var(--accent-primary)',
+                borderRadius: '4px',
+                padding: '0px 6px',
+                fontSize: '10px',
+                fontWeight: 600,
+                color: 'var(--accent-primary)',
+                cursor: 'pointer',
+                verticalAlign: 'middle',
+                lineHeight: '18px',
+              }}
+            >
+              Show Me
+            </button>
+          </>
+        )}
+      </span>
+    </div>
   );
 }
 

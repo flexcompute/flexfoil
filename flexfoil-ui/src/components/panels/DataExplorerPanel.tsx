@@ -20,9 +20,12 @@ import {
   type CellValueChangedEvent,
   type GridApi,
   type CellSelectionOptions,
+  type IRowNode,
+  type SelectionChangedEvent,
 } from 'ag-grid-community';
 import Plot from 'react-plotly.js';
 import { useRunStore } from '../../stores/runStore';
+import { useDistributionStore } from '../../stores/distributionStore';
 import { AUTO_GROUP_KEY, useRouteUiStore } from '../../stores/routeUiStore';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useOnboarding } from '../../onboarding/useOnboarding';
@@ -37,6 +40,8 @@ import { buildFence, isInlier, type Fence } from '../../lib/outlierFilter';
 import { useCustomColumnStore, compileCustomColumns } from '../../stores/customColumnStore';
 import { useAllPlotFields } from '../../hooks/useAllPlotFields';
 import { CustomColumnEditor } from '../CustomColumnEditor';
+import { OutlierContextMenu } from '../OutlierContextMenu';
+import { CUSTOM_AGG_FUNCS, ALL_AGG_FUNC_NAMES } from '../../lib/aggFunctions';
 
 // ────────────────────────────────────────────────────────────
 // Helpers
@@ -96,6 +101,7 @@ function buildRunHoverDetails(run: RunRow): Array<string | number> {
     run.solver_mode,
     run.session_id ?? 'n/a',
     run.created_at,
+    run.id,        // index 10 — used for outlier flagging
   ];
 }
 
@@ -118,31 +124,78 @@ const RUN_HOVER_TEMPLATE = [
 // ────────────────────────────────────────────────────────────
 
 function buildColumnDefs(): ColDef<RunRow>[] {
+  const agg = ALL_AGG_FUNC_NAMES;
   return [
+    {
+      colId: 'pin',
+      headerName: '',
+      width: 40,
+      maxWidth: 40,
+      checkboxSelection: true,
+      headerCheckboxSelection: true,
+      pinned: 'left',
+      sortable: false,
+      filter: false,
+      resizable: false,
+      suppressHeaderMenuButton: true,
+      lockPosition: true,
+    },
     { field: 'id', headerName: 'ID', width: 70, hide: true },
     { field: 'airfoil_name', headerName: 'Airfoil', pinned: 'left', width: 140, editable: true, enableRowGroup: true, chartDataType: 'category' as const },
-    { field: 'alpha', headerName: 'α (°)', width: 90, chartDataType: 'series' as const, valueFormatter: p => p.value?.toFixed(2) ?? '' },
-    { field: 'reynolds', headerName: 'Re', width: 120, chartDataType: 'series' as const, valueFormatter: p => p.value != null ? p.value.toExponential(2) : '' },
-    { field: 'mach', headerName: 'Mach', width: 80, chartDataType: 'series' as const, valueFormatter: p => p.value?.toFixed(3) ?? '' },
-    { field: 'ncrit', headerName: 'Ncrit', width: 80, chartDataType: 'series' as const },
-    { field: 'cl', headerName: 'CL', width: 110, chartDataType: 'series' as const, valueFormatter: p => p.value?.toFixed(5) ?? '' },
-    { field: 'cd', headerName: 'CD', width: 110, chartDataType: 'series' as const, valueFormatter: p => p.value?.toFixed(6) ?? '' },
-    { field: 'cm', headerName: 'CM', width: 110, chartDataType: 'series' as const, valueFormatter: p => p.value?.toFixed(5) ?? '' },
-    { field: 'ld', headerName: 'L/D', width: 100, chartDataType: 'series' as const, valueFormatter: p => p.value?.toFixed(3) ?? '' },
+    { field: 'alpha', headerName: 'α (°)', width: 90, chartDataType: 'series' as const, aggFunc: 'avg', allowedAggFuncs: agg, valueFormatter: p => typeof p.value === 'number' ? p.value.toFixed(2) : '' },
+    { field: 'reynolds', headerName: 'Re', width: 120, chartDataType: 'series' as const, aggFunc: 'first', allowedAggFuncs: agg, valueFormatter: p => typeof p.value === 'number' ? p.value.toExponential(2) : '' },
+    { field: 'mach', headerName: 'Mach', width: 80, chartDataType: 'series' as const, aggFunc: 'first', allowedAggFuncs: agg, valueFormatter: p => typeof p.value === 'number' ? p.value.toFixed(3) : '' },
+    { field: 'ncrit', headerName: 'Ncrit', width: 80, chartDataType: 'series' as const, aggFunc: 'first', allowedAggFuncs: agg },
+    { field: 'cl', headerName: 'CL', width: 110, chartDataType: 'series' as const, aggFunc: 'max', allowedAggFuncs: agg, valueFormatter: p => typeof p.value === 'number' ? p.value.toFixed(5) : '' },
+    { field: 'cd', headerName: 'CD', width: 110, chartDataType: 'series' as const, aggFunc: 'min', allowedAggFuncs: agg, valueFormatter: p => typeof p.value === 'number' ? p.value.toFixed(6) : '' },
+    { field: 'cm', headerName: 'CM', width: 110, chartDataType: 'series' as const, aggFunc: 'avg', allowedAggFuncs: agg, valueFormatter: p => typeof p.value === 'number' ? p.value.toFixed(5) : '' },
+    { field: 'ld', headerName: 'L/D', width: 100, chartDataType: 'series' as const, aggFunc: 'max', allowedAggFuncs: agg, valueFormatter: p => typeof p.value === 'number' ? p.value.toFixed(3) : '' },
+    { field: 'flap_deflection', headerName: 'Flap δ (°)', width: 90, chartDataType: 'series' as const, aggFunc: 'first', allowedAggFuncs: agg, enableRowGroup: true, hide: true, valueFormatter: p => typeof p.value === 'number' ? p.value.toFixed(1) : '' },
+    { field: 'flap_hinge_x', headerName: 'Flap x/c', width: 90, chartDataType: 'series' as const, aggFunc: 'first', allowedAggFuncs: agg, enableRowGroup: true, hide: true, valueFormatter: p => typeof p.value === 'number' ? p.value.toFixed(3) : '' },
     { field: 'converged', headerName: 'Converged', width: 100, chartDataType: 'category' as const, enableRowGroup: true,
       valueFormatter: p => p.value ? 'Yes' : 'No',
       cellStyle: p => ({ color: p.value ? 'var(--accent-primary)' : 'var(--accent-danger)' }),
     },
-    { field: 'x_tr_upper', headerName: 'Xtr Upper', width: 100, chartDataType: 'series' as const, valueFormatter: p => p.value?.toFixed(4) ?? '' },
-    { field: 'x_tr_lower', headerName: 'Xtr Lower', width: 100, chartDataType: 'series' as const, valueFormatter: p => p.value?.toFixed(4) ?? '' },
-    { field: 'iterations', headerName: 'Iter', width: 70, chartDataType: 'series' as const },
-    { field: 'residual', headerName: 'Residual', width: 110, chartDataType: 'series' as const, valueFormatter: p => p.value?.toExponential(2) ?? '' },
-    { field: 'n_panels', headerName: 'Panels', width: 85, chartDataType: 'series' as const },
-    { field: 'max_iter', headerName: 'MaxIter', width: 85, hide: true, chartDataType: 'series' as const },
+    { field: 'x_tr_upper', headerName: 'Xtr Upper', width: 100, chartDataType: 'series' as const, aggFunc: 'avg', allowedAggFuncs: agg, valueFormatter: p => typeof p.value === 'number' ? p.value.toFixed(4) : '' },
+    { field: 'x_tr_lower', headerName: 'Xtr Lower', width: 100, chartDataType: 'series' as const, aggFunc: 'avg', allowedAggFuncs: agg, valueFormatter: p => typeof p.value === 'number' ? p.value.toFixed(4) : '' },
+    { field: 'iterations', headerName: 'Iter', width: 70, chartDataType: 'series' as const, aggFunc: 'avg', allowedAggFuncs: agg },
+    { field: 'residual', headerName: 'Residual', width: 110, chartDataType: 'series' as const, aggFunc: 'avg', allowedAggFuncs: agg, valueFormatter: p => typeof p.value === 'number' ? p.value.toExponential(2) : '' },
+    { field: 'n_panels', headerName: 'Panels', width: 85, chartDataType: 'series' as const, aggFunc: 'first', allowedAggFuncs: agg },
+    { field: 'max_iter', headerName: 'MaxIter', width: 85, hide: true, chartDataType: 'series' as const, aggFunc: 'first', allowedAggFuncs: agg },
     { field: 'solver_mode', headerName: 'Solver', width: 90, chartDataType: 'category' as const, enableRowGroup: true },
     { field: 'session_id', headerName: 'Session', width: 130, enableRowGroup: true, hide: true, chartDataType: 'category' as const },
     { field: 'created_at', headerName: 'Time', width: 170, sort: 'desc', chartDataType: 'category' as const },
     { field: 'airfoil_hash', headerName: 'Hash', width: 130, hide: true, chartDataType: 'category' as const },
+    {
+      field: 'is_outlier', headerName: 'Outlier', width: 80,
+      chartDataType: 'category' as const, enableRowGroup: true,
+      valueFormatter: (p) => p.value ? 'Yes' : '',
+      cellStyle: (p) => p.value ? { color: '#ef4444', fontWeight: 600 } : {},
+    },
+    // Aerodynamic summary columns — show the alpha at which CL or L/D is maximized.
+    // Hidden by default; become meaningful when row grouping is active.
+    {
+      colId: 'alpha_stall',
+      headerName: 'α_stall',
+      width: 90,
+      chartDataType: 'series' as const,
+      valueGetter: (params) => params.data?.alpha ?? null,
+      aggFunc: 'at max(CL)',
+      allowedAggFuncs: agg,
+      valueFormatter: p => typeof p.value === 'number' ? p.value.toFixed(2) : '',
+      hide: true,
+    },
+    {
+      colId: 'alpha_ldmax',
+      headerName: 'α @ L/D_max',
+      width: 105,
+      chartDataType: 'series' as const,
+      valueGetter: (params) => params.data?.alpha ?? null,
+      aggFunc: 'at max(L/D)',
+      allowedAggFuncs: agg,
+      valueFormatter: p => typeof p.value === 'number' ? p.value.toFixed(2) : '',
+      hide: true,
+    },
   ];
 }
 
@@ -159,12 +212,15 @@ export function DataExplorerPanel() {
     allRuns,
     filteredRuns,
     setFilteredRuns,
+    setAggregatedRuns,
+    aggregatedRuns,
     clearAll,
     exportDb,
     importDb,
     restoreRunById,
     renameRun,
     selectedRunId,
+    toggleOutlier,
   } = useRunStore();
 
   const view = useRouteUiStore((state) => state.dataExplorerView);
@@ -175,13 +231,19 @@ export function DataExplorerPanel() {
   const setColorBy = useRouteUiStore((state) => state.setDataExplorerColorBy);
   const filterModel = useRouteUiStore((state) => state.dataExplorerFilterModel);
   const setFilterModel = useRouteUiStore((state) => state.setDataExplorerFilterModel);
-  const [dataSource, setDataSource] = useState<DataSource>('full');
+  const dataSource = useRouteUiStore((state) => state.dataExplorerDataSource);
+  const setDataSource = useRouteUiStore((state) => state.setDataExplorerDataSource);
   const [showColumnEditor, setShowColumnEditor] = useState(false);
   const customColumns = useCustomColumnStore((s) => s.columns);
   const { numericFields: mergedNumericFields, encodingFields: mergedEncodingFields, getFieldLabel: mergedGetLabel, getFieldValue } = useAllPlotFields();
   const [groupBy, setGroupBy] = useState<keyof RunRow | '' | typeof AUTO_GROUP_KEY>(AUTO_GROUP_KEY);
   const [sizeBy, setSizeBy] = useState<keyof RunRow | ''>('');
   const [symbolBy, setSymbolBy] = useState<keyof RunRow | ''>('');
+
+  const smartGroupActive = useRouteUiStore((state) => state.dataExplorerSmartGroup);
+  const setSmartGroupActive = useRouteUiStore((state) => state.setDataExplorerSmartGroup);
+
+  const setPinned = useDistributionStore((s) => s.setPinned);
 
   // ── AG Grid refs & config ──
   const gridRef = useRef<AgGridReact<RunRow>>(null);
@@ -207,7 +269,7 @@ export function DataExplorerPanel() {
           if (!params.data || !evalFn) return null;
           return evalFn(params.data);
         },
-        valueFormatter: (p: { value?: number | null }) => p.value?.toFixed(4) ?? '',
+        valueFormatter: (p: { value?: number | null }) => typeof p.value === 'number' ? p.value.toFixed(4) : '',
       };
     });
     return [...base, ...custom];
@@ -223,7 +285,11 @@ export function DataExplorerPanel() {
     if (filterModel) {
       e.api.setFilterModel(filterModel as GridFilterModel);
     }
-  }, [filterModel]);
+    if (smartGroupActive) {
+      e.api.setRowGroupColumns(['airfoil_name', 'reynolds', 'mach', 'ncrit', 'flap_deflection', 'flap_hinge_x']);
+      e.api.setColumnsVisible(['alpha_stall', 'alpha_ldmax'], true);
+    }
+  }, [filterModel, smartGroupActive]);
   const onFilterChanged = useCallback((e: FilterChangedEvent<RunRow>) => {
     const filtered: RunRow[] = [];
     e.api.forEachNodeAfterFilterAndSort(node => { if (node.data) filtered.push(node.data); });
@@ -239,12 +305,92 @@ export function DataExplorerPanel() {
     }
   }, [renameRun]);
 
+  const onSelectionChanged = useCallback((e: SelectionChangedEvent<RunRow>) => {
+    const selectedIds: number[] = [];
+    e.api.getSelectedNodes().forEach((node) => {
+      if (node.data) selectedIds.push(node.data.id);
+    });
+    setPinned(selectedIds);
+  }, [setPinned]);
+
+  const onGroupChanged = useCallback(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    const groupCols = api.getRowGroupColumns();
+    const groupIds = new Set(groupCols.map(c => c.getColId()));
+    const isSmartGroup = groupIds.size >= 3
+      && groupIds.has('airfoil_name') && groupIds.has('reynolds') && groupIds.has('mach');
+    setSmartGroupActive(isSmartGroup);
+    if (groupCols.length === 0) {
+      setAggregatedRuns([]);
+      return;
+    }
+
+    const findFirstFilteredLeaf = (node: IRowNode<RunRow>): RunRow | null => {
+      if (!node.group && node.data) return node.data;
+      for (const child of node.childrenAfterFilter ?? []) {
+        const found = findFirstFilteredLeaf(child);
+        if (found) return found;
+      }
+      return null;
+    };
+
+    const aggRows: RunRow[] = [];
+    api.forEachNodeAfterFilterAndSort((node) => {
+      if (!node.group || !node.aggData) return;
+      if (node.childrenAfterFilter?.some((c) => c.group)) return;
+
+      const first = findFirstFilteredLeaf(node);
+      if (!first) return;
+
+      const agg = node.aggData as Record<string, unknown>;
+      aggRows.push({
+        ...first,
+        id: -(aggRows.length + 1),
+        cl: typeof agg.cl === 'number' ? agg.cl : first.cl,
+        cd: typeof agg.cd === 'number' ? agg.cd : first.cd,
+        cm: typeof agg.cm === 'number' ? agg.cm : first.cm,
+        ld: typeof agg.ld === 'number' ? agg.ld : first.ld,
+        alpha: typeof agg.alpha === 'number' ? agg.alpha : first.alpha,
+        reynolds: typeof agg.reynolds === 'number' ? agg.reynolds : first.reynolds,
+        mach: typeof agg.mach === 'number' ? agg.mach : first.mach,
+        ncrit: typeof agg.ncrit === 'number' ? agg.ncrit : first.ncrit,
+        iterations: typeof agg.iterations === 'number' ? agg.iterations : first.iterations,
+        residual: typeof agg.residual === 'number' ? agg.residual : first.residual,
+        x_tr_upper: typeof agg.x_tr_upper === 'number' ? agg.x_tr_upper : first.x_tr_upper,
+        x_tr_lower: typeof agg.x_tr_lower === 'number' ? agg.x_tr_lower : first.x_tr_lower,
+        geometry_snapshot: null,
+      });
+    });
+    setAggregatedRuns(aggRows);
+  }, [setAggregatedRuns]);
+
   const outlierFilter = useRouteUiStore((state) => state.outlierFilterEnabled);
   const setOutlierFilter = useRouteUiStore((state) => state.setOutlierFilterEnabled);
 
+  const applySmartGroup = useCallback(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    api.setRowGroupColumns(['airfoil_name', 'reynolds', 'mach', 'ncrit', 'flap_deflection', 'flap_hinge_x']);
+    api.setColumnsVisible(['alpha_stall', 'alpha_ldmax'], true);
+    setSmartGroupActive(true);
+    setDataSource('aggregated');
+  }, [setSmartGroupActive, setDataSource]);
+
+  const clearGroups = useCallback(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    api.setRowGroupColumns([]);
+    api.setColumnsVisible(['alpha_stall', 'alpha_ldmax'], false);
+    setSmartGroupActive(false);
+    if (dataSource === 'aggregated') setDataSource('full');
+  }, [dataSource, setSmartGroupActive, setDataSource]);
+
   // ── Correlogram ──
-  const data = dataSource === 'full' ? allRuns : filteredRuns;
-  const successOnly = useMemo(() => data.filter((r) => r.success), [data]);
+  const data = dataSource === 'aggregated' ? aggregatedRuns
+    : dataSource === 'filtered' ? filteredRuns
+    : allRuns;
+  const successOnly = useMemo(() => data.filter((r) => r.success && !r.is_outlier), [data]);
 
   const toggleSplomKey = useCallback((key: keyof RunRow) => {
     if (splomKeys.includes(key)) {
@@ -499,7 +645,10 @@ export function DataExplorerPanel() {
   const applyRouteActivePanel = useRouteUiStore((state) => state.applyRouteActivePanel);
 
   const hoveredCellRef = useRef<{ xKey: keyof RunRow; yKey: keyof RunRow } | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; xKey: keyof RunRow; yKey: keyof RunRow } | null>(null);
+  const hoveredRunIdRef = useRef<number | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number; y: number; xKey: keyof RunRow; yKey: keyof RunRow; runId: number | null;
+  } | null>(null);
 
   const handlePlotHover = useCallback((event: Readonly<Plotly.PlotHoverEvent>) => {
     const point = event.points?.[0];
@@ -513,14 +662,23 @@ export function DataExplorerPanel() {
     if (col < n && row < n) {
       hoveredCellRef.current = { xKey: splomKeys[col], yKey: splomKeys[row] };
     }
+    const cd = point.customdata as Array<string | number> | undefined;
+    const runId = cd?.[10];
+    hoveredRunIdRef.current = typeof runId === 'number' ? runId : null;
   }, [splomKeys]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     const cell = hoveredCellRef.current;
-    if (!cell || cell.xKey === cell.yKey) return;
+    if (!cell) return;
     e.preventDefault();
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    setContextMenu({ x: e.clientX - rect.left, y: e.clientY - rect.top, xKey: cell.xKey, yKey: cell.yKey });
+    setContextMenu({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+      xKey: cell.xKey,
+      yKey: cell.yKey,
+      runId: hoveredRunIdRef.current,
+    });
   }, []);
 
   const handleOpenInPlotBuilder = useCallback(() => {
@@ -531,17 +689,6 @@ export function DataExplorerPanel() {
     applyRouteActivePanel('plot-builder');
     setContextMenu(null);
   }, [contextMenu, setPlotXField, setPlotYField, setPlotChartType, applyRouteActivePanel]);
-
-  useEffect(() => {
-    if (!contextMenu) return;
-    const dismiss = () => setContextMenu(null);
-    window.addEventListener('click', dismiss);
-    window.addEventListener('scroll', dismiss, true);
-    return () => {
-      window.removeEventListener('click', dismiss);
-      window.removeEventListener('scroll', dismiss, true);
-    };
-  }, [contextMenu]);
 
   // ── Styles ──
   const btnStyle: React.CSSProperties = {
@@ -617,6 +764,74 @@ export function DataExplorerPanel() {
         {view === 'table' && (
           <>
             <button
+              data-tour="de-smart-group"
+              onClick={smartGroupActive ? clearGroups : applySmartGroup}
+              style={{
+                ...btnStyle,
+                borderColor: smartGroupActive ? 'var(--accent-primary)' : undefined,
+                color: smartGroupActive ? 'var(--accent-primary)' : undefined,
+              }}
+              title={smartGroupActive
+                ? 'Clear grouping and hide summary columns'
+                : 'Group by polar configuration (Airfoil + Re + Mach + Ncrit + flap) to see CL_max, L/D_max, α_stall per group'}
+            >
+              {smartGroupActive ? 'Clear Groups' : 'Smart Group'}
+            </button>
+            <button
+              onClick={() => {
+                const api = apiRef.current;
+                if (!api) return;
+                const current = api.getFilterModel() as Record<string, unknown> | null;
+                const hasConvergedFilter = current?.converged != null;
+                if (hasConvergedFilter) {
+                  const { converged: _, ...rest } = current!;
+                  api.setFilterModel(Object.keys(rest).length > 0 ? rest : null);
+                } else {
+                  api.setFilterModel({
+                    ...(current ?? {}),
+                    converged: { filterType: 'set', values: ['true'] },
+                  });
+                }
+              }}
+              style={{
+                ...btnStyle,
+                borderColor: (filterModel as Record<string, unknown> | null)?.converged != null
+                  ? 'var(--accent-primary)' : undefined,
+                color: (filterModel as Record<string, unknown> | null)?.converged != null
+                  ? 'var(--accent-primary)' : undefined,
+              }}
+              title="Toggle filter to only show converged solutions"
+            >
+              Converged Only
+            </button>
+            <button
+              onClick={() => {
+                const api = apiRef.current;
+                if (!api) return;
+                const current = api.getFilterModel() as Record<string, unknown> | null;
+                const hasOutlierFilter = current?.is_outlier != null;
+                if (hasOutlierFilter) {
+                  const { is_outlier: _, ...rest } = current!;
+                  api.setFilterModel(Object.keys(rest).length > 0 ? rest : null);
+                } else {
+                  api.setFilterModel({
+                    ...(current ?? {}),
+                    is_outlier: { filterType: 'set', values: ['false'] },
+                  });
+                }
+              }}
+              style={{
+                ...btnStyle,
+                borderColor: (filterModel as Record<string, unknown> | null)?.is_outlier != null
+                  ? 'var(--accent-warning, #f59e0b)' : undefined,
+                color: (filterModel as Record<string, unknown> | null)?.is_outlier != null
+                  ? 'var(--accent-warning, #f59e0b)' : undefined,
+              }}
+              title="Toggle filter to exclude manually flagged outliers"
+            >
+              Exclude Outliers
+            </button>
+            <button
               onClick={() => {
                 apiRef.current?.setFilterModel(null);
                 setFilterModel(null);
@@ -665,14 +880,22 @@ export function DataExplorerPanel() {
             rowData={allRuns}
             columnDefs={columnDefs}
             defaultColDef={defaultColDef}
+            aggFuncs={CUSTOM_AGG_FUNCS}
+            groupAggFiltering
             onGridReady={onGridReady}
             onFilterChanged={onFilterChanged}
             onCellValueChanged={onCellValueChanged}
+            onColumnRowGroupChanged={onGroupChanged}
+            onModelUpdated={onGroupChanged}
+            onSelectionChanged={onSelectionChanged}
+            rowSelection="multiple"
+            suppressRowClickSelection
             enableCharts
             enableAdvancedFilter
             cellSelection={cellSelection}
             sideBar
             rowGroupPanelShow="always"
+            groupDefaultExpanded={1}
             enableCellTextSelection
             getRowId={(params) => String(params.data.id)}
             autoSizeStrategy={{ type: 'fitCellContents' }}
@@ -710,6 +933,9 @@ export function DataExplorerPanel() {
               <select value={dataSource} onChange={(e) => setDataSource(e.target.value as DataSource)} style={selectStyle}>
                 <option value="full">All ({allRuns.length})</option>
                 <option value="filtered">Grid Filter ({filteredRuns.length})</option>
+                {aggregatedRuns.length > 0 && (
+                  <option value="aggregated">Aggregated ({aggregatedRuns.length})</option>
+                )}
               </select>
             </div>
 
@@ -800,44 +1026,19 @@ export function DataExplorerPanel() {
                 style={{ width: '100%', height: '100%' }}
               />
             )}
-            {contextMenu && (
-              <div
-                style={{
-                  position: 'absolute',
-                  left: contextMenu.x,
-                  top: contextMenu.y,
-                  zIndex: 1000,
-                  background: isDark ? '#1c241f' : '#fff',
-                  border: `1px solid ${isDark ? '#3a463d' : '#d2dbd0'}`,
-                  borderRadius: '6px',
-                  boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 4px 16px rgba(0,0,0,0.12)',
-                  padding: '4px 0',
-                  minWidth: '180px',
-                }}
-              >
-                <button
-                  onClick={handleOpenInPlotBuilder}
-                  style={{
-                    display: 'block',
-                    width: '100%',
-                    padding: '7px 14px',
-                    background: 'transparent',
-                    border: 'none',
-                    borderRadius: 0,
-                    textAlign: 'left',
-                    fontSize: '12px',
-                    color: isDark ? '#f0f2f0' : '#111813',
-                    cursor: 'pointer',
-                  }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                >
-                  Open in Plot Builder
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '8px' }}>
-                    {getLabel(contextMenu.xKey)} vs {getLabel(contextMenu.yKey)}
-                  </span>
-                </button>
-              </div>
+            {contextMenu && (contextMenu.runId != null || contextMenu.xKey !== contextMenu.yKey) && (
+              <OutlierContextMenu
+                x={contextMenu.x}
+                y={contextMenu.y}
+                isFlagged={false}
+                onToggle={contextMenu.runId != null ? () => toggleOutlier(contextMenu.runId!) : () => {}}
+                onDismiss={() => setContextMenu(null)}
+                extras={contextMenu.xKey !== contextMenu.yKey ? [{
+                  label: 'Open in Plot Builder',
+                  detail: `${getLabel(contextMenu.xKey)} vs ${getLabel(contextMenu.yKey)}`,
+                  onClick: handleOpenInPlotBuilder,
+                }] : undefined}
+              />
             )}
           </div>
           <div style={{
@@ -847,7 +1048,7 @@ export function DataExplorerPanel() {
             color: 'var(--text-muted)',
             flexShrink: 0,
           }}>
-            Diagonal cells show distributions; click any scatter point to load its historical flowfield.
+            Diagonal cells show distributions. Right-click a point to flag as outlier.
             {selectedRunId != null ? ` Current restored run: #${selectedRunId}` : ''}
           </div>
         </div>

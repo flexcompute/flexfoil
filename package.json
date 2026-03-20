@@ -1,6 +1,14 @@
 {
   "license": "MIT",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:show-me": "playwright test e2e/showMe/"
+  },
   "dependencies": {
     "playwright": "^1.58.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
   }
 }

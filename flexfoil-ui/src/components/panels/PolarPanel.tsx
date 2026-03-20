@@ -7,12 +7,16 @@
 
 import { useRef, useEffect, useCallback, useMemo, useState } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
+import { useRunStore } from '../../stores/runStore';
 import { useRouteUiStore } from '../../stores/routeUiStore';
+import { usePolarOutlierStore } from '../../stores/polarOutlierStore';
 import { colorForKey } from '../../lib/plotStyling';
-import { filterOutliers } from '../../lib/outlierFilter';
-import type { AxisVariable, PolarPoint } from '../../types';
+import { buildFence, isInlier } from '../../lib/outlierFilter';
+import { OutlierContextMenu } from '../OutlierContextMenu';
+import type { AxisVariable, PolarPoint, RunRow } from '../../types';
 
 const PLOT_MARGIN = { top: 20, right: 20, bottom: 40, left: 50 };
+const HIT_RADIUS = 8;
 
 const AXIS_LABELS: Record<AxisVariable, string> = {
   alpha: 'α (deg)',
@@ -33,6 +37,22 @@ function getValue(point: PolarPoint, variable: AxisVariable): number {
     return Math.abs(cd) > 1e-10 ? point.cl / cd : 0;
   }
   return (point as unknown as Record<string, number | undefined>)[variable] ?? 0;
+}
+
+function getRunValue(row: RunRow, axis: AxisVariable): number | null {
+  switch (axis) {
+    case 'alpha': return row.alpha;
+    case 'cl': return row.cl;
+    case 'cd': return row.cd;
+    case 'cm': return row.cm;
+    case 'ld': return row.ld;
+    case 'reynolds': return row.reynolds;
+    case 'mach': return row.mach;
+    case 'ncrit': return row.ncrit;
+    case 'flapDeflection': return row.flap_deflection;
+    case 'flapHingeX': return row.flap_hinge_x;
+    default: return null;
+  }
 }
 
 function getAxisBounds(values: number[]): [number, number] {
@@ -60,8 +80,22 @@ function generateTicks(min: number, max: number, count: number = 5): number[] {
   return ticks;
 }
 
+interface AnnotatedPoint {
+  point: PolarPoint;
+  origIndex: number;
+  isFlagged: boolean;
+}
+
+interface DisplaySeries {
+  key: string;
+  label: string;
+  allAnnotated: AnnotatedPoint[];
+  visiblePoints: AnnotatedPoint[];
+}
+
 export function PolarPanel() {
   const { polarData, removePolar, clearAllPolars } = useAirfoilStore();
+  const aggregatedRuns = useRunStore((s) => s.aggregatedRuns);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -72,43 +106,109 @@ export function PolarPanel() {
   const outlierFilter = useRouteUiStore((state) => state.outlierFilterEnabled);
   const setOutlierFilter = useRouteUiStore((state) => state.setOutlierFilterEnabled);
   const [canvasSize, setCanvasSize] = useState({ width: 400, height: 300 });
+  const [showAggregated, setShowAggregated] = useState(false);
 
-  const filteredPolarData = useMemo(() => {
-    if (!outlierFilter) return polarData;
-    return polarData.map((series) => ({
-      ...series,
-      points: filterOutliers(series.points, [
-        (p) => getValue(p, xAxis),
-        (p) => getValue(p, yAxis),
-      ]),
-    }));
-  }, [polarData, outlierFilter, xAxis, yAxis]);
+  const outlierRevision = usePolarOutlierStore((s) => s.revision);
+  const toggleFlag = usePolarOutlierStore((s) => s.toggleFlag);
+  const checkFlagged = usePolarOutlierStore((s) => s.isFlagged);
 
-  const totalPoints = useMemo(
-    () => filteredPolarData.reduce((n, s) => n + s.points.length, 0),
-    [filteredPolarData],
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number; y: number; seriesKey: string; pointIndex: number; isFlagged: boolean;
+  } | null>(null);
+
+  const displayData: DisplaySeries[] = useMemo(() => {
+    return polarData.map((series) => {
+      const allAnnotated: AnnotatedPoint[] = series.points.map((point, i) => ({
+        point,
+        origIndex: i,
+        isFlagged: checkFlagged(series.key, i),
+      }));
+
+      if (!outlierFilter) {
+        return { key: series.key, label: series.label, allAnnotated, visiblePoints: allAnnotated };
+      }
+
+      const xValues = allAnnotated.map((ap) => getValue(ap.point, xAxis));
+      const yValues = allAnnotated.map((ap) => getValue(ap.point, yAxis));
+      const xFence = buildFence(xValues);
+      const yFence = buildFence(yValues);
+
+      const visiblePoints = allAnnotated.filter((ap) => {
+        if (ap.isFlagged) return false;
+        return (
+          isInlier(getValue(ap.point, xAxis), xFence) &&
+          isInlier(getValue(ap.point, yAxis), yFence)
+        );
+      });
+
+      return { key: series.key, label: series.label, allAnnotated, visiblePoints };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [polarData, outlierFilter, xAxis, yAxis, outlierRevision]);
+
+  const totalVisible = useMemo(
+    () => displayData.reduce((n, s) => n + s.visiblePoints.length, 0),
+    [displayData],
   );
   const rawTotalPoints = useMemo(
     () => polarData.reduce((n, s) => n + s.points.length, 0),
     [polarData],
   );
-  const outlierCount = rawTotalPoints - totalPoints;
+  const manualFlagCount = useMemo(
+    () => displayData.reduce((n, s) => n + s.allAnnotated.filter((ap) => ap.isFlagged).length, 0),
+    [displayData],
+  );
+  const removedCount = rawTotalPoints - totalVisible;
+
+  const aggOverlayPoints = useMemo(() => {
+    if (!showAggregated || aggregatedRuns.length === 0) return [];
+    return aggregatedRuns
+      .map((row) => {
+        const x = getRunValue(row, xAxis);
+        const y = getRunValue(row, yAxis);
+        if (x == null || y == null) return null;
+        return { x, y, label: row.airfoil_name };
+      })
+      .filter((p): p is { x: number; y: number; label: string } => p !== null);
+  }, [showAggregated, aggregatedRuns, xAxis, yAxis]);
 
   const { xBounds, yBounds } = useMemo(() => {
     const allX: number[] = [];
     const allY: number[] = [];
-    for (const series of filteredPolarData) {
-      for (const p of series.points) {
-        allX.push(getValue(p, xAxis));
-        allY.push(getValue(p, yAxis));
+    for (const series of displayData) {
+      for (const ap of series.visiblePoints) {
+        allX.push(getValue(ap.point, xAxis));
+        allY.push(getValue(ap.point, yAxis));
       }
+    }
+    for (const pt of aggOverlayPoints) {
+      allX.push(pt.x);
+      allY.push(pt.y);
     }
     return {
       xBounds: getAxisBounds(allX),
       yBounds: getAxisBounds(allY),
     };
-  }, [filteredPolarData, xAxis, yAxis]);
-  
+  }, [displayData, xAxis, yAxis, aggOverlayPoints]);
+
+  const makeToCanvasX = useCallback(
+    (width: number) => {
+      const plotWidth = width - PLOT_MARGIN.left - PLOT_MARGIN.right;
+      return (x: number) =>
+        PLOT_MARGIN.left + ((x - xBounds[0]) / (xBounds[1] - xBounds[0])) * plotWidth;
+    },
+    [xBounds],
+  );
+
+  const makeToCanvasY = useCallback(
+    (height: number) => {
+      const plotHeight = height - PLOT_MARGIN.top - PLOT_MARGIN.bottom;
+      return (y: number) =>
+        PLOT_MARGIN.top + (1 - (y - yBounds[0]) / (yBounds[1] - yBounds[0])) * plotHeight;
+    },
+    [yBounds],
+  );
+
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -117,17 +217,12 @@ export function PolarPanel() {
     if (!ctx) return;
     
     const { width, height } = canvasSize;
-    const plotWidth = width - PLOT_MARGIN.left - PLOT_MARGIN.right;
-    const plotHeight = height - PLOT_MARGIN.top - PLOT_MARGIN.bottom;
+    const toCanvasX = makeToCanvasX(width);
+    const toCanvasY = makeToCanvasY(height);
     
     ctx.fillStyle = getComputedStyle(document.documentElement)
       .getPropertyValue('--bg-primary').trim() || '#0f0f0f';
     ctx.fillRect(0, 0, width, height);
-    
-    const toCanvasX = (x: number) =>
-      PLOT_MARGIN.left + ((x - xBounds[0]) / (xBounds[1] - xBounds[0])) * plotWidth;
-    const toCanvasY = (y: number) =>
-      PLOT_MARGIN.top + (1 - (y - yBounds[0]) / (yBounds[1] - yBounds[0])) * plotHeight;
     
     // Grid
     ctx.strokeStyle = getComputedStyle(document.documentElement)
@@ -196,38 +291,78 @@ export function PolarPanel() {
     ctx.restore();
     
     // Draw each series
-    if (totalPoints > 0) {
-      filteredPolarData.forEach((series) => {
+    const hasContent = totalVisible > 0 || aggOverlayPoints.length > 0;
+    if (totalVisible > 0) {
+      displayData.forEach((series) => {
         const color = colorForKey(series.key);
-        const pts = series.points;
-        if (pts.length === 0) return;
+        const visible = series.visiblePoints;
+        if (visible.length === 0) return;
 
-        const xVals = pts.map(p => getValue(p, xAxis));
-        const yVals = pts.map(p => getValue(p, yAxis));
-
-        // Line
-        ctx.strokeStyle = color;
-        ctx.globalAlpha = 0.8;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        for (let i = 0; i < pts.length; i++) {
-          const x = toCanvasX(xVals[i]);
-          const y = toCanvasY(yVals[i]);
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
+        // Line connecting non-flagged visible points only
+        const linePoints = visible.filter((ap) => !ap.isFlagged);
+        if (linePoints.length > 0) {
+          ctx.strokeStyle = color;
+          ctx.globalAlpha = 0.8;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          for (let i = 0; i < linePoints.length; i++) {
+            const cx = toCanvasX(getValue(linePoints[i].point, xAxis));
+            const cy = toCanvasY(getValue(linePoints[i].point, yAxis));
+            if (i === 0) ctx.moveTo(cx, cy);
+            else ctx.lineTo(cx, cy);
+          }
+          ctx.stroke();
+          ctx.globalAlpha = 1;
         }
-        ctx.stroke();
-        ctx.globalAlpha = 1;
 
         // Points
-        ctx.fillStyle = color;
-        for (let i = 0; i < pts.length; i++) {
-          ctx.beginPath();
-          ctx.arc(toCanvasX(xVals[i]), toCanvasY(yVals[i]), 3, 0, Math.PI * 2);
-          ctx.fill();
+        for (const ap of visible) {
+          const cx = toCanvasX(getValue(ap.point, xAxis));
+          const cy = toCanvasY(getValue(ap.point, yAxis));
+
+          if (ap.isFlagged) {
+            const s = 4;
+            ctx.strokeStyle = '#ef4444';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(cx - s, cy - s);
+            ctx.lineTo(cx + s, cy + s);
+            ctx.moveTo(cx + s, cy - s);
+            ctx.lineTo(cx - s, cy + s);
+            ctx.stroke();
+          } else {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
       });
-    } else {
+    }
+
+    // Draw aggregated overlay as diamond markers
+    if (aggOverlayPoints.length > 0) {
+      const accentColor = getComputedStyle(document.documentElement)
+        .getPropertyValue('--accent-secondary').trim() || '#f59e0b';
+      const s = 6;
+      for (const pt of aggOverlayPoints) {
+        const cx = toCanvasX(pt.x);
+        const cy = toCanvasY(pt.y);
+        ctx.fillStyle = accentColor;
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - s);
+        ctx.lineTo(cx + s, cy);
+        ctx.lineTo(cx, cy + s);
+        ctx.lineTo(cx - s, cy);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+
+    if (!hasContent) {
       ctx.fillStyle = getComputedStyle(document.documentElement)
         .getPropertyValue('--text-secondary').trim() || '#888888';
       ctx.font = '14px sans-serif';
@@ -235,7 +370,54 @@ export function PolarPanel() {
       ctx.textBaseline = 'middle';
       ctx.fillText('No polar data. Run a polar sweep in the Solve panel.', width / 2, height / 2);
     }
-  }, [canvasSize, filteredPolarData, totalPoints, xAxis, yAxis, xBounds, yBounds]);
+  }, [canvasSize, displayData, totalVisible, xAxis, yAxis, xBounds, yBounds, makeToCanvasX, makeToCanvasY, aggOverlayPoints]);
+
+  // Canvas hit-testing for right-click context menu
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      e.preventDefault();
+      const canvas = canvasRef.current;
+      if (!canvas || displayData.length === 0) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const mx = (e.clientX - rect.left) * scaleX;
+      const my = (e.clientY - rect.top) * scaleY;
+
+      const toCanvasX = makeToCanvasX(canvas.width);
+      const toCanvasY = makeToCanvasY(canvas.height);
+
+      let bestDist = HIT_RADIUS;
+      let bestHit: { seriesKey: string; pointIndex: number; isFlagged: boolean } | null = null;
+
+      for (const series of displayData) {
+        for (const ap of series.visiblePoints) {
+          const cx = toCanvasX(getValue(ap.point, xAxis));
+          const cy = toCanvasY(getValue(ap.point, yAxis));
+          const dist = Math.hypot(mx - cx, my - cy);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestHit = { seriesKey: series.key, pointIndex: ap.origIndex, isFlagged: ap.isFlagged };
+          }
+        }
+      }
+
+      if (bestHit) {
+        const containerRect = containerRef.current?.getBoundingClientRect();
+        const offsetX = containerRect ? rect.left - containerRect.left : 0;
+        const offsetY = containerRect ? rect.top - containerRect.top : 0;
+        setCtxMenu({
+          x: e.clientX - rect.left + offsetX,
+          y: e.clientY - rect.top + offsetY,
+          ...bestHit,
+        });
+      } else {
+        setCtxMenu(null);
+      }
+    },
+    [displayData, xAxis, yAxis, makeToCanvasX, makeToCanvasY],
+  );
   
   // Resize observer
   useEffect(() => {
@@ -303,35 +485,67 @@ export function PolarPanel() {
           />
           Remove Outliers
         </label>
+
+        {aggregatedRuns.length > 0 && (
+          <label style={{
+            display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px',
+            color: showAggregated ? 'var(--accent-secondary, #f59e0b)' : 'var(--text-secondary)',
+            cursor: 'pointer', userSelect: 'none',
+          }}>
+            <input
+              type="checkbox"
+              checked={showAggregated}
+              onChange={(e) => setShowAggregated(e.target.checked)}
+              style={{ margin: 0, accentColor: 'var(--accent-secondary, #f59e0b)' }}
+            />
+            Aggregated ({aggregatedRuns.length})
+          </label>
+        )}
         
         <span style={{ 
           marginLeft: 'auto', 
           fontSize: '11px', 
           color: 'var(--text-secondary)' 
         }}>
-          {totalPoints} pts
-          {outlierFilter && outlierCount > 0 && (
-            <span style={{ color: 'var(--accent-warning, #f59e0b)' }}> ({outlierCount} removed)</span>
+          {totalVisible} pts
+          {removedCount > 0 && (
+            <span style={{ color: 'var(--accent-warning, #f59e0b)' }}>
+              {' '}({removedCount} removed{manualFlagCount > 0 && !outlierFilter ? `, ${manualFlagCount} flagged` : ''})
+            </span>
           )}
-          {filteredPolarData.length > 1 && ` · ${filteredPolarData.length} series`}
+          {manualFlagCount > 0 && !outlierFilter && removedCount === 0 && (
+            <span style={{ color: 'var(--accent-warning, #f59e0b)' }}> ({manualFlagCount} flagged)</span>
+          )}
+          {displayData.length > 1 && ` · ${displayData.length} series`}
         </span>
       </div>
       
       {/* Canvas */}
       <div 
         ref={containerRef}
-        style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}
+        style={{ flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }}
       >
         <canvas
           ref={canvasRef}
           width={canvasSize.width}
           height={canvasSize.height}
           style={{ display: 'block', width: '100%', height: '100%' }}
+          onContextMenu={handleContextMenu}
         />
+
+        {ctxMenu && (
+          <OutlierContextMenu
+            x={ctxMenu.x}
+            y={ctxMenu.y}
+            isFlagged={ctxMenu.isFlagged}
+            onToggle={() => toggleFlag(ctxMenu.seriesKey, ctxMenu.pointIndex)}
+            onDismiss={() => setCtxMenu(null)}
+          />
+        )}
       </div>
 
       {/* Legend */}
-      {filteredPolarData.length > 0 && (
+      {displayData.length > 0 && displayData.some((s) => s.visiblePoints.length > 0) && (
         <div style={{
           padding: '6px 8px',
           borderTop: '1px solid var(--border-color)',
@@ -341,7 +555,7 @@ export function PolarPanel() {
           maxHeight: '100px',
           overflowY: 'auto',
         }}>
-          {filteredPolarData.map((series) => (
+          {displayData.map((series) => (
             <div
               key={series.key}
               style={{
@@ -365,7 +579,7 @@ export function PolarPanel() {
                 whiteSpace: 'nowrap',
                 color: 'var(--text-secondary)',
               }}>
-                {series.label} ({series.points.length} pts)
+                {series.label} ({series.visiblePoints.length} pts)
               </span>
               <button
                 onClick={() => removePolar(series.key)}
@@ -384,7 +598,7 @@ export function PolarPanel() {
               </button>
             </div>
           ))}
-          {filteredPolarData.length > 1 && (
+          {displayData.length > 1 && (
             <button
               onClick={clearAllPolars}
               style={{

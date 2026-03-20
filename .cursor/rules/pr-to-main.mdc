@@ -5,7 +5,7 @@ alwaysApply: true
 
 # PR-to-Main Requirements
 
-Every pull request that targets `main` **must** satisfy the two gates below before it can be opened. Treat these as blocking — do not create the PR until both are done.
+Every pull request that targets `main` **must** satisfy the three gates below before it can be opened. Treat these as blocking — do not create the PR until all are done.
 
 ## 1. Update "What's New"
 
@@ -19,7 +19,20 @@ The in-app changelog lives in `flexfoil-ui/src/lib/version.ts` (the `CHANGELOG` 
   - `fixed` — bug fix
 - Keep descriptions concise (one sentence, no period).
 
-## 2. Keep Documentation in Sync
+## 2. Bump Distribution Versions
+
+All version numbers **must** stay in sync with the changelog's latest entry.
+
+| File | Field | Must match |
+|------|-------|------------|
+| `flexfoil-ui/package.json` | `"version"` | Top `CHANGELOG` entry version (drives `__APP_VERSION__` via Vite) |
+| `packages/flexfoil-python/pyproject.toml` | `version` | Bump if the PR touches **anything** in `packages/flexfoil-python/`, `crates/rustfoil-python/`, solver behavior, or the WASM bridge. Skip only if the PR is purely UI cosmetic. |
+
+- Use semver: bump **patch** for fixes, **minor** for new features, **major** for breaking changes.
+- The `package.json` version and the top `CHANGELOG` entry version must always be identical after the PR.
+- When in doubt about whether the Python package needs a bump, bump it — users should always be able to `pip install --upgrade flexfoil` to get the latest solver/API changes.
+
+## 3. Keep Documentation in Sync
 
 The docs site lives in `docs-site/docs/` (Docusaurus `.mdx` files).
 
@@ -32,9 +45,11 @@ The docs site lives in `docs-site/docs/` (Docusaurus `.mdx` files).
 When drafting the PR description, include this checklist (filled in):
 
 ```markdown
-## Changelog & Docs
+## Changelog, Versions & Docs
 - [ ] `flexfoil-ui/src/lib/version.ts` CHANGELOG updated
 - [ ] All user-visible changes have a changelog entry
+- [ ] `flexfoil-ui/package.json` version matches top CHANGELOG entry
+- [ ] `packages/flexfoil-python/pyproject.toml` version bumped (if applicable)
 - [ ] New/changed docs pages added or updated in `docs-site/docs/`
 - [ ] No stale or aspirational content remains in affected docs
 ```

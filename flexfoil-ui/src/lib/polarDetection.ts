@@ -7,7 +7,7 @@
  */
 
 import type { RunRow } from '../types';
-import { AUTO_GROUP_INVARIANT_FIELDS } from './plotFields';
+import { ALL_INPUT_PARAMETER_FIELDS, AUTO_GROUP_INVARIANT_FIELDS } from './plotFields';
 import { valueKey } from './plotStyling';
 
 export interface PolarGroup {
@@ -67,6 +67,8 @@ interface GroupMeta {
   n_panels: number;
   max_iter: number;
   solver_mode: RunRow['solver_mode'];
+  flap_deflection: number | null;
+  flap_hinge_x: number | null;
 }
 
 /**
@@ -87,6 +89,8 @@ function buildSmartLabels(
     'reynolds',
     'mach',
     'ncrit',
+    'flap_deflection',
+    'flap_hinge_x',
     'n_panels',
     'max_iter',
     'solver_mode',
@@ -112,7 +116,7 @@ function buildSmartLabels(
 export function splitByNumericGap(
   rows: RunRow[],
   field: keyof RunRow,
-  gapMultiplier = 3,
+  gapMultiplier = 5,
 ): RunRow[][] {
   if (rows.length < 3) return [sortRows(rows, field)];
 
@@ -176,6 +180,8 @@ function buildGroupMeta(row: RunRow): GroupMeta {
     n_panels: row.n_panels,
     max_iter: row.max_iter,
     solver_mode: row.solver_mode,
+    flap_deflection: row.flap_deflection,
+    flap_hinge_x: row.flap_hinge_x,
   };
 }
 
@@ -191,6 +197,10 @@ function formatLabelPart(field: keyof GroupMeta, value: GroupMeta[keyof GroupMet
       return `M=${String(value)}`;
     case 'ncrit':
       return `Nc=${String(value)}`;
+    case 'flap_deflection':
+      return value != null ? `δ=${value}°` : '';
+    case 'flap_hinge_x':
+      return value != null ? `x/c=${value}` : '';
     case 'n_panels':
       return `Panels=${String(value)}`;
     case 'max_iter':
@@ -205,10 +215,14 @@ function formatLabelPart(field: keyof GroupMeta, value: GroupMeta[keyof GroupMet
 /**
  * Detect polar groups from a flat array of RunRows.
  *
- * 1. Group by invariant run configuration fields, excluding active plot encodings
- * 2. Within each group, sort by `sortField`
- * 3. Split on large gaps in the sorted field
- * 4. Generate labels from only the fields that vary across the resulting groups
+ * Core principle: a group is "runs where every input parameter is the same
+ * except the one on the X-axis (the swept variable)."
+ *
+ * 1. Take all input parameters, remove the X-axis field (sortField) and
+ *    any explicitly plotted / encoding fields.
+ * 2. Group by the remaining invariant fields.
+ * 3. Optionally split on large gaps in the sort field (only for larger groups).
+ * 4. Generate labels from only the fields that vary across resulting groups.
  */
 export function detectSmartRunGroups(
   rows: RunRow[],
@@ -220,13 +234,17 @@ export function detectSmartRunGroups(
     sortField = 'alpha',
     plottedFields = [],
     encodingFields = [],
-    invariantFields = AUTO_GROUP_INVARIANT_FIELDS,
+    invariantFields,
   } = options;
+
+  // Build grouping fields: all input parameters minus the swept variable
+  const baseFields = invariantFields ?? ALL_INPUT_PARAMETER_FIELDS;
   const excludedFields = new Set<keyof RunRow>([
+    sortField,
     ...plottedFields,
     ...encodingFields.filter((field): field is keyof RunRow => Boolean(field)),
   ]);
-  const groupFields = invariantFields.filter((field) => !excludedFields.has(field));
+  const groupFields = baseFields.filter((field) => !excludedFields.has(field));
 
   const compoundGroups = new Map<string, RunRow[]>();
   for (const row of rows) {
@@ -238,17 +256,22 @@ export function detectSmartRunGroups(
   const allSegments: { key: string; meta: GroupMeta; rows: RunRow[]; subIndex: number; totalSubs: number }[] = [];
 
   for (const [key, groupRows] of [...compoundGroups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    // Always detect gaps by alpha (the natural sweep variable for polars),
-    // then sort each resulting segment by the actual plot X axis.
-    const gapSorted = sortRows(groupRows, 'alpha');
-    const segments = splitByNumericGap(gapSorted, 'alpha');
-    const meta = buildGroupMeta(gapSorted[0]);
+    const sorted = sortRows(groupRows, sortField);
+    const meta = buildGroupMeta(sorted[0]);
+
+    // Only gap-split larger groups (small ones are likely a single intentional sweep)
+    // and only when the sort field is numeric (gap detection on categorical is meaningless)
+    const shouldSplit = sorted.length >= 6
+      && typeof sorted[0]?.[sortField] === 'number';
+    const segments = shouldSplit
+      ? splitByNumericGap(sorted, sortField)
+      : [sorted];
 
     for (let i = 0; i < segments.length; i++) {
       allSegments.push({
         key: segments.length > 1 ? `${key}__seg${i}` : key,
         meta,
-        rows: sortRows(segments[i], sortField),
+        rows: segments[i],
         subIndex: i,
         totalSubs: segments.length,
       });
@@ -257,7 +280,7 @@ export function detectSmartRunGroups(
 
   const labels = buildSmartLabels(
     allSegments.map(s => s.meta),
-    new Set([...(plottedFields as string[]), 'alpha']),
+    new Set([...(plottedFields as string[]), String(sortField)]),
   );
 
   return allSegments.map((seg, i) => {

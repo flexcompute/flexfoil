@@ -48,6 +48,8 @@ export function saveEphemeralState(snapshot: {
         dataExplorerSplomKeys: snapshot.ui.dataExplorerSplomKeys,
         dataExplorerColorBy: snapshot.ui.dataExplorerColorBy,
         dataExplorerFilterModel: snapshot.ui.dataExplorerFilterModel,
+        dataExplorerSmartGroup: snapshot.ui.dataExplorerSmartGroup,
+        dataExplorerDataSource: snapshot.ui.dataExplorerDataSource,
         layoutJson: snapshot.layoutJson ?? snapshot.ui.layoutJson,
         viewport: snapshot.ui.viewport,
       },

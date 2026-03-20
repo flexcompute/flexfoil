@@ -118,6 +118,14 @@ export function buildSearchIndex(deps: {
       keywords: ['logs', 'history', 'solver output', 'convergence', 'debug', 'console', 'case'],
       panelId: 'case-logs',
     },
+    {
+      id: 'panel:distributions',
+      label: 'Distributions',
+      description: 'Surface distribution plots (Cp, Cf, BL quantities) vs x/c, y, or arc-length',
+      category: 'panel',
+      keywords: ['cp', 'cf', 'distribution', 'surface', 'boundary layer', 'pressure', 'friction', 'thickness', 'shape factor'],
+      panelId: 'distributions',
+    },
 
     // ── Sub-features (open panel + set mode) ────────────
     {

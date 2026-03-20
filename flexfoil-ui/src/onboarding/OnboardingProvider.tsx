@@ -18,6 +18,7 @@ import { tours, type TourId, type TourStep } from './tours';
 import { getChallenge, isPanelVisible, isElementVisible, getPanelDisplayName, getParentPanel, buildElementNotVisibleHTML, type Challenge } from './challenges';
 import { markTourComplete, hasCompletedTour as checkTourCompleted, resetOnboarding, saveTourProgress, getTourProgress, clearTourProgress, hasTourProgress } from './storage';
 import { useLayout } from '../contexts/LayoutContext';
+import { useRouteUiStore } from '../stores/routeUiStore';
 
 export interface OnboardingContextType {
   /** Start a specific tour (resumes from last position unless fromBeginning=true) */
@@ -49,8 +50,14 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
   const challengeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentChallengeRef = useRef<Challenge | null>(null);
   
-  // Get layout context for panel focusing
+  // Use the store-based approach to open panels. This triggers a useEffect in
+  // DockingLayout that calls handleOpenPanel/handleRestorePanel with its own
+  // up-to-date model reference, avoiding stale closures in LayoutContext.
   const { openPanel } = useLayout();
+  const focusPanel = useCallback((panelId: string) => {
+    openPanel(panelId);
+    useRouteUiStore.getState().applyRouteActivePanel(panelId as any);
+  }, [openPanel]);
 
   // Clean up challenge polling
   const clearChallengePolling = useCallback(() => {
@@ -130,6 +137,7 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
       doneBtnText: 'Done',
       progressText: '{{current}} of {{total}}',
       allowClose: true,
+      overlayClickBehavior: () => {},
       overlayColor: isDark ? 'rgba(0, 0, 0, 0.75)' : 'rgba(0, 0, 0, 0.5)',
       stagePadding: 8,
       stageRadius: 8,
@@ -151,7 +159,7 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
         
         // Focus panel if specified or detected (brings tab to front)
         if (parentPanel) {
-          openPanel(parentPanel);
+          focusPanel(parentPanel);
         }
         
         // Run onBeforeHighlight callback if provided
@@ -306,7 +314,49 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
     });
 
     return driverRef.current;
-  }, [clearChallengePolling, buildChallengeHTML, openPanel]);
+  }, [clearChallengePolling, buildChallengeHTML, focusPanel]);
+
+  // Delegated click handler for "Show Panel" buttons injected into tour popovers.
+  // Registered on `window` (not document) in capture phase so it fires BEFORE
+  // driver.js's document-level capture handlers which call stopImmediatePropagation.
+  // Also intercepts pointerdown to prevent driver.js from killing the pointer
+  // event chain before click can fire.
+  useEffect(() => {
+    if (!isActive) return;
+
+    const handleShowPanelClick = (e: Event) => {
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-open-panel]');
+      if (!btn) return;
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      const panelId = btn.dataset.openPanel;
+      if (panelId) {
+        useRouteUiStore.getState().applyRouteActivePanel(panelId as any);
+        setTimeout(() => driverRef.current?.refresh(), 200);
+      }
+    };
+
+    const eatPointerOnBtn = (e: Event) => {
+      const btn = (e.target as HTMLElement).closest?.('[data-open-panel]');
+      if (!btn) return;
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+    };
+
+    window.addEventListener('click', handleShowPanelClick, true);
+    window.addEventListener('pointerdown', eatPointerOnBtn, true);
+    window.addEventListener('pointerup', eatPointerOnBtn, true);
+    window.addEventListener('mousedown', eatPointerOnBtn, true);
+    window.addEventListener('mouseup', eatPointerOnBtn, true);
+    return () => {
+      window.removeEventListener('click', handleShowPanelClick, true);
+      window.removeEventListener('pointerdown', eatPointerOnBtn, true);
+      window.removeEventListener('pointerup', eatPointerOnBtn, true);
+      window.removeEventListener('mousedown', eatPointerOnBtn, true);
+      window.removeEventListener('mouseup', eatPointerOnBtn, true);
+    };
+  }, [isActive]);
 
   // Cleanup on unmount
   useEffect(() => {

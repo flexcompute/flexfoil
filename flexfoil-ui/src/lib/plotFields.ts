@@ -28,7 +28,7 @@ export const PLOT_FIELDS: PlotFieldMeta[] = [
   { key: 'residual', label: 'Residual', kind: 'numeric' },
   { key: 'x_tr_upper', label: 'Xtr Upper', kind: 'numeric' },
   { key: 'x_tr_lower', label: 'Xtr Lower', kind: 'numeric' },
-  { key: 'flap_deflection', label: 'Flap δ', kind: 'numeric' },
+  { key: 'flap_deflection', label: 'Flap δ', kind: 'numeric', autoGroupInvariant: true },
   { key: 'flap_hinge_x', label: 'Flap x/c', kind: 'numeric', autoGroupInvariant: true },
   { key: 'solver_mode', label: 'Solver', kind: 'categorical', autoGroupInvariant: true },
   { key: 'created_at', label: 'Created', kind: 'temporal' },
@@ -44,6 +44,16 @@ export const ENCODING_PLOT_FIELDS = PLOT_FIELDS;
 export const AUTO_GROUP_INVARIANT_FIELDS = PLOT_FIELDS.filter(
   (field) => field.autoGroupInvariant,
 ).map((field) => field.key);
+
+/** All solver input parameters that could be invariant OR swept.
+ *  The grouping logic excludes whichever one is on the X-axis. */
+export const ALL_INPUT_PARAMETER_FIELDS: (keyof RunRow)[] = [
+  'airfoil_name', 'airfoil_hash', 'alpha',
+  'reynolds', 'mach', 'ncrit',
+  'n_panels', 'max_iter',
+  'flap_deflection', 'flap_hinge_x',
+  'solver_mode',
+];
 
 export function getPlotFieldMeta(key: keyof RunRow): PlotFieldMeta | undefined {
   return PLOT_FIELDS.find((field) => field.key === key);

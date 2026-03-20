@@ -22,8 +22,14 @@ export default defineConfig({
   },
   server: {
     fs: {
-      // Allow serving files from the pkg directory
       allow: ['..'],
+    },
+    proxy: {
+      '/api/uiuc-proxy': {
+        target: 'https://m-selig.ae.illinois.edu',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/uiuc-proxy/, '/ads/coord'),
+      },
     },
   },
 })
