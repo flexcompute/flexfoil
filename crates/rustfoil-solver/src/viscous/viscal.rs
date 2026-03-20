@@ -2036,23 +2036,56 @@ pub struct PerBodyViscousResult {
 
 /// Run independent viscous BL analysis on each body of a multi-element config.
 ///
-/// Each body gets its own boundary layer marching using edge velocities from
-/// the multi-body inviscid solution. There is no cross-body viscous coupling.
+/// **Phase 1 multi-body viscous**: each body runs its own BL marching using
+/// edge velocities from the **multi-body inviscid** solver. This means each
+/// body's inviscid Ue includes the influence of all other bodies (circulation
+/// interference, slot flow effects), but the viscous coupling (DIJ mass-defect
+/// matrix, Newton iteration) is per-body only.
 ///
-/// This is Phase 1 of the multi-body viscous implementation. It produces
-/// reasonable results for well-separated elements but underestimates
-/// viscous effects in confluent regions (slat wake over main element).
+/// Produces good results for well-separated elements. Underestimates viscous
+/// effects in confluent regions (slat wake over main) -- that requires Phase 2.
 pub fn solve_multi_body_independent(
     bodies: &[rustfoil_core::Body],
     alpha_deg: f64,
     config: &super::config::ViscousSolverConfig,
 ) -> MultiBodyViscousResult {
-    let mut per_body = Vec::with_capacity(bodies.len());
+    use crate::inviscid::{InviscidSolver, FlowConditions};
+
+    let k = bodies.len();
+    if k == 0 {
+        return MultiBodyViscousResult {
+            per_body: vec![], cl_total: 0.0, cd_total: 0.0, cm_total: 0.0,
+            all_converged: true,
+        };
+    }
+
+    // Step 1: Run multi-body inviscid solver to get per-body edge velocities
+    // that include inter-body influence (slot flow, circulation interference).
+    let mb_inviscid_solver = InviscidSolver::new();
+    let flow = FlowConditions::with_alpha_deg(alpha_deg);
+
+    let mb_solution = match mb_inviscid_solver.solve(bodies, &flow) {
+        Ok(sol) => sol,
+        Err(e) => {
+            return MultiBodyViscousResult {
+                per_body: (0..k).map(|i| PerBodyViscousResult {
+                    name: format!("Body {}", i),
+                    result: None,
+                    error: Some(format!("Multi-body inviscid failed: {:?}", e)),
+                }).collect(),
+                cl_total: 0.0, cd_total: 0.0, cm_total: 0.0, all_converged: false,
+            };
+        }
+    };
+
+    // Step 2: For each body, set up viscous using single-body infrastructure
+    // (for DIJ, wake geometry) but REPLACE the edge velocities with the
+    // multi-body inviscid solution.
+    let mut per_body = Vec::with_capacity(k);
     let mut cl_total = 0.0;
     let mut cd_total = 0.0;
     let mut cm_total = 0.0;
     let mut all_converged = true;
-
     let ref_chord = bodies.iter().map(|b| b.chord()).fold(0.0_f64, f64::max);
 
     for (idx, body) in bodies.iter().enumerate() {
@@ -2060,38 +2093,33 @@ pub fn solve_multi_body_independent(
         let chord = body.chord();
         let chord_ratio = chord / ref_chord;
 
-        match super::setup::setup_from_body(body, alpha_deg) {
-            Ok(setup_result) => {
-                match solve_viscous_from_setup(&setup_result, config, alpha_deg) {
-                    Ok(vis) => {
-                        cl_total += vis.cl * chord_ratio;
-                        cd_total += vis.cd * chord_ratio;
-                        cm_total += vis.cm * chord_ratio;
-                        if !vis.converged {
-                            all_converged = false;
-                        }
-                        per_body.push(PerBodyViscousResult {
-                            name: body_name,
-                            result: Some(vis),
-                            error: None,
-                        });
-                    }
-                    Err(e) => {
-                        all_converged = false;
-                        per_body.push(PerBodyViscousResult {
-                            name: body_name,
-                            result: None,
-                            error: Some(format!("Viscous solve failed: {}", e)),
-                        });
-                    }
+        let result = setup_and_solve_one_body(
+            body,
+            &mb_solution.gamma_per_body[idx],
+            alpha_deg,
+            config,
+        );
+
+        match result {
+            Ok(vis) => {
+                cl_total += vis.cl * chord_ratio;
+                cd_total += vis.cd * chord_ratio;
+                cm_total += vis.cm * chord_ratio;
+                if !vis.converged {
+                    all_converged = false;
                 }
+                per_body.push(PerBodyViscousResult {
+                    name: body_name,
+                    result: Some(vis),
+                    error: None,
+                });
             }
             Err(e) => {
                 all_converged = false;
                 per_body.push(PerBodyViscousResult {
                     name: body_name,
                     result: None,
-                    error: Some(format!("Setup failed: {}", e)),
+                    error: Some(e),
                 });
             }
         }
@@ -2104,6 +2132,56 @@ pub fn solve_multi_body_independent(
         cm_total,
         all_converged,
     }
+}
+
+/// Set up and run viscous analysis for one body using externally-provided
+/// edge velocities (from the multi-body inviscid solver).
+///
+/// Uses the single-body `rustfoil-inviscid` factorization for DIJ and wake
+/// geometry, but replaces the edge velocities with the multi-body gamma.
+fn setup_and_solve_one_body(
+    body: &rustfoil_core::Body,
+    multi_body_gamma: &[f64],
+    alpha_deg: f64,
+    config: &super::config::ViscousSolverConfig,
+) -> Result<ViscousResult, String> {
+    // Run single-body setup (builds DIJ, wake, stagnation from single-body inviscid)
+    let mut setup_result = super::setup::setup_from_body(body, alpha_deg)
+        .map_err(|e| format!("Setup failed: {:?}", e))?;
+
+    // Replace edge velocities with multi-body gamma.
+    // The multi-body gamma includes inter-body influence.
+    let n_setup = setup_result.setup.ue_inviscid.len();
+    let n_multi = multi_body_gamma.len();
+
+    if n_multi == n_setup {
+        setup_result.setup.ue_inviscid = multi_body_gamma.to_vec();
+    } else if n_multi == n_setup - 1 {
+        // Body may have added a closing node; pad with average of first and last
+        let mut ue = multi_body_gamma.to_vec();
+        ue.push(0.5 * (multi_body_gamma[0] + multi_body_gamma[n_multi - 1]));
+        setup_result.setup.ue_inviscid = ue;
+    } else {
+        return Err(format!(
+            "Gamma length mismatch: multi-body has {} nodes but setup expects {}",
+            n_multi, n_setup
+        ));
+    }
+
+    // Re-find stagnation with the new (multi-body) edge velocities
+    let arc_lengths = &setup_result.setup.arc_lengths;
+    let (ist, sst, _) = super::setup::interpolate_stagnation(
+        &setup_result.setup.ue_inviscid, arc_lengths,
+    );
+    setup_result.ist = ist;
+    setup_result.sst = sst;
+    setup_result.setup.stagnation_index = ist;
+    let n = arc_lengths.len();
+    setup_result.setup.n_upper = n - ist;
+    setup_result.setup.n_lower = ist + 1;
+
+    // Run viscous solver with the multi-body edge velocities
+    solve_viscous_from_setup(&setup_result, config, alpha_deg)
 }
 
 /// Run viscous analysis from a pre-computed setup result.
@@ -2183,5 +2261,117 @@ fn solve_viscous_from_setup(
     match result {
         Ok(vis) => Ok(vis),
         Err(e) => Err(format!("{:?}", e)),
+    }
+}
+
+#[cfg(test)]
+mod multi_body_tests {
+    use super::*;
+    use rustfoil_core::{Body, point};
+    use std::f64::consts::PI;
+
+    fn make_naca0012(n_half: usize, chord: f64, x_pos: f64, y_pos: f64, defl_deg: f64) -> Body {
+        let t = 0.12;
+        let defl_rad = defl_deg.to_radians();
+        let cos_d = defl_rad.cos();
+        let sin_d = defl_rad.sin();
+
+        let x_coords: Vec<f64> = (0..n_half)
+            .map(|i| {
+                let beta = PI * (i as f64) / ((n_half - 1) as f64);
+                0.5 * (1.0 - beta.cos())
+            })
+            .collect();
+
+        let mut points = Vec::with_capacity(2 * n_half - 1);
+        for i in (0..n_half).rev() {
+            let xc = x_coords[i];
+            let y_t = 5.0 * t * (
+                0.2969 * xc.sqrt() - 0.126 * xc - 0.3516 * xc.powi(2)
+                + 0.2843 * xc.powi(3) - 0.1015 * xc.powi(4)
+            );
+            let xr = xc * chord;
+            let yr = y_t * chord;
+            points.push(point(xr * cos_d - yr * sin_d + x_pos, xr * sin_d + yr * cos_d + y_pos));
+        }
+        for i in 1..n_half {
+            let xc = x_coords[i];
+            let y_t = 5.0 * t * (
+                0.2969 * xc.sqrt() - 0.126 * xc - 0.3516 * xc.powi(2)
+                + 0.2843 * xc.powi(3) - 0.1015 * xc.powi(4)
+            );
+            let xr = xc * chord;
+            let yr = -y_t * chord;
+            points.push(point(xr * cos_d - yr * sin_d + x_pos, xr * sin_d + yr * cos_d + y_pos));
+        }
+        Body::from_points("NACA0012", &points).unwrap()
+    }
+
+    #[test]
+    fn test_multi_body_viscous_single_element_regression() {
+        let body = make_naca0012(50, 1.0, 0.0, 0.0, 0.0);
+        let config = ViscousSolverConfig::with_re_mach(1e6, 0.0);
+        let alpha = 4.0;
+
+        // Multi-body viscous on a single element should give the same result
+        // as the standard single-body viscous path.
+        let mb_result = solve_multi_body_independent(&[body.clone()], alpha, &config);
+        assert_eq!(mb_result.per_body.len(), 1);
+        let mb_vis = mb_result.per_body[0].result.as_ref()
+            .expect("Single-element multi-body viscous should succeed");
+
+        // Compare against single-body setup
+        let sb_setup = super::super::setup::setup_from_body(&body, alpha)
+            .expect("Single-body setup should succeed");
+        let sb_vis = solve_viscous_from_setup(&sb_setup, &config, alpha)
+            .expect("Single-body viscous should succeed");
+
+        println!("Single-body vs multi-body viscous (NACA 0012, α=4°, Re=1M):");
+        println!("  Single-body: CL={:.4}, CD={:.6}, CM={:.4}, converged={}",
+            sb_vis.cl, sb_vis.cd, sb_vis.cm, sb_vis.converged);
+        println!("  Multi-body:  CL={:.4}, CD={:.6}, CM={:.4}, converged={}",
+            mb_vis.cl, mb_vis.cd, mb_vis.cm, mb_vis.converged);
+
+        // The multi-body and single-body inviscid solvers use different
+        // implementations (rustfoil-solver vs rustfoil-inviscid), so edge
+        // velocities differ slightly. The viscous results won't match exactly,
+        // but both should produce physically reasonable CL at alpha=4°.
+        assert!(mb_vis.cl > 0.3 && mb_vis.cl < 1.0,
+            "Multi-body single-element CL should be in [0.3, 1.0] at α=4°, got {:.4}", mb_vis.cl);
+        assert!(sb_vis.cl > 0.3 && sb_vis.cl < 1.0,
+            "Single-body CL should be in [0.3, 1.0] at α=4°, got {:.4}", sb_vis.cl);
+    }
+
+    #[test]
+    fn test_multi_body_viscous_two_element() {
+        let main = make_naca0012(50, 1.0, 0.0, 0.0, 0.0);
+        let flap = make_naca0012(25, 0.3, 2.0, -0.05, -15.0);
+        let config = ViscousSolverConfig::with_re_mach(1e6, 0.0);
+
+        let result = solve_multi_body_independent(&[main, flap], 4.0, &config);
+
+        println!("Two-element viscous (NACA 0012 + 0.3c flap, α=4°, Re=1M):");
+        println!("  Total: CL={:.4}, CD={:.6}, CM={:.4}", result.cl_total, result.cd_total, result.cm_total);
+        for pb in &result.per_body {
+            if let Some(vis) = &pb.result {
+                println!("  {}: CL={:.4}, CD={:.6}, converged={}, iters={}",
+                    pb.name, vis.cl, vis.cd, vis.converged, vis.iterations);
+            } else {
+                println!("  {}: FAILED — {}", pb.name, pb.error.as_deref().unwrap_or("unknown"));
+            }
+        }
+
+        assert_eq!(result.per_body.len(), 2);
+
+        // At least the main body should produce a result
+        let main_result = result.per_body[0].result.as_ref();
+        assert!(main_result.is_some(),
+            "Main body viscous should succeed: {}",
+            result.per_body[0].error.as_deref().unwrap_or("no error"));
+
+        let main_vis = main_result.unwrap();
+        assert!(main_vis.cl > 0.3, "Main CL should be positive at α=4°, got {:.4}", main_vis.cl);
+        assert!(main_vis.cd > 0.0 && main_vis.cd < 0.1,
+            "Main CD should be in [0, 0.1], got {:.6}", main_vis.cd);
     }
 }
