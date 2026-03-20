@@ -707,6 +707,7 @@ dependencies = [
  "rustfoil-xfoil",
  "serde",
  "serde-wasm-bindgen",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-test",
 ]
