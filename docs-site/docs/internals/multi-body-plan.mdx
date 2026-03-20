@@ -1,0 +1,863 @@
+# Multi-Body Extension Plan
+
+:::info
+This is the engineering plan for extending FlexFoil from single-airfoil analysis to
+multi-element configurations (slat + main + flap). It covers the full stack: panel
+method math, boundary layer rewrite, WASM bindings, data model, UI, validation
+cases, and agent decomposition for parallel development.
+
+**Branch:** `multi-body` &middot; **Status:** Planning &middot; **Last updated:** 2026-03-20
+:::
+
+---
+
+## 1. Current Architecture
+
+FlexFoil implements Mark Drela's linear vorticity stream-function panel method
+(XFOIL-style) in Rust, compiled to WASM for 60 Hz in-browser interaction.
+
+```
+Coordinates ─► Paneling ─► Influence Matrix (N+1)×(N+1) ─► LU Solve ─► γ(α)
+                                                                      ─► Cp, CL, CD, CM
+                                                                      ─► Viscous BL coupling
+```
+
+### Crate graph
+
+```
+rustfoil-core          (geometry: Body, Panel, Point, splines)
+├── rustfoil-bl        (integral BL equations + closures)
+│   └── rustfoil-coupling  (VI coupling: Newton, march, DIJ)
+│       ├── rustfoil-solver    (Body-based inviscid + viscous)
+│       │   └── rustfoil-xfoil (XFOIL-faithful path: oper, QDES, MDES)
+│       │       ├── rustfoil-wasm   (WebAssembly bindings)
+│       │       ├── rustfoil-cli    (CLI)
+│       │       └── rustfoil-python (PyO3)
+│       └── rustfoil-inviscid  (array-based inviscid, used by xfoil path)
+└── rustfoil-testkit   (test utilities, no rustfoil deps)
+```
+
+### Multi-body readiness today
+
+`rustfoil-core` was designed for multi-body from day one. `Body` supports named
+elements and the docs show `Vec<Body>` as the intended API. But every layer above
+hard-codes `bodies[0]`:
+
+```rust
+// crates/rustfoil-solver/src/inviscid/mod.rs:256-257
+// For now, handle single body
+let body = &bodies[0];
+```
+
+---
+
+## 2. What Changes, Layer by Layer
+
+### 2.1 Inviscid Solver — MODERATE
+
+**File:** `crates/rustfoil-solver/src/inviscid/mod.rs`
+
+The influence matrix grows from `(N+1) × (N+1)` to `(N_total + K) × (N_total + K)`
+where `N_total = N_1 + N_2 + ⋯ + N_K` (total nodes across all bodies) and `K` is
+the number of bodies (one Kutta condition each).
+
+**Changes required:**
+
+- Assembly loop iterates over all (body_i, body_j) pairs; the PSIS/PSID kernels are
+  unchanged (point-to-panel functions).
+- One Kutta row per body: `γ[TE_upper_k] + γ[TE_lower_k] = 0`.
+- Per-body TE panel treatment: each body has its own `sharp`, `ante`, `aste`,
+  `scs`, `sds`.
+- `FactorizedSolution` gains `nodes_per_body: Vec<usize>` (already stubbed) and
+  `body_gamma_ranges: Vec<Range<usize>>`.
+
+**Performance:** Matrix goes from ~160×160 (single NACA 0012 at 160 panels) to
+~500×500 (3-element at 160 panels each). LU is O(n³) — roughly 30× slower per
+solve, but still sub-millisecond. Polar sweeps at 0.5° steps over 40° will take
+~2s instead of ~0.1s.
+
+### 2.2 Wake Model — HARD
+
+**File:** `crates/rustfoil-xfoil/src/wake_panel.rs`
+
+Each body sheds a wake from its TE. The wake from an upstream element passes over
+downstream elements, affecting their circulation and BL development.
+
+**Phase 0 approach:** Straight-line wakes from each TE along the TE bisector
+direction. Simple, fast, good enough for inviscid CL estimation.
+
+**Phase 2 approach:** Streamline-following wakes using the existing
+`build_streamlines()` infrastructure. Wake panels are included in the influence
+matrix with source singularities (for displacement).
+
+**Hard sub-problems:**
+
+- Wake-body intersection detection (where does the slat wake hit the main wing?)
+- Wake-wake merging (slat wake + main wake downstream of the main TE)
+- Wake relaxation iteration (wake shape depends on solution, solution depends on
+  wake shape)
+
+### 2.3 Viscous Coupling — VERY HARD
+
+**Files:** `crates/rustfoil-coupling/`, `crates/rustfoil-bl/`
+
+The existing BL model tracks 3 unknowns per station: `[ampl/ctau, θ, δ*]`. It
+assumes one stagnation point, one upper/lower surface split, one wake. None of this
+holds for multi-element.
+
+See [Section 3](#3-confluent-boundary-layer-rewrite) for the full rewrite plan.
+
+### 2.4 WASM Bindings — EASY
+
+**File:** `crates/rustfoil-wasm/src/lib.rs`
+
+```rust
+// Current
+#[wasm_bindgen]
+pub fn analyze_airfoil(coords: &[f64], alpha: f64, ...) -> JsValue;
+
+// Multi-body
+#[wasm_bindgen]
+pub fn analyze_multi_element(bodies_json: &str, alpha: f64, ...) -> JsValue;
+```
+
+Where `bodies_json` is:
+```json
+[
+  {"name": "slat", "coords": [x0,y0,x1,y1,...], "position": {"x": -0.05, "y": 0.02, "angle": -30}},
+  {"name": "main", "coords": [x0,y0,x1,y1,...], "position": {"x": 0, "y": 0, "angle": 0}},
+  {"name": "flap", "coords": [x0,y0,x1,y1,...], "position": {"x": 0.85, "y": -0.05, "angle": 30}}
+]
+```
+
+The single-body `analyze_airfoil` stays as-is for backward compatibility.
+
+### 2.5 Data Model and Storage — MODERATE
+
+**Files:** `flexfoil-ui/src/types/`, `flexfoil-ui/src/stores/`, `packages/flexfoil-python/src/flexfoil/server.py`
+
+| Current | Multi-Body |
+|---|---|
+| `coordinates_json` (one body) | `bodies_json` (array of named bodies with positions) |
+| `airfoil_hash` | `configuration_hash` (hash of all bodies + positions) |
+| `flaps_json` (deflections on one body) | Per-body transforms or separate body entries |
+| `panels_json` (one body) | Per-body panels in `bodies_json` |
+
+Run cache key becomes: `config_hash + alpha + Re + Mach + ncrit + n_panels + max_iter`.
+
+Schema migration: add `bodies_json TEXT` column; treat existing single-body runs as
+1-element configs.
+
+### 2.6 UI — HARD (parallelizable)
+
+**Directory:** `flexfoil-ui/`
+
+- `airfoilStore`: `coordinates` becomes `bodies: Array<{name, coordinates, panels, position}>`.
+- `AirfoilCanvas`: Renders multiple contours with distinct colors; supports
+  selecting/editing individual elements; handles relative positioning.
+- Element positioning panel: controls for x, y, rotation per element.
+- Polar/sweep engine: passes multi-body config to WASM.
+- Distribution panel: per-body Cp, Cf, δ*, θ.
+- Data Explorer: shows configuration used per run.
+- Library: "configurations" alongside single airfoils.
+
+---
+
+## 3. Confluent Boundary Layer Rewrite
+
+### 3.1 The Physics
+
+When a slat wake passes over the main wing, the flow near the wall has two shear
+layers:
+
+```
+           Freestream
+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~  Ue_outer (inviscid edge)
+     ┄┄┄ outer layer (slat wake) ┄┄┄  θ_o, H*_o, ctau_o
+     ┈┈┈┈ mixing zone ┈┈┈┈
+     ─── inner layer (wall BL) ───   θ_i, H*_i, ctau_i
+     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  wall
+```
+
+The current BL model tracks one layer per station and cannot represent this
+structure. XFOIL was never designed for it.
+
+MSES (Drela, MIT) solves the same fundamental equations — von Kármán momentum
+integral + lag-entrainment closure — but tracks two independent layers in confluent
+regions. MSES uses a streamline-based Euler solver for the inviscid part; we retain
+the panel method and adapt only the BL side.
+
+### 3.2 Extended BL State
+
+**File:** `crates/rustfoil-bl/src/state.rs`
+
+Current state per station: 3 primary unknowns `[ampl/ctau, θ, δ*]`.
+
+Extended state in confluent regions: 6 primary unknowns
+`[ampl_i/ctau_i, θ_i, δ*_i, ctau_o, θ_o, δ*_o]`.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LayerMode {
+    Single,
+    Confluent,
+}
+
+pub struct BlStation {
+    pub layer_mode: LayerMode,
+
+    // Inner layer (always present — identical to today's fields)
+    pub x: f64,
+    pub u: f64,           // Ue inner (wall-layer edge velocity)
+    pub theta: f64,
+    pub delta_star: f64,
+    pub ctau: f64,
+    pub ampl: f64,
+    // ... secondary: h, hk, hs, cf, cd, etc.
+
+    // Outer layer (populated only when layer_mode == Confluent)
+    pub u_outer: f64,           // Ue outer (inviscid edge velocity)
+    pub theta_outer: f64,
+    pub delta_star_outer: f64,
+    pub ctau_outer: f64,
+    // ... secondary: h_outer, hk_outer, hs_outer, cd_outer, etc.
+}
+```
+
+### 3.3 Two-Layer Integral Equations
+
+**Inner layer** (wall BL in confluent zone) — same form as today but with modified
+edge velocity `Ue_i`:
+
+```
+Momentum:   d(θ_i)/ds + (H_i + 2 − M²)·θ_i/Ue_i · dUe_i/ds = Cf_i / 2
+Shape:      d(H*_i)/ds = f(H_i, H*_i, θ_i, Cf_i, CD_i, Ue_i)
+Lag:        shear-lag equation for ctau_i (unchanged)
+```
+
+**Outer layer** (wake in confluent zone) — momentum equation with Cf = 0:
+
+```
+Momentum:   d(θ_o)/ds + (H_o + 2 − M²)·θ_o/Ue_o · dUe_o/ds = 0
+Shape:      d(H*_o)/ds = f(H_o, H*_o, θ_o, CD_o, Ue_o)
+Lag:        shear-lag equation for ctau_o (wake equilibrium)
+```
+
+**Combined displacement** feeds into viscous-inviscid coupling:
+
+```
+δ*_total = δ*_inner + δ*_outer
+```
+
+### 3.4 Outer-Layer Closures
+
+**File:** `crates/rustfoil-bl/src/closures/`
+
+The inner layer keeps all existing closures unchanged. The outer layer needs:
+
+| Quantity | Closure | Source |
+|---|---|---|
+| Cf_outer | 0 (no wall) | By definition |
+| Hs_outer | Turbulent Hs correlation clamped to wake-like H (1.0–1.8) | Existing `hs.rs` turbulent branch, adapted |
+| CD_outer | Wake dissipation model | Existing `di_turbulent_wake()` in `dissipation.rs` |
+| Ctau_outer | Shear-lag with wake equilibrium CQ | Same lag equation, different equilibrium target |
+| Mixing rate | Empirical inner/outer entrainment | New — determines how fast the two-layer structure relaxes to single-layer |
+
+The mixing rate closure is the highest-risk new piece. Start with a simple
+exponential decay model: the outer layer's `δ*_o` decays with a characteristic
+length proportional to `θ_o` at impingement. Calibrate against 30P30N BL profile
+data.
+
+### 3.5 Variable-Width Newton Blocks
+
+**File:** `crates/rustfoil-coupling/src/solve.rs`
+
+Current: fixed 3×3 `VA[i]`, `VB[i]` blocks.
+
+For the first pass, use uniform 6×6 blocks everywhere. Single-layer stations pad
+the outer-layer rows with identity (outer unknowns held fixed). This wastes ~2×
+memory but the matrices are tiny (hundreds of rows) so it doesn't matter.
+
+```
+VA = | VA_ii  VA_io |    VB = | VB_ii  VB_io |
+     | VA_oi  VA_oo |         | VB_oi  VB_oo |
+```
+
+`VA_io` = d(inner residuals)/d(outer unknowns). In single-layer stations, the
+off-diagonal blocks are zero and the `oo` diagonal is identity.
+
+The VM matrix (mass coupling to inviscid) uses `δ*_total = δ*_i + δ*_o`, so:
+
+```
+VM_total = VM_inner + VM_outer
+```
+
+### 3.6 Wake-Body Impingement
+
+When the inviscid solution is computed, trace a streamline from each upstream TE.
+Where this streamline intersects a downstream body's outer BL edge, mark that
+station as the start of the confluent region.
+
+Algorithm:
+1. Compute wake trajectory using `build_streamlines()` from the inviscid solution.
+2. For each downstream body, find the station where the wake streamline is closest.
+3. At that station, initialize the outer-layer state from the upstream body's
+   wake state at its TE.
+4. March the outer layer downstream alongside the inner layer.
+5. When `ctau_o < ε` (outer layer has dissipated), switch back to single-layer.
+
+### 3.7 Phased Implementation
+
+| Sub-phase | What | Risk |
+|---|---|---|
+| 3a | `BlStation` extension + `LayerMode` enum | Low |
+| 3b | Outer-layer closures (Cf=0, wake Hs, wake CD) | Medium — empirical fits |
+| 3c | Two-layer `bldif` residuals and Jacobians | Medium — algebra-heavy |
+| 3d | 6×6 Newton blocks in `solve.rs` | Low — mechanical expansion |
+| 3e | Wake-body impingement detection | Medium — geometric edge cases |
+| 3f | Cross-layer Jacobian terms (`VA_io`, `VA_oi`) | Medium — coupling derivatives |
+| 3g | Layer merging (confluent → single) | Medium — smooth transition |
+| 3h | Calibration against 30P30N BL data | Ongoing |
+
+---
+
+## 4. Validation Cases
+
+### 4.1 Inviscid Validation (Phase 0)
+
+#### V1: Two Circular Cylinders (Analytical)
+
+Potential flow around two circular cylinders has a known analytical solution
+(bi-polar coordinates / Milne-Thomson). This is the simplest possible multi-body
+inviscid test — no trailing edges, no Kutta condition complications.
+
+- **Geometry:** Two unit-radius cylinders, centers at (0, 0) and (3, 0)
+- **Flow:** Uniform freestream U∞ = 1, α = 0°
+- **Validation:** Cp distribution on both cylinders vs. analytical solution
+- **Pass criterion:** Max |ΔCp| < 0.01 at 200 panels per cylinder
+
+#### V2: NACA 0012 + Flat-Plate Flap (Simple Two-Element)
+
+A main NACA 0012 with a thin flat-plate flap at the trailing edge. This tests the
+multi-body Kutta condition enforcement with the simplest geometry.
+
+- **Geometry:** NACA 0012 (c = 1.0) + flat plate (c = 0.2) deflected 20° at
+  gap = 0.02c, overlap = 0.01c
+- **Flow:** α = 0°, inviscid
+- **Validation:** CL increment from flap deflection; thin-airfoil theory gives
+  ΔCL ≈ 2π·δ·(c_f/c)^½ as first-order check
+- **Pass criterion:** CL within 10% of thin-airfoil prediction and Cp is smooth
+  through the gap
+
+#### V3: GA(W)-1 + 30% Fowler Flap (Two-Element, Experimental Cp)
+
+NASA CR-2833 (McGhee & Beasley, 1977) provides extensive experimental pressure
+distributions for the GA(W)-1 airfoil with a 30% chord Fowler flap.
+
+- **Geometry:** GA(W)-1 (17% thick general aviation airfoil) + 30% c Fowler flap
+- **Flow:** Re = 2.2×10⁶, M = 0.13; flap deflections 10°, 20°, 30°, 40°
+- **Validation:** Inviscid Cp vs. experiment at low α (where viscous effects are
+  small); CL vs. α slope
+- **Data source:** NASA CR-2833, Tables and Figures; digitized Cp data
+- **Pass criterion (inviscid):** Cp shape matches qualitatively; CL slope (dCL/dα)
+  within 5% of experiment at low α; CL level may differ (no viscous displacement)
+
+#### V4: 30P30N Three-Element (Primary Benchmark)
+
+The McDonnell Douglas 30P30N is the standard multi-element validation case. Three
+elements: slat (30° deflection), main, flap (30° deflection).
+
+- **Geometry:** 30P30N configuration from NASA/AIAA CFD challenge workshop
+  - Slat: 14.48% c, deflected −30°, gap 2.95% c, overlap −2.50% c
+  - Main: reference element
+  - Flap: 30.0% c, deflected 30°, gap 1.27% c, overlap 0.25% c
+- **Flow:** Re = 9×10⁶, M = 0.2
+- **Validation (inviscid):** Cp on all three elements at α = 0°, 8°, 16°;
+  CL vs. α up to stall
+- **Data sources:**
+  - Chin et al., AIAA-93-3137 (surface pressures, force balance)
+  - Rumsey et al., "Summary of the First AIAA CFD High-Lift Prediction Workshop"
+  - Murayama et al. (JAXA experimental data)
+- **Pass criterion (inviscid):** CL within 5% of experiment at α < 10°; Cp peaks
+  on slat and flap captured qualitatively; correct relative loading between elements
+- **Target values (approximate, from experiment):**
+  - α = 0°: CL ≈ 1.5
+  - α = 8°: CL ≈ 2.8
+  - α = 16°: CL ≈ 3.8
+  - CL_max ≈ 4.1 at α ≈ 19° (viscous; inviscid will overpredict)
+
+### 4.2 Viscous Validation (Phase 1 — Independent BL)
+
+#### V5: Single Element Regression
+
+Before testing multi-body viscous, verify the existing single-body viscous path is
+unbroken.
+
+- **Geometry:** NACA 0012, 160 panels
+- **Flow:** Re = 1×10⁶, M = 0, Ncrit = 9, α = 0° and α = 5°
+- **Validation:** CL, CD, CM, x_tr must match the current solver output exactly
+- **Pass criterion:** Bit-identical results (same Float64 values)
+
+#### V6: GA(W)-1 + Fowler Flap (Independent Viscous)
+
+Same configuration as V3 but now with per-body independent viscous solve.
+
+- **Validation:** CD prediction; transition location on main and flap; CL at higher
+  α where viscous displacement matters
+- **Pass criterion:** CL within 3% of experiment at α < 8°; CD on the right order
+  of magnitude (independent BL will under-predict CD due to missing wake interaction)
+
+#### V7: 30P30N (Independent Viscous)
+
+Same as V4 but with per-body independent viscous.
+
+- **Validation:** CL vs. α; compare with inviscid to show displacement effect
+- **Pass criterion:** CL reduced relative to inviscid (displacement effect
+  captured); CL within 10% of experiment up to α = 16°
+
+### 4.3 Confluent BL Validation (Phase 2)
+
+#### V8: 30P30N Boundary Layer Profiles
+
+Experimental BL profile data exists at multiple stations on the main element where
+the slat wake is confluent with the wall BL.
+
+- **Validation:** Compare predicted δ*, θ, H along main element with experiment;
+  compare inner/outer layer thicknesses with measured wake/BL profiles
+- **Data source:** Chin et al., AIAA-93-3137; BANC-III workshop data
+- **Pass criterion:** Predicted δ* within 20% of experiment in confluent region;
+  predicted transition location on main element within 5% x/c of experiment
+
+#### V9: 30P30N Full Polar
+
+- **Validation:** CL, CD, CM vs. α from −4° to 22°
+- **Pass criterion:** CL_max within 5% of experiment; α_stall within 1°;
+  CD within 15% through the linear range
+
+#### V10: NLR 7301 + Flap (Two-Element Transonic)
+
+Two-element case at M = 0.185, α = 6°. Tests the solver at moderate Mach where
+compressibility corrections matter.
+
+- **Geometry:** NLR 7301 supercritical airfoil (16.5% thick) + trailing-edge flap,
+  20° deflection
+- **Flow:** Re = 2.51×10⁶, M = 0.185, α = 6°
+- **Data source:** NLR experimental data; NASA WIND validation archive
+  (grc.nasa.gov/www/wind/valid/nlrflap/)
+- **Pass criterion:** Cp distribution on main element and flap matches experiment;
+  suction peak on main element captured
+
+### 4.4 Validation Data Provenance
+
+All validation geometry and experimental data will be stored in
+`crates/rustfoil-testkit/data/multi-element/`:
+
+```
+multi-element/
+├── two-cylinders/
+│   ├── geometry.json          # Two unit-radius cylinders
+│   └── analytical_cp.json     # Analytical Cp from bi-polar solution
+├── naca0012-flat-flap/
+│   ├── geometry.json          # NACA 0012 + flat plate
+│   └── thin_airfoil_cl.json   # Thin-airfoil theory reference
+├── gaw1-fowler/
+│   ├── main.dat               # GA(W)-1 coordinates (Selig format)
+│   ├── flap.dat               # Fowler flap coordinates
+│   ├── config.json            # Gap, overlap, deflection
+│   ├── cp_exp_10deg.csv       # Experimental Cp, δ_f = 10°
+│   ├── cp_exp_20deg.csv
+│   ├── cp_exp_30deg.csv
+│   └── source.txt             # "NASA CR-2833, McGhee & Beasley, 1977"
+├── 30p30n/
+│   ├── slat.dat
+│   ├── main.dat
+│   ├── flap.dat
+│   ├── config.json            # Gap, overlap, deflection for each element
+│   ├── cl_vs_alpha_exp.csv    # CL(α) from Chin et al.
+│   ├── cp_exp_alpha0.csv
+│   ├── cp_exp_alpha8.csv
+│   ├── cp_exp_alpha16.csv
+│   ├── bl_profiles_main.csv   # BL profiles on main element (confluent region)
+│   └── source.txt             # "Chin et al., AIAA-93-3137; Rumsey et al."
+└── nlr7301-flap/
+    ├── main.dat
+    ├── flap.dat
+    ├── config.json
+    ├── cp_exp_alpha6.csv
+    └── source.txt             # "NLR experimental, NASA WIND archive"
+```
+
+---
+
+## 5. Agent Decomposition
+
+### 5.1 Why Parallel Agents Work Here
+
+FlexFoil's crate structure provides natural isolation boundaries. Each Rust crate
+has a defined public API and crates communicate only through those APIs. Multiple
+agents can work on different crates simultaneously if they agree on interface
+contracts up front.
+
+### 5.2 Agent Dependency Graph
+
+```
+Day 1 (parallel):
+  Agent 1: Influence Matrix (rustfoil-solver/inviscid)
+  Agent 2: Confluent BL Equations (rustfoil-bl)
+  Agent 4: Multi-Element UI (flexfoil-ui)
+  Agent 6: Test & Validation Data (rustfoil-testkit)
+
+After Agents 1+2 complete:
+  Agent 3: Multi-Body Coupling (rustfoil-coupling)
+
+After Agent 3 completes:
+  Agent 5: Wake-Body Interaction (rustfoil-xfoil wake)
+
+Continuous:
+  Integration & Validation (all agents)
+```
+
+### 5.3 Agent 1: Influence Matrix
+
+**Crate:** `rustfoil-solver/src/inviscid/mod.rs`
+
+**Scope:**
+- Remove `let body = &bodies[0]` gate at line 257
+- Build influence matrix over all `(body_i, body_j)` pairs
+- Index management: track per-body node ranges in the global matrix
+- Add one Kutta row per body
+- Per-body TE panel treatment (sharp/blunt detection per element)
+- Straight-line wakes from each TE (Phase 0 wake model)
+- Update `FactorizedSolution` and `InviscidSolution` for multi-body
+
+**Interface contract:**
+```rust
+pub struct FactorizedSolution {
+    pub nodes_per_body: Vec<usize>,
+    pub body_node_ranges: Vec<Range<usize>>,
+    // ... existing fields
+}
+
+pub struct InviscidSolution {
+    pub gamma_per_body: Vec<Vec<f64>>,
+    pub cp_per_body: Vec<Vec<f64>>,
+    pub cl_per_body: Vec<f64>,
+    pub cl_total: f64,
+    pub cm_total: f64,
+    // ... existing fields
+}
+```
+
+**Tests:** V1 (two cylinders), V2 (NACA 0012 + flat flap), V4 inviscid (30P30N)
+
+**Estimated effort:** 1–2 weeks
+
+### 5.4 Agent 2: Confluent BL Equations
+
+**Crates:** `rustfoil-bl/src/state.rs`, `rustfoil-bl/src/closures/`,
+`rustfoil-bl/src/equations.rs`
+
+**Scope:**
+- Add `LayerMode::Confluent` to `BlStation`
+- Add outer-layer fields to `BlStation` (θ_o, δ*_o, ctau_o, u_o, secondaries)
+- Write outer-layer closures: `cf_outer()` (=0), `hs_outer()`, `cd_outer()`,
+  `ctau_eq_outer()`
+- Extend `bldif()` to produce 6-equation residuals and 6×6 Jacobian blocks when
+  `layer_mode == Confluent`
+- Extend `blvar()` to populate outer-layer secondary variables
+- Write mixing-rate closure (empirical: exponential decay of outer δ* with
+  characteristic length ~ θ_o at impingement)
+
+**Interface contract:**
+```rust
+pub struct BlResiduals {
+    pub inner: [f64; 3],      // [res_lag, res_mom, res_shape]
+    pub outer: Option<[f64; 3]>,  // None for single-layer
+}
+
+pub struct BlJacobian {
+    pub va_ii: [[f64; 3]; 3],
+    pub vb_ii: [[f64; 3]; 3],
+    pub va_io: Option<[[f64; 3]; 3]>,  // d(inner)/d(outer)
+    pub vb_io: Option<[[f64; 3]; 3]>,
+    pub va_oi: Option<[[f64; 3]; 3]>,  // d(outer)/d(inner)
+    pub vb_oi: Option<[[f64; 3]; 3]>,
+    pub va_oo: Option<[[f64; 3]; 3]>,
+    pub vb_oo: Option<[[f64; 3]; 3]>,
+}
+```
+
+**Tests:** Unit tests for outer closures; regression on single-layer (must be
+bit-identical when `LayerMode::Single`); V5 regression
+
+**Estimated effort:** 3–4 weeks
+
+### 5.5 Agent 3: Multi-Body Coupling
+
+**Crates:** `rustfoil-coupling/src/solve.rs`, `rustfoil-coupling/src/global_newton.rs`,
+`rustfoil-coupling/src/march.rs`
+
+**Scope:**
+- Per-body BL marching: each body has its own stagnation point, upper/lower split,
+  transition locations
+- Extend Newton blocks from 3×3 to 6×6 (uniform padding for single-layer stations)
+- Modify forward/back sweep in `solve.rs` for 6×6 blocks
+- Update VM matrix for combined displacement: `δ*_total = δ*_inner + δ*_outer`
+- Multi-body global Newton: `nsys = Σ_k (n_upper_k + n_lower_k) − 2K`
+- Per-body wake marching
+
+**Interface contract:**
+```rust
+pub struct BodyBl {
+    pub name: String,
+    pub stations_upper: Vec<BlStation>,
+    pub stations_lower: Vec<BlStation>,
+    pub stations_wake: Vec<BlStation>,
+    pub stagnation_idx: usize,
+}
+
+pub fn solve_multi_body_bl(
+    bodies_bl: &mut [BodyBl],
+    inviscid: &MultiBodyInviscidSolution,
+    config: &ViscousSolverConfig,
+) -> Result<MultiBodyViscousResult>;
+```
+
+**Tests:** V5 regression (single body through multi-body path); V6 (GA(W)-1
+independent viscous); V7 (30P30N independent viscous)
+
+**Estimated effort:** 2–3 weeks
+
+### 5.6 Agent 4: Multi-Element UI
+
+**Directory:** `flexfoil-ui/`
+
+**Scope:**
+- Extend `airfoilStore` with `bodies: Array<BodyState>` where
+  `BodyState = {name, coordinates, panels, position: {x, y, angle}}`
+- Multi-contour rendering in `AirfoilCanvas` (distinct colors per element)
+- Element selection and individual editing
+- Positioning panel: per-element x, y, rotation controls
+- Multi-element library: save/load configurations
+- Sweep engine: pass multi-body config to WASM
+- Distribution panel: per-body Cp overlay
+- Data Explorer: configuration hash display
+
+**Interface contract (WASM):**
+```typescript
+interface MultiElementInput {
+  bodies: Array<{
+    name: string;
+    coords: Float64Array;
+    position: { x: number; y: number; angle: number };
+  }>;
+}
+
+interface MultiElementResult {
+  cl_total: number;
+  cm_total: number;
+  per_body: Array<{
+    name: string;
+    cl: number;
+    cp: Float64Array;
+    cp_x: Float64Array;
+    gamma: Float64Array;
+  }>;
+  converged: boolean;
+  success: boolean;
+  error?: string;
+}
+```
+
+**Tests:** Visual regression; load 3-element config → render → inviscid solve →
+display per-body Cp
+
+**Estimated effort:** 3–4 weeks
+
+### 5.7 Agent 5: Wake-Body Interaction
+
+**Crates:** `rustfoil-xfoil/src/wake_panel.rs`, `rustfoil-solver/src/inviscid/`
+
+**Scope:**
+- Multi-wake geometry: compute streamline-following wake from each body's TE
+- Wake-body intersection detection: find where upstream wakes hit downstream bodies
+- Initialize outer-layer BL state at impingement points from upstream wake state
+- Layer merging logic: detect when outer layer has dissipated, switch back to
+  single-layer
+- Handle edge cases: wake misses body, wake hits LE, wake passes through gap
+
+**Interface contract:**
+```rust
+pub struct WakeImpingement {
+    pub source_body: usize,
+    pub target_body: usize,
+    pub target_station: usize,
+    pub wake_state_at_impingement: WakeState,
+}
+
+pub fn detect_wake_impingements(
+    bodies: &[Body],
+    wakes: &[WakeTrajectory],
+) -> Vec<WakeImpingement>;
+```
+
+**Tests:** V8 (30P30N BL profiles); V9 (30P30N full polar)
+
+**Estimated effort:** 4–6 weeks
+
+### 5.8 Agent 6: Test and Validation Data
+
+**Crate:** `rustfoil-testkit/`
+
+**Scope:**
+- Curate geometry data for all validation cases (V1–V10)
+- Digitize experimental Cp and CL data from published sources
+- Build test harnesses that load geometry, run solver, compare against reference
+- Create `MultiElementTestCase` struct and validation runner
+
+**Interface contract:**
+```rust
+pub struct MultiElementTestCase {
+    pub name: String,
+    pub bodies: Vec<BodyCoords>,
+    pub flow: FlowConditions,
+    pub expected: ExpectedResults,
+}
+
+pub struct ExpectedResults {
+    pub cl_total: Option<f64>,
+    pub cl_tolerance: f64,
+    pub cp_per_body: Option<Vec<Vec<(f64, f64)>>>,  // (x, Cp) pairs
+    pub cp_tolerance: f64,
+}
+```
+
+**Tests:** Self-contained; validates that test data loads and reference values are
+self-consistent
+
+**Estimated effort:** 1 week initial + ongoing
+
+### 5.9 Coordination Protocol
+
+1. **Interface-first (Day 0):** Define shared types in `rustfoil-core` and function
+   signatures in each crate before any agent writes implementation. This is a
+   synchronous 1-day step.
+
+2. **Feature flags:** Use Rust `cfg` features (`multi_body`, `confluent_bl`) so
+   multi-body code compiles alongside single-body without breaking the existing path.
+
+3. **Integration branch:** Each agent works on a feature branch off `multi-body`.
+   Weekly merge into `multi-body` with CI running Agent 6's test suite.
+
+4. **Contract tests:** Each agent writes tests against the interface contracts
+   (not just internal logic). These run on the integration branch and catch
+   mismatches early.
+
+---
+
+## 6. Phased Execution
+
+### Phase 0: Inviscid Multi-Body — weeks
+
+**Agents active:** 1, 4, 6 (parallel)
+
+**Deliverables:**
+- Multi-body influence matrix with K Kutta conditions
+- Straight-line wakes from each TE
+- WASM bindings for multi-element analysis
+- UI: load multiple .dat files, position elements, run inviscid, display per-body Cp
+- Validation: V1, V2, V3 (inviscid), V4 (inviscid)
+
+**Exit criteria:** V4 (30P30N inviscid) — CL within 5% of experiment at α = 0°
+and α = 8°.
+
+**Value:** CL(α) for multi-element configs, Cp distributions, design exploration.
+
+### Phase 1: Independent Viscous — weeks
+
+**Agents active:** 3
+
+**Deliverables:**
+- Per-body BL marching using multi-body inviscid edge velocities
+- Per-body transition prediction
+- No wake/BL interaction (each body sees only its own inviscid Ue)
+
+**Exit criteria:** V5 regression passes (bit-identical single-body); V6 (GA(W)-1
+independent viscous) CL within 3% of experiment at low α.
+
+**Value:** Approximate CD, transition prediction; reasonable for well-separated
+elements.
+
+### Phase 2: Confluent BL + Wake Interaction — months
+
+**Agents active:** 2, 3, 5 (2 starts on Day 1 in parallel with Phase 0)
+
+**Deliverables:**
+- Two-layer BL model in confluent regions
+- Streamline-following multi-body wakes
+- Wake-body impingement detection and outer-layer initialization
+- 6×6 Newton blocks with cross-layer coupling
+
+**Exit criteria:** V8 (30P30N BL profiles) δ* within 20% of experiment; V9 (30P30N
+full polar) CL_max within 5% of experiment.
+
+**Value:** Accurate high-lift analysis with drag prediction.
+
+### Phase 3: Production Hardening — months
+
+**All agents**
+
+**Deliverables:**
+- Robust convergence across the flight envelope (α sweep through stall)
+- Inverse design mode for multi-element (target Cp on each element)
+- Geometry design mode (gap, overlap, deflection as design variables)
+- V10 (NLR 7301 transonic two-element)
+
+**Exit criteria:** V9 + V10 pass; α sweep from −4° to 22° converges without
+manual intervention on 30P30N.
+
+**Value:** Production-quality multi-element analysis and design.
+
+---
+
+## 7. Risk Register
+
+| Risk | Impact | Likelihood | Mitigation |
+|---|---|---|---|
+| Confluent closures don't converge | Phase 2 blocked | Medium | Start with frozen wake (no mixing); add complexity incrementally |
+| Newton convergence degrades with 6×6 blocks | Phase 2 slow/fragile | Medium | Under-relaxation; continuation from Phase 1 solution |
+| Wake impingement geometry edge cases | Phase 2 inaccurate | Medium | Robust streamline tracing; fallback to straight-line wake |
+| 30P30N geometry data not freely available | Validation blocked | Low | Use GA(W)-1 as primary; build synthetic 2-element cases |
+| Performance regression for single-body | User-facing | Low | Feature flags; single-body path unchanged |
+| Matrix size causes interactive lag | UX degradation | Low | O(n³) at n=500 is still ~1ms on modern hardware |
+
+---
+
+## 8. Summary Table
+
+| Component | Difficulty | Effort | Agent | Phase | Blocking? |
+|---|---|---|---|---|---|
+| Core geometry (`rustfoil-core`) | Done | 0 | — | — | No |
+| Inviscid multi-body | Moderate | 1–2 weeks | 1 | 0 | No |
+| Straight-line wakes | Moderate | 1 week | 1 | 0 | No |
+| WASM bindings | Easy | Days | 1 | 0 | No |
+| Data model migration | Moderate | 1 week | 4 | 0 | No |
+| UI for multi-element | Hard | 3–4 weeks | 4 | 0 | No |
+| Independent viscous per body | Moderate | 1–2 weeks | 3 | 1 | No |
+| Confluent BL equations | Very hard | 3–4 weeks | 2 | 2 | For high-lift accuracy |
+| Multi-body Newton coupling | Hard | 2–3 weeks | 3 | 1→2 | For viscous multi-body |
+| Wake-body interaction | Hard | 4–6 weeks | 5 | 2 | For confluent BL |
+| Test and validation data | Easy | 1 week + ongoing | 6 | 0→3 | For confidence |
+
+---
+
+## References
+
+1. Drela, M. "XFOIL: An Analysis and Design System for Low Reynolds Number Airfoils." *Conference on Low Reynolds Number Airfoil Aerodynamics*, 1989.
+2. Drela, M. "Two-Dimensional Transonic Aerodynamic Design and Analysis Using the Euler Equations." PhD Thesis, MIT, 1986. (MSES foundation)
+3. Drela, M. "Design and Optimization Method for Multi-Element Airfoils." *AIAA Paper 93-0969*, 1993.
+4. Chin, V.D. et al. "Flowfield Measurements about a Multi-Element Airfoil at High Reynolds Numbers." *AIAA Paper 93-3137*, 1993. (30P30N primary reference)
+5. McGhee, R.J. and Beasley, W.D. "Low-Speed Aerodynamic Characteristics of a 17-Percent-Thick Airfoil Section Designed for General Aviation Applications." NASA TN D-7428, 1973. (GA(W)-1 geometry)
+6. McGhee, R.J. et al. "Force and Pressure Tests of the GA(W)-1 Airfoil with a 20-Percent Aileron and Pressure Tests with a 30-Percent Fowler Flap." NASA CR-2833, 1977. (GA(W)-1 + Fowler flap data)
+7. Katz, J. and Plotkin, A. *Low-Speed Aerodynamics*. Cambridge University Press, 2nd ed., 2001. (Panel method theory, multi-body formulation Ch. 11)
+8. Rumsey, C.L. et al. "Summary of the First AIAA CFD High-Lift Prediction Workshop." *Journal of Aircraft*, Vol. 48, No. 6, 2011. (30P30N computational benchmark)
