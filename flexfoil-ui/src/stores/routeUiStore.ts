@@ -105,7 +105,7 @@ export const DEFAULT_ROUTE_UI_STATE: RouteUiSnapshot = {
   solvePolarStart: -5,
   solvePolarEnd: 15,
   solvePolarStep: 1,
-  sweepPrimary: { param: 'alpha', start: -5, end: 15, step: 1 },
+  sweepPrimary: { param: 'alpha', start: -5, end: 15, step: 1, rawText: '-5:1:15' },
   sweepSecondary: null,
   polarXAxis: 'alpha',
   polarYAxis: 'cl',

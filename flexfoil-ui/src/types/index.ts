@@ -40,7 +40,17 @@ export interface SweepAxis {
   step: number;
   /** Which flap to vary — only used for flapDeflection / flapHingeX */
   flapId?: string;
+  /** Explicit values override start/end/step when present */
+  values?: number[];
+  /** Raw text from the sweep input field (preserved for lossless editing) */
+  rawText?: string;
 }
+
+/** Surface distribution quantity identifiers */
+export type DistributionQuantity = 'cp' | 'cf' | 'delta_star' | 'theta' | 'h' | 'ue';
+
+/** Surface coordinate for distribution x-axis */
+export type SurfaceCoordinate = 'x' | 'y' | 's';
 export type ChartType = 'scatter' | 'line' | 'bar' | 'histogram';
 export type DataSource = 'full' | 'filtered' | 'aggregated';
 export type AxisScale = 'linear' | 'log';

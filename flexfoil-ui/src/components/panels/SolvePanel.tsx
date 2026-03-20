@@ -14,8 +14,9 @@ import { useCaseLogStore } from '../../stores/caseLogStore';
 import { analyzeAirfoil, analyzeAirfoilInviscid, isWasmReady, type AnalysisResult } from '../../lib/wasm';
 import { useSolverJobStore } from '../../stores/solverJobStore';
 import { runSweep, type SweepConfig, type SweepRunData } from '../../lib/sweepEngine';
-import type { PolarPoint, SweepParam } from '../../types';
+import type { PolarPoint, SweepAxis, SweepParam } from '../../types';
 import type { RunInsert } from '../../lib/storageBackend';
+import { parseSweepValues, formatSweepValues } from '../../lib/parseSweepValues';
 
 type SolveOrCacheResult = {
   result: AnalysisResult | null;
@@ -1309,8 +1310,8 @@ function formatNumericDisplay(v: number): string {
 
 function SweepAxisRow({ label, axis, onUpdate, flaps }: {
   label: string;
-  axis: { param: SweepParam; start: number; end: number; step: number; flapId?: string };
-  onUpdate: (partial: Partial<typeof axis>) => void;
+  axis: SweepAxis;
+  onUpdate: (partial: Partial<SweepAxis>) => void;
   flaps: { id: string; name: string }[];
 }) {
   const options = buildSweepOptions(flaps);
@@ -1319,6 +1320,35 @@ function SweepAxisRow({ label, axis, onUpdate, flaps }: {
   const selectedValue = isFlapParam && axis.flapId
     ? `${axis.param}:${axis.flapId}`
     : axis.param;
+
+  const [text, setText] = useState(
+    axis.rawText ?? `${formatNumericDisplay(axis.start)}:${formatNumericDisplay(axis.step)}:${formatNumericDisplay(axis.end)}`,
+  );
+  const focusedRef = useRef(false);
+
+  useEffect(() => {
+    if (!focusedRef.current) {
+      setText(
+        axis.rawText ?? (axis.values
+          ? formatSweepValues(axis.values)
+          : `${formatNumericDisplay(axis.start)}:${formatNumericDisplay(axis.step)}:${formatNumericDisplay(axis.end)}`),
+      );
+    }
+  }, [axis.rawText, axis.values, axis.start, axis.step, axis.end]);
+
+  const commit = useCallback(() => {
+    focusedRef.current = false;
+    const parsed = parseSweepValues(text);
+    if (parsed.length > 0) {
+      onUpdate({ values: parsed, rawText: text });
+    } else {
+      setText(
+        axis.rawText ?? `${formatNumericDisplay(axis.start)}:${formatNumericDisplay(axis.step)}:${formatNumericDisplay(axis.end)}`,
+      );
+    }
+  }, [text, axis, onUpdate]);
+
+  const count = axis.values?.length ?? Math.max(0, Math.floor(Math.abs(axis.end - axis.start) / (Math.abs(axis.step) || 1)) + 1);
 
   return (
     <div style={{ marginBottom: '8px' }}>
@@ -1330,7 +1360,7 @@ function SweepAxisRow({ label, axis, onUpdate, flaps }: {
             const opt = options.find(o => o.value === e.target.value);
             if (!opt) return;
             const defaults = SWEEP_DEFAULTS[opt.param];
-            onUpdate({ param: opt.param, ...defaults, flapId: opt.flapId });
+            onUpdate({ param: opt.param, ...defaults, flapId: opt.flapId, values: undefined, rawText: undefined });
           }}
           style={{ flex: 1, fontSize: '11px' }}
         >
@@ -1344,19 +1374,24 @@ function SweepAxisRow({ label, axis, onUpdate, flaps }: {
           Define flaps in Geometry Control to enable flap sweeps
         </div>
       )}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px' }}>
-        <div>
-          <label style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Start</label>
-          <NumericTextInput value={axis.start} onCommit={(v) => onUpdate({ start: v })} />
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '2px' }}>
+          <label style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Values</label>
+          <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+            {count} pt{count !== 1 ? 's' : ''}
+          </span>
         </div>
-        <div>
-          <label style={{ fontSize: '9px', color: 'var(--text-muted)' }}>End</label>
-          <NumericTextInput value={axis.end} onCommit={(v) => onUpdate({ end: v })} />
-        </div>
-        <div>
-          <label style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Step</label>
-          <NumericTextInput value={axis.step} onCommit={(v) => onUpdate({ step: v })} min={0.001} />
-        </div>
+        <input
+          type="text"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onFocus={() => { focusedRef.current = true; }}
+          onBlur={commit}
+          onKeyDown={(e) => { if (e.key === 'Enter') commit(); }}
+          placeholder="e.g. -5:1:15 or 5e5, 1e6, 3e6"
+          title="start:step:end for ranges, comma-separated for explicit values, or mix both"
+          style={{ width: '100%', fontSize: '11px', fontFamily: 'var(--font-mono)' }}
+        />
       </div>
     </div>
   );

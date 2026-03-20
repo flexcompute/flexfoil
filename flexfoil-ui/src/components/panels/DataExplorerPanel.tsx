@@ -21,9 +21,11 @@ import {
   type GridApi,
   type CellSelectionOptions,
   type IRowNode,
+  type SelectionChangedEvent,
 } from 'ag-grid-community';
 import Plot from 'react-plotly.js';
 import { useRunStore } from '../../stores/runStore';
+import { useDistributionStore } from '../../stores/distributionStore';
 import { AUTO_GROUP_KEY, useRouteUiStore } from '../../stores/routeUiStore';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useOnboarding } from '../../onboarding/useOnboarding';
@@ -126,6 +128,20 @@ const RUN_HOVER_TEMPLATE = [
 function buildColumnDefs(): ColDef<RunRow>[] {
   const agg = ALL_AGG_FUNC_NAMES;
   return [
+    {
+      colId: 'pin',
+      headerName: '',
+      width: 40,
+      maxWidth: 40,
+      checkboxSelection: true,
+      headerCheckboxSelection: true,
+      pinned: 'left',
+      sortable: false,
+      filter: false,
+      resizable: false,
+      suppressHeaderMenuButton: true,
+      lockPosition: true,
+    },
     { field: 'id', headerName: 'ID', width: 70, hide: true },
     { field: 'airfoil_name', headerName: 'Airfoil', pinned: 'left', width: 140, editable: true, enableRowGroup: true, chartDataType: 'category' as const },
     { field: 'alpha', headerName: 'α (°)', width: 90, chartDataType: 'series' as const, aggFunc: 'avg', allowedAggFuncs: agg, valueFormatter: p => typeof p.value === 'number' ? p.value.toFixed(2) : '' },
@@ -229,6 +245,8 @@ export function DataExplorerPanel() {
   const smartGroupActive = useRouteUiStore((state) => state.dataExplorerSmartGroup);
   const setSmartGroupActive = useRouteUiStore((state) => state.setDataExplorerSmartGroup);
 
+  const setPinned = useDistributionStore((s) => s.setPinned);
+
   // ── AG Grid refs & config ──
   const gridRef = useRef<AgGridReact<RunRow>>(null);
   const apiRef = useRef<GridApi<RunRow> | null>(null);
@@ -288,6 +306,14 @@ export function DataExplorerPanel() {
       }
     }
   }, [renameRun]);
+
+  const onSelectionChanged = useCallback((e: SelectionChangedEvent<RunRow>) => {
+    const selectedIds: number[] = [];
+    e.api.getSelectedNodes().forEach((node) => {
+      if (node.data) selectedIds.push(node.data.id);
+    });
+    setPinned(selectedIds);
+  }, [setPinned]);
 
   const onGroupChanged = useCallback(() => {
     const api = apiRef.current;
@@ -862,6 +888,9 @@ export function DataExplorerPanel() {
             onCellValueChanged={onCellValueChanged}
             onColumnRowGroupChanged={onGroupChanged}
             onModelUpdated={onGroupChanged}
+            onSelectionChanged={onSelectionChanged}
+            rowSelection="multiple"
+            suppressRowClickSelection
             enableCharts
             enableAdvancedFilter
             cellSelection={cellSelection}

@@ -12,6 +12,7 @@ export const PANELS = [
   { id: 'data-explorer', name: 'Data Explorer', component: 'data-explorer' },
   { id: 'plot-builder', name: 'Plot Builder', component: 'plot-builder' },
   { id: 'case-logs', name: 'Case Logs', component: 'case-logs' },
+  { id: 'distributions', name: 'Distributions', component: 'distributions' },
 ] as const;
 
 export type PanelId = (typeof PANELS)[number]['id'];
@@ -46,6 +47,7 @@ export const defaultLayoutJson: IJsonModel = {
               { type: 'tab', id: 'polar', name: 'Polar Plot', component: 'polar' },
               { type: 'tab', id: 'plot-builder', name: 'Plot Builder', component: 'plot-builder' },
               { type: 'tab', id: 'data-explorer', name: 'Data Explorer', component: 'data-explorer' },
+              { type: 'tab', id: 'distributions', name: 'Distributions', component: 'distributions' },
               { type: 'tab', id: 'case-logs', name: 'Case Logs', component: 'case-logs' },
             ],
           },

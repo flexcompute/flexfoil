@@ -81,6 +81,8 @@ function isGeometryParam(p: SweepParam): boolean {
 }
 
 function generateValues(axis: SweepAxis): number[] {
+  if (axis.values && axis.values.length > 0) return axis.values;
+
   const values: number[] = [];
   const step = Math.abs(axis.step) || 1;
   const direction = axis.end >= axis.start ? 1 : -1;
