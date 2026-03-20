@@ -231,25 +231,6 @@ function evaluateCubicSpline(coeffs: SplineCoefficients, targetX: number): numbe
 }
 
 /**
- * Interpolate y values at given x positions using cubic spline.
- * This provides smooth C2-continuous interpolation through the control points.
- * Exported for use in other modules that need spline interpolation.
- */
-function interpolateYSpline(points: { x: number; y: number }[], targetX: number): number {
-  if (points.length === 0) return 0;
-  if (points.length === 1) return points[0].y;
-  if (points.length === 2) {
-    // Linear for 2 points
-    return interpolateYLinear(points, targetX);
-  }
-  
-  const coeffs = buildCubicSplineCoeffs(points);
-  if (!coeffs) return 0;
-  
-  return evaluateCubicSpline(coeffs, targetX);
-}
-
-/**
  * Legacy alias for linear interpolation (used in decomposition).
  */
 const interpolateY = interpolateYLinear;
@@ -469,52 +450,6 @@ export function reconstructFromCamberThicknessSpline(
 }
 
 /**
- * Scale the thickness of an airfoil while preserving the camber line.
- * 
- * @param coords - Original airfoil coordinates
- * @param factor - Scale factor (1.0 = original, 2.0 = double thickness)
- * @returns Scaled airfoil coordinates
- */
-function scaleThickness(coords: AirfoilPoint[], factor: number): AirfoilPoint[] {
-  if (coords.length < 5 || factor <= 0) {
-    return coords;
-  }
-  
-  const { camber, thickness } = decomposeToCamberThickness(coords);
-  
-  // Scale thickness
-  const scaledThickness = thickness.map(p => ({
-    x: p.x,
-    t: p.t * factor,
-  }));
-  
-  return reconstructFromCamberThickness(camber, scaledThickness, coords.length);
-}
-
-/**
- * Scale the camber of an airfoil while preserving the thickness distribution.
- * 
- * @param coords - Original airfoil coordinates
- * @param factor - Scale factor (0.0 = symmetric, 1.0 = original, 2.0 = double camber)
- * @returns Scaled airfoil coordinates
- */
-function scaleCamber(coords: AirfoilPoint[], factor: number): AirfoilPoint[] {
-  if (coords.length < 5) {
-    return coords;
-  }
-  
-  const { camber, thickness } = decomposeToCamberThickness(coords);
-  
-  // Scale camber
-  const scaledCamber = camber.map(p => ({
-    x: p.x,
-    y: p.y * factor,
-  }));
-  
-  return reconstructFromCamberThickness(scaledCamber, thickness, coords.length);
-}
-
-/**
  * Apply both thickness and camber scaling.
  * 
  * The algorithm preserves leading edge geometry by:
@@ -638,36 +573,6 @@ export function createThicknessControlPoints(
   }
   
   return points;
-}
-
-/**
- * Reconstruct airfoil from camber and thickness control points.
- * Uses cubic spline interpolation through the control points for smooth curves.
- * 
- * @param camberPoints - Camber control points
- * @param thicknessPoints - Thickness control points  
- * @param nPoints - Number of output points
- * @returns Airfoil coordinates
- */
-function reconstructFromControlPoints(
-  camberPoints: CamberControlPoint[],
-  thicknessPoints: ThicknessControlPoint[],
-  nPoints: number = 161
-): AirfoilPoint[] {
-  if (camberPoints.length < 2 || thicknessPoints.length < 2) {
-    return [];
-  }
-  
-  // Sort control points by x
-  const sortedCamber = [...camberPoints].sort((a, b) => a.x - b.x);
-  const sortedThickness = [...thicknessPoints].sort((a, b) => a.x - b.x);
-  
-  // Convert to simple arrays for reconstruction
-  const camber = sortedCamber.map(p => ({ x: p.x, y: p.y }));
-  const thickness = sortedThickness.map(p => ({ x: p.x, t: p.t }));
-  
-  // Use spline interpolation for smooth curves through sparse control points
-  return reconstructFromCamberThicknessSpline(camber, thickness, nPoints);
 }
 
 /**

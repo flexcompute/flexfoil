@@ -42,6 +42,7 @@ describe('routeState', () => {
         spacingPanelMode: 'advanced',
         sspInterpolation: 'linear',
         sspVisualization: 'foil',
+        geometryDesign: { flaps: [], teGap: 0, teGapBlend: 0.8, leRadiusFactor: 1.0 },
       },
       visualization: {
         ...DEFAULT_VISUALIZATION_STATE,
@@ -99,6 +100,7 @@ describe('routeState', () => {
         spacingPanelMode: 'simple',
         sspInterpolation: 'linear',
         sspVisualization: 'plot',
+        geometryDesign: { flaps: [], teGap: 0, teGapBlend: 0.8, leRadiusFactor: 1.0 },
       },
       visualization: {
         ...DEFAULT_VISUALIZATION_STATE,
@@ -189,6 +191,7 @@ describe('routeState', () => {
         spacingPanelMode: 'simple',
         sspInterpolation: 'linear',
         sspVisualization: 'plot',
+        geometryDesign: { flaps: [], teGap: 0, teGapBlend: 0.8, leRadiusFactor: 1.0 },
       },
       visualization: DEFAULT_VISUALIZATION_STATE,
       ui: DEFAULT_ROUTE_UI_STATE,

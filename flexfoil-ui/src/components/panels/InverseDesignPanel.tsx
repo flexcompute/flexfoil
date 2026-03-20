@@ -7,10 +7,9 @@
 
 import React, { useRef, useCallback, useMemo, useState, useEffect } from 'react';
 import { useAirfoilStore } from '../../stores/airfoilStore';
-import { useVisualizationStore } from '../../stores/visualizationStore';
-import { analyzeAirfoil, analyzeAirfoilInviscid, runInverseDesign, runFullInverseDesign, repanelXfoil, isWasmReady } from '../../lib/wasm';
+import { analyzeAirfoil, analyzeAirfoilInviscid, runInverseDesign, runFullInverseDesign } from '../../lib/wasm';
 import { useSolverJobStore } from '../../stores/solverJobStore';
-import type { InverseDesignSurfaceTarget, AirfoilPoint } from '../../types';
+import type { InverseDesignSurfaceTarget } from '../../types';
 
 type InverseMethod = 'qdes' | 'mdes';
 
@@ -78,7 +77,7 @@ function polyline(xs: number[], ys: number[]): string {
 }
 
 const TargetCurveEditor: React.FC<TargetCurveEditorProps> = ({
-  surface, target, achieved, currentX, currentValues, onChange, color, achievedColor,
+  surface, target, achieved, currentX, currentValues, onChange: _onChange, color, achievedColor,
 }) => {
   if (!target) return null;
 
@@ -138,13 +137,13 @@ export function InverseDesignPanel() {
   const [mdesSymmetric, setMdesSymmetric] = useState(false);
   const [mdesFilter, setMdesFilter] = useState(0.0);
   const [mdesSolving, setMdesSolving] = useState(false);
-  const [mdesResult, setMdesResultLocal] = useState<{ x: number[]; y: number[] } | null>(null);
+  const [_mdesResult, setMdesResultLocal] = useState<{ x: number[]; y: number[] } | null>(null);
 
   const {
     panels, displayAlpha, reynolds, mach, ncrit, maxIterations, solverMode,
     inverseDesign, setInverseDesignTarget, setInverseDesignTargetKind,
     setInverseDesignSolving, setInverseDesignResult, setInverseDesignMaxIterations,
-    setInverseDesignDamping, applyInverseDesignResult, clearInverseDesign,
+    setInverseDesignDamping, applyInverseDesignResult,
   } = useAirfoilStore();
 
   const inverseDesignRef = useRef(inverseDesign);

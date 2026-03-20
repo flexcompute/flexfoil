@@ -31,8 +31,6 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { useOnboarding } from '../../onboarding/useOnboarding';
 import type { DataSource, RunRow } from '../../types';
 import {
-  ENCODING_PLOT_FIELDS,
-  NUMERIC_PLOT_FIELDS,
   getPlotFieldLabel,
   isNumericPlotField,
 } from '../../lib/plotFields';

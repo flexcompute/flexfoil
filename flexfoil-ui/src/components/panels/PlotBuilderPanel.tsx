@@ -5,9 +5,6 @@ import { AUTO_GROUP_KEY, useRouteUiStore } from '../../stores/routeUiStore';
 import { useTheme } from '../../contexts/ThemeContext';
 import { detectSmartRunGroups } from '../../lib/polarDetection';
 import {
-  ENCODING_PLOT_FIELDS,
-  NUMERIC_PLOT_FIELDS,
-  getPlotFieldLabel,
   isNumericPlotField,
 } from '../../lib/plotFields';
 import { buildMarkerEncoding, colorForKey, colorForValue } from '../../lib/plotStyling';
