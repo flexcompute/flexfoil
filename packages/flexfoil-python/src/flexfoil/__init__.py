@@ -12,12 +12,14 @@ flexfoil — Airfoil analysis in Python with a local web UI.
     flexfoil.serve()   # opens the web UI at localhost:8420
 """
 
-from flexfoil.airfoil import Airfoil
+from flexfoil.airfoil import Airfoil, BLResult, SolveResult
 from flexfoil.database import RunDatabase, get_database
 from flexfoil.polar import PolarResult
 
 __all__ = [
     "Airfoil",
+    "BLResult",
+    "SolveResult",
     "RunDatabase",
     "PolarResult",
     "naca",

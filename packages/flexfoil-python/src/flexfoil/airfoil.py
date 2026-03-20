@@ -11,6 +11,7 @@ from flexfoil._rustfoil import (
     analyze_inviscid,
     deflect_flap,
     generate_naca4,
+    get_bl_distribution,
     parse_dat_file,
     repanel_xfoil,
 )
@@ -37,6 +38,8 @@ class SolveResult:
     ncrit: float
     success: bool
     error: str | None = None
+    cp: list[float] | None = None
+    cp_x: list[float] | None = None
 
     @property
     def ld(self) -> float | None:
@@ -53,6 +56,36 @@ class SolveResult:
             f"SolveResult(α={self.alpha:.2f}°, Re={self.reynolds:.0e}, "
             f"CL={self.cl:.4f}, CD={self.cd:.5f}, CM={self.cm:.4f}, {conv})"
         )
+
+
+@dataclass
+class BLResult:
+    """Boundary-layer distribution result (viscous only)."""
+
+    success: bool
+    converged: bool = False
+    error: str | None = None
+    x_tr_upper: float = 1.0
+    x_tr_lower: float = 1.0
+    x_upper: list[float] = field(default_factory=list)
+    x_lower: list[float] = field(default_factory=list)
+    cf_upper: list[float] = field(default_factory=list)
+    cf_lower: list[float] = field(default_factory=list)
+    delta_star_upper: list[float] = field(default_factory=list)
+    delta_star_lower: list[float] = field(default_factory=list)
+    theta_upper: list[float] = field(default_factory=list)
+    theta_lower: list[float] = field(default_factory=list)
+    h_upper: list[float] = field(default_factory=list)
+    h_lower: list[float] = field(default_factory=list)
+    ue_upper: list[float] = field(default_factory=list)
+    ue_lower: list[float] = field(default_factory=list)
+
+    def __repr__(self) -> str:
+        if not self.success:
+            return f"BLResult(success=False, error={self.error!r})"
+        conv = "converged" if self.converged else "NOT converged"
+        n = len(self.x_upper) + len(self.x_lower)
+        return f"BLResult({conv}, {n} stations, xtr_u={self.x_tr_upper:.3f}, xtr_l={self.x_tr_lower:.3f})"
 
 
 class Airfoil:
@@ -190,6 +223,8 @@ class Airfoil:
 
         if viscous:
             raw = analyze_faithful(coords, alpha, Re, mach, ncrit, max_iter)
+            # For viscous, also get Cp from inviscid pass
+            raw_inv = analyze_inviscid(coords, alpha)
             result = SolveResult(
                 cl=raw.get("cl", 0.0),
                 cd=raw.get("cd", 0.0),
@@ -205,6 +240,8 @@ class Airfoil:
                 ncrit=ncrit,
                 success=raw.get("success", False),
                 error=raw.get("error"),
+                cp=raw_inv.get("cp") if raw_inv.get("success") else None,
+                cp_x=raw_inv.get("cp_x") if raw_inv.get("success") else None,
             )
         else:
             raw = analyze_inviscid(coords, alpha)
@@ -223,6 +260,8 @@ class Airfoil:
                 ncrit=0.0,
                 success=raw.get("success", False),
                 error=raw.get("error"),
+                cp=raw.get("cp"),
+                cp_x=raw.get("cp_x"),
             )
 
         if store and result.success:
@@ -232,55 +271,78 @@ class Airfoil:
 
     def polar(
         self,
-        alpha: tuple[float, float, float] = (-5, 15, 0.5),
+        alpha: tuple[float, float, float] | list[float] = (-5, 15, 0.5),
         *,
-        Re: float = 1e6,
-        mach: float = 0.0,
-        ncrit: float = 9.0,
+        Re: float | list[float] = 1e6,
+        mach: float | list[float] = 0.0,
+        ncrit: float | list[float] = 9.0,
         max_iter: int = 100,
         viscous: bool = True,
         store: bool = True,
         parallel: bool = True,
-    ) -> PolarResult:
-        """Run a polar sweep over a range of angles of attack.
+    ) -> PolarResult | list[PolarResult]:
+        """Run a polar sweep over angles of attack, optionally with matrix sweeps.
 
         Parameters
         ----------
-        alpha : (start, end, step) in degrees
-        Re, mach, ncrit, max_iter : solver parameters
+        alpha : (start, end, step), or an explicit list of angles in degrees
+        Re : Reynolds number, or a list for matrix sweep
+        mach : Mach number, or a list for matrix sweep
+        ncrit : e^N criterion, or a list for matrix sweep
+        max_iter : maximum Newton iterations
         viscous : if False, inviscid only
         store : if True, cache each point in the local database
         parallel : if True (default), solve all alphas in parallel via rayon
+
+        Returns
+        -------
+        PolarResult if Re/mach/ncrit are scalars;
+        list[PolarResult] if any are lists (one per outer-product combination).
         """
         from flexfoil.polar import PolarResult
 
         import numpy as np
 
-        start, end, step = alpha
-        alphas = np.arange(start, end + step * 0.5, step)
-
-        if parallel:
-            results = self._polar_batch(
-                [float(a) for a in alphas],
-                Re=Re, mach=mach, ncrit=ncrit, max_iter=max_iter,
-                viscous=viscous, store=store,
-            )
+        if isinstance(alpha, (list, np.ndarray)):
+            alphas = [float(a) for a in alpha]
         else:
-            results = [
-                self.solve(
-                    float(a), Re=Re, mach=mach, ncrit=ncrit,
-                    max_iter=max_iter, viscous=viscous, store=store,
-                )
-                for a in alphas
-            ]
+            start, end, step = alpha
+            alphas = [float(a) for a in np.arange(start, end + step * 0.5, step)]
 
-        return PolarResult(
-            airfoil_name=self.name,
-            reynolds=Re,
-            mach=mach,
-            ncrit=ncrit,
-            results=results,
-        )
+        re_list = Re if isinstance(Re, list) else [Re]
+        mach_list = mach if isinstance(mach, list) else [mach]
+        ncrit_list = ncrit if isinstance(ncrit, list) else [ncrit]
+
+        is_matrix = isinstance(Re, list) or isinstance(mach, list) or isinstance(ncrit, list)
+
+        all_polars: list[PolarResult] = []
+        for re_val in re_list:
+            for mach_val in mach_list:
+                for ncrit_val in ncrit_list:
+                    if parallel:
+                        results = self._polar_batch(
+                            alphas,
+                            Re=re_val, mach=mach_val, ncrit=ncrit_val,
+                            max_iter=max_iter, viscous=viscous, store=store,
+                        )
+                    else:
+                        results = [
+                            self.solve(
+                                a, Re=re_val, mach=mach_val, ncrit=ncrit_val,
+                                max_iter=max_iter, viscous=viscous, store=store,
+                            )
+                            for a in alphas
+                        ]
+
+                    all_polars.append(PolarResult(
+                        airfoil_name=self.name,
+                        reynolds=re_val,
+                        mach=mach_val,
+                        ncrit=ncrit_val,
+                        results=results,
+                    ))
+
+        return all_polars if is_matrix else all_polars[0]
 
     def _polar_batch(
         self,
@@ -349,6 +411,51 @@ class Airfoil:
                     self._store_run(r, viscous=viscous, max_iter=max_iter)
 
         return results
+
+    def bl_distribution(
+        self,
+        alpha: float = 0.0,
+        *,
+        Re: float = 1e6,
+        mach: float = 0.0,
+        ncrit: float = 9.0,
+        max_iter: int = 100,
+    ) -> BLResult:
+        """Compute boundary-layer distributions (viscous only).
+
+        Returns a BLResult with per-surface arrays of x, Cf, delta_star,
+        theta, H, and ue for upper and lower surfaces.
+        """
+        coords = self._flat_panels()
+        raw = get_bl_distribution(coords, alpha, Re, mach, ncrit, max_iter)
+
+        if not raw.get("success", False):
+            return BLResult(
+                success=False,
+                error=raw.get("error"),
+                converged=False,
+                x_tr_upper=1.0,
+                x_tr_lower=1.0,
+            )
+
+        return BLResult(
+            success=True,
+            converged=raw.get("converged", False),
+            x_tr_upper=raw.get("x_tr_upper", 1.0),
+            x_tr_lower=raw.get("x_tr_lower", 1.0),
+            x_upper=raw.get("x_upper", []),
+            x_lower=raw.get("x_lower", []),
+            cf_upper=raw.get("cf_upper", []),
+            cf_lower=raw.get("cf_lower", []),
+            delta_star_upper=raw.get("delta_star_upper", []),
+            delta_star_lower=raw.get("delta_star_lower", []),
+            theta_upper=raw.get("theta_upper", []),
+            theta_lower=raw.get("theta_lower", []),
+            h_upper=raw.get("h_upper", []),
+            h_lower=raw.get("h_lower", []),
+            ue_upper=raw.get("ue_upper", []),
+            ue_lower=raw.get("ue_lower", []),
+        )
 
     def _store_run(self, result: SolveResult, *, viscous: bool, max_iter: int) -> None:
         """Insert a run into the local database."""
