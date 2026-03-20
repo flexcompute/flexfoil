@@ -316,10 +316,12 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
   // Delegated click handler for "Show Panel" buttons injected into tour popovers.
   // Registered on `window` (not document) in capture phase so it fires BEFORE
   // driver.js's document-level capture handlers which call stopImmediatePropagation.
+  // Also intercepts pointerdown to prevent driver.js from killing the pointer
+  // event chain before click can fire.
   useEffect(() => {
     if (!isActive) return;
 
-    const handleShowPanel = (e: MouseEvent) => {
+    const handleShowPanelClick = (e: Event) => {
       const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-open-panel]');
       if (!btn) return;
       e.stopPropagation();
@@ -332,8 +334,25 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
       }
     };
 
-    window.addEventListener('click', handleShowPanel, true);
-    return () => window.removeEventListener('click', handleShowPanel, true);
+    const eatPointerOnBtn = (e: Event) => {
+      const btn = (e.target as HTMLElement).closest?.('[data-open-panel]');
+      if (!btn) return;
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+    };
+
+    window.addEventListener('click', handleShowPanelClick, true);
+    window.addEventListener('pointerdown', eatPointerOnBtn, true);
+    window.addEventListener('pointerup', eatPointerOnBtn, true);
+    window.addEventListener('mousedown', eatPointerOnBtn, true);
+    window.addEventListener('mouseup', eatPointerOnBtn, true);
+    return () => {
+      window.removeEventListener('click', handleShowPanelClick, true);
+      window.removeEventListener('pointerdown', eatPointerOnBtn, true);
+      window.removeEventListener('pointerup', eatPointerOnBtn, true);
+      window.removeEventListener('mousedown', eatPointerOnBtn, true);
+      window.removeEventListener('mouseup', eatPointerOnBtn, true);
+    };
   }, [isActive]);
 
   // Cleanup on unmount
