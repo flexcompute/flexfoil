@@ -5,7 +5,7 @@
  * Runs are pinned via checkbox selection in the Data Explorer table.
  */
 
-import { useMemo, useCallback, useRef, useEffect } from 'react';
+import { useMemo, useRef, useEffect } from 'react';
 import Plot from 'react-plotly.js';
 import { useDistributionStore } from '../../stores/distributionStore';
 import { useRunStore } from '../../stores/runStore';
