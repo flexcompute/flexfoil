@@ -49,6 +49,16 @@ export const AUTO_GROUP_INVARIANT_FIELDS = PLOT_FIELDS.filter(
   (field) => field.autoGroupInvariant,
 ).map((field) => field.key);
 
+/** All solver input parameters that could be invariant OR swept.
+ *  The grouping logic excludes whichever one is on the X-axis. */
+export const ALL_INPUT_PARAMETER_FIELDS: (keyof RunRow)[] = [
+  'airfoil_name', 'airfoil_hash', 'alpha',
+  'reynolds', 'mach', 'ncrit',
+  'n_panels', 'max_iter',
+  'flap_deflection', 'flap_hinge_x',
+  'solver_mode',
+];
+
 export function getPlotFieldMeta(key: keyof RunRow): PlotFieldMeta | undefined {
   return PLOT_FIELDS.find((field) => field.key === key);
 }

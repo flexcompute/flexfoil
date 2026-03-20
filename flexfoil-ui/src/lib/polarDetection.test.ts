@@ -265,4 +265,77 @@ describe('detectSmartRunGroups', () => {
     });
     expect(groups).toHaveLength(1);
   });
+
+  it('keeps non-uniform alpha sweep as one group', () => {
+    // Simulates "5:1:11, 11.11, 15:1:28" — should NOT be split
+    const alphas = [5, 6, 7, 8, 9, 10, 11, 11.11, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28];
+    const rows = alphas.map((a, i) => makeRow({ id: i, alpha: a }));
+    const groups = detectSmartRunGroups(rows, {
+      sortField: 'alpha',
+      plottedFields: ['alpha', 'cl'],
+    });
+    expect(groups).toHaveLength(1);
+    expect(groups[0].rows).toHaveLength(alphas.length);
+  });
+
+  it('groups Re sweep correctly when X-axis is reynolds', () => {
+    // Sweep over Re at fixed alpha — should be one group
+    const rows = [
+      makeRow({ id: 1, alpha: 5, reynolds: 1e5 }),
+      makeRow({ id: 2, alpha: 5, reynolds: 5e5 }),
+      makeRow({ id: 3, alpha: 5, reynolds: 1e6 }),
+      makeRow({ id: 4, alpha: 5, reynolds: 3e6 }),
+    ];
+    const groups = detectSmartRunGroups(rows, {
+      sortField: 'reynolds',
+      plottedFields: ['reynolds', 'cl'],
+    });
+    expect(groups).toHaveLength(1);
+    expect(groups[0].rows.map(r => r.reynolds)).toEqual([1e5, 5e5, 1e6, 3e6]);
+  });
+
+  it('separates Re sweeps at different alphas when X-axis is reynolds', () => {
+    const rows = [
+      makeRow({ id: 1, alpha: 0, reynolds: 1e5 }),
+      makeRow({ id: 2, alpha: 0, reynolds: 1e6 }),
+      makeRow({ id: 3, alpha: 5, reynolds: 1e5 }),
+      makeRow({ id: 4, alpha: 5, reynolds: 1e6 }),
+    ];
+    const groups = detectSmartRunGroups(rows, {
+      sortField: 'reynolds',
+      plottedFields: ['reynolds', 'cl'],
+    });
+    expect(groups).toHaveLength(2);
+  });
+
+  it('handles matrix sweep (alpha x Re) with alpha on X-axis', () => {
+    const rows = [
+      makeRow({ id: 1, alpha: 0, reynolds: 1e6 }),
+      makeRow({ id: 2, alpha: 5, reynolds: 1e6 }),
+      makeRow({ id: 3, alpha: 10, reynolds: 1e6 }),
+      makeRow({ id: 4, alpha: 0, reynolds: 2e6 }),
+      makeRow({ id: 5, alpha: 5, reynolds: 2e6 }),
+      makeRow({ id: 6, alpha: 10, reynolds: 2e6 }),
+    ];
+    const groups = detectSmartRunGroups(rows, {
+      sortField: 'alpha',
+      plottedFields: ['alpha', 'cl'],
+    });
+    expect(groups).toHaveLength(2);
+    expect(groups.map(g => g.label).sort()).toEqual(['Re=1M', 'Re=2M']);
+  });
+
+  it('non-uniform Re sweep is kept as one group', () => {
+    // Explicit Re values like [5e5, 1e6, 3e6] — sparse, should not be split
+    const rows = [
+      makeRow({ id: 1, alpha: 5, reynolds: 5e5 }),
+      makeRow({ id: 2, alpha: 5, reynolds: 1e6 }),
+      makeRow({ id: 3, alpha: 5, reynolds: 3e6 }),
+    ];
+    const groups = detectSmartRunGroups(rows, {
+      sortField: 'reynolds',
+      plottedFields: ['reynolds', 'cd'],
+    });
+    expect(groups).toHaveLength(1);
+  });
 });
