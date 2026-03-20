@@ -18,6 +18,7 @@ import { tours, type TourId, type TourStep } from './tours';
 import { getChallenge, isPanelVisible, isElementVisible, getPanelDisplayName, getParentPanel, buildElementNotVisibleHTML, type Challenge } from './challenges';
 import { markTourComplete, hasCompletedTour as checkTourCompleted, resetOnboarding, saveTourProgress, getTourProgress, clearTourProgress, hasTourProgress } from './storage';
 import { useLayout } from '../contexts/LayoutContext';
+import { useRouteUiStore } from '../stores/routeUiStore';
 
 export interface OnboardingContextType {
   /** Start a specific tour (resumes from last position unless fromBeginning=true) */
@@ -49,12 +50,14 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
   const challengeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentChallengeRef = useRef<Challenge | null>(null);
   
-  // Get layout context for panel focusing.
-  // Ref avoids re-subscribing the capture-phase click listener (which must
-  // stay registered before driver.js's own listener to win the race).
+  // Use the store-based approach to open panels. This triggers a useEffect in
+  // DockingLayout that calls handleOpenPanel/handleRestorePanel with its own
+  // up-to-date model reference, avoiding stale closures in LayoutContext.
   const { openPanel } = useLayout();
-  const openPanelRef = useRef(openPanel);
-  openPanelRef.current = openPanel;
+  const focusPanel = useCallback((panelId: string) => {
+    openPanel(panelId);
+    useRouteUiStore.getState().applyRouteActivePanel(panelId as any);
+  }, [openPanel]);
 
   // Clean up challenge polling
   const clearChallengePolling = useCallback(() => {
@@ -156,7 +159,7 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
         
         // Focus panel if specified or detected (brings tab to front)
         if (parentPanel) {
-          openPanel(parentPanel);
+          focusPanel(parentPanel);
         }
         
         // Run onBeforeHighlight callback if provided
@@ -311,7 +314,7 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
     });
 
     return driverRef.current;
-  }, [clearChallengePolling, buildChallengeHTML, openPanel]);
+  }, [clearChallengePolling, buildChallengeHTML, focusPanel]);
 
   // Delegated click handler for "Show Panel" buttons injected into tour popovers.
   // Registered on `window` (not document) in capture phase so it fires BEFORE
@@ -329,8 +332,8 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
       e.preventDefault();
       const panelId = btn.dataset.openPanel;
       if (panelId) {
-        openPanelRef.current(panelId);
-        setTimeout(() => driverRef.current?.refresh(), 150);
+        useRouteUiStore.getState().applyRouteActivePanel(panelId as any);
+        setTimeout(() => driverRef.current?.refresh(), 200);
       }
     };
 
