@@ -159,24 +159,29 @@ export function getParentPanel(selector: string): string | null {
 }
 
 /**
- * Build HTML for element not visible warning
+ * Build HTML for element not visible warning with actionable "Show Panel" button
+ * and an animated cursor to draw attention.
  */
 export function buildElementNotVisibleHTML(panelId: string | null): string {
   const panelName = panelId ? getPanelDisplayName(panelId) : 'the required panel';
-  
+  const dataAttr = panelId ? ` data-open-panel="${panelId}"` : '';
+
+  const cursorSvg = `<svg class="tour-animated-cursor" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M5 3l14 8-6.5 1.5L11 19z" fill="currentColor" stroke="var(--bg-primary, #1a1a1a)" stroke-width="1.2" stroke-linejoin="round"/>
+  </svg>`;
+
   return `
     <div class="tour-element-warning">
       <div class="tour-element-warning__header">
-        <span class="tour-element-warning__icon">⚠</span>
-        <span class="tour-element-warning__label">Element not visible</span>
+        ${cursorSvg}
+        <span class="tour-element-warning__label">Panel hidden</span>
       </div>
       <div class="tour-element-warning__message">
-        The element for this step is hidden. Please open the <strong>${panelName}</strong> panel:
-        <ul style="margin: 8px 0 0 0; padding-left: 20px;">
-          <li>Click on the <strong>${panelName}</strong> tab if you see it</li>
-          <li>Or use <strong>Window</strong> menu → <strong>${panelName}</strong></li>
-        </ul>
+        The <strong>${panelName}</strong> panel needs to be visible for this step.
       </div>
+      <button class="tour-show-panel-btn"${dataAttr}>
+        Show ${panelName}
+      </button>
     </div>
   `;
 }

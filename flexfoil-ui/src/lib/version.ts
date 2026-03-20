@@ -29,6 +29,14 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.1.2',
+    date: '2026-03-20',
+    items: [
+      { category: 'fixed', text: 'Tutorial no longer dismisses when clicking on panels or the overlay' },
+      { category: 'changed', text: 'Hidden panel warning in tutorials replaced with a "Show Panel" button and animated cursor' },
+    ],
+  },
+  {
     version: '1.1.1',
     date: '2026-03-19',
     items: [

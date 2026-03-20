@@ -130,6 +130,7 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
       doneBtnText: 'Done',
       progressText: '{{current}} of {{total}}',
       allowClose: true,
+      overlayClickBehavior: () => {},
       overlayColor: isDark ? 'rgba(0, 0, 0, 0.75)' : 'rgba(0, 0, 0, 0.5)',
       stagePadding: 8,
       stageRadius: 8,
@@ -307,6 +308,27 @@ export function OnboardingProvider({ children }: OnboardingProviderProps) {
 
     return driverRef.current;
   }, [clearChallengePolling, buildChallengeHTML, openPanel]);
+
+  // Delegated click handler for "Show Panel" buttons injected into tour popovers.
+  // Active only while a tour is running so it doesn't interfere otherwise.
+  useEffect(() => {
+    if (!isActive) return;
+
+    const handleShowPanel = (e: MouseEvent) => {
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-open-panel]');
+      if (!btn) return;
+      e.stopPropagation();
+      const panelId = btn.dataset.openPanel;
+      if (panelId) {
+        openPanel(panelId);
+        // After opening, give layout a moment to settle then refresh the highlight
+        setTimeout(() => driverRef.current?.refresh(), 150);
+      }
+    };
+
+    document.addEventListener('click', handleShowPanel, true);
+    return () => document.removeEventListener('click', handleShowPanel, true);
+  }, [isActive, openPanel]);
 
   // Cleanup on unmount
   useEffect(() => {
