@@ -113,9 +113,14 @@ def generate_csm(
     # Extrude along y-axis
     lines.append(f"extrude 0 {span:.10f} 0")
 
-    # Tag boundaries
-    lines.append('select face')
-    lines.append('attribute groupName $airfoil')
+    # Tag airfoil surface faces (lateral faces of the extrusion)
+    # After extrude, the body has 5 faces:
+    #   - 3 lateral faces (upper surface, lower surface, TE) → airfoil wall
+    #   - 2 end caps (y=0 and y=span) → these get deleted by AutomatedFarfield
+    # We tag only the lateral faces as "airfoil"
+    lines.append("select face")
+    lines.append("attribute groupName $airfoil")
+    lines.append("attribute faceName $airfoil")
 
     lines.append("")
     lines.append("end")

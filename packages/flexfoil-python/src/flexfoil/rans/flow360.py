@@ -76,7 +76,7 @@ def _submit_modern(
     draft = fl.VolumeMesh.from_file(
         str(ugrid_path),
         project_name=f"FlexFoil: {case_label}",
-        solver_version="release-25.2",
+        solver_version="release-25.8",
     )
     vm = draft.submit()
     vm.wait()
@@ -355,7 +355,7 @@ def _submit_csm(
     project = fl.Project.from_geometry(
         str(csm_path),
         name=f"FlexFoil: {case_label}",
-        solver_version="release-25.2",
+        solver_version="release-25.8",
         length_unit="m",
     )
 
@@ -364,6 +364,9 @@ def _submit_csm(
 
     if on_progress:
         on_progress("Building simulation params", 0.1)
+
+    # Group faces by faceName to distinguish airfoil from end caps
+    geometry.group_faces_by_tag("faceName")
 
     farfield = fl.AutomatedFarfield(name="farfield", method="quasi-3d")
 
@@ -382,7 +385,7 @@ def _submit_csm(
             reference_geometry=fl.ReferenceGeometry(
                 moment_center=[0.25, 0, 0],
                 moment_length=[1, 1, 1],
-                area=span,  # chord * span for 2D normalization
+                area=span,
             ),
             operating_condition=fl.AerospaceCondition.from_mach_reynolds(
                 mach=mach,
@@ -397,7 +400,7 @@ def _submit_csm(
                 CFL=fl.RampCFL(initial=5, final=200, ramp_steps=2000),
             ),
             models=[
-                fl.Wall(surfaces=[geometry["*"]], name="airfoil"),
+                fl.Wall(surfaces=[geometry["airfoil"]], name="airfoil"),
                 fl.Freestream(surfaces=farfield.farfield, name="freestream"),
                 fl.SlipWall(surfaces=farfield.symmetry_planes, name="symmetry"),
                 fl.Fluid(
@@ -416,7 +419,7 @@ def _submit_csm(
             outputs=[
                 fl.SurfaceOutput(
                     name="surface",
-                    surfaces=geometry["*"],
+                    surfaces=geometry["airfoil"],
                     output_fields=["Cp", "Cf", "CfVec", "yPlus"],
                 ),
             ],
