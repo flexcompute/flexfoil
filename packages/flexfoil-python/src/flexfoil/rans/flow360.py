@@ -328,99 +328,110 @@ def _get_last_value(forces: dict, key: str) -> float:
 
 def _submit_csm(
     csm_path: Path,
-    case_config: dict,
     case_label: str,
     *,
+    alpha: float = 0.0,
     Re: float = 1e6,
+    mach: float = 0.2,
+    span: float = 0.01,
+    max_steps: int = 5000,
+    turbulence_model: str = "SpalartAllmaras",
     timeout: int = 3600,
     on_progress: Callable[[str, float], None] | None = None,
 ) -> tuple[str, str]:
-    """Upload CSM geometry, auto-mesh, and submit case.
+    """Upload CSM geometry and run via Project.run_case (modern SDK).
 
-    Uses Flow360's automated meshing pipeline:
-    CSM geometry → surface mesh → volume mesh → RANS case.
+    Uses Flow360's automated meshing + solver pipeline via the Project API.
+    This handles farfield, BL mesh, wake refinement, and solving in one call.
 
     Returns (case_id, mesh_id).
     """
+    import flow360 as fl
     from flexfoil.rans.mesh import estimate_first_cell_height
 
-    import flow360client
-
-    # Step 1: Surface mesh from geometry
     if on_progress:
-        on_progress("Generating surface mesh", 0.1)
+        on_progress("Uploading geometry", 0.05)
 
-    surface_config = {
-        "maxEdgeLength": 0.05,
-        "curvatureResolutionAngle": 15.0,
-        "growthRate": 1.2,
-    }
-
-    import json as _json
-    import tempfile as _tempfile
-
-    surf_cfg_path = Path(_tempfile.mktemp(suffix=".json"))
-    surf_cfg_path.write_text(_json.dumps(surface_config))
-
-    surface_mesh_id = flow360client.NewSurfaceMeshFromGeometry(
+    project = fl.Project.from_geometry(
         str(csm_path),
-        str(surf_cfg_path),
+        name=f"FlexFoil: {case_label}",
+        solver_version="release-25.2",
+        length_unit="m",
     )
-    surf_cfg_path.unlink(missing_ok=True)
 
-    # Step 2: Volume mesh from surface
-    if on_progress:
-        on_progress("Generating volume mesh", 0.2)
-
+    geometry = project.geometry
     first_cell = estimate_first_cell_height(Re)
-    volume_config = {
-        "firstLayerThickness": first_cell,
-        "growthRate": 1.15,
-        "volume": {
-            "firstLayerThickness": first_cell,
-            "growthRate": 1.15,
-        },
-    }
 
-    vol_cfg_path = Path(_tempfile.mktemp(suffix=".json"))
-    vol_cfg_path.write_text(_json.dumps(volume_config))
-
-    mesh_id = flow360client.NewMeshFromSurface(
-        surfaceMeshId=surface_mesh_id,
-        config=str(vol_cfg_path),
-        meshName=case_label,
-    )
-    vol_cfg_path.unlink(missing_ok=True)
-
-    # Step 3: Submit case
     if on_progress:
-        on_progress("Submitting case", 0.3)
+        on_progress("Building simulation params", 0.1)
 
-    case_id = flow360client.NewCase(
-        meshId=mesh_id,
-        config=case_config,
-        caseName=case_label,
-    )
+    farfield = fl.AutomatedFarfield(name="farfield", method="quasi-3d")
 
-    # Step 4: Wait
+    with fl.SI_unit_system:
+        params = fl.SimulationParams(
+            meshing=fl.MeshingParams(
+                defaults=fl.MeshingDefaults(
+                    surface_edge_growth_rate=1.17,
+                    surface_max_edge_length=0.05,
+                    curvature_resolution_angle=15 * fl.u.deg,
+                    boundary_layer_growth_rate=1.15,
+                    boundary_layer_first_layer_thickness=first_cell,
+                ),
+                volume_zones=[farfield],
+            ),
+            reference_geometry=fl.ReferenceGeometry(
+                moment_center=[0.25, 0, 0],
+                moment_length=[1, 1, 1],
+                area=span,  # chord * span for 2D normalization
+            ),
+            operating_condition=fl.operating_condition_from_mach_reynolds(
+                mach=mach,
+                reynolds=Re,
+                temperature=288.15,
+                alpha=alpha * fl.u.deg,
+                beta=0 * fl.u.deg,
+                project_length_unit=1 * fl.u.m,
+            ),
+            time_stepping=fl.Steady(
+                max_steps=max_steps,
+                CFL=fl.RampCFL(initial=5, final=200, ramp_steps=2000),
+            ),
+            models=[
+                fl.Wall(surfaces=[geometry["*"]], name="airfoil"),
+                fl.Freestream(surfaces=farfield.farfield, name="freestream"),
+                fl.SlipWall(surfaces=farfield.symmetry_planes, name="symmetry"),
+                fl.Fluid(
+                    navier_stokes_solver=fl.NavierStokesSolver(
+                        absolute_tolerance=1e-10,
+                        linear_solver=fl.LinearSolver(max_iterations=35),
+                    ),
+                    turbulence_model_solver=fl.SpalartAllmaras(
+                        absolute_tolerance=1e-8,
+                        linear_solver=fl.LinearSolver(max_iterations=25),
+                    ) if turbulence_model == "SpalartAllmaras" else fl.KOmegaSST(
+                        absolute_tolerance=1e-8,
+                    ),
+                ),
+            ],
+            outputs=[
+                fl.SurfaceOutput(
+                    name="surface",
+                    surfaces=geometry["*"],
+                    output_fields=["Cp", "Cf", "CfVec", "yPlus"],
+                ),
+            ],
+        )
+
     if on_progress:
-        on_progress("Running RANS solver", 0.35)
+        on_progress("Running case (mesh + solve)", 0.15)
 
-    import flow360client.case as case_api
-    start = time.time()
-    while True:
-        info = case_api.GetCaseInfo(case_id)
-        status = info.get("status", "unknown")
-        if on_progress:
-            frac = {"preprocessing": 0.4, "queued": 0.45, "running": 0.6,
-                     "postprocessing": 0.9, "completed": 1.0,
-                     "error": 1.0, "diverged": 1.0}.get(status, 0.35)
-            on_progress(status, frac)
-        if status in ("completed", "error", "diverged"):
-            break
-        if time.time() - start > timeout:
-            break
-        time.sleep(10)
+    project.run_case(params=params, name=case_label)
+
+    case = project.case
+    case.wait()
+
+    case_id = case.id
+    mesh_id = ""  # mesh is managed by the project
 
     return case_id, mesh_id
 
@@ -483,8 +494,8 @@ def run_rans(
             max_steps=max_steps, turbulence_model=turbulence_model,
         )
 
-        if use_auto_mesh and _has_legacy_sdk():
-            # Primary path: CSM geometry → Flow360 automated meshing
+        if use_auto_mesh and _has_modern_sdk():
+            # Primary path: CSM geometry → Flow360 automated meshing + solving
             if on_progress:
                 on_progress("Generating geometry", 0.05)
 
@@ -493,8 +504,10 @@ def run_rans(
             )
 
             case_id, mesh_id = _submit_csm(
-                csm_path, case_config, case_label,
-                Re=Re, timeout=timeout, on_progress=on_progress,
+                csm_path, case_label,
+                alpha=alpha, Re=Re, mach=mach, span=span,
+                max_steps=max_steps, turbulence_model=turbulence_model,
+                timeout=timeout, on_progress=on_progress,
             )
 
         else:
