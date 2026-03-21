@@ -556,3 +556,227 @@ def run_rans(
         if cleanup:
             import shutil
             shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Parallel batch execution
+# ---------------------------------------------------------------------------
+
+def _submit_csm_no_wait(
+    csm_path: Path,
+    case_label: str,
+    *,
+    alpha: float,
+    Re: float,
+    mach: float,
+    span: float,
+    max_steps: int,
+    turbulence_model: str,
+) -> tuple:
+    """Submit a CSM case without waiting. Returns (project, case, alpha)."""
+    import flow360 as fl
+    from flexfoil.rans.mesh import estimate_first_cell_height
+
+    project = fl.Project.from_geometry(
+        str(csm_path),
+        name=f"FlexFoil: {case_label}",
+        solver_version="release-25.8",
+        length_unit="m",
+    )
+
+    geometry = project.geometry
+    first_cell = estimate_first_cell_height(Re)
+    geometry.group_faces_by_tag("faceName")
+
+    farfield = fl.AutomatedFarfield(name="farfield", method="quasi-3d")
+
+    with fl.SI_unit_system:
+        params = fl.SimulationParams(
+            meshing=fl.MeshingParams(
+                defaults=fl.MeshingDefaults(
+                    surface_edge_growth_rate=1.17,
+                    surface_max_edge_length=0.05,
+                    curvature_resolution_angle=15 * fl.u.deg,
+                    boundary_layer_growth_rate=1.15,
+                    boundary_layer_first_layer_thickness=first_cell,
+                ),
+                volume_zones=[farfield],
+            ),
+            reference_geometry=fl.ReferenceGeometry(
+                moment_center=[0.25, 0, 0],
+                moment_length=[1, 1, 1],
+                area=span,
+            ),
+            operating_condition=fl.AerospaceCondition.from_mach_reynolds(
+                mach=mach,
+                reynolds_mesh_unit=Re,
+                temperature=288.15 * fl.u.K,
+                alpha=alpha * fl.u.deg,
+                beta=0 * fl.u.deg,
+                project_length_unit=1 * fl.u.m,
+            ),
+            time_stepping=fl.Steady(
+                max_steps=max_steps,
+                CFL=fl.RampCFL(initial=5, final=200, ramp_steps=2000),
+            ),
+            models=[
+                fl.Wall(surfaces=[geometry["airfoil"]], name="airfoil"),
+                fl.Freestream(surfaces=farfield.farfield, name="freestream"),
+                fl.SlipWall(surfaces=farfield.symmetry_planes, name="symmetry"),
+                fl.Fluid(
+                    navier_stokes_solver=fl.NavierStokesSolver(
+                        absolute_tolerance=1e-10,
+                        linear_solver=fl.LinearSolver(max_iterations=35),
+                    ),
+                    turbulence_model_solver=fl.SpalartAllmaras(
+                        absolute_tolerance=1e-8,
+                        linear_solver=fl.LinearSolver(max_iterations=25),
+                    ) if turbulence_model == "SpalartAllmaras" else fl.KOmegaSST(
+                        absolute_tolerance=1e-8,
+                    ),
+                ),
+            ],
+            outputs=[
+                fl.SurfaceOutput(
+                    name="surface",
+                    surfaces=geometry["airfoil"],
+                    output_fields=["Cp", "Cf", "CfVec", "yPlus"],
+                ),
+            ],
+        )
+
+    project.run_case(params=params, name=case_label)
+    return project, project.case, alpha
+
+
+def run_rans_batch(
+    coords: list[tuple[float, float]],
+    alphas: list[float],
+    *,
+    Re: float = 1e6,
+    mach: float = 0.2,
+    airfoil_name: str = "airfoil",
+    span: float = 0.01,
+    max_steps: int = 5000,
+    turbulence_model: str = "SpalartAllmaras",
+    timeout: int = 3600,
+    max_workers: int = 4,
+    on_progress: Callable[[str, int, int], None] | None = None,
+) -> list[RANSResult]:
+    """Run multiple RANS cases in parallel via Flow360.
+
+    Submits all alpha cases concurrently (up to max_workers at a time),
+    then waits for all to complete. Much faster than sequential for polars.
+
+    Parameters
+    ----------
+    coords : airfoil coordinates
+    alphas : list of angles of attack
+    max_workers : max concurrent Flow360 submissions (default 4)
+    on_progress : callback(status, completed_count, total)
+    """
+    if not check_auth():
+        return [
+            RANSResult(cl=0, cd=0, cm=0, alpha=a, reynolds=Re, mach=mach,
+                       converged=False, success=False,
+                       error="Flow360 credentials not configured.")
+            for a in alphas
+        ]
+
+    if not _has_modern_sdk():
+        # Fall back to sequential for legacy SDK
+        return [
+            run_rans(coords, alpha=a, Re=Re, mach=mach,
+                     airfoil_name=airfoil_name, span=span,
+                     max_steps=max_steps, turbulence_model=turbulence_model,
+                     timeout=timeout)
+            for a in alphas
+        ]
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    tmpdir = tempfile.mkdtemp(prefix="flexfoil_rans_batch_")
+    n_total = len(alphas)
+
+    # Generate CSM once (geometry is the same for all alphas)
+    csm_path = generate_and_write_csm(
+        coords, tmpdir, span=span, mesh_name=airfoil_name,
+    )
+
+    if on_progress:
+        on_progress("Submitting all cases", 0, n_total)
+
+    # Submit all cases in parallel
+    def _submit_one(alpha: float) -> tuple:
+        case_label = f"{airfoil_name}_a{alpha:.1f}_Re{Re:.0e}_M{mach:.2f}"
+        # Each submission needs its own CSM file copy (Flow360 uploads it)
+        import shutil
+        alpha_dir = Path(tmpdir) / f"a{alpha:.1f}"
+        alpha_dir.mkdir(exist_ok=True)
+        alpha_csm = alpha_dir / csm_path.name
+        shutil.copy2(csm_path, alpha_csm)
+
+        return _submit_csm_no_wait(
+            alpha_csm, case_label,
+            alpha=alpha, Re=Re, mach=mach, span=span,
+            max_steps=max_steps, turbulence_model=turbulence_model,
+        )
+
+    # Phase 1: Submit all cases concurrently
+    submissions = {}  # alpha → (project, case)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_submit_one, a): a for a in alphas}
+        for i, future in enumerate(as_completed(futures)):
+            alpha = futures[future]
+            try:
+                project, case, _ = future.result()
+                submissions[alpha] = (project, case)
+                if on_progress:
+                    on_progress(f"Submitted α={alpha:.1f}°", i + 1, n_total)
+            except Exception as e:
+                submissions[alpha] = (None, str(e))
+                if on_progress:
+                    on_progress(f"Failed α={alpha:.1f}°: {e}", i + 1, n_total)
+
+    if on_progress:
+        on_progress("All submitted — waiting for solves", n_total, n_total)
+
+    # Phase 2: Wait for all cases to complete
+    def _wait_one(alpha: float) -> RANSResult:
+        entry = submissions.get(alpha)
+        if entry is None or isinstance(entry[1], str):
+            error = entry[1] if entry else "Not submitted"
+            return RANSResult(
+                cl=0, cd=0, cm=0, alpha=alpha, reynolds=Re, mach=mach,
+                converged=False, success=False, error=error,
+            )
+        project, case = entry
+        try:
+            case.wait()
+            result = fetch_results(case.id, alpha=alpha, Re=Re, mach=mach)
+            return result
+        except Exception as e:
+            return RANSResult(
+                cl=0, cd=0, cm=0, alpha=alpha, reynolds=Re, mach=mach,
+                converged=False, success=False, error=str(e),
+            )
+
+    results_map = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_wait_one, a): a for a in alphas}
+        for i, future in enumerate(as_completed(futures)):
+            alpha = futures[future]
+            results_map[alpha] = future.result()
+            if on_progress:
+                r = results_map[alpha]
+                status = f"α={alpha:.1f}°: CL={r.cl:.4f}" if r.success else f"α={alpha:.1f}°: {r.error}"
+                on_progress(status, i + 1, n_total)
+
+    # Return results in original alpha order
+    results = [results_map[a] for a in alphas]
+
+    # Cleanup
+    import shutil
+    shutil.rmtree(tmpdir, ignore_errors=True)
+
+    return results
