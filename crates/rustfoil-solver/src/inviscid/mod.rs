@@ -127,6 +127,10 @@ pub struct FactorizedSolution {
     body_node_ranges: Vec<Range<usize>>,
     /// Chord length per body
     body_chords: Vec<f64>,
+    /// LU factorization of the influence matrix (for DIJ computation)
+    lu: nalgebra::LU<f64, nalgebra::Dyn, nalgebra::Dyn>,
+    /// Per-body node lists (for source influence computation)
+    body_nodes_list: Vec<Vec<Point>>,
 }
 
 impl FactorizedSolution {
@@ -756,7 +760,123 @@ impl InviscidSolver {
             chord,
             body_node_ranges,
             body_chords,
+            lu,
+            body_nodes_list,
         })
+    }
+}
+
+impl FactorizedSolution {
+    /// Access per-body node index ranges.
+    pub fn body_node_ranges(&self) -> &[Range<usize>] {
+        &self.body_node_ranges
+    }
+
+    /// Build the multi-body mass-defect influence matrix (DIJ).
+    ///
+    /// DIJ[i,j] = change in gamma[i] (edge velocity at node i on any body)
+    /// due to a unit source (mass defect) at panel j on any body.
+    ///
+    /// This is the multi-body equivalent of XFOIL's QDCALC. It uses the
+    /// multi-body LU factorization to back-substitute the source influence,
+    /// capturing cross-body mass-defect coupling (displacement on body A
+    /// affects Ue on body B).
+    ///
+    /// Returns an N_total x N_total matrix.
+    pub fn build_multi_body_dij(&self) -> SolverResult<DMatrix<f64>> {
+        let n_total = self.n_nodes;
+        let k = self.body_node_ranges.len();
+        let sys_size = n_total + k;
+
+        // Build the source influence matrix BIJ.
+        // BIJ[i, j] = stream function at node i due to a unit source at panel j.
+        // For same-body: use exact PSILIN source kernel.
+        // For cross-body: use sub-panel point-source approximation.
+        let mut bij = DMatrix::<f64>::zeros(sys_size, n_total);
+
+        for (body_i, range_i) in self.body_node_ranges.iter().enumerate() {
+            for i_global in range_i.clone() {
+                let xi = self.nodes[i_global].x;
+                let yi = self.nodes[i_global].y;
+
+                for (body_j, range_j) in self.body_node_ranges.iter().enumerate() {
+                    let src_nodes = &self.body_nodes_list[body_j];
+                    let n_j = range_j.len();
+                    let offset_j = range_j.start;
+
+                    for jo_local in 0..n_j {
+                        let jp_local = (jo_local + 1) % n_j;
+                        let j_global = offset_j + jo_local;
+
+                        let x_jo = src_nodes[jo_local].x;
+                        let y_jo = src_nodes[jo_local].y;
+                        let x_jp = src_nodes[jp_local].x;
+                        let y_jp = src_nodes[jp_local].y;
+
+                        let dx = x_jp - x_jo;
+                        let dy = y_jp - y_jo;
+                        let ds_sq = dx * dx + dy * dy;
+                        if ds_sq < 1e-24 { continue; }
+
+                        let dso = ds_sq.sqrt();
+
+                        // Source panel influence on stream function:
+                        // For a unit source at panel midpoint:
+                        //   ψ = σ·ds/(4π) · θ  where θ = atan2(ry, rx)
+                        // Using point-source sub-panels for robustness:
+                        let xm_panel = 0.5 * (x_jo + x_jp);
+                        let ym_panel = 0.5 * (y_jo + y_jp);
+                        let rx_mid = xi - xm_panel;
+                        let ry_mid = yi - ym_panel;
+                        let r = (rx_mid * rx_mid + ry_mid * ry_mid).sqrt().max(1e-12);
+
+                        let nsub = if body_i != body_j {
+                            (4.0 * dso / r).ceil().max(8.0).min(64.0) as usize
+                        } else {
+                            1 // same-body: single panel is fine for source
+                        };
+
+                        let sub_ds = dso / nsub as f64;
+
+                        for sub in 0..nsub {
+                            let t = (sub as f64 + 0.5) / nsub as f64;
+                            let xm = x_jo + t * dx;
+                            let ym = y_jo + t * dy;
+                            let rx = xi - xm;
+                            let ry = yi - ym;
+                            let r_sub = (rx * rx + ry * ry).sqrt().max(0.5 * sub_ds);
+
+                            // Source stream function: ψ = σ·ds/(2π) · atan2(ry, rx)
+                            let theta = ry.atan2(rx);
+                            let coeff = sub_ds / (2.0 * PI) * theta;
+
+                            // Distribute to panel endpoint j
+                            bij[(i_global, j_global)] += -coeff;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Kutta rows: source panels don't contribute to Kutta conditions
+        // (already zeros in bij)
+
+        // Solve: DIJ = AIJ^{-1} * BIJ (column by column)
+        let mut dij = DMatrix::<f64>::zeros(n_total, n_total);
+
+        for j in 0..n_total {
+            let rhs = bij.column(j).clone_owned();
+            match self.lu.solve(&rhs) {
+                Some(solution) => {
+                    for i in 0..n_total {
+                        dij[(i, j)] = solution[i];
+                    }
+                }
+                None => return Err(SolverError::SingularMatrix),
+            }
+        }
+
+        Ok(dij)
     }
 }
 

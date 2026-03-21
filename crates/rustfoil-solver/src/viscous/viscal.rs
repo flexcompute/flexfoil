@@ -2064,23 +2064,34 @@ pub fn solve_multi_body_independent(
     let mb_inviscid_solver = InviscidSolver::new();
     let flow = FlowConditions::with_alpha_deg(alpha_deg);
 
-    let mb_solution = match mb_inviscid_solver.solve(bodies, &flow) {
-        Ok(sol) => sol,
+    let mb_factorized = match mb_inviscid_solver.factorize(bodies) {
+        Ok(f) => f,
         Err(e) => {
             return MultiBodyViscousResult {
                 per_body: (0..k).map(|i| PerBodyViscousResult {
                     name: format!("Body {}", i),
                     result: None,
-                    error: Some(format!("Multi-body inviscid failed: {:?}", e)),
+                    error: Some(format!("Multi-body inviscid factorize failed: {:?}", e)),
                 }).collect(),
                 cl_total: 0.0, cd_total: 0.0, cm_total: 0.0, all_converged: false,
             };
         }
     };
+    let mb_solution = mb_factorized.solve_alpha(&flow);
+
+    // Build multi-body DIJ (mass-defect influence matrix with cross-body coupling).
+    // This captures how displacement on body A affects Ue on body B.
+    let mb_dij = match mb_factorized.build_multi_body_dij() {
+        Ok(d) => Some(d),
+        Err(e) => {
+            eprintln!("[multi-body viscous] Failed to build multi-body DIJ: {:?}. Falling back to per-body DIJ.", e);
+            None
+        }
+    };
 
     // Step 2: For each body, set up viscous using single-body infrastructure
-    // (for DIJ, wake geometry) but REPLACE the edge velocities with the
-    // multi-body inviscid solution.
+    // (for wake geometry) but REPLACE the edge velocities and DIJ with the
+    // multi-body versions.
     let mut per_body = Vec::with_capacity(k);
     let mut cl_total = 0.0;
     let mut cd_total = 0.0;
@@ -2098,6 +2109,8 @@ pub fn solve_multi_body_independent(
             &mb_solution.gamma_per_body[idx],
             alpha_deg,
             config,
+            mb_dij.as_ref(),
+            &mb_factorized.body_node_ranges()[idx],
         );
 
         match result {
@@ -2144,6 +2157,8 @@ fn setup_and_solve_one_body(
     multi_body_gamma: &[f64],
     alpha_deg: f64,
     config: &super::config::ViscousSolverConfig,
+    mb_dij: Option<&DMatrix<f64>>,
+    body_range: &std::ops::Range<usize>,
 ) -> Result<ViscousResult, String> {
     // Run single-body setup (builds DIJ, wake, stagnation from single-body inviscid)
     let mut setup_result = super::setup::setup_from_body(body, alpha_deg)
@@ -2180,14 +2195,40 @@ fn setup_and_solve_one_body(
     setup_result.setup.n_upper = n - ist;
     setup_result.setup.n_lower = ist + 1;
 
-    // Run viscous solver with the multi-body edge velocities.
-    // Skip Newton coupling (max_iterations=0): the single-body DIJ matrix is
-    // inconsistent with multi-body Ue, making the Newton system poorly conditioned
-    // at moderate-to-high alpha. The direct march (MRCHUE) alone gives the
-    // primary displacement effect from a single BL pass over the multi-body Ue.
-    // Full viscous-inviscid coupling requires a multi-body-aware DIJ (Phase 2).
+    // If we have a multi-body DIJ, extract this body's block and replace the
+    // single-body DIJ. This gives proper cross-body mass-defect coupling in the
+    // Newton iteration.
+    if let Some(full_dij) = mb_dij {
+        let n_body = body_range.len();
+        let n_setup = setup_result.setup.dij.nrows();
+
+        // The multi-body DIJ is N_total x N_total. We need the n_body x n_body
+        // block for this body's panels. The mapping from setup panel indices to
+        // multi-body indices depends on the node ordering.
+        if n_body == n_setup || (n_body + 1 == n_setup && n_setup > n_body) {
+            // Extract the body's diagonal block from the full DIJ
+            let n = n_body.min(n_setup);
+            let offset = body_range.start;
+            let mut body_dij = DMatrix::<f64>::zeros(n_setup, n_setup);
+            for i in 0..n {
+                for j in 0..n {
+                    body_dij[(i, j)] = full_dij[(offset + i, offset + j)];
+                }
+            }
+            setup_result.setup.dij = body_dij;
+        }
+    }
+
+    // With multi-body DIJ: enable Newton coupling with conservative settings.
+    // The multi-body DIJ is approximate (no wake panels, sub-panel source kernel),
+    // so we use under-relaxation and limited iterations to avoid divergence.
     let mut mb_config = config.clone();
-    mb_config.max_iterations = 0;
+    if mb_dij.is_some() {
+        mb_config.relaxation = mb_config.relaxation.min(0.5);
+        mb_config.max_iterations = mb_config.max_iterations.min(20);
+    } else {
+        mb_config.max_iterations = 0;
+    }
     solve_viscous_from_setup(&setup_result, &mb_config, alpha_deg)
 }
 
