@@ -2195,27 +2195,27 @@ fn setup_and_solve_one_body(
     setup_result.setup.n_upper = n - ist;
     setup_result.setup.n_lower = ist + 1;
 
-    // If we have a multi-body DIJ, extract this body's block and replace the
-    // single-body DIJ. This gives proper cross-body mass-defect coupling in the
-    // Newton iteration.
+    // Hybrid DIJ: keep the per-body wake-DIJ from setup_from_body (which has
+    // accurate airfoil-wake, wake-airfoil, and wake-wake blocks from the single-body
+    // XFOIL QDCALC path), but replace the airfoil-airfoil block with the multi-body
+    // cross-body coupling. This gives:
+    // - Correct wake influence on viscous coupling (from single-body DIJ)
+    // - Cross-body mass-defect coupling (from multi-body DIJ)
     if let Some(full_dij) = mb_dij {
         let n_body = body_range.len();
-        let n_setup = setup_result.setup.dij.nrows();
+        let n_setup_total = setup_result.setup.dij.nrows();
+        // n_setup_total includes wake panels; n_body is just the airfoil nodes
+        let n_airfoil = n_body.min(n_setup_total);
+        let offset = body_range.start;
 
-        // The multi-body DIJ is N_total x N_total. We need the n_body x n_body
-        // block for this body's panels. The mapping from setup panel indices to
-        // multi-body indices depends on the node ordering.
-        if n_body == n_setup || (n_body + 1 == n_setup && n_setup > n_body) {
-            // Extract the body's diagonal block from the full DIJ
-            let n = n_body.min(n_setup);
-            let offset = body_range.start;
-            let mut body_dij = DMatrix::<f64>::zeros(n_setup, n_setup);
-            for i in 0..n {
-                for j in 0..n {
-                    body_dij[(i, j)] = full_dij[(offset + i, offset + j)];
+        // Replace only the airfoil-airfoil block (top-left n_airfoil x n_airfoil)
+        // of the setup DIJ with the multi-body block. Leave wake rows/cols untouched.
+        for i in 0..n_airfoil {
+            for j in 0..n_airfoil {
+                if offset + i < full_dij.nrows() && offset + j < full_dij.ncols() {
+                    setup_result.setup.dij[(i, j)] = full_dij[(offset + i, offset + j)];
                 }
             }
-            setup_result.setup.dij = body_dij;
         }
     }
 
