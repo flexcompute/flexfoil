@@ -1,11 +1,11 @@
-"""Structured O-grid mesh generation for pseudo-2D airfoil RANS.
+"""Structured C-grid mesh generation for pseudo-2D airfoil RANS.
 
 Generates a single-cell-deep hex mesh from 2D airfoil coordinates using a
-hybrid normal-offset / TFI O-grid. The inner BL layers use normal-offset for
-proper wall resolution; the outer layers blend to transfinite interpolation
-(surface → farfield circle) for guaranteed cell validity.
+C-grid topology. The airfoil contour is split at the trailing edge and a
+wake cut extends downstream, giving the mesh lines a clean exit path.
 
-Supports single-body and multi-body (slat + main + flap) configurations.
+This avoids the degenerate trailing-edge cells and poor outer-field coverage
+that plague O-grid approaches for airfoils.
 
 No external meshing dependencies — pure numpy.
 """
@@ -33,7 +33,11 @@ def estimate_first_cell_height(
 
 
 def _compute_normals(curve: np.ndarray) -> np.ndarray:
-    """Compute unit outward normals along a closed curve."""
+    """Compute unit outward normals along an open curve.
+
+    Uses central differences for interior points, one-sided at endpoints.
+    Outward direction is determined by the curve's winding sense.
+    """
     n = len(curve)
     tangents = np.zeros_like(curve)
     tangents[1:-1] = curve[2:] - curve[:-2]
@@ -44,8 +48,10 @@ def _compute_normals(curve: np.ndarray) -> np.ndarray:
     lengths = np.maximum(lengths, 1e-14)
     tangents = tangents / lengths
 
+    # Rotate 90° to get normal: (tx, ty) → (ty, -tx)
     normals = np.column_stack([tangents[:, 1], -tangents[:, 0]])
 
+    # Ensure normals point outward (away from contour centroid)
     centroid = curve.mean(axis=0)
     outward = curve - centroid
     dots = np.sum(normals * outward, axis=1)
@@ -55,141 +61,179 @@ def _compute_normals(curve: np.ndarray) -> np.ndarray:
     return normals
 
 
-def _make_farfield_ring(surface: np.ndarray, center: np.ndarray, radius: float) -> np.ndarray:
-    """Create a farfield circle with points matched to surface point directions."""
-    directions = surface - center
-    angles = np.arctan2(directions[:, 1], directions[:, 0])
-    ring = np.column_stack([
-        center[0] + radius * np.cos(angles),
-        center[1] + radius * np.sin(angles),
-    ])
-    return ring
-
-
 # ---------------------------------------------------------------------------
-# O-grid generation
+# C-grid generation
 # ---------------------------------------------------------------------------
 
 def generate_airfoil_mesh(
     coords: list[tuple[float, float]] | list[list[tuple[float, float]]],
     *,
     n_normal: int = 80,
+    n_wake: int = 40,
     first_cell_height: float | None = None,
     Re: float = 1e6,
     growth_rate: float = 1.1,
     farfield_radius: float = 50.0,
+    wake_length: float = 5.0,
     chord: float = 1.0,
     y_plus: float = 1.0,
 ) -> dict:
-    """Generate a structured O-grid mesh around one or more 2D airfoil bodies.
+    """Generate a structured C-grid mesh around a 2D airfoil.
 
-    Uses a hybrid approach: normal-offset for the inner boundary-layer region,
-    smoothly blending to transfinite interpolation (TFI) towards the farfield
-    circle. This gives proper y+ wall resolution while guaranteeing positive
-    cell volumes everywhere.
+    The C-grid topology:
+    - The inner boundary is: wake_lower → TE_lower → LE → TE_upper → wake_upper
+    - Mesh lines march outward from this C-shaped boundary
+    - The wake cut extends downstream from the TE
+    - No degenerate cells at the trailing edge
 
     Parameters
     ----------
-    coords : list of (x, y), or list of lists for multi-body
-        Single body: list of (x, y) in Selig ordering.
-        Multi-body: list of bodies, each a list of (x, y) in Selig ordering,
-                    ordered upstream to downstream (e.g. [slat, main, flap]).
+    coords : list of (x, y) or list of lists for multi-body
+        Airfoil coordinates in Selig ordering (upper TE → LE → lower TE).
     n_normal : int
         Number of cells in the wall-normal direction.
+    n_wake : int
+        Number of streamwise cells in the wake region downstream of TE.
     first_cell_height : float or None
-        First cell height. Auto-estimated from Re if None.
+        First cell height (auto-estimated from Re if None).
     Re : float
         Reynolds number.
     growth_rate : float
-        Geometric growth rate for BL layers.
+        Geometric growth rate for boundary-layer cells.
     farfield_radius : float
         Farfield distance in chord lengths.
+    wake_length : float
+        Wake extent downstream of TE in chord lengths.
     chord : float
         Reference chord length.
     y_plus : float
-        Target y+.
+        Target y+ for first cell.
 
     Returns
     -------
-    dict with mesh data.
+    dict with mesh data including C-grid topology info.
     """
-    # Normalize input: single body → list of one body
+    # Normalize input
     if (len(coords) > 0
             and isinstance(coords[0], (tuple, list))
             and len(coords[0]) == 2
             and isinstance(coords[0][0], (int, float))):
-        bodies = [np.array(coords, dtype=np.float64)]
+        surface = np.array(coords, dtype=np.float64)
     else:
-        bodies = [np.array(b, dtype=np.float64) for b in coords]
+        # Multi-body: concatenate
+        surface = np.vstack([np.array(b, dtype=np.float64) for b in coords])
 
-    # Concatenate all bodies into one contour
-    # For multi-body, the contour goes: body1 upper→LE→lower, body2 upper→LE→lower, ...
-    surface = np.vstack(bodies)
-    n_surface = len(surface)
+    n_pts = len(surface)
+    if n_pts < 20:
+        raise ValueError(f"Need at least 20 surface points, got {n_pts}")
 
-    if n_surface < 20:
-        raise ValueError(f"Need at least 20 surface points, got {n_surface}")
+    # Selig ordering: upper TE → LE → lower TE
+    # Find LE (leftmost point)
+    le_idx = np.argmin(surface[:, 0])
 
-    # Ensure closed contour
-    if np.linalg.norm(surface[0] - surface[-1]) > 1e-10:
-        surface = np.vstack([surface, surface[0]])
-        n_surface = len(surface)
+    # Split into upper and lower surfaces
+    # Upper: indices 0..le_idx (TE → LE, x decreasing)
+    # Lower: indices le_idx..end (LE → TE, x increasing)
+    upper = surface[:le_idx + 1]  # TE_upper → LE
+    lower = surface[le_idx:]      # LE → TE_lower
 
-    # Track body ranges
-    body_ranges = []
-    offset = 0
-    for body in bodies:
-        body_ranges.append((offset, offset + len(body)))
-        offset += len(body)
+    # TE points
+    te_upper = upper[0].copy()
+    te_lower = lower[-1].copy()
+    te_mid = 0.5 * (te_upper + te_lower)
 
     if first_cell_height is None:
         first_cell_height = estimate_first_cell_height(Re, chord, y_plus)
 
-    center = np.array([0.5 * chord, 0.0])
-    normals = _compute_normals(surface)
-    farfield = _make_farfield_ring(surface, center, farfield_radius * chord)
+    # --- Build the C-shaped inner boundary ---
+    # Order: wake_lower (far→TE) + lower_reversed (TE→LE) + upper (LE→TE) + wake_upper (TE→far)
 
-    # Generate radial layer heights with geometric growth
+    # Wake points: extend downstream from TE
+    # Geometric spacing in the wake, coarser than BL
+    wake_dx = np.zeros(n_wake)
+    wake_first = chord * 0.01  # first wake cell ~1% chord
+    for i in range(n_wake):
+        wake_dx[i] = wake_first * (1.2 ** i)
+    wake_x_offsets = np.cumsum(wake_dx)
+    # Scale to fit wake_length
+    if wake_x_offsets[-1] > 0:
+        wake_x_offsets *= (wake_length * chord) / wake_x_offsets[-1]
+
+    wake_upper_pts = np.column_stack([
+        te_upper[0] + wake_x_offsets,
+        np.full(n_wake, te_upper[1]),
+    ])
+    wake_lower_pts = np.column_stack([
+        te_lower[0] + wake_x_offsets,
+        np.full(n_wake, te_lower[1]),
+    ])
+
+    # Reverse lower surface so it goes TE → LE
+    lower_reversed = lower[::-1]  # now TE_lower → LE
+
+    # C-boundary: wake_lower_reversed → lower(TE→LE) → upper(LE→TE) → wake_upper
+    wake_lower_reversed = wake_lower_pts[::-1]  # far → TE
+    c_boundary = np.vstack([
+        wake_lower_reversed,   # far downstream → TE_lower
+        lower_reversed[1:],    # TE_lower → LE (skip duplicate TE point)
+        upper[1:],             # LE → TE_upper (skip duplicate LE point)
+        wake_upper_pts,        # TE_upper → far downstream
+    ])
+
+    n_c = len(c_boundary)
+
+    # --- Compute normals along the C-boundary ---
+    normals = _compute_normals(c_boundary)
+
+    # For wake points, force normals to be purely vertical (±y)
+    # Wake lower normals should point downward (-y), wake upper should point upward (+y)
+    n_wake_lower = n_wake  # first n_wake points are wake_lower_reversed
+    n_wake_upper = n_wake  # last n_wake points are wake_upper
+
+    # Wake lower: normal should point in -y direction
+    for i in range(n_wake_lower):
+        normals[i] = [0.0, -1.0]
+
+    # Wake upper: normal should point in +y direction
+    for i in range(n_c - n_wake_upper, n_c):
+        normals[i] = [0.0, 1.0]
+
+    # --- Generate radial layers ---
     n_layers = n_normal + 1
     heights = np.zeros(n_layers)
     for i in range(1, n_layers):
         heights[i] = heights[i - 1] + first_cell_height * growth_rate ** (i - 1)
 
-    total_height = heights[-1]
-    s = heights / total_height if total_height > 0 else np.linspace(0, 1, n_layers)
+    # Scale heights so the outermost layer reaches farfield_radius
+    max_height = heights[-1]
+    target = farfield_radius * chord
+    if max_height < target:
+        # Use a blending approach: geometric near wall, stretched outer
+        scale = target / max_height
+        # Quadratic blend: inner layers keep spacing, outer layers stretch
+        t = np.linspace(0, 1, n_layers)
+        blend = t ** 1.5  # gentle blend
+        heights = heights * (1.0 - blend) + heights * scale * blend
+    elif max_height > target:
+        heights *= target / max_height
 
-    # Hybrid normal-offset / TFI
-    # Inner layers use normal-offset for BL resolution; outer layers blend to TFI.
-    # Transition at ~10% chord to keep more of the near-field properly resolved.
-    bl_transition = 0.10 * chord
-
-    nodes_2d = np.zeros((n_surface * n_layers, 2))
-    nodes_2d[:n_surface] = surface
+    # --- Build 2D mesh nodes ---
+    nodes_2d = np.zeros((n_c * n_layers, 2))
+    nodes_2d[:n_c] = c_boundary  # layer 0 = C-boundary
 
     for j in range(1, n_layers):
         h = heights[j]
-
-        normal_layer = surface + h * normals
-        tfi_layer = (1.0 - s[j]) * surface + s[j] * farfield
-
-        if h <= bl_transition:
-            blend = 0.0
-        elif h >= bl_transition * 4.0:
-            blend = 1.0
-        else:
-            t = (h - bl_transition) / (bl_transition * 3.0)
-            blend = 3 * t * t - 2 * t * t * t  # smoothstep
-
-        layer = (1.0 - blend) * normal_layer + blend * tfi_layer
-        nodes_2d[j * n_surface: (j + 1) * n_surface] = layer
+        layer = c_boundary + h * normals
+        nodes_2d[j * n_c: (j + 1) * n_c] = layer
 
     return {
         "nodes_2d": nodes_2d,
-        "n_surface": n_surface,
+        "n_c": n_c,  # points along the C-boundary
         "n_layers": n_layers,
-        "surface_coords": surface,
+        "n_wake": n_wake,
+        "c_boundary": c_boundary,
         "first_cell_height": first_cell_height,
-        "body_ranges": body_ranges,
+        "le_idx_in_c": n_wake + len(lower_reversed) - 1,  # LE position in C-boundary
     }
 
 
@@ -198,43 +242,45 @@ def generate_airfoil_mesh(
 # ---------------------------------------------------------------------------
 
 def extrude_to_3d(mesh_2d: dict, *, span: float = 0.01) -> dict:
-    """Extrude a 2D O-grid mesh one cell deep in the y-direction.
+    """Extrude a 2D C-grid mesh one cell deep in the y-direction.
 
     The airfoil lies in the x-z plane (chord along x, thickness along z).
     Span (extrusion) is along y. This matches Flow360's alphaAngle convention.
+
+    The C-grid has an open topology: the two ends of the C (wake_lower_far and
+    wake_upper_far) are NOT connected. This means the mesh has n_c-1 cells
+    along the C direction per layer.
     """
     nodes_2d = mesh_2d["nodes_2d"]
-    n_surface = mesh_2d["n_surface"]
+    n_c = mesh_2d["n_c"]
     n_layers = mesh_2d["n_layers"]
     n_nodes_2d = len(nodes_2d)
 
-    # 3D nodes: (x, y_span, z=2D_y)
+    # 3D nodes: (x_2d, y_span, z_2d_y)
     nodes_y0 = np.column_stack([nodes_2d[:, 0], np.zeros(n_nodes_2d), nodes_2d[:, 1]])
     nodes_y1 = np.column_stack([nodes_2d[:, 0], np.full(n_nodes_2d, span), nodes_2d[:, 1]])
     nodes = np.vstack([nodes_y0, nodes_y1])
 
-    # Hex elements
-    n_cells_circ = n_surface - 1  # closed contour
+    # Hex elements: (n_c - 1) cells around C × (n_layers - 1) cells radially
+    n_cells_c = n_c - 1  # open C: no wraparound
     n_cells_normal = n_layers - 1
-    n_hexes = n_cells_circ * n_cells_normal
+    n_hexes = n_cells_c * n_cells_normal
 
     hexes = np.zeros((n_hexes, 8), dtype=np.int32)
     idx = 0
 
     for j in range(n_cells_normal):
-        for i in range(n_cells_circ):
-            i_next = (i + 1) % (n_surface - 1)  # wrap for closed contour
-
-            n0 = j * n_surface + i
-            n1 = j * n_surface + i_next
-            n2 = (j + 1) * n_surface + i_next
-            n3 = (j + 1) * n_surface + i
+        for i in range(n_cells_c):
+            n0 = j * n_c + i
+            n1 = j * n_c + (i + 1)
+            n2 = (j + 1) * n_c + (i + 1)
+            n3 = (j + 1) * n_c + i
             n4 = n0 + n_nodes_2d
             n5 = n1 + n_nodes_2d
             n6 = n2 + n_nodes_2d
             n7 = n3 + n_nodes_2d
 
-            # Check winding
+            # Check winding via scalar triple product
             p0, p1, p3, p4 = nodes_y0[n0], nodes_y0[n1], nodes_y0[n3], nodes_y1[n0]
             vol = np.dot(p1 - p0, np.cross(p3 - p0, p4 - p0))
 
@@ -244,35 +290,52 @@ def extrude_to_3d(mesh_2d: dict, *, span: float = 0.01) -> dict:
                 hexes[idx] = [n0, n3, n2, n1, n4, n7, n6, n5]
             idx += 1
 
-    hexes = hexes[:idx] + 1  # 1-based
+    hexes = hexes[:idx] + 1  # 1-based for UGRID
 
-    # Boundary faces
-    # 1. Wall: inner ring (j=0)
+    # --- Boundary faces ---
+    n_wake = mesh_2d["n_wake"]
+
+    # 1. Wall: inner ring (j=0), but ONLY the airfoil portion, not the wake
+    # C-boundary indices: [0..n_wake-1] = wake_lower, [n_wake..n_c-n_wake-1] = airfoil, [n_c-n_wake..n_c-1] = wake_upper
+    airfoil_start = n_wake
+    airfoil_end = n_c - n_wake
     wall_quads = []
-    for i in range(n_cells_circ):
-        i_next = (i + 1) % (n_surface - 1)
-        n0, n1 = i, i_next
+    for i in range(airfoil_start, airfoil_end - 1):
+        n0, n1 = i, i + 1
         wall_quads.append([n0, n0 + n_nodes_2d, n1 + n_nodes_2d, n1])
 
-    # 2. Farfield: outer ring (j = n_layers-1)
+    # 2. Farfield: outer ring (j = n_layers-1), ALL cells
     farfield_quads = []
     j = n_cells_normal
-    for i in range(n_cells_circ):
-        i_next = (i + 1) % (n_surface - 1)
-        n0 = j * n_surface + i
-        n1 = j * n_surface + i_next
+    for i in range(n_cells_c):
+        n0 = j * n_c + i
+        n1 = j * n_c + (i + 1)
         farfield_quads.append([n0, n1, n1 + n_nodes_2d, n0 + n_nodes_2d])
 
-    # 3/4. Symmetry faces (y=0 and y=span)
+    # 3. Wake cut: the two open ends of the C-grid, stacked radially
+    # Wake end 1 (i=0 face): all layers, first point of each layer
+    wake_end1_quads = []
+    for j in range(n_cells_normal):
+        n0 = j * n_c + 0  # first point
+        n3 = (j + 1) * n_c + 0
+        wake_end1_quads.append([n0, n0 + n_nodes_2d, n3 + n_nodes_2d, n3])
+
+    # Wake end 2 (i=n_c-1 face): all layers, last point of each layer
+    wake_end2_quads = []
+    for j in range(n_cells_normal):
+        n0 = j * n_c + (n_c - 1)  # last point
+        n3 = (j + 1) * n_c + (n_c - 1)
+        wake_end2_quads.append([n0, n3, n3 + n_nodes_2d, n0 + n_nodes_2d])
+
+    # 4. Symmetry faces (y=0 and y=span): ALL 2D quad cells
     sym_y0_quads = []
     sym_y1_quads = []
     for j in range(n_cells_normal):
-        for i in range(n_cells_circ):
-            i_next = (i + 1) % (n_surface - 1)
-            n0 = j * n_surface + i
-            n1 = j * n_surface + i_next
-            n2 = (j + 1) * n_surface + i_next
-            n3 = (j + 1) * n_surface + i
+        for i in range(n_cells_c):
+            n0 = j * n_c + i
+            n1 = j * n_c + (i + 1)
+            n2 = (j + 1) * n_c + (i + 1)
+            n3 = (j + 1) * n_c + i
             sym_y0_quads.append([n0, n3, n2, n1])
             sym_y1_quads.append([n0 + n_nodes_2d, n1 + n_nodes_2d,
                                  n2 + n_nodes_2d, n3 + n_nodes_2d])
@@ -284,11 +347,19 @@ def extrude_to_3d(mesh_2d: dict, *, span: float = 0.01) -> dict:
         "symmetry_y1": np.array(sym_y1_quads, dtype=np.int32) + 1,
     }
 
+    # Wake cut faces get Freestream BC (outflow)
+    wake_faces = np.vstack([
+        np.array(wake_end1_quads, dtype=np.int32),
+        np.array(wake_end2_quads, dtype=np.int32),
+    ]) + 1
+    boundary_quads["wake"] = wake_faces
+
     boundary_ids = {
         "wall": 1,
         "farfield": 2,
         "symmetry_y0": 3,
         "symmetry_y1": 4,
+        "wake": 5,
     }
 
     return {
@@ -339,8 +410,11 @@ def write_mapbc(path: str | Path, mesh_3d: dict) -> None:
     path = Path(path)
     boundary_ids = mesh_3d["boundary_ids"]
     bc_type_map = {
-        "wall": 4000, "farfield": 3000,
-        "symmetry_y0": 5000, "symmetry_y1": 5000,
+        "wall": 4000,
+        "farfield": 3000,
+        "symmetry_y0": 5000,
+        "symmetry_y1": 5000,
+        "wake": 3000,  # Freestream on wake cut (outflow)
     }
     lines = [str(len(boundary_ids))]
     for name, tag in sorted(boundary_ids.items(), key=lambda x: x[1]):
@@ -358,8 +432,10 @@ def generate_and_write_mesh(
     *,
     Re: float = 1e6,
     n_normal: int = 80,
+    n_wake: int = 40,
     growth_rate: float = 1.1,
     farfield_radius: float = 50.0,
+    wake_length: float = 5.0,
     span: float = 0.01,
     mesh_name: str = "airfoil",
 ) -> tuple[Path, Path]:
@@ -368,8 +444,9 @@ def generate_and_write_mesh(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     mesh_2d = generate_airfoil_mesh(
-        coords, n_normal=n_normal, Re=Re,
+        coords, n_normal=n_normal, n_wake=n_wake, Re=Re,
         growth_rate=growth_rate, farfield_radius=farfield_radius,
+        wake_length=wake_length,
     )
     mesh_3d = extrude_to_3d(mesh_2d, span=span)
 

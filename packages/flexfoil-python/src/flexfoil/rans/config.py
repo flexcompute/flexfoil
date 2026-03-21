@@ -63,12 +63,13 @@ def build_case_config(
             "betaAngle": 0.0,
             "Temperature": temperature,
         },
-        # UGRID boundary tags are integers: 1=wall, 2=farfield, 3=sym_z0, 4=sym_z1
+        # Boundary names must match those in the .mapbc file
         "boundaries": {
-            "1": {"type": "NoSlipWall"},
-            "2": {"type": "Freestream"},
-            "3": {"type": "SlipWall"},
-            "4": {"type": "SlipWall"},
+            "wall": {"type": "NoSlipWall"},
+            "farfield": {"type": "Freestream"},
+            "symmetry_y0": {"type": "SlipWall"},
+            "symmetry_y1": {"type": "SlipWall"},
+            "wake": {"type": "Freestream"},
         },
         "navierStokesSolver": {
             "absoluteTolerance": 1e-10,
@@ -96,7 +97,7 @@ def build_case_config(
             "outputFormat": "paraview",
             "animationFrequency": -1,
             "surfaces": {
-                "1": {
+                "wall": {
                     "outputFields": ["Cp", "Cf", "CfVec", "yPlus"],
                 },
             },

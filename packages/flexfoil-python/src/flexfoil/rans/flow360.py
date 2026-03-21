@@ -1,10 +1,13 @@
 """Flow360 client wrapper for pseudo-2D airfoil RANS.
 
-Handles mesh upload, case submission, polling, and result retrieval.
+Uses the modern ``flow360`` SDK (v25+) for mesh upload and case submission.
+Cases appear in the main Flow360 workspace under Project view.
+Falls back to ``flow360client`` (v23) if the modern SDK is not installed.
 """
 
 from __future__ import annotations
 
+import json
 import tempfile
 import time
 from pathlib import Path
@@ -15,164 +18,285 @@ from flexfoil.rans.config import build_case_config
 from flexfoil.rans.mesh import generate_and_write_mesh
 
 
-def _import_flow360():
-    """Lazy-import flow360client, raising a helpful error if missing."""
+# ---------------------------------------------------------------------------
+# SDK detection
+# ---------------------------------------------------------------------------
+
+def _has_modern_sdk() -> bool:
+    """Check if the modern flow360 SDK (v25+) is available."""
+    try:
+        import flow360
+        return hasattr(flow360, "VolumeMesh")
+    except ImportError:
+        return False
+
+
+def _has_legacy_sdk() -> bool:
+    """Check if the legacy flow360client SDK is available."""
     try:
         import flow360client
-        import flow360client.case as case_api
-        return flow360client, case_api
+        return True
     except ImportError:
-        raise ImportError(
-            "flow360client is required for RANS analysis. "
-            "Install it with: pip install flexfoil[rans]"
-        ) from None
+        return False
 
 
 def check_auth() -> bool:
-    """Verify that flow360client credentials are configured."""
-    flow360client, _ = _import_flow360()
+    """Verify that Flow360 credentials are configured."""
     try:
+        import flow360client
         auth = flow360client.Config.auth
         return bool(auth and auth.get("accessToken"))
     except Exception:
         return False
 
 
-def submit_mesh(
-    ugrid_path: str | Path,
-    mapbc_path: str | Path,
+# ---------------------------------------------------------------------------
+# Modern SDK (flow360 v25+)
+# ---------------------------------------------------------------------------
+
+def _submit_modern(
+    ugrid_path: Path,
+    case_config: dict,
+    case_label: str,
     *,
-    mesh_name: str = "flexfoil-airfoil",
-) -> str:
-    """Upload a UGRID mesh to Flow360.
+    timeout: int = 3600,
+    on_progress: Callable[[str, float], None] | None = None,
+) -> tuple[str, str]:
+    """Upload mesh and submit case using the modern flow360 SDK.
 
-    Returns the mesh ID.
+    Returns (case_id, mesh_id).
     """
-    flow360client, _ = _import_flow360()
+    import flow360 as fl
+    from flow360.component.v1.flow360_params import Flow360Params
 
-    mesh_json = {
-        "boundaries": {
-            "noSlipWalls": ["1"],
-        }
-    }
+    # Upload mesh
+    if on_progress:
+        on_progress("Uploading mesh", 0.1)
+
+    draft = fl.VolumeMesh.from_file(
+        str(ugrid_path),
+        project_name=f"FlexFoil: {case_label}",
+        solver_version="release-25.2",
+    )
+    vm = draft.submit()
+    vm.wait()
+    mesh_id = vm.id
+
+    # Build Flow360Params from config dict
+    if on_progress:
+        on_progress("Submitting case", 0.15)
+
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+    json.dump(case_config, tmp)
+    tmp.close()
+    params = Flow360Params.from_file(tmp.name)
+    Path(tmp.name).unlink(missing_ok=True)
+
+    # Submit case
+    case_draft = fl.Case.create(
+        name=case_label,
+        params=params,
+        volume_mesh_id=mesh_id,
+    )
+    case = case_draft.submit()
+    case_id = case.id
+
+    # Wait for completion
+    if on_progress:
+        on_progress("Running RANS solver", 0.2)
+
+    # Poll until case completes (case.wait() can return prematurely)
+    if on_progress:
+        on_progress("Running RANS solver", 0.2)
+
+    start = time.time()
+    while True:
+        info = case.get_info()
+        status = info.caseStatus
+
+        if on_progress:
+            frac = {"preprocessing": 0.25, "queued": 0.3, "running": 0.5,
+                     "postprocessing": 0.9, "completed": 1.0,
+                     "error": 1.0, "diverged": 1.0}.get(status, 0.2)
+            on_progress(status, frac)
+
+        if status in ("completed", "error", "diverged"):
+            break
+
+        if time.time() - start > timeout:
+            break
+
+        time.sleep(10)
+
+    return case_id, mesh_id
+
+
+# ---------------------------------------------------------------------------
+# Legacy SDK (flow360client v23)
+# ---------------------------------------------------------------------------
+
+def _submit_legacy(
+    ugrid_path: Path,
+    case_config: dict,
+    case_label: str,
+    *,
+    timeout: int = 3600,
+    on_progress: Callable[[str, float], None] | None = None,
+) -> tuple[str, str]:
+    """Upload mesh and submit case using the legacy flow360client SDK.
+
+    Returns (case_id, mesh_id).
+    """
+    import flow360client
+
+    if on_progress:
+        on_progress("Uploading mesh", 0.1)
 
     mesh_id = flow360client.NewMesh(
         str(ugrid_path),
-        meshName=mesh_name,
-        meshJson=mesh_json,
+        meshName=case_label,
+        meshJson={"boundaries": {"noSlipWalls": ["1"]}},
         fmat="aflr3",
         endianness="big",
     )
 
-    return mesh_id
+    if on_progress:
+        on_progress("Submitting case", 0.15)
 
-
-def submit_case(
-    mesh_id: str,
-    case_config: dict,
-    *,
-    case_name: str = "flexfoil-rans",
-) -> str:
-    """Submit a RANS case to Flow360.
-
-    Returns the case ID.
-    """
-    flow360client, _ = _import_flow360()
+    # Legacy SDK uses integer boundary tags
+    legacy_config = _config_with_integer_boundaries(case_config)
     case_id = flow360client.NewCase(
         meshId=mesh_id,
-        config=case_config,
-        caseName=case_name,
+        config=legacy_config,
+        caseName=case_label,
     )
-    return case_id
 
+    if on_progress:
+        on_progress("Running RANS solver", 0.2)
 
-def wait_for_case(
-    case_id: str,
-    *,
-    timeout: int = 3600,
-    poll_interval: int = 10,
-    on_progress: Callable[[str, float], None] | None = None,
-) -> dict:
-    """Wait for a Flow360 case to complete.
-
-    Parameters
-    ----------
-    case_id : str
-        Flow360 case ID.
-    timeout : int
-        Maximum wait time in seconds (default 1 hour).
-    poll_interval : int
-        Time between status checks in seconds.
-    on_progress : callable or None
-        Called with (status_string, progress_fraction) on each poll.
-
-    Returns
-    -------
-    dict
-        Case info from GetCaseInfo.
-    """
-    _, case_api = _import_flow360()
-
+    import flow360client.case as case_api
     start = time.time()
     while True:
         info = case_api.GetCaseInfo(case_id)
         status = info.get("status", "unknown")
 
         if on_progress:
-            # Estimate progress from status
-            progress_map = {
-                "preprocessing": 0.1,
-                "queued": 0.15,
-                "running": 0.5,
-                "postprocessing": 0.9,
-                "completed": 1.0,
-                "error": 1.0,
-                "diverged": 1.0,
-            }
-            frac = progress_map.get(status, 0.2)
+            frac = {"preprocessing": 0.1, "queued": 0.15, "running": 0.5,
+                     "postprocessing": 0.9, "completed": 1.0,
+                     "error": 1.0, "diverged": 1.0}.get(status, 0.2)
             on_progress(status, frac)
 
         if status in ("completed", "error", "diverged"):
-            return info
+            break
 
-        elapsed = time.time() - start
-        if elapsed > timeout:
-            return {"status": "timeout", "elapsed": elapsed}
+        if time.time() - start > timeout:
+            break
 
-        time.sleep(poll_interval)
+        time.sleep(10)
 
+    return case_id, mesh_id
+
+
+def _config_with_integer_boundaries(config: dict) -> dict:
+    """Convert named boundaries to integer tags for legacy SDK."""
+    config = dict(config)
+    name_to_tag = {
+        "wall": "1", "farfield": "2",
+        "symmetry_y0": "3", "symmetry_y1": "4",
+    }
+
+    if "boundaries" in config:
+        new_boundaries = {}
+        for name, bc in config["boundaries"].items():
+            tag = name_to_tag.get(name, name)
+            new_boundaries[tag] = bc
+        config["boundaries"] = new_boundaries
+
+    if "surfaceOutput" in config and "surfaces" in config["surfaceOutput"]:
+        new_surfaces = {}
+        for name, so in config["surfaceOutput"]["surfaces"].items():
+            tag = name_to_tag.get(name, name)
+            new_surfaces[tag] = so
+        config["surfaceOutput"]["surfaces"] = new_surfaces
+
+    return config
+
+
+# ---------------------------------------------------------------------------
+# Result fetching (works with both SDKs via flow360client)
+# ---------------------------------------------------------------------------
 
 def fetch_results(case_id: str, *, alpha: float, Re: float, mach: float) -> RANSResult:
     """Download results from a completed Flow360 case.
 
-    Returns a RANSResult with integrated forces.
+    Uses the modern SDK to check status, falls back to legacy for force data.
     """
-    _, case_api = _import_flow360()
+    # Check status via modern SDK if available
+    status = "unknown"
+    if _has_modern_sdk():
+        try:
+            import flow360 as fl
+            case = fl.Case.from_cloud(case_id)
+            info = case.get_info()
+            status = info.caseStatus or str(info.status)
+        except Exception:
+            pass
 
-    info = case_api.GetCaseInfo(case_id)
-    status = info.get("status", "unknown")
+    # Fall back to legacy SDK for status
+    if status == "unknown" and _has_legacy_sdk():
+        try:
+            import flow360client.case as case_api
+            info = case_api.GetCaseInfo(case_id)
+            status = info.get("status", "unknown")
+        except Exception:
+            pass
 
-    if status != "completed":
+    # Normalize status string (modern SDK may return enum or string)
+    status = str(status).lower().replace("flow360status.", "")
+    if "completed" not in status:
         return RANSResult(
             cl=0.0, cd=0.0, cm=0.0,
             alpha=alpha, reynolds=Re, mach=mach,
             converged=False, success=False,
-            error=f"Case {status}: {info.get('statusMessage', 'unknown error')}",
+            error=f"Case status: {status}",
             case_id=case_id,
         )
 
-    try:
-        forces = case_api.GetCaseTotalForces(case_id)
-    except Exception as e:
+    # Fetch forces — try modern SDK first, then legacy
+    forces = None
+
+    if _has_modern_sdk():
+        try:
+            import flow360 as fl
+            case = fl.Case.from_cloud(case_id)
+            tf = case.results.total_forces
+            df = tf.as_dataframe()
+            forces = {col: df[col].tolist() for col in df.columns}
+        except Exception:
+            pass
+
+    if forces is None and _has_legacy_sdk():
+        try:
+            import flow360client.case as case_api
+            forces = case_api.GetCaseTotalForces(case_id)
+        except Exception as e:
+            return RANSResult(
+                cl=0.0, cd=0.0, cm=0.0,
+                alpha=alpha, reynolds=Re, mach=mach,
+                converged=False, success=False,
+                error=f"Failed to fetch forces: {e}",
+                case_id=case_id,
+            )
+
+    if forces is None:
         return RANSResult(
             cl=0.0, cd=0.0, cm=0.0,
             alpha=alpha, reynolds=Re, mach=mach,
             converged=False, success=False,
-            error=f"Failed to fetch forces: {e}",
+            error="Could not fetch force data from either SDK",
             case_id=case_id,
         )
 
-    # forces is a dict with time-history lists; take the last (converged) value
     cl = _get_last_value(forces, "CL")
     cd = _get_last_value(forces, "CD")
     cm = _get_last_value(forces, "CMz")
@@ -180,16 +304,10 @@ def fetch_results(case_id: str, *, alpha: float, Re: float, mach: float) -> RANS
     cd_friction = _get_last_value(forces, "CDSkinFriction")
 
     return RANSResult(
-        cl=cl,
-        cd=cd,
-        cm=cm,
-        alpha=alpha,
-        reynolds=Re,
-        mach=mach,
-        converged=True,
-        success=True,
-        cd_pressure=cd_pressure,
-        cd_friction=cd_friction,
+        cl=cl, cd=cd, cm=cm,
+        alpha=alpha, reynolds=Re, mach=mach,
+        converged=True, success=True,
+        cd_pressure=cd_pressure, cd_friction=cd_friction,
         case_id=case_id,
     )
 
@@ -203,6 +321,10 @@ def _get_last_value(forces: dict, key: str) -> float:
         return float(val)
     return 0.0
 
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
 
 def run_rans(
     coords: list[tuple[float, float]],
@@ -223,47 +345,25 @@ def run_rans(
 ) -> RANSResult:
     """Full RANS pipeline: coords → mesh → upload → solve → results.
 
-    Parameters
-    ----------
-    coords : list of (x, y)
-        Airfoil coordinates (Selig ordering).
-    alpha : float
-        Angle of attack in degrees.
-    Re : float
-        Reynolds number.
-    mach : float
-        Freestream Mach number.
-    airfoil_name : str
-        Name for the mesh/case in Flow360.
-    n_normal : int
-        Mesh cells in wall-normal direction.
-    growth_rate : float
-        BL mesh growth rate.
-    farfield_radius : float
-        Farfield distance in chord lengths.
-    span : float
-        Pseudo-3D span.
-    max_steps : int
-        Max pseudo-time steps.
-    turbulence_model : str
-        'SpalartAllmaras' or 'kOmegaSST'.
-    timeout : int
-        Max wait time in seconds.
-    on_progress : callable or None
-        Progress callback: (status, fraction).
-    cleanup : bool
-        Remove temporary mesh files after upload.
-
-    Returns
-    -------
-    RANSResult
+    Uses the modern ``flow360`` SDK if available (cases appear in Project view),
+    otherwise falls back to ``flow360client``.
     """
     if not check_auth():
         return RANSResult(
             cl=0.0, cd=0.0, cm=0.0,
             alpha=alpha, reynolds=Re, mach=mach,
             converged=False, success=False,
-            error="Flow360 credentials not configured. Run flow360client.ChooseAccount() first.",
+            error="Flow360 credentials not configured.",
+        )
+
+    use_modern = _has_modern_sdk()
+
+    if not use_modern and not _has_legacy_sdk():
+        return RANSResult(
+            cl=0.0, cd=0.0, cm=0.0,
+            alpha=alpha, reynolds=Re, mach=mach,
+            converged=False, success=False,
+            error="No Flow360 SDK installed. Run: pip install flow360",
         )
 
     tmpdir = tempfile.mkdtemp(prefix="flexfoil_rans_")
@@ -274,55 +374,28 @@ def run_rans(
             on_progress("Generating mesh", 0.05)
 
         ugrid_path, mapbc_path = generate_and_write_mesh(
-            coords,
-            tmpdir,
-            Re=Re,
-            n_normal=n_normal,
-            growth_rate=growth_rate,
-            farfield_radius=farfield_radius,
-            span=span,
-            mesh_name=airfoil_name,
+            coords, tmpdir,
+            Re=Re, n_normal=n_normal,
+            growth_rate=growth_rate, farfield_radius=farfield_radius,
+            span=span, mesh_name=airfoil_name,
         )
 
-        # Step 2: Upload mesh
-        if on_progress:
-            on_progress("Uploading mesh", 0.1)
-
+        # Step 2-4: Upload + submit + wait
         case_label = f"{airfoil_name}_a{alpha:.1f}_Re{Re:.0e}_M{mach:.2f}"
-        mesh_id = submit_mesh(ugrid_path, mapbc_path, mesh_name=case_label)
-
-        # Step 3: Submit case
-        if on_progress:
-            on_progress("Submitting case", 0.15)
-
         case_config = build_case_config(
-            alpha=alpha,
-            Re=Re,
-            mach=mach,
-            span=span,
-            max_steps=max_steps,
-            turbulence_model=turbulence_model,
+            alpha=alpha, Re=Re, mach=mach, span=span,
+            max_steps=max_steps, turbulence_model=turbulence_model,
         )
 
-        case_id = submit_case(mesh_id, case_config, case_name=case_label)
-
-        # Step 4: Wait for completion
-        if on_progress:
-            on_progress("Running RANS solver", 0.2)
-
-        info = wait_for_case(
-            case_id,
-            timeout=timeout,
-            on_progress=on_progress,
-        )
-
-        if info.get("status") == "timeout":
-            return RANSResult(
-                cl=0.0, cd=0.0, cm=0.0,
-                alpha=alpha, reynolds=Re, mach=mach,
-                converged=False, success=False,
-                error=f"Case timed out after {timeout}s",
-                case_id=case_id, mesh_id=mesh_id,
+        if use_modern:
+            case_id, mesh_id = _submit_modern(
+                ugrid_path, case_config, case_label,
+                timeout=timeout, on_progress=on_progress,
+            )
+        else:
+            case_id, mesh_id = _submit_legacy(
+                ugrid_path, case_config, case_label,
+                timeout=timeout, on_progress=on_progress,
             )
 
         # Step 5: Fetch results
