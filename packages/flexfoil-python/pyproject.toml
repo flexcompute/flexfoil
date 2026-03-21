@@ -41,8 +41,11 @@ matplotlib = [
 dataframe = [
     "pandas>=2.0",
 ]
+rans = [
+    "flow360>=25.0",
+]
 all = [
-    "flexfoil[server,matplotlib,dataframe]",
+    "flexfoil[server,matplotlib,dataframe,rans]",
 ]
 dev = [
     "flexfoil[all]",

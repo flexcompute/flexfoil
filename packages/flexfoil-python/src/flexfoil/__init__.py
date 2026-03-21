@@ -16,6 +16,11 @@ from flexfoil.airfoil import Airfoil, BLResult, SolveResult
 from flexfoil.database import RunDatabase, get_database
 from flexfoil.polar import PolarResult
 
+try:
+    from flexfoil.rans import RANSPolarResult, RANSResult
+except ImportError:
+    pass  # flow360client not installed
+
 __all__ = [
     "Airfoil",
     "BLResult",
