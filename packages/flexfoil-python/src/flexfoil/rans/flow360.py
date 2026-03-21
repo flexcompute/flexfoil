@@ -735,36 +735,58 @@ def run_rans_batch(
     if on_progress:
         on_progress("All submitted — waiting for solves", n_total, n_total)
 
-    # Phase 2: Wait for all cases to complete
-    def _wait_one(alpha: float) -> RANSResult:
-        entry = submissions.get(alpha)
-        if entry is None or isinstance(entry[1], str):
-            error = entry[1] if entry else "Not submitted"
-            return RANSResult(
-                cl=0, cd=0, cm=0, alpha=alpha, reynolds=Re, mach=mach,
+    # Phase 2: Poll all cases until complete (no case.wait() — it uses Rich)
+    pending_alphas = set(
+        a for a in alphas
+        if a in submissions and not isinstance(submissions[a][1], str)
+    )
+    results_map = {}
+
+    # Pre-populate failures
+    for a in alphas:
+        if a not in pending_alphas:
+            entry = submissions.get(a)
+            error = entry[1] if entry and isinstance(entry[1], str) else "Not submitted"
+            results_map[a] = RANSResult(
+                cl=0, cd=0, cm=0, alpha=a, reynolds=Re, mach=mach,
                 converged=False, success=False, error=error,
             )
-        project, case = entry
-        try:
-            case.wait()
-            result = fetch_results(case.id, alpha=alpha, Re=Re, mach=mach)
-            return result
-        except Exception as e:
-            return RANSResult(
-                cl=0, cd=0, cm=0, alpha=alpha, reynolds=Re, mach=mach,
-                converged=False, success=False, error=str(e),
-            )
 
-    results_map = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_wait_one, a): a for a in alphas}
-        for i, future in enumerate(as_completed(futures)):
-            alpha = futures[future]
-            results_map[alpha] = future.result()
-            if on_progress:
-                r = results_map[alpha]
-                status = f"α={alpha:.1f}°: CL={r.cl:.4f}" if r.success else f"α={alpha:.1f}°: {r.error}"
-                on_progress(status, i + 1, n_total)
+    poll_count = 0
+    while pending_alphas:
+        time.sleep(15)
+        poll_count += 1
+        for a in list(pending_alphas):
+            project, case = submissions[a]
+            try:
+                info = case.get_info()
+                status = info.caseStatus
+                if status in ("completed", "error", "diverged"):
+                    results_map[a] = fetch_results(case.id, alpha=a, Re=Re, mach=mach)
+                    pending_alphas.discard(a)
+                    if on_progress:
+                        r = results_map[a]
+                        done = n_total - len(pending_alphas)
+                        msg = f"α={a:.1f}°: CL={r.cl:.4f}" if r.success else f"α={a:.1f}°: {r.error}"
+                        on_progress(msg, done, n_total)
+            except Exception as e:
+                results_map[a] = RANSResult(
+                    cl=0, cd=0, cm=0, alpha=a, reynolds=Re, mach=mach,
+                    converged=False, success=False, error=str(e),
+                )
+                pending_alphas.discard(a)
+
+        if poll_count * 15 > timeout:
+            for a in list(pending_alphas):
+                results_map[a] = RANSResult(
+                    cl=0, cd=0, cm=0, alpha=a, reynolds=Re, mach=mach,
+                    converged=False, success=False, error="Timeout",
+                )
+                pending_alphas.discard(a)
+
+        if on_progress and pending_alphas:
+            done = n_total - len(pending_alphas)
+            on_progress(f"Waiting... {len(pending_alphas)} remaining", done, n_total)
 
     # Return results in original alpha order
     results = [results_map[a] for a in alphas]
