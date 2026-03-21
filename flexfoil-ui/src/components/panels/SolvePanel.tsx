@@ -17,6 +17,7 @@ import { runSweep, type SweepConfig, type SweepRunData } from '../../lib/sweepEn
 import type { PolarPoint, SweepAxis, SweepParam } from '../../types';
 import type { RunInsert } from '../../lib/storageBackend';
 import { parseSweepValues, formatSweepValues } from '../../lib/parseSweepValues';
+import { isLocalMode } from '../../lib/storageBackend';
 
 type SolveOrCacheResult = {
   result: AnalysisResult | null;
@@ -164,6 +165,16 @@ export function SolvePanel() {
   const polar = useMemo(() => lastSeries?.points ?? [], [lastSeries]);
 
   const isViscous = solverMode === 'viscous';
+  const isRans = solverMode === 'rans';
+
+  // RANS state
+  const [ransResult, setRansResult] = useState<{
+    cl: number; cd: number; cm: number; alpha: number;
+    converged: boolean; success: boolean; error?: string | null;
+    case_id?: string; cd_pressure?: number; cd_friction?: number;
+  } | null>(null);
+  const [ransStatus, setRansStatus] = useState<string | null>(null);
+  const [ransJobId, setRansJobId] = useState<string | null>(null);
 
   const serializePoints = useCallback((points: { x: number; y: number; s?: number; surface?: 'upper' | 'lower' }[]) => {
     return JSON.stringify(points.map((point) => ({
@@ -831,6 +842,81 @@ export function SolvePanel() {
       maxIterations, solverMode, geometryDesign.flaps, name, isViscous, upsertPolar, addRun, addRunBatch,
       jobDispatch, jobComplete, jobUpdate]);
 
+  // --------------- RANS analysis ---------------
+
+  const runRansAnalysis = useCallback(async () => {
+    if (panels.length < 3) return;
+    setIsRunning(true);
+    setError(null);
+    setRansResult(null);
+    setRansStatus('Submitting...');
+
+    const coordsJson = JSON.stringify(panels.map((p) => ({ x: p.x, y: p.y })));
+
+    try {
+      const resp = await fetch('/api/rans/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          coordinates_json: coordsJson,
+          alpha: targetAlpha,
+          reynolds: reynolds,
+          mach: mach || 0.2,
+          airfoil_name: name,
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setError(data.error || 'Failed to submit RANS case');
+        setIsRunning(false);
+        setRansStatus(null);
+        return;
+      }
+      const jobId = data.job_id;
+      setRansJobId(jobId);
+      setRansStatus('Submitted — generating mesh...');
+
+      // Poll for completion
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusResp = await fetch(`/api/rans/status/${jobId}`);
+          const statusData = await statusResp.json();
+          const status = statusData.status;
+
+          if (status === 'Generating mesh') setRansStatus('Generating mesh...');
+          else if (status === 'Uploading mesh') setRansStatus('Uploading mesh to Flow360...');
+          else if (status === 'Submitting case') setRansStatus('Submitting case...');
+          else if (status === 'Running RANS solver' || status === 'running') setRansStatus('Solving (this may take a few minutes)...');
+          else if (status === 'Fetching results') setRansStatus('Fetching results...');
+          else if (status === 'complete' || status === 'failed') {
+            clearInterval(pollInterval);
+            setIsRunning(false);
+            if (statusData.result) {
+              setRansResult(statusData.result);
+              if (statusData.result.success) {
+                setRansStatus('Complete');
+              } else {
+                setRansStatus(null);
+                setError(statusData.result.error || 'RANS case failed');
+              }
+            } else {
+              setRansStatus(null);
+              setError('RANS case failed');
+            }
+          } else {
+            setRansStatus(`${status}...`);
+          }
+        } catch {
+          // Silently retry
+        }
+      }, 3000);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to submit RANS case');
+      setIsRunning(false);
+      setRansStatus(null);
+    }
+  }, [panels, targetAlpha, reynolds, mach, name]);
+
   // --------------- derived ---------------
 
   const clAlpha = useMemo(() => {
@@ -868,15 +954,27 @@ export function SolvePanel() {
             >
               Viscous
             </button>
+            {isLocalMode() && (
+              <button
+                onClick={() => setSolverMode('rans')}
+                className={solverMode === 'rans' ? 'active' : ''}
+                style={{ flex: 1 }}
+                title="RANS CFD via Flow360 (cloud)"
+              >
+                RANS
+              </button>
+            )}
           </div>
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
-            {isViscous
-              ? 'XFOIL viscous solver with boundary layer coupling'
-              : 'Linear-vorticity panel method (CD = 0)'}
+            {isRans
+              ? 'RANS CFD via Flow360 (cloud compute)'
+              : isViscous
+                ? 'XFOIL viscous solver with boundary layer coupling'
+                : 'Linear-vorticity panel method (CD = 0)'}
           </div>
         </div>
 
-        {isViscous && (
+        {(isViscous || isRans) && (
           <div className="form-group">
             <div className="form-label">Reynolds Number</div>
             <input
@@ -889,6 +987,23 @@ export function SolvePanel() {
               onKeyDown={(e) => { if (e.key === 'Enter') commitReynolds(); }}
               placeholder="e.g. 6e6, 1000000"
             />
+          </div>
+        )}
+
+        {isRans && (
+          <div className="form-group">
+            <div className="form-label">Mach Number</div>
+            <input
+              type="number"
+              value={mach || 0.2}
+              onChange={(e) => setMach(Math.max(0.01, Math.min(0.9, parseFloat(e.target.value) || 0.2)))}
+              step={0.01}
+              min={0.01}
+              max={0.9}
+            />
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
+              Required for compressible RANS (SA turbulence model)
+            </div>
           </div>
         )}
 
@@ -959,51 +1074,73 @@ export function SolvePanel() {
         <div className="form-group" data-tour="solve-alpha">
           <div className="form-label">Single Point</div>
 
-          <div style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
-            <button
-              onClick={() => setRunMode('alpha')}
-              className={runMode === 'alpha' ? 'active' : ''}
-              style={{ flex: 1 }}
-            >
-              Run to α
-            </button>
-            <button
-              onClick={() => setRunMode('cl')}
-              className={runMode === 'cl' ? 'active' : ''}
-              style={{ flex: 1 }}
-            >
-              Run to CL
-            </button>
-          </div>
+          {!isRans && (
+            <div style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
+              <button
+                onClick={() => setRunMode('alpha')}
+                className={runMode === 'alpha' ? 'active' : ''}
+                style={{ flex: 1 }}
+              >
+                Run to α
+              </button>
+              <button
+                onClick={() => setRunMode('cl')}
+                className={runMode === 'cl' ? 'active' : ''}
+                style={{ flex: 1 }}
+              >
+                Run to CL
+              </button>
+            </div>
+          )}
 
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <label style={{ fontSize: '12px', minWidth: '60px' }}>
-              {runMode === 'alpha' ? 'Alpha (°):' : 'Target CL:'}
+              {isRans ? 'Alpha (°):' : runMode === 'alpha' ? 'Alpha (°):' : 'Target CL:'}
             </label>
             <input
               type="number"
-              value={runMode === 'alpha' ? targetAlpha : targetCl}
+              value={isRans ? targetAlpha : (runMode === 'alpha' ? targetAlpha : targetCl)}
               onChange={(e) => {
                 const val = parseFloat(e.target.value);
-                if (runMode === 'alpha') setTargetAlpha(val);
+                if (isRans || runMode === 'alpha') setTargetAlpha(val);
                 else setTargetCl(val);
               }}
-              step={runMode === 'alpha' ? 0.5 : 0.1}
+              step={isRans || runMode === 'alpha' ? 0.5 : 0.1}
               style={{ flex: 1 }}
             />
             <button
-              onClick={runAnalysis}
-              disabled={isRunning || !isWasmReady()}
-              style={{ minWidth: '60px' }}
+              onClick={isRans ? runRansAnalysis : runAnalysis}
+              disabled={isRunning || (!isRans && !isWasmReady())}
+              style={{ minWidth: isRans ? '100px' : '60px' }}
               data-tour="solve-run"
             >
-              {isRunning ? '...' : 'Run'}
+              {isRunning ? '...' : isRans ? 'Run RANS ☁️' : 'Run'}
             </button>
           </div>
+
+          {/* RANS progress indicator */}
+          {isRans && ransStatus && (
+            <div style={{
+              fontSize: '11px',
+              color: 'var(--accent-primary)',
+              marginTop: '8px',
+              padding: '6px 8px',
+              background: 'var(--bg-secondary)',
+              borderRadius: '4px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}>
+              {isRunning && (
+                <span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>⟳</span>
+              )}
+              {ransStatus}
+            </div>
+          )}
         </div>
 
-        {/* Single Point Results */}
-        {result && result.success && (
+        {/* Single Point Results — XFOIL */}
+        {!isRans && result && result.success && (
           <div className="form-group">
             <div className="form-label">Results</div>
             <div style={{
@@ -1024,6 +1161,39 @@ export function SolvePanel() {
                     ? `Converged in ${result.iterations} iterations`
                     : `Not converged after ${result.iterations} iterations (residual ${result.residual.toExponential(2)})`)
                 : 'Direct panel solve'}
+            </div>
+          </div>
+        )}
+
+        {/* Single Point Results — RANS */}
+        {isRans && ransResult && ransResult.success && (
+          <div className="form-group">
+            <div className="form-label">RANS Results</div>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: '8px',
+            }}>
+              <ResultCard label="CL" value={ransResult.cl.toFixed(4)} />
+              <ResultCard label="CD" value={ransResult.cd.toFixed(5)} />
+              <ResultCard label="CM" value={ransResult.cm.toFixed(4)} />
+            </div>
+            {ransResult.cd_pressure != null && ransResult.cd_friction != null && (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(2, 1fr)',
+                gap: '8px',
+                marginTop: '8px',
+              }}>
+                <ResultCard label="CD_p" value={ransResult.cd_pressure.toFixed(5)} />
+                <ResultCard label="CD_f" value={ransResult.cd_friction.toFixed(5)} />
+              </div>
+            )}
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '8px' }}>
+              Flow360 RANS (SA) at α={ransResult.alpha.toFixed(1)}°, Re={ransResult.reynolds.toExponential(1)}, M={ransResult.mach.toFixed(2)}
+              {ransResult.case_id && (
+                <span> · Case: {ransResult.case_id.slice(0, 8)}</span>
+              )}
             </div>
           </div>
         )}

@@ -18,7 +18,7 @@ export interface AirfoilPoint extends Point {
 
 /** Control modes for airfoil manipulation */
 export type ControlMode = 'parameters' | 'camber-spline' | 'thickness-spline' | 'inverse-design' | 'geometry-design';
-export type SolverMode = 'viscous' | 'inviscid';
+export type SolverMode = 'viscous' | 'inviscid' | 'rans';
 export type RunMode = 'alpha' | 'cl';
 export type AxisVariable = 'alpha' | 'cl' | 'cd' | 'cm' | 'ld'
   | 'reynolds' | 'mach' | 'ncrit' | 'flapDeflection' | 'flapHingeX';

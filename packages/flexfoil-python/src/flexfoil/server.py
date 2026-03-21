@@ -216,6 +216,122 @@ async def uiuc_proxy(request: Request) -> Response:
 
 
 # ---------------------------------------------------------------------------
+# RANS endpoints — Flow360 cloud CFD
+# ---------------------------------------------------------------------------
+
+_rans_jobs: dict[str, dict] = {}  # case_id → {status, result, ...}
+
+
+async def rans_submit(request: Request) -> JSONResponse:
+    """Submit a RANS case to Flow360 (runs in background)."""
+    try:
+        from flexfoil.rans.flow360 import check_auth, run_rans
+    except ImportError:
+        return JSONResponse(
+            {"error": "flow360client not installed. Run: pip install flexfoil[rans]"},
+            status_code=501,
+        )
+
+    body = await request.json()
+    coords_json = body.get("coordinates_json", "[]")
+    coords = [(p["x"], p["y"]) for p in json.loads(coords_json)]
+    alpha = float(body.get("alpha", 0.0))
+    Re = float(body.get("reynolds", 1e6))
+    mach = float(body.get("mach", 0.2))
+    airfoil_name = body.get("airfoil_name", "airfoil")
+
+    if not check_auth():
+        return JSONResponse(
+            {"error": "Flow360 credentials not configured"},
+            status_code=401,
+        )
+
+    # Generate a tracking ID
+    import uuid
+    job_id = str(uuid.uuid4())[:8]
+    _rans_jobs[job_id] = {"status": "submitted", "result": None}
+
+    async def _background():
+        try:
+            async def progress(status, frac):
+                _rans_jobs[job_id]["status"] = status
+                await _broadcast("rans_status", {
+                    "job_id": job_id,
+                    "status": status,
+                    "progress": frac,
+                })
+
+            # Run in thread pool (blocking I/O)
+            def _sync_progress(status, frac):
+                _rans_jobs[job_id]["status"] = status
+
+            result = await asyncio.to_thread(
+                run_rans,
+                coords,
+                alpha=alpha,
+                Re=Re,
+                mach=mach,
+                airfoil_name=airfoil_name,
+                on_progress=_sync_progress,
+            )
+
+            _rans_jobs[job_id]["status"] = "complete" if result.success else "failed"
+            _rans_jobs[job_id]["result"] = {
+                "cl": result.cl,
+                "cd": result.cd,
+                "cm": result.cm,
+                "alpha": result.alpha,
+                "reynolds": result.reynolds,
+                "mach": result.mach,
+                "converged": result.converged,
+                "success": result.success,
+                "error": result.error,
+                "case_id": result.case_id,
+                "cd_pressure": result.cd_pressure,
+                "cd_friction": result.cd_friction,
+            }
+
+            await _broadcast("rans_status", {
+                "job_id": job_id,
+                "status": _rans_jobs[job_id]["status"],
+                "progress": 1.0,
+                "result": _rans_jobs[job_id]["result"],
+            })
+
+        except Exception as e:
+            _rans_jobs[job_id]["status"] = "failed"
+            _rans_jobs[job_id]["result"] = {"error": str(e), "success": False}
+            await _broadcast("rans_status", {
+                "job_id": job_id,
+                "status": "failed",
+                "error": str(e),
+            })
+
+    asyncio.create_task(_background())
+    return JSONResponse({"job_id": job_id, "status": "submitted"}, status_code=202)
+
+
+async def rans_status(request: Request) -> JSONResponse:
+    """Get status of a RANS job."""
+    job_id = request.path_params["job_id"]
+    job = _rans_jobs.get(job_id)
+    if job is None:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+    return JSONResponse({"job_id": job_id, **job})
+
+
+async def rans_result(request: Request) -> JSONResponse:
+    """Get result of a completed RANS job."""
+    job_id = request.path_params["job_id"]
+    job = _rans_jobs.get(job_id)
+    if job is None:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+    if job["result"] is None:
+        return JSONResponse({"error": "Not complete yet", "status": job["status"]}, status_code=202)
+    return JSONResponse(job["result"])
+
+
+# ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
 
@@ -259,6 +375,9 @@ def _build_routes() -> list:
         Route("/api/db/export", export_db),
         Route("/api/db/import", import_db, methods=["POST"]),
         Route("/api/uiuc-proxy/{filename:path}", uiuc_proxy),
+        Route("/api/rans/submit", rans_submit, methods=["POST"]),
+        Route("/api/rans/status/{job_id:str}", rans_status),
+        Route("/api/rans/result/{job_id:str}", rans_result),
         Route("/api/events", sse_endpoint),
     ]
     if STATIC_DIR.is_dir():
