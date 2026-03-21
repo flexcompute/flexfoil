@@ -2180,8 +2180,15 @@ fn setup_and_solve_one_body(
     setup_result.setup.n_upper = n - ist;
     setup_result.setup.n_lower = ist + 1;
 
-    // Run viscous solver with the multi-body edge velocities
-    solve_viscous_from_setup(&setup_result, config, alpha_deg)
+    // Run viscous solver with the multi-body edge velocities.
+    // Skip Newton coupling (max_iterations=0): the single-body DIJ matrix is
+    // inconsistent with multi-body Ue, making the Newton system poorly conditioned
+    // at moderate-to-high alpha. The direct march (MRCHUE) alone gives the
+    // primary displacement effect from a single BL pass over the multi-body Ue.
+    // Full viscous-inviscid coupling requires a multi-body-aware DIJ (Phase 2).
+    let mut mb_config = config.clone();
+    mb_config.max_iterations = 0;
+    solve_viscous_from_setup(&setup_result, &mb_config, alpha_deg)
 }
 
 /// Run viscous analysis from a pre-computed setup result.
