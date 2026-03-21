@@ -15,7 +15,7 @@ from typing import Callable
 
 from flexfoil.rans import RANSResult
 from flexfoil.rans.config import build_case_config
-from flexfoil.rans.mesh import generate_and_write_mesh
+from flexfoil.rans.mesh import generate_and_write_csm, generate_and_write_mesh
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +323,109 @@ def _get_last_value(forces: dict, key: str) -> float:
 
 
 # ---------------------------------------------------------------------------
+# CSM-based meshing (uses Flow360's automated mesher)
+# ---------------------------------------------------------------------------
+
+def _submit_csm(
+    csm_path: Path,
+    case_config: dict,
+    case_label: str,
+    *,
+    Re: float = 1e6,
+    timeout: int = 3600,
+    on_progress: Callable[[str, float], None] | None = None,
+) -> tuple[str, str]:
+    """Upload CSM geometry, auto-mesh, and submit case.
+
+    Uses Flow360's automated meshing pipeline:
+    CSM geometry → surface mesh → volume mesh → RANS case.
+
+    Returns (case_id, mesh_id).
+    """
+    from flexfoil.rans.mesh import estimate_first_cell_height
+
+    import flow360client
+
+    # Step 1: Surface mesh from geometry
+    if on_progress:
+        on_progress("Generating surface mesh", 0.1)
+
+    surface_config = {
+        "maxEdgeLength": 0.05,
+        "curvatureResolutionAngle": 15.0,
+        "growthRate": 1.2,
+    }
+
+    import json as _json
+    import tempfile as _tempfile
+
+    surf_cfg_path = Path(_tempfile.mktemp(suffix=".json"))
+    surf_cfg_path.write_text(_json.dumps(surface_config))
+
+    surface_mesh_id = flow360client.NewSurfaceMeshFromGeometry(
+        str(csm_path),
+        str(surf_cfg_path),
+    )
+    surf_cfg_path.unlink(missing_ok=True)
+
+    # Step 2: Volume mesh from surface
+    if on_progress:
+        on_progress("Generating volume mesh", 0.2)
+
+    first_cell = estimate_first_cell_height(Re)
+    volume_config = {
+        "firstLayerThickness": first_cell,
+        "growthRate": 1.15,
+        "volume": {
+            "firstLayerThickness": first_cell,
+            "growthRate": 1.15,
+        },
+    }
+
+    vol_cfg_path = Path(_tempfile.mktemp(suffix=".json"))
+    vol_cfg_path.write_text(_json.dumps(volume_config))
+
+    mesh_id = flow360client.NewMeshFromSurface(
+        surfaceMeshId=surface_mesh_id,
+        config=str(vol_cfg_path),
+        meshName=case_label,
+    )
+    vol_cfg_path.unlink(missing_ok=True)
+
+    # Step 3: Submit case
+    if on_progress:
+        on_progress("Submitting case", 0.3)
+
+    case_id = flow360client.NewCase(
+        meshId=mesh_id,
+        config=case_config,
+        caseName=case_label,
+    )
+
+    # Step 4: Wait
+    if on_progress:
+        on_progress("Running RANS solver", 0.35)
+
+    import flow360client.case as case_api
+    start = time.time()
+    while True:
+        info = case_api.GetCaseInfo(case_id)
+        status = info.get("status", "unknown")
+        if on_progress:
+            frac = {"preprocessing": 0.4, "queued": 0.45, "running": 0.6,
+                     "postprocessing": 0.9, "completed": 1.0,
+                     "error": 1.0, "diverged": 1.0}.get(status, 0.35)
+            on_progress(status, frac)
+        if status in ("completed", "error", "diverged"):
+            break
+        if time.time() - start > timeout:
+            break
+        time.sleep(10)
+
+    return case_id, mesh_id
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -342,11 +445,16 @@ def run_rans(
     timeout: int = 3600,
     on_progress: Callable[[str, float], None] | None = None,
     cleanup: bool = True,
+    use_auto_mesh: bool = True,
 ) -> RANSResult:
     """Full RANS pipeline: coords → mesh → upload → solve → results.
 
-    Uses the modern ``flow360`` SDK if available (cases appear in Project view),
-    otherwise falls back to ``flow360client``.
+    Parameters
+    ----------
+    use_auto_mesh : bool
+        If True (default), use Flow360's automated meshing via CSM geometry.
+        This produces higher-quality meshes. If False, generate a C-grid
+        mesh locally and upload as UGRID.
     """
     if not check_auth():
         return RANSResult(
@@ -369,34 +477,48 @@ def run_rans(
     tmpdir = tempfile.mkdtemp(prefix="flexfoil_rans_")
 
     try:
-        # Step 1: Generate mesh
-        if on_progress:
-            on_progress("Generating mesh", 0.05)
-
-        ugrid_path, mapbc_path = generate_and_write_mesh(
-            coords, tmpdir,
-            Re=Re, n_normal=n_normal,
-            growth_rate=growth_rate, farfield_radius=farfield_radius,
-            span=span, mesh_name=airfoil_name,
-        )
-
-        # Step 2-4: Upload + submit + wait
         case_label = f"{airfoil_name}_a{alpha:.1f}_Re{Re:.0e}_M{mach:.2f}"
         case_config = build_case_config(
             alpha=alpha, Re=Re, mach=mach, span=span,
             max_steps=max_steps, turbulence_model=turbulence_model,
         )
 
-        if use_modern:
-            case_id, mesh_id = _submit_modern(
-                ugrid_path, case_config, case_label,
-                timeout=timeout, on_progress=on_progress,
+        if use_auto_mesh and _has_legacy_sdk():
+            # Primary path: CSM geometry → Flow360 automated meshing
+            if on_progress:
+                on_progress("Generating geometry", 0.05)
+
+            csm_path = generate_and_write_csm(
+                coords, tmpdir, span=span, mesh_name=airfoil_name,
             )
+
+            case_id, mesh_id = _submit_csm(
+                csm_path, case_config, case_label,
+                Re=Re, timeout=timeout, on_progress=on_progress,
+            )
+
         else:
-            case_id, mesh_id = _submit_legacy(
-                ugrid_path, case_config, case_label,
-                timeout=timeout, on_progress=on_progress,
+            # Fallback: generate C-grid mesh locally
+            if on_progress:
+                on_progress("Generating mesh", 0.05)
+
+            ugrid_path, mapbc_path = generate_and_write_mesh(
+                coords, tmpdir,
+                Re=Re, n_normal=n_normal,
+                growth_rate=growth_rate, farfield_radius=farfield_radius,
+                span=span, mesh_name=airfoil_name,
             )
+
+            if use_modern:
+                case_id, mesh_id = _submit_modern(
+                    ugrid_path, case_config, case_label,
+                    timeout=timeout, on_progress=on_progress,
+                )
+            else:
+                case_id, mesh_id = _submit_legacy(
+                    ugrid_path, case_config, case_label,
+                    timeout=timeout, on_progress=on_progress,
+                )
 
         # Step 5: Fetch results
         if on_progress:
