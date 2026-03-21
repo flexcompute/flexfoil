@@ -384,10 +384,10 @@ def _submit_csm(
                 moment_length=[1, 1, 1],
                 area=span,  # chord * span for 2D normalization
             ),
-            operating_condition=fl.operating_condition_from_mach_reynolds(
+            operating_condition=fl.AerospaceCondition.from_mach_reynolds(
                 mach=mach,
-                reynolds=Re,
-                temperature=288.15,
+                reynolds_mesh_unit=Re,
+                temperature=288.15 * fl.u.K,
                 alpha=alpha * fl.u.deg,
                 beta=0 * fl.u.deg,
                 project_length_unit=1 * fl.u.m,
