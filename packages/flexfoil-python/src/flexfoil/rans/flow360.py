@@ -706,37 +706,31 @@ def run_rans_batch(
     if on_progress:
         on_progress("Submitting all cases", 0, n_total)
 
-    # Submit all cases in parallel
-    def _submit_one(alpha: float) -> tuple:
+    # Phase 1: Submit all cases SEQUENTIALLY (Flow360 SDK uses Rich progress
+    # bars that aren't thread-safe), but each case starts solving immediately
+    # on the cloud so they run in parallel after submission.
+    submissions = {}  # alpha → (project, case)
+    for i, alpha in enumerate(alphas):
         case_label = f"{airfoil_name}_a{alpha:.1f}_Re{Re:.0e}_M{mach:.2f}"
-        # Each submission needs its own CSM file copy (Flow360 uploads it)
         import shutil
         alpha_dir = Path(tmpdir) / f"a{alpha:.1f}"
         alpha_dir.mkdir(exist_ok=True)
         alpha_csm = alpha_dir / csm_path.name
         shutil.copy2(csm_path, alpha_csm)
 
-        return _submit_csm_no_wait(
-            alpha_csm, case_label,
-            alpha=alpha, Re=Re, mach=mach, span=span,
-            max_steps=max_steps, turbulence_model=turbulence_model,
-        )
-
-    # Phase 1: Submit all cases concurrently
-    submissions = {}  # alpha → (project, case)
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_submit_one, a): a for a in alphas}
-        for i, future in enumerate(as_completed(futures)):
-            alpha = futures[future]
-            try:
-                project, case, _ = future.result()
-                submissions[alpha] = (project, case)
-                if on_progress:
-                    on_progress(f"Submitted α={alpha:.1f}°", i + 1, n_total)
-            except Exception as e:
-                submissions[alpha] = (None, str(e))
-                if on_progress:
-                    on_progress(f"Failed α={alpha:.1f}°: {e}", i + 1, n_total)
+        try:
+            project, case, _ = _submit_csm_no_wait(
+                alpha_csm, case_label,
+                alpha=alpha, Re=Re, mach=mach, span=span,
+                max_steps=max_steps, turbulence_model=turbulence_model,
+            )
+            submissions[alpha] = (project, case)
+            if on_progress:
+                on_progress(f"Submitted α={alpha:.1f}°", i + 1, n_total)
+        except Exception as e:
+            submissions[alpha] = (None, str(e))
+            if on_progress:
+                on_progress(f"Failed α={alpha:.1f}°: {e}", i + 1, n_total)
 
     if on_progress:
         on_progress("All submitted — waiting for solves", n_total, n_total)
