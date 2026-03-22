@@ -523,8 +523,8 @@ def generate_and_write_mesh_gmsh(
     gmsh.option.setNumber("General.Terminal", 0)
     gmsh.model.add("airfoil")
 
-    # Airfoil spline
-    pts = [gmsh.model.geo.addPoint(x, y, 0, surface_size_min) for x, y in coords]
+    # Airfoil spline with fine mesh size near surface
+    pts = [gmsh.model.geo.addPoint(x, y, 0, 0.003) for x, y in coords]
     spline = gmsh.model.geo.addBSpline(pts + [pts[0]])
     airfoil_loop = gmsh.model.geo.addCurveLoop([spline])
 
@@ -545,28 +545,36 @@ def generate_and_write_mesh_gmsh(
     surf = gmsh.model.geo.addPlaneSurface([farfield_loop, airfoil_loop])
     gmsh.model.geo.synchronize()
 
-    # BL field
+    # Structured BL with proper settings
     bl = gmsh.model.mesh.field.add("BoundaryLayer")
     gmsh.model.mesh.field.setNumbers(bl, "CurvesList", [spline])
     gmsh.model.mesh.field.setNumber(bl, "Size", first_cell)
+    gmsh.model.mesh.field.setNumber(bl, "SizeFar", 0.02)
     gmsh.model.mesh.field.setNumber(bl, "Ratio", growth_rate)
     gmsh.model.mesh.field.setNumber(bl, "Thickness", bl_thickness)
     gmsh.model.mesh.field.setNumber(bl, "Quads", 1)
+    gmsh.model.mesh.field.setNumber(bl, "IntersectMetrics", 0)
     gmsh.model.mesh.field.setAsBoundaryLayer(bl)
 
-    # Size control
+    # Smooth size transition from BL edge to farfield
     dist = gmsh.model.mesh.field.add("Distance")
     gmsh.model.mesh.field.setNumbers(dist, "CurvesList", [spline])
+    gmsh.model.mesh.field.setNumber(dist, "Sampling", 200)
     thresh = gmsh.model.mesh.field.add("Threshold")
     gmsh.model.mesh.field.setNumber(thresh, "InField", dist)
-    gmsh.model.mesh.field.setNumber(thresh, "SizeMin", surface_size_min)
+    gmsh.model.mesh.field.setNumber(thresh, "SizeMin", 0.02)
     gmsh.model.mesh.field.setNumber(thresh, "SizeMax", surface_size_max)
     gmsh.model.mesh.field.setNumber(thresh, "DistMin", bl_thickness)
     gmsh.model.mesh.field.setNumber(thresh, "DistMax", farfield_radius * 0.6)
+    gmsh.model.mesh.field.setNumber(thresh, "Sigmoid", 1)
     gmsh.model.mesh.field.setAsBackgroundMesh(thresh)
 
-    gmsh.option.setNumber("Mesh.RecombineAll", 1)
-    gmsh.option.setNumber("Mesh.Algorithm", 8)
+    # Unstructured tris in farfield (quads only in BL via field)
+    gmsh.option.setNumber("Mesh.RecombineAll", 0)
+    gmsh.option.setNumber("Mesh.Algorithm", 6)  # Frontal-Delaunay
+    gmsh.option.setNumber("Mesh.SmoothRatio", 1.8)
+    gmsh.option.setNumber("Mesh.AnisoMax", 1000)
+    gmsh.option.setNumber("Mesh.BoundaryLayerFanPoints", 5)  # fan at TE
 
     gmsh.model.mesh.generate(2)
 

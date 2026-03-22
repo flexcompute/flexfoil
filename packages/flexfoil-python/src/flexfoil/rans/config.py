@@ -63,13 +63,13 @@ def build_case_config(
             "betaAngle": 0.0,
             "Temperature": temperature,
         },
-        # Boundary names must match those in the .mapbc file
+        # Boundary names must match those in the .mapbc file.
+        # The wake boundary is only present in the algebraic C-grid mesh.
         "boundaries": {
             "wall": {"type": "NoSlipWall"},
             "farfield": {"type": "Freestream"},
             "symmetry_y0": {"type": "SlipWall"},
             "symmetry_y1": {"type": "SlipWall"},
-            "wake": {"type": "Freestream"},
         },
         "navierStokesSolver": {
             "absoluteTolerance": 1e-10,
