@@ -759,9 +759,9 @@ def generate_and_write_mesh_gmsh(
         gmsh.finalize()
         raise RuntimeError("gmsh did not produce quad elements — transfinite meshing failed")
 
-    # Wall edges
+    # Wall edges (upper + LE + lower)
     wall_edges = []
-    for curve in [c_upper, c_lower]:
+    for curve in [c_upper, c_le, c_lower]:
         _, _, enodes = gmsh.model.mesh.getElements(dim=1, tag=curve)
         for en in enodes:
             wall_edges.append(en.reshape(-1, 2))
@@ -769,8 +769,9 @@ def generate_and_write_mesh_gmsh(
 
     # Farfield + outlet edges
     ff_edges = []
-    for curve in [c_ff_upper, c_ff_lower, c_wake_top, c_wake_bottom,
-                  c_wake_exit_upper, c_wake_exit_lower]:
+    for curve in [c_inlet, c_top_line, c_bottom_line,
+                  c_wake_top_line, c_wake_bottom_line,
+                  c_outlet_top, c_outlet_bottom]:
         _, _, enodes = gmsh.model.mesh.getElements(dim=1, tag=curve)
         for en in enodes:
             ff_edges.append(en.reshape(-1, 2))
