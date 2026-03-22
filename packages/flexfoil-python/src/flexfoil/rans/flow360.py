@@ -734,27 +734,16 @@ def run_rans_batch(
         coords, tmpdir, Re=Re, span=span, mesh_name=airfoil_name,
     )
 
-    # Step 2: Upload mesh ONCE
+    # Step 2: Upload mesh ONCE via legacy SDK (compatible with both case APIs)
     if on_progress:
         on_progress("Uploading mesh", 0, n_total)
 
-    if _has_modern_sdk():
-        import flow360 as fl
-        draft = fl.VolumeMesh.from_file(
-            str(ugrid_path),
-            project_name=f"FlexFoil: {airfoil_name}_polar",
-            solver_version="release-25.8",
-        )
-        vm = draft.submit()
-        vm.wait()
-        mesh_id = vm.id
-    else:
-        import flow360client
-        mesh_id = flow360client.NewMesh(
-            str(ugrid_path), meshName=f"{airfoil_name}_polar",
-            meshJson={"boundaries": {"noSlipWalls": ["1"]}},
-            fmat="aflr3", endianness="big",
-        )
+    import flow360client
+    mesh_id = flow360client.NewMesh(
+        str(ugrid_path), meshName=f"{airfoil_name}_polar",
+        meshJson={"boundaries": {"noSlipWalls": ["1"]}},
+        fmat="aflr3", endianness="big",
+    )
 
     # Step 3: Submit one case per alpha (all against the same mesh)
     submissions = {}  # alpha → case_id
@@ -766,23 +755,11 @@ def run_rans_batch(
         )
 
         try:
-            if _has_modern_sdk():
-                from flow360.component.v1.flow360_params import Flow360Params
-                tmp_json = Path(tmpdir) / f"case_a{alpha:.1f}.json"
-                tmp_json.write_text(json.dumps(case_config))
-                params = Flow360Params.from_file(str(tmp_json))
-                case_draft = fl.Case.create(
-                    name=case_label, params=params, volume_mesh_id=mesh_id,
-                )
-                case = case_draft.submit()
-                submissions[alpha] = case.id
-            else:
-                import flow360client
-                legacy_config = _config_with_integer_boundaries(case_config)
-                case_id = flow360client.NewCase(
-                    meshId=mesh_id, config=legacy_config, caseName=case_label,
-                )
-                submissions[alpha] = case_id
+            legacy_config = _config_with_integer_boundaries(case_config)
+            case_id = flow360client.NewCase(
+                meshId=mesh_id, config=legacy_config, caseName=case_label,
+            )
+            submissions[alpha] = case_id
 
             if on_progress:
                 on_progress(f"Submitted α={alpha:.1f}°", i + 1, n_total)
