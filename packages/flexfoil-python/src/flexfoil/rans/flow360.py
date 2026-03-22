@@ -137,7 +137,11 @@ def _submit_modern(
                 fl.SurfaceOutput(
                     name="surface",
                     surfaces=[vm["wall"]],
-                    output_fields=["Cp", "Cf", "yPlus"],
+                    output_fields=["Cp", "Cf", "CfVec", "yPlus"],
+                ),
+                fl.VolumeOutput(
+                    name="volume",
+                    output_fields=["primitiveVars", "Cp", "Mach"],
                 ),
             ],
         )
