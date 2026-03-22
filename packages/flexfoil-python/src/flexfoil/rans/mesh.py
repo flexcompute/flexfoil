@@ -669,7 +669,11 @@ def generate_and_write_mesh_gmsh(
     c_top_line = geo.addLine(p_top_te, p_inlet_top)
     c_bottom_line = geo.addLine(p_inlet_bottom, p_bottom_te)
 
+    # TE base line (connects upper and lower TE points — closes the open TE)
+    c_te_base = geo.addLine(p_te_upper, p_te_lower)
+
     # Wake lines — upper wake from TE_upper, lower wake from TE_lower
+    # Both converge to the same wake exit center point
     c_wake_upper = geo.addLine(p_te_upper, p_wake_center)
     c_wake_lower = geo.addLine(p_te_lower, p_wake_center)
     c_outlet_top = geo.addLine(p_wake_center, p_wake_top)
@@ -677,31 +681,44 @@ def generate_and_write_mesh_gmsh(
     c_wake_top_line = geo.addLine(p_top_te, p_wake_top)
     c_wake_bottom_line = geo.addLine(p_bottom_te, p_wake_bottom)
 
+    # TE farfield connector (vertical line between top_te and bottom_te farfield pts)
+    c_te_farfield = geo.addLine(p_top_te, p_bottom_te)
+
     # === SURFACES (5 blocks) ===
     # 1. Inlet section (around LE)
     inlet_loop = geo.addCurveLoop([c_inlet, c_bottom_to_inlet, -c_le, c_top_to_inlet])
     s_inlet = geo.addPlaneSurface([inlet_loop])
 
-    # 2. Top section (upper surface)
+    # 2. Top section (upper surface → farfield)
     top_loop = geo.addCurveLoop([-c_upper, -c_top_to_inlet, c_top_line, -c_te_upper_to_top])
     s_top = geo.addPlaneSurface([top_loop])
 
-    # 3. Bottom section (lower surface)
+    # 3. Bottom section (lower surface → farfield)
     bottom_loop = geo.addCurveLoop([-c_bottom_to_inlet, -c_lower, -c_te_lower_to_bottom, c_bottom_line])
     s_bottom = geo.addPlaneSurface([bottom_loop])
 
-    # 4. Top wake (from upper TE)
+    # 4. Upper wake (from TE_upper to wake exit top half)
     wake_top_loop = geo.addCurveLoop([c_te_upper_to_top, c_wake_upper, c_outlet_top, -c_wake_top_line])
     s_wake_top = geo.addPlaneSurface([wake_top_loop])
 
-    # 5. Bottom wake (from lower TE)
+    # 5. Lower wake (from TE_lower to wake exit bottom half)
     wake_bottom_loop = geo.addCurveLoop([c_te_lower_to_bottom, c_wake_bottom_line, c_outlet_bottom, -c_wake_lower])
     s_wake_bottom = geo.addPlaneSurface([wake_bottom_loop])
+
+    # 6. TE closure strip (thin quad strip closing the open TE gap)
+    # Connects: TE_upper → TE_lower (via te_base), then TE_lower → farfield_bottom_te
+    # → farfield_top_te → TE_upper (via radial lines)
+    # CCW: te_upper → te_lower → bottom_te_ff → top_te_ff → te_upper
+    te_strip_loop = geo.addCurveLoop([c_te_base, c_te_lower_to_bottom, -c_te_farfield, c_te_upper_to_top])
+    s_te_strip = geo.addPlaneSurface([te_strip_loop])
 
     geo.synchronize()
 
     # === TRANSFINITE CURVES ===
     mesh = gmsh.model.mesh
+
+    # Number of cells across TE gap (just a few — it's very thin)
+    n_te = 3
 
     # Inlet section
     mesh.setTransfiniteCurve(c_inlet, n_le, "Bump", -0.1)
@@ -719,29 +736,33 @@ def generate_and_write_mesh_gmsh(
     mesh.setTransfiniteCurve(c_lower, n_airfoil, "Progression", te_growth)
     mesh.setTransfiniteCurve(c_bottom_line, n_airfoil, "Progression", -te_growth)
 
-    # Top wake
+    # TE base & farfield connector
+    mesh.setTransfiniteCurve(c_te_base, n_te)
+    mesh.setTransfiniteCurve(c_te_farfield, n_te)
+
+    # Upper wake
     mesh.setTransfiniteCurve(c_wake_top_line, n_wake, "Progression", -wake_growth)
     mesh.setTransfiniteCurve(c_wake_upper, n_wake, "Progression", wake_growth)
     mesh.setTransfiniteCurve(c_outlet_top, n_normal, "Progression", bl_growth)
 
-    # Bottom wake
+    # Lower wake
     mesh.setTransfiniteCurve(c_wake_bottom_line, n_wake, "Progression", wake_growth)
     mesh.setTransfiniteCurve(c_wake_lower, n_wake, "Progression", wake_growth)
     mesh.setTransfiniteCurve(c_outlet_bottom, n_normal, "Progression", -bl_growth)
 
     # === TRANSFINITE SURFACES + RECOMBINE ===
-    for s in [s_inlet, s_top, s_bottom, s_wake_top, s_wake_bottom]:
+    for s in [s_inlet, s_top, s_bottom, s_wake_top, s_wake_bottom, s_te_strip]:
         mesh.setTransfiniteSurface(s)
         mesh.setRecombine(2, s)
 
     gmsh.model.mesh.generate(2)
 
     # === PHYSICAL GROUPS ===
-    gmsh.model.addPhysicalGroup(1, [c_upper, c_lower, c_le], tag=1, name="wall")
+    gmsh.model.addPhysicalGroup(1, [c_upper, c_lower, c_le, c_te_base], tag=1, name="wall")
     gmsh.model.addPhysicalGroup(1, [c_inlet, c_top_line, c_bottom_line,
                                      c_wake_top_line, c_wake_bottom_line,
                                      c_outlet_top, c_outlet_bottom], tag=2, name="farfield")
-    gmsh.model.addPhysicalGroup(2, [s_inlet, s_top, s_bottom, s_wake_top, s_wake_bottom],
+    gmsh.model.addPhysicalGroup(2, [s_inlet, s_top, s_bottom, s_wake_top, s_wake_bottom, s_te_strip],
                                 tag=10, name="fluid")
 
     # === EXTRACT MESH ===
@@ -762,9 +783,9 @@ def generate_and_write_mesh_gmsh(
         gmsh.finalize()
         raise RuntimeError("gmsh did not produce quad elements — transfinite meshing failed")
 
-    # Wall edges (upper + LE + lower)
+    # Wall edges (upper + LE + lower + TE base)
     wall_edges = []
-    for curve in [c_upper, c_le, c_lower]:
+    for curve in [c_upper, c_le, c_lower, c_te_base]:
         _, _, enodes = gmsh.model.mesh.getElements(dim=1, tag=curve)
         for en in enodes:
             wall_edges.append(en.reshape(-1, 2))
