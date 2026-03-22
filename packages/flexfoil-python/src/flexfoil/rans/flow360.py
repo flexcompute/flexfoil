@@ -727,40 +727,34 @@ def run_rans_batch(
     tmpdir = tempfile.mkdtemp(prefix="flexfoil_rans_batch_")
     n_total = len(alphas)
 
-    # Step 1: Generate mesh ONCE (geometry is same for all alphas)
+    # Generate CSM geometry once
     if on_progress:
-        on_progress("Generating mesh", 0, n_total)
+        on_progress("Generating geometry", 0, n_total)
 
-    ugrid_path, mapbc_path = generate_and_write_mesh(
-        coords, tmpdir, Re=Re, span=span, mesh_name=airfoil_name,
+    csm_path = generate_and_write_csm(
+        coords, tmpdir, span=span, mesh_name=airfoil_name,
     )
 
-    # Step 2: Upload mesh ONCE via legacy SDK (compatible with both case APIs)
-    if on_progress:
-        on_progress("Uploading mesh", 0, n_total)
-
-    import flow360client
-    mesh_id = flow360client.NewMesh(
-        str(ugrid_path), meshName=f"{airfoil_name}_polar",
-        meshJson={"boundaries": {"noSlipWalls": ["1"]}},
-        fmat="aflr3", endianness="big",
-    )
-
-    # Step 3: Submit one case per alpha (all against the same mesh)
-    submissions = {}  # alpha → case_id
+    # Submit each alpha as a separate Project (sequential — SDK uses Rich)
+    # Each project does its own auto-meshing + solve via Flow360
+    submissions = {}  # alpha → case_id (string) or error string
     for i, alpha in enumerate(alphas):
         case_label = f"{airfoil_name}_a{alpha:.1f}_Re{Re:.0e}_M{mach:.2f}"
-        case_config = build_case_config(
-            alpha=alpha, Re=Re, mach=mach, span=span,
-            max_steps=max_steps, turbulence_model=turbulence_model,
-        )
+
+        # Copy CSM to per-alpha dir (each Project needs its own file)
+        import shutil
+        alpha_dir = Path(tmpdir) / f"a{alpha:.1f}"
+        alpha_dir.mkdir(exist_ok=True)
+        alpha_csm = alpha_dir / csm_path.name
+        shutil.copy2(csm_path, alpha_csm)
 
         try:
-            legacy_config = _config_with_integer_boundaries(case_config)
-            case_id = flow360client.NewCase(
-                meshId=mesh_id, config=legacy_config, caseName=case_label,
+            project, case, _ = _submit_csm_no_wait(
+                alpha_csm, case_label,
+                alpha=alpha, Re=Re, mach=mach, span=span,
+                max_steps=max_steps, turbulence_model=turbulence_model,
             )
-            submissions[alpha] = case_id
+            submissions[alpha] = case.id
 
             if on_progress:
                 on_progress(f"Submitted α={alpha:.1f}°", i + 1, n_total)
