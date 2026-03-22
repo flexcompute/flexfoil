@@ -43,6 +43,7 @@ dataframe = [
 ]
 rans = [
     "flow360>=25.0",
+    "gmsh>=4.0",
 ]
 all = [
     "flexfoil[server,matplotlib,dataframe,rans]",

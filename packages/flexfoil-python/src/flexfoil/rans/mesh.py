@@ -453,7 +453,19 @@ def generate_and_write_mesh(
     span: float = 0.01,
     mesh_name: str = "airfoil",
 ) -> tuple[Path, Path]:
-    """Full pipeline: airfoil coords → UGRID mesh files (C-grid fallback)."""
+    """Full pipeline: airfoil coords → UGRID mesh files.
+
+    Uses gmsh if available (high-quality BL mesh), falls back to the
+    algebraic C-grid generator otherwise.
+    """
+    try:
+        return generate_and_write_mesh_gmsh(
+            coords, output_dir, Re=Re, growth_rate=growth_rate,
+            farfield_radius=farfield_radius, span=span, mesh_name=mesh_name,
+        )
+    except ImportError:
+        pass
+
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -468,5 +480,238 @@ def generate_and_write_mesh(
     mapbc_path = output_dir / f"{mesh_name}.mapbc"
     write_ugrid(ugrid_path, mesh_3d)
     write_mapbc(mapbc_path, mesh_3d)
+
+    return ugrid_path, mapbc_path
+
+
+# ---------------------------------------------------------------------------
+# gmsh-based mesh generation (preferred)
+# ---------------------------------------------------------------------------
+
+def generate_and_write_mesh_gmsh(
+    coords: list[tuple[float, float]],
+    output_dir: str | Path,
+    *,
+    Re: float = 1e6,
+    growth_rate: float = 1.15,
+    farfield_radius: float = 50.0,
+    span: float = 0.01,
+    mesh_name: str = "airfoil",
+    y_plus: float = 1.0,
+    bl_thickness: float = 0.2,
+    surface_size_min: float = 0.01,
+    surface_size_max: float = 5.0,
+) -> tuple[Path, Path]:
+    """Generate a pseudo-2D airfoil mesh using gmsh.
+
+    Uses gmsh's BoundaryLayer field for proper BL meshing, then manually
+    extrudes one cell deep in the spanwise direction. Produces hex + prism
+    elements with no degenerate cells.
+
+    Requires ``pip install gmsh``.
+
+    Returns (ugrid_path, mapbc_path).
+    """
+    import gmsh
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    first_cell = estimate_first_cell_height(Re, y_plus=y_plus)
+
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 0)
+    gmsh.model.add("airfoil")
+
+    # Airfoil spline
+    pts = [gmsh.model.geo.addPoint(x, y, 0, surface_size_min) for x, y in coords]
+    spline = gmsh.model.geo.addBSpline(pts + [pts[0]])
+    airfoil_loop = gmsh.model.geo.addCurveLoop([spline])
+
+    # Farfield circle
+    R = farfield_radius
+    cx, cy = 0.5, 0.0
+    center = gmsh.model.geo.addPoint(cx, cy, 0)
+    p1 = gmsh.model.geo.addPoint(cx + R, cy, 0, surface_size_max)
+    p2 = gmsh.model.geo.addPoint(cx, cy + R, 0, surface_size_max)
+    p3 = gmsh.model.geo.addPoint(cx - R, cy, 0, surface_size_max)
+    p4 = gmsh.model.geo.addPoint(cx, cy - R, 0, surface_size_max)
+    a1 = gmsh.model.geo.addCircleArc(p1, center, p2)
+    a2 = gmsh.model.geo.addCircleArc(p2, center, p3)
+    a3 = gmsh.model.geo.addCircleArc(p3, center, p4)
+    a4 = gmsh.model.geo.addCircleArc(p4, center, p1)
+    farfield_loop = gmsh.model.geo.addCurveLoop([a1, a2, a3, a4])
+
+    surf = gmsh.model.geo.addPlaneSurface([farfield_loop, airfoil_loop])
+    gmsh.model.geo.synchronize()
+
+    # BL field
+    bl = gmsh.model.mesh.field.add("BoundaryLayer")
+    gmsh.model.mesh.field.setNumbers(bl, "CurvesList", [spline])
+    gmsh.model.mesh.field.setNumber(bl, "Size", first_cell)
+    gmsh.model.mesh.field.setNumber(bl, "Ratio", growth_rate)
+    gmsh.model.mesh.field.setNumber(bl, "Thickness", bl_thickness)
+    gmsh.model.mesh.field.setNumber(bl, "Quads", 1)
+    gmsh.model.mesh.field.setAsBoundaryLayer(bl)
+
+    # Size control
+    dist = gmsh.model.mesh.field.add("Distance")
+    gmsh.model.mesh.field.setNumbers(dist, "CurvesList", [spline])
+    thresh = gmsh.model.mesh.field.add("Threshold")
+    gmsh.model.mesh.field.setNumber(thresh, "InField", dist)
+    gmsh.model.mesh.field.setNumber(thresh, "SizeMin", surface_size_min)
+    gmsh.model.mesh.field.setNumber(thresh, "SizeMax", surface_size_max)
+    gmsh.model.mesh.field.setNumber(thresh, "DistMin", bl_thickness)
+    gmsh.model.mesh.field.setNumber(thresh, "DistMax", farfield_radius * 0.6)
+    gmsh.model.mesh.field.setAsBackgroundMesh(thresh)
+
+    gmsh.option.setNumber("Mesh.RecombineAll", 1)
+    gmsh.option.setNumber("Mesh.Algorithm", 8)
+
+    gmsh.model.mesh.generate(2)
+
+    # Extract 2D mesh
+    node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
+    n_nodes_2d = len(node_tags)
+    coords_2d = node_coords.reshape(-1, 3)[:, :2]
+
+    tag_to_idx = {int(t): i for i, t in enumerate(node_tags)}
+
+    # Get elements
+    elem_types, elem_tags, elem_nodes = gmsh.model.mesh.getElements(dim=2)
+    quad_conn, tri_conn = None, None
+    for et, _, enodes in zip(elem_types, elem_tags, elem_nodes):
+        props = gmsh.model.mesh.getElementProperties(et)
+        if "Quad" in props[0]:
+            quad_conn = enodes.reshape(-1, 4)
+        elif "Tri" in props[0]:
+            tri_conn = enodes.reshape(-1, 3)
+
+    # Boundary edges
+    wall_edges = []
+    et, _, enodes = gmsh.model.mesh.getElements(dim=1, tag=spline)
+    for en in enodes:
+        wall_edges.append(en.reshape(-1, 2))
+    wall_edges = np.vstack(wall_edges) if wall_edges else np.zeros((0, 2), dtype=int)
+
+    ff_edges = []
+    for arc in [a1, a2, a3, a4]:
+        et, _, enodes = gmsh.model.mesh.getElements(dim=1, tag=arc)
+        for en in enodes:
+            ff_edges.append(en.reshape(-1, 2))
+    ff_edges = np.vstack(ff_edges) if ff_edges else np.zeros((0, 2), dtype=int)
+
+    gmsh.finalize()
+
+    # === EXTRUDE TO 3D ===
+    # Nodes: airfoil in x-z plane, span in y
+    nodes_y0 = np.column_stack([coords_2d[:, 0], np.zeros(n_nodes_2d), coords_2d[:, 1]])
+    nodes_y1 = np.column_stack([coords_2d[:, 0], np.full(n_nodes_2d, span), coords_2d[:, 1]])
+    all_nodes = np.vstack([nodes_y0, nodes_y1])
+
+    # Hex elements from quads — check orientation so volume is positive
+    hexes = []
+    if quad_conn is not None:
+        for q in quad_conn:
+            idx = [tag_to_idx[int(t)] for t in q]
+            n0, n1, n2, n3 = idx
+            # Check hex volume via cross product
+            p0, p1, p3 = nodes_y0[n0], nodes_y0[n1], nodes_y0[n3]
+            p4 = nodes_y1[n0]
+            vol = np.dot(p1 - p0, np.cross(p3 - p0, p4 - p0))
+            if vol > 0:
+                hexes.append([n0+1, n1+1, n2+1, n3+1,
+                             n0+n_nodes_2d+1, n1+n_nodes_2d+1, n2+n_nodes_2d+1, n3+n_nodes_2d+1])
+            else:
+                # Flip winding to get positive volume
+                hexes.append([n0+1, n3+1, n2+1, n1+1,
+                             n0+n_nodes_2d+1, n3+n_nodes_2d+1, n2+n_nodes_2d+1, n1+n_nodes_2d+1])
+
+    # Prism elements from triangles — check orientation
+    prisms = []
+    if tri_conn is not None:
+        for t in tri_conn:
+            idx = [tag_to_idx[int(tag)] for tag in t]
+            n0, n1, n2 = idx
+            p0, p1, p2 = nodes_y0[n0], nodes_y0[n1], nodes_y0[n2]
+            p3 = nodes_y1[n0]
+            vol = np.dot(p1 - p0, np.cross(p2 - p0, p3 - p0))
+            if vol > 0:
+                prisms.append([n0+1, n1+1, n2+1, n0+n_nodes_2d+1, n1+n_nodes_2d+1, n2+n_nodes_2d+1])
+            else:
+                prisms.append([n0+1, n2+1, n1+1, n0+n_nodes_2d+1, n2+n_nodes_2d+1, n1+n_nodes_2d+1])
+
+    hexes = np.array(hexes, dtype=np.int32) if hexes else np.zeros((0, 8), dtype=np.int32)
+    prisms = np.array(prisms, dtype=np.int32) if prisms else np.zeros((0, 6), dtype=np.int32)
+
+    # Boundary faces
+    wall_quads = np.array([
+        [tag_to_idx[int(e[0])]+1, tag_to_idx[int(e[1])]+1,
+         tag_to_idx[int(e[1])]+n_nodes_2d+1, tag_to_idx[int(e[0])]+n_nodes_2d+1]
+        for e in wall_edges
+    ], dtype=np.int32)
+
+    ff_quads = np.array([
+        [tag_to_idx[int(e[0])]+1, tag_to_idx[int(e[1])]+1,
+         tag_to_idx[int(e[1])]+n_nodes_2d+1, tag_to_idx[int(e[0])]+n_nodes_2d+1]
+        for e in ff_edges
+    ], dtype=np.int32)
+
+    # Symmetry planes: all 2D quads at y=0 and y=span
+    sym_y0_quads, sym_y0_tris = [], []
+    sym_y1_quads, sym_y1_tris = [], []
+    if quad_conn is not None:
+        for q in quad_conn:
+            idx = [tag_to_idx[int(t)]+1 for t in q]
+            sym_y0_quads.append(idx)
+            sym_y1_quads.append([i + n_nodes_2d for i in idx])
+    if tri_conn is not None:
+        for t in tri_conn:
+            idx = [tag_to_idx[int(tag)]+1 for tag in t]
+            sym_y0_tris.append(idx)
+            sym_y1_tris.append([i + n_nodes_2d for i in idx])
+
+    # === WRITE UGRID ===
+    # Collect all boundary tris and quads with tags
+    all_bnd_tris, all_tri_tags = [], []
+    for tris, tag in [(sym_y0_tris, 3), (sym_y1_tris, 4)]:
+        for t in tris:
+            all_bnd_tris.append(t)
+            all_tri_tags.append(tag)
+
+    all_bnd_quads, all_quad_tags = [], []
+    for quads, tag in [
+        (wall_quads.tolist(), 1),
+        (ff_quads.tolist(), 2),
+        (sym_y0_quads, 3),
+        (sym_y1_quads, 4),
+    ]:
+        for q in quads:
+            all_bnd_quads.append(q)
+            all_quad_tags.append(tag)
+
+    ugrid_path = output_dir / f"{mesh_name}.b8.ugrid"
+    mapbc_path = output_dir / f"{mesh_name}.mapbc"
+
+    with open(ugrid_path, "wb") as f:
+        f.write(struct.pack(">7i",
+            len(all_nodes), len(all_bnd_tris), len(all_bnd_quads),
+            0, 0, len(prisms), len(hexes)))
+        for node in all_nodes:
+            f.write(struct.pack(">3d", *node))
+        for tri in all_bnd_tris:
+            f.write(struct.pack(">3i", *tri))
+        for quad in all_bnd_quads:
+            f.write(struct.pack(">4i", *quad))
+        for tag in all_tri_tags:
+            f.write(struct.pack(">i", tag))
+        for tag in all_quad_tags:
+            f.write(struct.pack(">i", tag))
+        for prism in prisms:
+            f.write(struct.pack(">6i", *prism))
+        for hex_elem in hexes:
+            f.write(struct.pack(">8i", *hex_elem))
+
+    mapbc_path.write_text("4\n1 4000 wall\n2 3000 farfield\n3 5000 symmetry_y0\n4 5000 symmetry_y1\n")
 
     return ugrid_path, mapbc_path
