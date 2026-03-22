@@ -59,15 +59,23 @@ def _submit_modern(
     case_config: dict,
     case_label: str,
     *,
+    alpha: float = 0.0,
+    Re: float = 1e6,
+    mach: float = 0.2,
+    max_steps: int = 5000,
+    turbulence_model: str = "SpalartAllmaras",
     timeout: int = 3600,
     on_progress: Callable[[str, float], None] | None = None,
 ) -> tuple[str, str]:
-    """Upload mesh and submit case using the modern flow360 SDK.
+    """Upload mesh and submit case using the modern flow360 SDK + Project API.
+
+    The mesh is in gmsh convention (airfoil in x-y plane, span in z).
+    We use betaAngle for angle of attack since Flow360's alphaAngle
+    rotates in the x-z plane.
 
     Returns (case_id, mesh_id).
     """
     import flow360 as fl
-    from flow360.component.v1.flow360_params import Flow360Params
 
     # Upload mesh
     if on_progress:
@@ -82,37 +90,71 @@ def _submit_modern(
     vm.wait()
     mesh_id = vm.id
 
-    # Build Flow360Params from config dict
+    # Submit case via Project API (required for modern SDK)
     if on_progress:
         on_progress("Submitting case", 0.15)
 
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
-    json.dump(case_config, tmp)
-    tmp.close()
-    params = Flow360Params.from_file(tmp.name)
-    Path(tmp.name).unlink(missing_ok=True)
+    project = fl.Project.from_cloud(vm.project_id)
 
-    # Submit case
-    case_draft = fl.Case.create(
-        name=case_label,
-        params=params,
-        volume_mesh_id=mesh_id,
-    )
-    case = case_draft.submit()
+    with fl.SI_unit_system:
+        params = fl.SimulationParams(
+            reference_geometry=fl.ReferenceGeometry(
+                moment_center=[0.25, 0, 0],
+                moment_length=[1, 1, 1],
+                area=case_config["geometry"]["refArea"],
+            ),
+            operating_condition=fl.AerospaceCondition.from_mach_reynolds(
+                mach=mach,
+                reynolds_mesh_unit=Re,
+                temperature=288.15 * fl.u.K,
+                alpha=0 * fl.u.deg,
+                beta=-alpha * fl.u.deg,  # betaAngle for x-y plane airfoil
+                project_length_unit=1 * fl.u.m,
+            ),
+            time_stepping=fl.Steady(
+                max_steps=max_steps,
+                CFL=fl.RampCFL(initial=5, final=200, ramp_steps=2000),
+            ),
+            models=[
+                fl.Wall(surfaces=[vm["wall"]], name="airfoil"),
+                fl.Freestream(surfaces=[vm["farfield"]], name="freestream"),
+                fl.SlipWall(
+                    surfaces=[vm["symmetry_y0"], vm["symmetry_y1"]],
+                    name="symmetry",
+                ),
+                fl.Fluid(
+                    navier_stokes_solver=fl.NavierStokesSolver(
+                        absolute_tolerance=1e-10,
+                    ),
+                    turbulence_model_solver=(
+                        fl.SpalartAllmaras(absolute_tolerance=1e-8)
+                        if turbulence_model == "SpalartAllmaras"
+                        else fl.KOmegaSST(absolute_tolerance=1e-8)
+                    ),
+                ),
+            ],
+            outputs=[
+                fl.SurfaceOutput(
+                    name="surface",
+                    surfaces=[vm["wall"]],
+                    output_fields=["Cp", "Cf", "yPlus"],
+                ),
+            ],
+        )
+
+    project.run_case(params=params, name=case_label)
+    case = project.case
     case_id = case.id
 
-    # Wait for completion
+    # Poll until complete (using legacy SDK — thread-safe, no Rich)
     if on_progress:
         on_progress("Running RANS solver", 0.2)
 
-    # Poll until case completes (case.wait() can return prematurely)
-    if on_progress:
-        on_progress("Running RANS solver", 0.2)
-
+    import flow360client.case as case_api
     start = time.time()
     while True:
-        info = case.get_info()
-        status = info.caseStatus
+        info = case_api.GetCaseInfo(case_id)
+        status = info.get("status", "unknown")
 
         if on_progress:
             frac = {"preprocessing": 0.25, "queued": 0.3, "running": 0.5,
@@ -298,7 +340,16 @@ def fetch_results(case_id: str, *, alpha: float, Re: float, mach: float) -> RANS
             case_id=case_id,
         )
 
-    cl = _get_last_value(forces, "CL")
+    # The gmsh mesh has the airfoil in the x-y plane, so:
+    #   CFy = lift (normal to freestream in the airfoil plane)
+    #   CD  = drag (aligned with freestream)
+    #   CMz = pitching moment
+    # Flow360's CL is in the z-direction which is the spanwise direction
+    # for our mesh orientation, so we use CFy instead.
+    cl = _get_last_value(forces, "CFy")
+    if abs(cl) < 1e-10:
+        # Fallback: if CFy is zero, the mesh might be in x-z plane (CSM path)
+        cl = _get_last_value(forces, "CL")
     cd = _get_last_value(forces, "CD")
     cm = _get_last_value(forces, "CMz")
     cd_pressure = _get_last_value(forces, "CDPressure")
@@ -334,8 +385,11 @@ def _fetch_results_legacy(
             )
 
         forces = case_api.GetCaseTotalForces(case_id)
+        cl = _get_last_value(forces, "CFy")
+        if abs(cl) < 1e-10:
+            cl = _get_last_value(forces, "CL")
         return RANSResult(
-            cl=_get_last_value(forces, "CL"),
+            cl=cl,
             cd=_get_last_value(forces, "CD"),
             cm=_get_last_value(forces, "CMz"),
             alpha=alpha, reynolds=Re, mach=mach,
@@ -569,6 +623,8 @@ def run_rans(
             if use_modern:
                 case_id, mesh_id = _submit_modern(
                     ugrid_path, case_config, case_label,
+                    alpha=alpha, Re=Re, mach=mach,
+                    max_steps=max_steps, turbulence_model=turbulence_model,
                     timeout=timeout, on_progress=on_progress,
                 )
             else:
