@@ -288,22 +288,44 @@ def generate_airfoil_mesh(
     # Normalize heights to [0, 1] for TFI parameter
     s = heights / heights[-1]  # s[0]=0 (surface), s[-1]=1 (farfield)
 
-    # Build outer boundary: a C-shaped curve at the farfield
-    # Map each inner boundary point to a corresponding outer point on a circle
+    # Build C-shaped outer boundary that preserves the wake opening.
+    # The outer boundary is a semicircle from the lower wake tip, around
+    # the front, to the upper wake tip — with straight segments along the
+    # wake exit on both sides. This keeps the wake cut open at the farfield.
     R = farfield_radius * chord
     cx = 0.5 * chord  # circle center at mid-chord
 
     outer = np.zeros_like(c_boundary)
+
+    # Wake tip positions at farfield distance
+    wake_tip_x = c_boundary[0, 0]  # x of outermost wake point (lower)
+    wake_lower_y = -R  # lower wake at farfield radius below
+    wake_upper_y = R   # upper wake at farfield radius above
+
     for i in range(n_c):
         pt = c_boundary[i]
-        dx, dy = pt[0] - cx, pt[1]
-        angle = np.arctan2(dy, dx)
-        outer[i] = [cx + R * np.cos(angle), R * np.sin(angle)]
 
-    # TFI: blend between inner boundary (s=0) and outer boundary (s=1)
-    # with BL clustering preserved via the s parameter
-    # node(i, j) = (1-s[j]) * inner[i] + s[j] * outer[i]
-    # This guarantees no crossing because it's a convex combination
+        if i < n_wake:
+            # Lower wake: go straight down from wake point to farfield
+            outer[i] = [pt[0], wake_lower_y]
+        elif i >= n_c - n_wake:
+            # Upper wake: go straight up from wake point to farfield
+            outer[i] = [pt[0], wake_upper_y]
+        else:
+            # Airfoil portion: map to semicircle in front of wake
+            # Parameterize along the airfoil contour
+            i_airfoil = i - n_wake  # 0 = lower TE, n_airfoil-1 = upper TE
+            n_airfoil = n_c - 2 * n_wake
+            t_airfoil = i_airfoil / max(n_airfoil - 1, 1)  # 0 to 1
+
+            # Map to angle: -pi/2 (lower TE) → -pi (LE) → -3pi/2 (upper TE)
+            # i.e. the semicircle wrapping around the front
+            angle = -np.pi / 2 - t_airfoil * np.pi
+
+            outer[i] = [cx + R * np.cos(angle), R * np.sin(angle)]
+
+    # TFI: blend inner (s=0) and outer (s=1) boundaries.
+    # Convex combination guarantees no cell crossing.
     nodes_2d = np.zeros((n_c * n_layers, 2))
     for j in range(n_layers):
         nodes_2d[j * n_c: (j + 1) * n_c] = (1.0 - s[j]) * c_boundary + s[j] * outer
