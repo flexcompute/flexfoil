@@ -312,6 +312,45 @@ def fetch_results(case_id: str, *, alpha: float, Re: float, mach: float) -> RANS
     )
 
 
+def _fetch_results_legacy(
+    case_id: str, *, alpha: float, Re: float, mach: float
+) -> RANSResult:
+    """Fetch results using only the legacy SDK (no Rich progress bars).
+
+    Safe to call from threads — unlike fetch_results() which may trigger
+    Rich download displays via the modern SDK.
+    """
+    try:
+        import flow360client.case as case_api
+        info = case_api.GetCaseInfo(case_id)
+        status = info.get("status", "unknown")
+
+        if status != "completed":
+            return RANSResult(
+                cl=0, cd=0, cm=0, alpha=alpha, reynolds=Re, mach=mach,
+                converged=False, success=False,
+                error=f"Case status: {status}", case_id=case_id,
+            )
+
+        forces = case_api.GetCaseTotalForces(case_id)
+        return RANSResult(
+            cl=_get_last_value(forces, "CL"),
+            cd=_get_last_value(forces, "CD"),
+            cm=_get_last_value(forces, "CMz"),
+            alpha=alpha, reynolds=Re, mach=mach,
+            converged=True, success=True,
+            cd_pressure=_get_last_value(forces, "CDPressure"),
+            cd_friction=_get_last_value(forces, "CDSkinFriction"),
+            case_id=case_id,
+        )
+    except Exception as e:
+        return RANSResult(
+            cl=0, cd=0, cm=0, alpha=alpha, reynolds=Re, mach=mach,
+            converged=False, success=False,
+            error=f"Force fetch failed: {e}", case_id=case_id,
+        )
+
+
 def _get_last_value(forces: dict, key: str) -> float:
     """Extract the last (converged) value from a forces time-history dict."""
     if key in forces:
@@ -459,16 +498,17 @@ def run_rans(
     timeout: int = 3600,
     on_progress: Callable[[str, float], None] | None = None,
     cleanup: bool = True,
-    use_auto_mesh: bool = True,
+    use_auto_mesh: bool = False,
 ) -> RANSResult:
     """Full RANS pipeline: coords → mesh → upload → solve → results.
 
     Parameters
     ----------
     use_auto_mesh : bool
-        If True (default), use Flow360's automated meshing via CSM geometry.
-        This produces higher-quality meshes. If False, generate a C-grid
-        mesh locally and upload as UGRID.
+        If True, use Flow360's automated meshing via CSM geometry.
+        WARNING: the automated mesher creates multiple spanwise cells which
+        causes spurious crossflow (not true 2D). Default is False, which
+        generates a single-cell-deep hex mesh locally for proper pseudo-2D.
     """
     if not check_auth():
         return RANSResult(
@@ -683,73 +723,93 @@ def run_rans_batch(
             for a in alphas
         ]
 
-    if not _has_modern_sdk():
-        # Fall back to sequential for legacy SDK
-        return [
-            run_rans(coords, alpha=a, Re=Re, mach=mach,
-                     airfoil_name=airfoil_name, span=span,
-                     max_steps=max_steps, turbulence_model=turbulence_model,
-                     timeout=timeout)
-            for a in alphas
-        ]
-
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
     tmpdir = tempfile.mkdtemp(prefix="flexfoil_rans_batch_")
     n_total = len(alphas)
 
-    # Generate CSM once (geometry is the same for all alphas)
-    csm_path = generate_and_write_csm(
-        coords, tmpdir, span=span, mesh_name=airfoil_name,
+    # Step 1: Generate mesh ONCE (geometry is same for all alphas)
+    if on_progress:
+        on_progress("Generating mesh", 0, n_total)
+
+    ugrid_path, mapbc_path = generate_and_write_mesh(
+        coords, tmpdir, Re=Re, span=span, mesh_name=airfoil_name,
     )
 
+    # Step 2: Upload mesh ONCE
     if on_progress:
-        on_progress("Submitting all cases", 0, n_total)
+        on_progress("Uploading mesh", 0, n_total)
 
-    # Phase 1: Submit all cases SEQUENTIALLY (Flow360 SDK uses Rich progress
-    # bars that aren't thread-safe), but each case starts solving immediately
-    # on the cloud so they run in parallel after submission.
-    submissions = {}  # alpha → (project, case)
+    if _has_modern_sdk():
+        import flow360 as fl
+        draft = fl.VolumeMesh.from_file(
+            str(ugrid_path),
+            project_name=f"FlexFoil: {airfoil_name}_polar",
+            solver_version="release-25.8",
+        )
+        vm = draft.submit()
+        vm.wait()
+        mesh_id = vm.id
+    else:
+        import flow360client
+        mesh_id = flow360client.NewMesh(
+            str(ugrid_path), meshName=f"{airfoil_name}_polar",
+            meshJson={"boundaries": {"noSlipWalls": ["1"]}},
+            fmat="aflr3", endianness="big",
+        )
+
+    # Step 3: Submit one case per alpha (all against the same mesh)
+    submissions = {}  # alpha → case_id
     for i, alpha in enumerate(alphas):
         case_label = f"{airfoil_name}_a{alpha:.1f}_Re{Re:.0e}_M{mach:.2f}"
-        import shutil
-        alpha_dir = Path(tmpdir) / f"a{alpha:.1f}"
-        alpha_dir.mkdir(exist_ok=True)
-        alpha_csm = alpha_dir / csm_path.name
-        shutil.copy2(csm_path, alpha_csm)
+        case_config = build_case_config(
+            alpha=alpha, Re=Re, mach=mach, span=span,
+            max_steps=max_steps, turbulence_model=turbulence_model,
+        )
 
         try:
-            project, case, _ = _submit_csm_no_wait(
-                alpha_csm, case_label,
-                alpha=alpha, Re=Re, mach=mach, span=span,
-                max_steps=max_steps, turbulence_model=turbulence_model,
-            )
-            submissions[alpha] = (project, case)
+            if _has_modern_sdk():
+                from flow360.component.v1.flow360_params import Flow360Params
+                tmp_json = Path(tmpdir) / f"case_a{alpha:.1f}.json"
+                tmp_json.write_text(json.dumps(case_config))
+                params = Flow360Params.from_file(str(tmp_json))
+                case_draft = fl.Case.create(
+                    name=case_label, params=params, volume_mesh_id=mesh_id,
+                )
+                case = case_draft.submit()
+                submissions[alpha] = case.id
+            else:
+                import flow360client
+                legacy_config = _config_with_integer_boundaries(case_config)
+                case_id = flow360client.NewCase(
+                    meshId=mesh_id, config=legacy_config, caseName=case_label,
+                )
+                submissions[alpha] = case_id
+
             if on_progress:
                 on_progress(f"Submitted α={alpha:.1f}°", i + 1, n_total)
         except Exception as e:
-            submissions[alpha] = (None, str(e))
+            submissions[alpha] = f"ERROR: {e}"
             if on_progress:
                 on_progress(f"Failed α={alpha:.1f}°: {e}", i + 1, n_total)
 
     if on_progress:
         on_progress("All submitted — waiting for solves", n_total, n_total)
 
-    # Phase 2: Poll all cases until complete (no case.wait() — it uses Rich)
+    # Phase 2: Poll all cases until complete via legacy SDK (thread-safe)
+    import flow360client.case as case_api
+
     pending_alphas = set(
         a for a in alphas
-        if a in submissions and not isinstance(submissions[a][1], str)
+        if a in submissions and not submissions[a].startswith("ERROR")
     )
     results_map = {}
 
     # Pre-populate failures
     for a in alphas:
         if a not in pending_alphas:
-            entry = submissions.get(a)
-            error = entry[1] if entry and isinstance(entry[1], str) else "Not submitted"
+            error = submissions.get(a, "Not submitted")
             results_map[a] = RANSResult(
                 cl=0, cd=0, cm=0, alpha=a, reynolds=Re, mach=mach,
-                converged=False, success=False, error=error,
+                converged=False, success=False, error=str(error),
             )
 
     poll_count = 0
@@ -757,12 +817,14 @@ def run_rans_batch(
         time.sleep(15)
         poll_count += 1
         for a in list(pending_alphas):
-            project, case = submissions[a]
+            case_id = submissions[a]
             try:
-                info = case.get_info()
-                status = info.caseStatus
+                info = case_api.GetCaseInfo(case_id)
+                status = info.get("status", "unknown")
                 if status in ("completed", "error", "diverged"):
-                    results_map[a] = fetch_results(case.id, alpha=a, Re=Re, mach=mach)
+                    results_map[a] = _fetch_results_legacy(
+                        case_id, alpha=a, Re=Re, mach=mach,
+                    )
                     pending_alphas.discard(a)
                     if on_progress:
                         r = results_map[a]
