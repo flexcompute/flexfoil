@@ -535,28 +535,32 @@ def generate_and_write_mesh_gmsh(
     output_dir: str | Path,
     *,
     Re: float = 1e6,
-    growth_rate: float = 1.15,
-    farfield_radius: float = 50.0,
+    farfield_radius: float = 15.0,
     span: float = 0.01,
     mesh_name: str = "airfoil",
     y_plus: float = 1.0,
     n_airfoil: int = 200,
-    n_normal: int = 80,
-    n_wake: int = 60,
+    n_normal: int = 125,
+    n_wake: int = 150,
+    n_le: int = 100,
     wake_length: float = 25.0,
-    te_cell_size: float = 0.005,
+    te_cell_size: float = 0.01,
+    le_length: float = 0.05,
 ) -> tuple[Path, Path]:
     """Generate a C-block structured mesh using gmsh transfinite meshing.
 
-    Creates a 5-block C-grid topology:
-      - Inlet block (semicircle around the front)
-      - Upper airfoil block (upper surface to farfield)
-      - Lower airfoil block (lower surface to farfield)
-      - Upper wake block (TE upper to downstream)
-      - Lower wake block (TE lower to downstream)
+    Uses a 5-block C-grid topology following the standard approach
+    (wuFoil / NASA CFL3D validation grids):
 
-    All blocks use transfinite (structured) meshing with quad recombination,
-    then extrude one cell deep for all-hex pseudo-3D.
+      - Inlet block: semicircle around the leading edge region
+      - Upper block: upper surface (LE split → TE) to farfield
+      - Lower block: lower surface (LE split → TE) to farfield
+      - Upper wake: TE to downstream exit (upper half)
+      - Lower wake: TE to downstream exit (lower half)
+
+    The airfoil is split into 3 segments: upper aft, leading edge, lower aft.
+    The LE gets a separate block with "Bump" distribution for good LE resolution.
+    The semicircle is centered at the LE split point.
 
     Requires ``pip install gmsh``.
 
@@ -569,138 +573,173 @@ def generate_and_write_mesh_gmsh(
 
     first_cell = estimate_first_cell_height(Re, y_plus=y_plus)
     pts = np.array(coords, dtype=np.float64)
+
+    # Split airfoil into 3 segments: upper aft, LE, lower aft
+    # LE region = points with x < le_length
     le_idx = int(np.argmin(pts[:, 0]))
 
-    # Split airfoil at LE
-    upper = pts[:le_idx + 1]   # TE → LE (x decreasing)
-    lower = pts[le_idx:]       # LE → TE (x increasing)
+    # Find the split points where x crosses le_length
+    # Upper: going from TE (x=1) toward LE (x=0), find where x < le_length
+    upper_all = pts[:le_idx + 1]  # TE → LE
+    lower_all = pts[le_idx:]      # LE → TE
 
-    te_upper = upper[0]
-    te_lower = lower[-1]
-    le = upper[-1]
+    # Split upper at le_length
+    upper_aft = []
+    upper_le = []
+    for i, (x, y) in enumerate(upper_all):
+        if x > le_length:
+            upper_aft.append((x, y))
+        else:
+            upper_le.append((x, y))
+    # Include the split point in both segments
+    if upper_aft and upper_le:
+        upper_aft.append(upper_le[0])
 
-    # BL growth factor for transfinite progression
-    bl_progression = 1.0 / np.exp(np.log(first_cell) / (n_normal - 1))
+    # Split lower at le_length
+    lower_le = []
+    lower_aft = []
+    for i, (x, y) in enumerate(lower_all):
+        if x <= le_length:
+            lower_le.append((x, y))
+        else:
+            lower_aft.append((x, y))
+    if lower_le and lower_aft:
+        lower_aft.insert(0, lower_le[-1])
 
-    # TE tangential clustering
-    te_progression = (te_cell_size / 0.1) ** (1.0 / max(n_airfoil // 2 - 1, 1))
+    te_pt = upper_aft[0]  # TE point
+    R = farfield_radius
+    center = (le_length, 0.0)
+
+    # Growth factors
+    bl_growth = 1.0 / np.exp(np.log(first_cell) / (n_normal - 1))
+    te_growth = (te_cell_size / 0.1) ** (1.0 / max(n_airfoil - 1, 1))
+    wake_growth = 1.0 / np.exp(np.log(te_cell_size) / (n_wake - 1))
 
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 0)
     gmsh.model.add("airfoil_cblock")
     geo = gmsh.model.geo
 
-    R = farfield_radius
+    # === AIRFOIL POINTS & SPLINES ===
+    # Upper aft: TE → LE split (x decreasing)
+    af_upper_pts = [geo.addPoint(x, y, 0) for x, y in upper_aft]
+    # LE region: upper split → actual LE → lower split
+    af_le_pts = [geo.addPoint(x, y, 0) for x, y in upper_le]
+    for x, y in lower_le[1:]:  # skip duplicate at LE
+        af_le_pts.append(geo.addPoint(x, y, 0))
+    # Lower aft: LE split → TE (x increasing)
+    af_lower_pts = [geo.addPoint(x, y, 0) for x, y in lower_aft]
 
-    # === KEY POINTS ===
-    p_te_upper = geo.addPoint(te_upper[0], te_upper[1], 0)
-    p_le = geo.addPoint(le[0], le[1], 0)
-    p_te_lower = geo.addPoint(te_lower[0], te_lower[1], 0)
+    # Key shared points
+    p_te = af_upper_pts[0]          # TE
+    p_top = af_upper_pts[-1]        # upper LE split = af_le start
+    p_bottom = af_lower_pts[0]      # lower LE split = af_le end
+    af_le_pts[0] = p_top            # share the point
+    af_le_pts[-1] = p_bottom        # share the point
+    af_lower_pts[-1] = p_te         # close at TE (same point)
 
-    # Farfield points (semicircle centered at LE)
-    cx, cy = le[0], le[1]
-    p_ff_top = geo.addPoint(te_upper[0], R, 0)       # above TE
-    p_ff_front = geo.addPoint(cx - R, cy, 0)          # in front of LE
-    p_ff_bottom = geo.addPoint(te_lower[0], -R, 0)    # below TE
+    c_upper = geo.addBSpline(af_upper_pts)
+    c_le = geo.addBSpline(af_le_pts)
+    c_lower = geo.addBSpline(af_lower_pts)
+
+    # === FARFIELD POINTS ===
+    p_center = geo.addPoint(center[0], center[1], 0)
+    p_inlet_top = geo.addPoint(center[0], R, 0)
+    p_inlet_bottom = geo.addPoint(center[0], -R, 0)
+    p_top_te = geo.addPoint(te_pt[0], R, 0)          # above TE
+    p_bottom_te = geo.addPoint(te_pt[0], -R, 0)      # below TE
 
     # Wake exit points
-    wake_x = te_upper[0] + wake_length
-    p_wake_upper = geo.addPoint(wake_x, R, 0)
-    p_wake_lower = geo.addPoint(wake_x, -R, 0)
-    p_wake_te_upper = geo.addPoint(wake_x, te_upper[1], 0)
-    p_wake_te_lower = geo.addPoint(wake_x, te_lower[1], 0)
+    wake_x = te_pt[0] + wake_length
+    p_wake_top = geo.addPoint(wake_x, R, 0)
+    p_wake_bottom = geo.addPoint(wake_x, -R, 0)
+    p_wake_center = geo.addPoint(wake_x, 0.0, 0)
 
-    # === AIRFOIL CURVES (splines through coordinates) ===
-    upper_pts = [p_te_upper]
-    for i in range(1, len(upper) - 1):
-        upper_pts.append(geo.addPoint(upper[i, 0], upper[i, 1], 0))
-    upper_pts.append(p_le)
-    c_upper = geo.addBSpline(upper_pts)
+    # === FARFIELD & CONNECTING CURVES ===
+    c_inlet = geo.addCircleArc(p_inlet_top, p_center, p_inlet_bottom)
 
-    lower_pts = [p_le]
-    for i in range(1, len(lower) - 1):
-        lower_pts.append(geo.addPoint(lower[i, 0], lower[i, 1], 0))
-    lower_pts.append(p_te_lower)
-    c_lower = geo.addBSpline(lower_pts)
+    # Radial lines: airfoil → farfield
+    c_top_to_inlet = geo.addLine(p_top, p_inlet_top)
+    c_bottom_to_inlet = geo.addLine(p_inlet_bottom, p_bottom)
+    c_te_to_top = geo.addLine(p_top_te, p_te)
+    c_te_to_bottom = geo.addLine(p_te, p_bottom_te)
 
-    # === FARFIELD CURVES ===
-    # Semicircle from ff_top → ff_front → ff_bottom
-    p_ff_center = geo.addPoint(cx, cy, 0)
-    c_ff_upper = geo.addCircleArc(p_ff_top, p_ff_center, p_ff_front)
-    c_ff_lower = geo.addCircleArc(p_ff_front, p_ff_center, p_ff_bottom)
+    # Top/bottom farfield lines
+    c_top_line = geo.addLine(p_top_te, p_inlet_top)
+    c_bottom_line = geo.addLine(p_inlet_bottom, p_bottom_te)
 
-    # === RADIAL LINES (airfoil → farfield) ===
-    c_te_upper_to_ff = geo.addLine(p_te_upper, p_ff_top)
-    c_le_to_ff = geo.addLine(p_le, p_ff_front)
-    c_te_lower_to_ff = geo.addLine(p_te_lower, p_ff_bottom)
-
-    # === WAKE LINES ===
-    c_wake_upper = geo.addLine(p_te_upper, p_wake_te_upper)
-    c_wake_lower = geo.addLine(p_te_lower, p_wake_te_lower)
-    c_wake_top = geo.addLine(p_ff_top, p_wake_upper)
-    c_wake_bottom = geo.addLine(p_ff_bottom, p_wake_lower)
-    c_wake_exit_upper = geo.addLine(p_wake_te_upper, p_wake_upper)
-    c_wake_exit_lower = geo.addLine(p_wake_te_lower, p_wake_lower)
+    # Wake lines
+    c_wake_center = geo.addLine(p_te, p_wake_center)
+    c_outlet_top = geo.addLine(p_wake_center, p_wake_top)
+    c_outlet_bottom = geo.addLine(p_wake_bottom, p_wake_center)
+    c_wake_top_line = geo.addLine(p_top_te, p_wake_top)  # NOT reversed
+    c_wake_bottom_line = geo.addLine(p_bottom_te, p_wake_bottom)
 
     # === SURFACES (5 blocks) ===
-    # Block 1: Upper airfoil (TE→LE along upper surface, radially out)
-    loop1 = geo.addCurveLoop([c_upper, c_le_to_ff, -c_ff_upper, -c_te_upper_to_ff])
-    s1 = geo.addPlaneSurface([loop1])
+    # 1. Inlet section (around LE)
+    inlet_loop = geo.addCurveLoop([c_inlet, c_bottom_to_inlet, -c_le, c_top_to_inlet])
+    s_inlet = geo.addPlaneSurface([inlet_loop])
 
-    # Block 2: Lower airfoil (LE→TE along lower surface, radially out)
-    loop2 = geo.addCurveLoop([c_lower, c_te_lower_to_ff, -c_ff_lower, -c_le_to_ff])
-    s2 = geo.addPlaneSurface([loop2])
+    # 2. Top section (upper surface)
+    top_loop = geo.addCurveLoop([-c_upper, -c_top_to_inlet, c_top_line, -c_te_to_top])
+    s_top = geo.addPlaneSurface([top_loop])
 
-    # Block 3: Upper wake
-    loop3 = geo.addCurveLoop([c_wake_upper, c_wake_exit_upper, -c_wake_top, -c_te_upper_to_ff])
-    s3 = geo.addPlaneSurface([loop3])
+    # 3. Bottom section (lower surface)
+    bottom_loop = geo.addCurveLoop([-c_bottom_to_inlet, -c_lower, -c_te_to_bottom, c_bottom_line])
+    s_bottom = geo.addPlaneSurface([bottom_loop])
 
-    # Block 4: Lower wake
-    loop4 = geo.addCurveLoop([c_wake_lower, c_wake_exit_lower, -c_wake_bottom, -c_te_lower_to_ff])
-    s4 = geo.addPlaneSurface([loop4])
+    # 4. Top wake
+    wake_top_loop = geo.addCurveLoop([c_te_to_top, c_wake_center, c_outlet_top, -c_wake_top_line])
+    s_wake_top = geo.addPlaneSurface([wake_top_loop])
+
+    # 5. Bottom wake
+    wake_bottom_loop = geo.addCurveLoop([c_te_to_bottom, c_wake_bottom_line, c_outlet_bottom, -c_wake_center])
+    s_wake_bottom = geo.addPlaneSurface([wake_bottom_loop])
 
     geo.synchronize()
 
     # === TRANSFINITE CURVES ===
-    n_half = n_airfoil // 2
+    mesh = gmsh.model.mesh
 
-    # Airfoil tangential (TE clustering via progression)
-    gmsh.model.mesh.setTransfiniteCurve(c_upper, n_half, "Progression", te_progression)
-    gmsh.model.mesh.setTransfiniteCurve(c_lower, n_half, "Progression", 1.0 / te_progression)
+    # Inlet section
+    mesh.setTransfiniteCurve(c_inlet, n_le, "Bump", -0.1)
+    mesh.setTransfiniteCurve(c_le, n_le)
+    mesh.setTransfiniteCurve(c_top_to_inlet, n_normal, "Progression", bl_growth)
+    mesh.setTransfiniteCurve(c_bottom_to_inlet, n_normal, "Progression", -bl_growth)
 
-    # Farfield arcs (match airfoil tangential count)
-    gmsh.model.mesh.setTransfiniteCurve(c_ff_upper, n_half, "Progression", te_progression)
-    gmsh.model.mesh.setTransfiniteCurve(c_ff_lower, n_half, "Progression", 1.0 / te_progression)
+    # Top section
+    mesh.setTransfiniteCurve(c_te_to_top, n_normal, "Progression", -bl_growth)
+    mesh.setTransfiniteCurve(c_upper, n_airfoil, "Progression", -te_growth)
+    mesh.setTransfiniteCurve(c_top_line, n_airfoil, "Progression", -te_growth)
 
-    # Radial lines (BL clustering)
-    gmsh.model.mesh.setTransfiniteCurve(c_te_upper_to_ff, n_normal, "Progression", bl_progression)
-    gmsh.model.mesh.setTransfiniteCurve(c_le_to_ff, n_normal, "Progression", bl_progression)
-    gmsh.model.mesh.setTransfiniteCurve(c_te_lower_to_ff, n_normal, "Progression", bl_progression)
+    # Bottom section
+    mesh.setTransfiniteCurve(c_te_to_bottom, n_normal, "Progression", bl_growth)
+    mesh.setTransfiniteCurve(c_lower, n_airfoil, "Progression", te_growth)
+    mesh.setTransfiniteCurve(c_bottom_line, n_airfoil, "Progression", -te_growth)
 
-    # Wake tangential (downstream clustering)
-    wake_progression = (te_cell_size / 1.0) ** (1.0 / max(n_wake - 1, 1))
-    gmsh.model.mesh.setTransfiniteCurve(c_wake_upper, n_wake, "Progression", 1.0 / wake_progression)
-    gmsh.model.mesh.setTransfiniteCurve(c_wake_lower, n_wake, "Progression", 1.0 / wake_progression)
-    gmsh.model.mesh.setTransfiniteCurve(c_wake_top, n_wake, "Progression", 1.0 / wake_progression)
-    gmsh.model.mesh.setTransfiniteCurve(c_wake_bottom, n_wake, "Progression", 1.0 / wake_progression)
+    # Top wake
+    mesh.setTransfiniteCurve(c_wake_top_line, n_wake, "Progression", -wake_growth)
+    mesh.setTransfiniteCurve(c_wake_center, n_wake, "Progression", wake_growth)
+    mesh.setTransfiniteCurve(c_outlet_top, n_normal, "Progression", bl_growth)
 
-    # Wake radial (match BL normal count)
-    gmsh.model.mesh.setTransfiniteCurve(c_wake_exit_upper, n_normal, "Progression", bl_progression)
-    gmsh.model.mesh.setTransfiniteCurve(c_wake_exit_lower, n_normal, "Progression", bl_progression)
+    # Bottom wake
+    mesh.setTransfiniteCurve(c_wake_bottom_line, n_wake, "Progression", wake_growth)
+    mesh.setTransfiniteCurve(c_outlet_bottom, n_normal, "Progression", -bl_growth)
 
-    # === TRANSFINITE SURFACES + RECOMBINE (all-quad) ===
-    for s in [s1, s2, s3, s4]:
-        gmsh.model.mesh.setTransfiniteSurface(s)
-        gmsh.model.mesh.setRecombine(2, s)
+    # === TRANSFINITE SURFACES + RECOMBINE ===
+    for s in [s_inlet, s_top, s_bottom, s_wake_top, s_wake_bottom]:
+        mesh.setTransfiniteSurface(s)
+        mesh.setRecombine(2, s)
 
     gmsh.model.mesh.generate(2)
 
-    # === PHYSICAL GROUPS for boundary tagging ===
-    gmsh.model.addPhysicalGroup(1, [c_upper, c_lower], tag=1, name="wall")
-    gmsh.model.addPhysicalGroup(1, [c_ff_upper, c_ff_lower,
-                                     c_wake_top, c_wake_bottom,
-                                     c_wake_exit_upper, c_wake_exit_lower], tag=2, name="farfield")
-    gmsh.model.addPhysicalGroup(2, [s1, s2, s3, s4], tag=10, name="fluid")
+    # === PHYSICAL GROUPS ===
+    gmsh.model.addPhysicalGroup(1, [c_upper, c_lower, c_le], tag=1, name="wall")
+    gmsh.model.addPhysicalGroup(1, [c_inlet, c_top_line, c_bottom_line,
+                                     c_wake_top_line, c_wake_bottom_line,
+                                     c_outlet_top, c_outlet_bottom], tag=2, name="farfield")
+    gmsh.model.addPhysicalGroup(2, [s_inlet, s_top, s_bottom, s_wake_top, s_wake_bottom],
+                                tag=10, name="fluid")
 
     # === EXTRACT MESH ===
     node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
