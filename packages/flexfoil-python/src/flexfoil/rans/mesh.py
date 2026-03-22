@@ -614,37 +614,67 @@ def generate_and_write_mesh_gmsh(
     te_growth = (te_cell_size / 0.1) ** (1.0 / max(n_airfoil - 1, 1))
     wake_growth = 1.0 / np.exp(np.log(te_cell_size) / (n_wake - 1))
 
+    # Detect open vs closed TE
+    te_upper = upper_aft[0]
+    te_lower = lower_aft[-1]
+    te_gap = np.sqrt((te_upper[0] - te_lower[0])**2 + (te_upper[1] - te_lower[1])**2)
+    open_te = te_gap > 1e-8
+
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 0)
     gmsh.model.add("airfoil_cblock")
     geo = gmsh.model.geo
 
     # === AIRFOIL POINTS & SPLINES ===
-    # Following wuFoil: close the TE to a SINGLE shared point.
-    # For open-TE airfoils (NACA 0012), this moves the TE by ~0.13% chord — negligible.
+    # For open-TE airfoils: both splines pass through their true TE coordinates
+    # then converge to a shared midpoint. This preserves the airfoil shape
+    # while giving a clean single-point C-grid topology.
 
-    # Upper aft points (TE → LE split, x decreasing)
-    af_upper_pts = [geo.addPoint(x, y, 0) for x, y in upper_aft]
-    # LE region (upper split → actual LE → lower split)
-    af_le_pts = [geo.addPoint(x, y, 0) for x, y in upper_le]
-    for x, y in lower_le[1:]:  # skip duplicate at LE
-        af_le_pts.append(geo.addPoint(x, y, 0))
-    # Lower aft points (LE split → TE, x increasing) — WITHOUT the last point
-    af_lower_pts = [geo.addPoint(x, y, 0) for x, y in lower_aft[:-1]]
+    if open_te:
+        te_mid = ((te_upper[0] + te_lower[0]) / 2.0,
+                  (te_upper[1] + te_lower[1]) / 2.0)
+        p_te_mid = geo.addPoint(te_mid[0], te_mid[1], 0)
+
+        # Upper: TE_mid → TE_upper → ... → LE_split
+        af_upper_pts = [p_te_mid]
+        af_upper_pts.append(geo.addPoint(te_upper[0], te_upper[1], 0))
+        for x, y in upper_aft[1:]:  # skip first (TE) since we added it explicitly
+            af_upper_pts.append(geo.addPoint(x, y, 0))
+
+        # LE region
+        af_le_pts = [geo.addPoint(x, y, 0) for x, y in upper_le]
+        for x, y in lower_le[1:]:
+            af_le_pts.append(geo.addPoint(x, y, 0))
+
+        # Lower: LE_split → ... → TE_lower → TE_mid
+        af_lower_pts = []
+        for x, y in lower_aft[:-1]:
+            af_lower_pts.append(geo.addPoint(x, y, 0))
+        af_lower_pts.append(geo.addPoint(te_lower[0], te_lower[1], 0))
+        af_lower_pts.append(p_te_mid)  # shared TE midpoint
+    else:
+        # Closed TE: standard wuFoil approach
+        af_upper_pts = [geo.addPoint(x, y, 0) for x, y in upper_aft]
+        af_le_pts = [geo.addPoint(x, y, 0) for x, y in upper_le]
+        for x, y in lower_le[1:]:
+            af_le_pts.append(geo.addPoint(x, y, 0))
+        af_lower_pts = [geo.addPoint(x, y, 0) for x, y in lower_aft[:-1]]
+        af_lower_pts.append(af_upper_pts[0])  # share TE point
+        p_te_mid = af_upper_pts[0]
 
     # Key shared points
-    p_te = af_upper_pts[0]           # SINGLE TE point (shared upper/lower)
+    p_te = p_te_mid if open_te else af_upper_pts[0]
     p_top = af_upper_pts[-1]         # upper LE split
     p_bottom = af_lower_pts[0]       # lower LE split
     af_le_pts[0] = p_top             # share the LE split point
     af_le_pts[-1] = p_bottom         # share the LE split point
-    af_lower_pts.append(p_te)        # lower surface ends at SAME TE point
 
     c_upper = geo.addBSpline(af_upper_pts)
     c_le = geo.addBSpline(af_le_pts)
     c_lower = geo.addBSpline(af_lower_pts)
 
-    # === FARFIELD POINTS ===
+    # === FARFIELD & WAKE (unified 5-block topology) ===
+    # Both open and closed TE now share a single p_te point.
     te_x = upper_aft[0][0]
     p_center = geo.addPoint(center[0], center[1], 0)
     p_inlet_top = geo.addPoint(center[0], R, 0)
@@ -652,13 +682,11 @@ def generate_and_write_mesh_gmsh(
     p_top_te = geo.addPoint(te_x, R, 0)
     p_bottom_te = geo.addPoint(te_x, -R, 0)
 
-    # Wake exit points
     wake_x = te_x + wake_length
     p_wake_top = geo.addPoint(wake_x, R, 0)
     p_wake_bottom = geo.addPoint(wake_x, -R, 0)
     p_wake_center = geo.addPoint(wake_x, 0.0, 0)
 
-    # === CURVES (following wuFoil exactly) ===
     c_inlet = geo.addCircleArc(p_inlet_top, p_center, p_inlet_bottom)
     c_top_to_inlet = geo.addLine(p_top, p_inlet_top)
     c_bottom_to_inlet = geo.addLine(p_inlet_bottom, p_bottom)
@@ -666,73 +694,58 @@ def generate_and_write_mesh_gmsh(
     c_te_to_bottom = geo.addLine(p_te, p_bottom_te)
     c_top_line = geo.addLine(p_top_te, p_inlet_top)
     c_bottom_line = geo.addLine(p_inlet_bottom, p_bottom_te)
-
-    # Wake
     c_wake_center = geo.addLine(p_te, p_wake_center)
     c_outlet_top = geo.addLine(p_wake_center, p_wake_top)
     c_outlet_bottom = geo.addLine(p_wake_bottom, p_wake_center)
     c_wake_top_line = geo.addLine(p_top_te, p_wake_top)
     c_wake_bottom_line = geo.addLine(p_bottom_te, p_wake_bottom)
 
-    # === SURFACES (5 blocks — wuFoil topology) ===
+    # 5 blocks
     inlet_loop = geo.addCurveLoop([c_inlet, c_bottom_to_inlet, -c_le, c_top_to_inlet])
     s_inlet = geo.addPlaneSurface([inlet_loop])
-
     top_loop = geo.addCurveLoop([-c_upper, -c_top_to_inlet, c_top_line, -c_te_to_top])
     s_top = geo.addPlaneSurface([top_loop])
-
     bottom_loop = geo.addCurveLoop([-c_bottom_to_inlet, -c_lower, -c_te_to_bottom, c_bottom_line])
     s_bottom = geo.addPlaneSurface([bottom_loop])
-
     wake_top_loop = geo.addCurveLoop([c_te_to_top, c_wake_center, c_outlet_top, -c_wake_top_line])
     s_wake_top = geo.addPlaneSurface([wake_top_loop])
-
     wake_bottom_loop = geo.addCurveLoop([-c_wake_center, c_outlet_bottom, c_wake_bottom_line, c_te_to_bottom])
     s_wake_bottom = geo.addPlaneSurface([wake_bottom_loop])
 
-    # synchronize AFTER all geometry — matching wuFoil
+    all_surfaces = [s_inlet, s_top, s_bottom, s_wake_top, s_wake_bottom]
     geo.synchronize()
 
-    # === TRANSFINITE CURVES ===
     mesh = gmsh.model.mesh
-
-    # Inlet
     mesh.setTransfiniteCurve(c_inlet, n_le, "Bump", -0.1)
     mesh.setTransfiniteCurve(c_le, n_le)
     mesh.setTransfiniteCurve(c_top_to_inlet, n_normal, "Progression", bl_growth)
     mesh.setTransfiniteCurve(c_bottom_to_inlet, n_normal, "Progression", -bl_growth)
-
-    # Top
     mesh.setTransfiniteCurve(c_te_to_top, n_normal, "Progression", -bl_growth)
     mesh.setTransfiniteCurve(c_upper, n_airfoil, "Progression", -te_growth)
     mesh.setTransfiniteCurve(c_top_line, n_airfoil, "Progression", -te_growth)
-
-    # Bottom
     mesh.setTransfiniteCurve(c_te_to_bottom, n_normal, "Progression", bl_growth)
     mesh.setTransfiniteCurve(c_lower, n_airfoil, "Progression", te_growth)
     mesh.setTransfiniteCurve(c_bottom_line, n_airfoil, "Progression", -te_growth)
-
-    # Wake
     mesh.setTransfiniteCurve(c_wake_top_line, n_wake, "Progression", -wake_growth)
     mesh.setTransfiniteCurve(c_wake_center, n_wake, "Progression", wake_growth)
     mesh.setTransfiniteCurve(c_outlet_top, n_normal, "Progression", bl_growth)
     mesh.setTransfiniteCurve(c_wake_bottom_line, n_wake, "Progression", wake_growth)
     mesh.setTransfiniteCurve(c_outlet_bottom, n_normal, "Progression", -bl_growth)
 
-    # === TRANSFINITE SURFACES + RECOMBINE ===
-    for s in [s_inlet, s_top, s_bottom, s_wake_top, s_wake_bottom]:
+    for s in all_surfaces:
         mesh.setTransfiniteSurface(s)
         mesh.setRecombine(2, s)
 
     gmsh.model.mesh.generate(2)
 
-    # === PHYSICAL GROUPS ===
-    gmsh.model.addPhysicalGroup(1, [c_upper, c_lower, c_le], tag=1, name="wall")
-    gmsh.model.addPhysicalGroup(1, [c_inlet, c_top_line, c_bottom_line,
-                                     c_wake_top_line, c_wake_bottom_line,
-                                     c_outlet_top, c_outlet_bottom], tag=2, name="farfield")
-    gmsh.model.addPhysicalGroup(2, [s_inlet, s_top, s_bottom, s_wake_top, s_wake_bottom],
-                                tag=10, name="fluid")
+    wall_curves = [c_upper, c_lower, c_le]
+    ff_curves = [c_inlet, c_top_line, c_bottom_line,
+                 c_wake_top_line, c_wake_bottom_line,
+                 c_outlet_top, c_outlet_bottom]
+
+    gmsh.model.addPhysicalGroup(1, wall_curves, tag=1, name="wall")
+    gmsh.model.addPhysicalGroup(1, ff_curves, tag=2, name="farfield")
+    gmsh.model.addPhysicalGroup(2, all_surfaces, tag=10, name="fluid")
 
     # === EXTRACT MESH ===
     node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
@@ -752,9 +765,9 @@ def generate_and_write_mesh_gmsh(
         gmsh.finalize()
         raise RuntimeError("gmsh did not produce quad elements — transfinite meshing failed")
 
-    # Wall edges (upper + LE + lower)
+    # Wall edges — use the wall_curves/ff_curves set by topology branch above
     wall_edges = []
-    for curve in [c_upper, c_le, c_lower]:
+    for curve in wall_curves:
         _, _, enodes = gmsh.model.mesh.getElements(dim=1, tag=curve)
         for en in enodes:
             wall_edges.append(en.reshape(-1, 2))
@@ -762,9 +775,7 @@ def generate_and_write_mesh_gmsh(
 
     # Farfield + outlet edges
     ff_edges = []
-    for curve in [c_inlet, c_top_line, c_bottom_line,
-                  c_wake_top_line, c_wake_bottom_line,
-                  c_outlet_top, c_outlet_bottom]:
+    for curve in ff_curves:
         _, _, enodes = gmsh.model.mesh.getElements(dim=1, tag=curve)
         for en in enodes:
             ff_edges.append(en.reshape(-1, 2))
