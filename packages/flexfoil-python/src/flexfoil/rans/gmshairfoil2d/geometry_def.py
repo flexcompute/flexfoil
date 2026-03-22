@@ -602,25 +602,52 @@ class AirfoilSpline:
             te_down_indx = self.te_indx + 1
 
         if te_up_indx is not None:
-            te_gap = abs(self.points[te_up_indx].y - self.points[te_down_indx].y)
+            p_a = self.points[te_up_indx]
+            p_b = self.points[te_down_indx]
+            te_gap = abs(p_a.y - p_b.y)
 
             if te_gap < 1e-6:
                 # Gap is negligible — treat as closed TE (single point)
                 pass
             else:
-                # OPEN TRAILING EDGE — preserve both points, use midpoint as TE reference.
-                # This is the FlexFoil modification: we do NOT extend curves to a sharp point.
+                # OPEN TRAILING EDGE
+                # Record the original TE points for reference
                 self.open_te = True
-                self.te_upper = self.points[te_up_indx]
-                self.te_lower = self.points[te_down_indx]
+                if p_a.y > p_b.y:
+                    self.te_upper = p_a
+                    self.te_lower = p_b
+                else:
+                    self.te_upper = p_b
+                    self.te_lower = p_a
 
-                # Insert midpoint between the two TE points as the reference TE
-                mid_x = (self.te_upper.x + self.te_lower.x) / 2
-                mid_y = (self.te_upper.y + self.te_lower.y) / 2
-                mid_point = Point(mid_x, mid_y, 0, self.mesh_size)
-                self.points.insert(te_down_indx, mid_point)
-                self.te = mid_point
-                self.te_indx = te_down_indx
+                # FlexFoil modification: instead of extending curves far downstream
+                # to a sharp intersection (which distorts the airfoil shape), we
+                # close the TE with a point at the midpoint of the TE gap.
+                # This preserves the airfoil shape while satisfying the structured
+                # mesh topology requirement for a single TE reference point.
+                x, y = p_a.x, p_a.y
+                z, w = p_b.x, p_b.y
+                # Place the closure point just barely downstream of the TE
+                # (1/10th of the TE gap width) to avoid degenerate geometry
+                # from having three coincident x=1.0 points.
+                closure_offset = te_gap * 0.1
+                mid_x = max(x, z) + closure_offset
+                mid_y = (y + w) / 2
+                new = Point(mid_x, mid_y, 0, self.mesh_size)
+
+                # Insert between the two TE points. The key is to insert at the
+                # position that puts the new point BETWEEN upper and lower surfaces
+                # in the point list (so gen_skin can split there).
+                # te_up_indx and te_down_indx are adjacent in the list.
+                # We want to insert after the higher index:
+                insert_idx = max(te_up_indx, te_down_indx) + 1
+                if insert_idx > len(self.points):
+                    self.points.append(new)
+                    self.te_indx = len(self.points) - 1
+                else:
+                    self.points.insert(insert_idx, new)
+                    self.te_indx = insert_idx
+                self.te = new
 
     def gen_skin(self):
         """
