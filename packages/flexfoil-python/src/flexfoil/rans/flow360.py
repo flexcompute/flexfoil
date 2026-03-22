@@ -203,6 +203,7 @@ def _config_with_integer_boundaries(config: dict) -> dict:
     name_to_tag = {
         "wall": "1", "farfield": "2",
         "symmetry_y0": "3", "symmetry_y1": "4",
+        "wake": "5",
     }
 
     if "boundaries" in config:
