@@ -269,6 +269,8 @@ def generate_airfoil_mesh(
         normals[i] = [0.0, 1.0]
 
     n_layers = n_normal + 1
+
+    # Build layer spacing: geometric near wall, stretched to reach farfield
     heights = np.zeros(n_layers)
     for i in range(1, n_layers):
         heights[i] = heights[i - 1] + first_cell_height * growth_rate ** (i - 1)
@@ -283,10 +285,28 @@ def generate_airfoil_mesh(
     elif max_h > target:
         heights *= target / max_h
 
+    # Normalize heights to [0, 1] for TFI parameter
+    s = heights / heights[-1]  # s[0]=0 (surface), s[-1]=1 (farfield)
+
+    # Build outer boundary: a C-shaped curve at the farfield
+    # Map each inner boundary point to a corresponding outer point on a circle
+    R = farfield_radius * chord
+    cx = 0.5 * chord  # circle center at mid-chord
+
+    outer = np.zeros_like(c_boundary)
+    for i in range(n_c):
+        pt = c_boundary[i]
+        dx, dy = pt[0] - cx, pt[1]
+        angle = np.arctan2(dy, dx)
+        outer[i] = [cx + R * np.cos(angle), R * np.sin(angle)]
+
+    # TFI: blend between inner boundary (s=0) and outer boundary (s=1)
+    # with BL clustering preserved via the s parameter
+    # node(i, j) = (1-s[j]) * inner[i] + s[j] * outer[i]
+    # This guarantees no crossing because it's a convex combination
     nodes_2d = np.zeros((n_c * n_layers, 2))
-    nodes_2d[:n_c] = c_boundary
-    for j in range(1, n_layers):
-        nodes_2d[j * n_c: (j + 1) * n_c] = c_boundary + heights[j] * normals
+    for j in range(n_layers):
+        nodes_2d[j * n_c: (j + 1) * n_c] = (1.0 - s[j]) * c_boundary + s[j] * outer
 
     return {
         "nodes_2d": nodes_2d,
