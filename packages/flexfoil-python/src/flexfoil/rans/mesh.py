@@ -621,22 +621,23 @@ def generate_and_write_mesh_gmsh(
     geo = gmsh.model.geo
 
     # === AIRFOIL POINTS & SPLINES ===
-    # Upper aft: TE → LE split (x decreasing)
+    # Upper aft: TE_upper → LE split (x decreasing)
     af_upper_pts = [geo.addPoint(x, y, 0) for x, y in upper_aft]
     # LE region: upper split → actual LE → lower split
     af_le_pts = [geo.addPoint(x, y, 0) for x, y in upper_le]
     for x, y in lower_le[1:]:  # skip duplicate at LE
         af_le_pts.append(geo.addPoint(x, y, 0))
-    # Lower aft: LE split → TE (x increasing)
+    # Lower aft: LE split → TE_lower (x increasing)
     af_lower_pts = [geo.addPoint(x, y, 0) for x, y in lower_aft]
 
-    # Key shared points
-    p_te = af_upper_pts[0]          # TE
-    p_top = af_upper_pts[-1]        # upper LE split = af_le start
-    p_bottom = af_lower_pts[0]      # lower LE split = af_le end
-    af_le_pts[0] = p_top            # share the point
-    af_le_pts[-1] = p_bottom        # share the point
-    af_lower_pts[-1] = p_te         # close at TE (same point)
+    # Key shared points (LE split points shared between segments)
+    p_te_upper = af_upper_pts[0]     # upper TE
+    p_te_lower = af_lower_pts[-1]    # lower TE (DIFFERENT from upper TE)
+    p_top = af_upper_pts[-1]         # upper LE split = af_le start
+    p_bottom = af_lower_pts[0]       # lower LE split = af_le end
+    af_le_pts[0] = p_top             # share the LE split point
+    af_le_pts[-1] = p_bottom         # share the LE split point
+    # NOTE: p_te_upper != p_te_lower for open-TE airfoils (NACA 0012)
 
     c_upper = geo.addBSpline(af_upper_pts)
     c_le = geo.addBSpline(af_le_pts)
@@ -661,18 +662,19 @@ def generate_and_write_mesh_gmsh(
     # Radial lines: airfoil → farfield
     c_top_to_inlet = geo.addLine(p_top, p_inlet_top)
     c_bottom_to_inlet = geo.addLine(p_inlet_bottom, p_bottom)
-    c_te_to_top = geo.addLine(p_top_te, p_te)
-    c_te_to_bottom = geo.addLine(p_te, p_bottom_te)
+    c_te_upper_to_top = geo.addLine(p_top_te, p_te_upper)
+    c_te_lower_to_bottom = geo.addLine(p_te_lower, p_bottom_te)
 
     # Top/bottom farfield lines
     c_top_line = geo.addLine(p_top_te, p_inlet_top)
     c_bottom_line = geo.addLine(p_inlet_bottom, p_bottom_te)
 
-    # Wake lines
-    c_wake_center = geo.addLine(p_te, p_wake_center)
+    # Wake lines — upper wake from TE_upper, lower wake from TE_lower
+    c_wake_upper = geo.addLine(p_te_upper, p_wake_center)
+    c_wake_lower = geo.addLine(p_te_lower, p_wake_center)
     c_outlet_top = geo.addLine(p_wake_center, p_wake_top)
     c_outlet_bottom = geo.addLine(p_wake_bottom, p_wake_center)
-    c_wake_top_line = geo.addLine(p_top_te, p_wake_top)  # NOT reversed
+    c_wake_top_line = geo.addLine(p_top_te, p_wake_top)
     c_wake_bottom_line = geo.addLine(p_bottom_te, p_wake_bottom)
 
     # === SURFACES (5 blocks) ===
@@ -681,19 +683,19 @@ def generate_and_write_mesh_gmsh(
     s_inlet = geo.addPlaneSurface([inlet_loop])
 
     # 2. Top section (upper surface)
-    top_loop = geo.addCurveLoop([-c_upper, -c_top_to_inlet, c_top_line, -c_te_to_top])
+    top_loop = geo.addCurveLoop([-c_upper, -c_top_to_inlet, c_top_line, -c_te_upper_to_top])
     s_top = geo.addPlaneSurface([top_loop])
 
     # 3. Bottom section (lower surface)
-    bottom_loop = geo.addCurveLoop([-c_bottom_to_inlet, -c_lower, -c_te_to_bottom, c_bottom_line])
+    bottom_loop = geo.addCurveLoop([-c_bottom_to_inlet, -c_lower, -c_te_lower_to_bottom, c_bottom_line])
     s_bottom = geo.addPlaneSurface([bottom_loop])
 
-    # 4. Top wake
-    wake_top_loop = geo.addCurveLoop([c_te_to_top, c_wake_center, c_outlet_top, -c_wake_top_line])
+    # 4. Top wake (from upper TE)
+    wake_top_loop = geo.addCurveLoop([c_te_upper_to_top, c_wake_upper, c_outlet_top, -c_wake_top_line])
     s_wake_top = geo.addPlaneSurface([wake_top_loop])
 
-    # 5. Bottom wake
-    wake_bottom_loop = geo.addCurveLoop([c_te_to_bottom, c_wake_bottom_line, c_outlet_bottom, -c_wake_center])
+    # 5. Bottom wake (from lower TE)
+    wake_bottom_loop = geo.addCurveLoop([c_te_lower_to_bottom, c_wake_bottom_line, c_outlet_bottom, -c_wake_lower])
     s_wake_bottom = geo.addPlaneSurface([wake_bottom_loop])
 
     geo.synchronize()
@@ -708,22 +710,23 @@ def generate_and_write_mesh_gmsh(
     mesh.setTransfiniteCurve(c_bottom_to_inlet, n_normal, "Progression", -bl_growth)
 
     # Top section
-    mesh.setTransfiniteCurve(c_te_to_top, n_normal, "Progression", -bl_growth)
+    mesh.setTransfiniteCurve(c_te_upper_to_top, n_normal, "Progression", -bl_growth)
     mesh.setTransfiniteCurve(c_upper, n_airfoil, "Progression", -te_growth)
     mesh.setTransfiniteCurve(c_top_line, n_airfoil, "Progression", -te_growth)
 
     # Bottom section
-    mesh.setTransfiniteCurve(c_te_to_bottom, n_normal, "Progression", bl_growth)
+    mesh.setTransfiniteCurve(c_te_lower_to_bottom, n_normal, "Progression", bl_growth)
     mesh.setTransfiniteCurve(c_lower, n_airfoil, "Progression", te_growth)
     mesh.setTransfiniteCurve(c_bottom_line, n_airfoil, "Progression", -te_growth)
 
     # Top wake
     mesh.setTransfiniteCurve(c_wake_top_line, n_wake, "Progression", -wake_growth)
-    mesh.setTransfiniteCurve(c_wake_center, n_wake, "Progression", wake_growth)
+    mesh.setTransfiniteCurve(c_wake_upper, n_wake, "Progression", wake_growth)
     mesh.setTransfiniteCurve(c_outlet_top, n_normal, "Progression", bl_growth)
 
     # Bottom wake
     mesh.setTransfiniteCurve(c_wake_bottom_line, n_wake, "Progression", wake_growth)
+    mesh.setTransfiniteCurve(c_wake_lower, n_wake, "Progression", wake_growth)
     mesh.setTransfiniteCurve(c_outlet_bottom, n_normal, "Progression", -bl_growth)
 
     # === TRANSFINITE SURFACES + RECOMBINE ===
