@@ -421,6 +421,58 @@ def _get_last_value(forces: dict, key: str) -> float:
 
 
 # ---------------------------------------------------------------------------
+# FlexFoil BL analysis for mesh refinement guidance
+# ---------------------------------------------------------------------------
+
+def _compute_bl_info(
+    coords: list[tuple[float, float]],
+    *,
+    alpha: float,
+    Re: float,
+    mach: float,
+) -> dict | None:
+    """Run FlexFoil's XFOIL solver to get BL/wake data for mesh guidance.
+
+    Returns a dict with:
+        wake_thickness: estimated wake thickness at TE (chord fractions)
+        x_tr_upper: transition location on upper surface
+        x_tr_lower: transition location on lower surface
+        delta_star_te: displacement thickness at TE
+    Or None if the analysis fails.
+    """
+    try:
+        from flexfoil._rustfoil import analyze_faithful, get_bl_distribution
+
+        flat = []
+        for x, y in coords:
+            flat.extend([x, y])
+
+        bl_raw = get_bl_distribution(flat, alpha, Re, mach, 9.0, 100)
+        if not bl_raw.get("success", False):
+            return None
+
+        ds_upper = bl_raw.get("delta_star_upper", [])
+        ds_lower = bl_raw.get("delta_star_lower", [])
+        x_tr_u = bl_raw.get("x_tr_upper", 1.0)
+        x_tr_l = bl_raw.get("x_tr_lower", 1.0)
+
+        # Wake thickness ≈ sum of δ* at TE (upper + lower)
+        ds_te_u = ds_upper[-1] if ds_upper else 0.005
+        ds_te_l = ds_lower[-1] if ds_lower else 0.005
+        wake_thickness = ds_te_u + ds_te_l
+
+        return {
+            "wake_thickness": wake_thickness,
+            "x_tr_upper": x_tr_u,
+            "x_tr_lower": x_tr_l,
+            "delta_star_te": ds_te_u + ds_te_l,
+        }
+
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # CSM-based meshing (uses Flow360's automated mesher)
 # ---------------------------------------------------------------------------
 
@@ -436,6 +488,7 @@ def _submit_csm(
     turbulence_model: str = "SpalartAllmaras",
     timeout: int = 3600,
     on_progress: Callable[[str, float], None] | None = None,
+    bl_info: dict | None = None,
 ) -> tuple[str, str]:
     """Upload CSM geometry and run via Project.run_case (modern SDK).
 
@@ -468,6 +521,48 @@ def _submit_csm(
 
     farfield = fl.AutomatedFarfield(name="farfield", method="quasi-3d")
 
+    # ---------------------------------------------------------------
+    # FlexFoil-guided refinement: use BL/wake data from XFOIL solver
+    # to tell the volume mesher where to cluster cells.
+    # ---------------------------------------------------------------
+    refinements = []
+
+    if bl_info is not None:
+        # bl_info is a dict with: wake_thickness, x_tr_upper, x_tr_lower, delta_star_te
+        wake_thick = bl_info.get("wake_thickness", 0.02)
+        x_tr_u = bl_info.get("x_tr_upper", 0.5)
+
+        # Wake refinement box: extends 3c downstream of TE,
+        # width = 4× wake thickness (captures full wake spreading)
+        wake_width = max(4 * wake_thick, 0.05)  # at least 0.05c
+        wake_box = fl.Box(
+            name="wake_refinement",
+            center=[1.0 + 1.5, 0, span / 2],  # 1.5c downstream of TE
+            size=[3.0, wake_width, span * 1.1],
+        )
+        refinements.append(
+            fl.UniformRefinement(
+                name="wake",
+                entities=[wake_box],
+                spacing=0.01,  # fine spacing in the wake
+            )
+        )
+
+        # Transition refinement box: cluster cells near transition location
+        if x_tr_u < 0.9:  # only if transition is on the airfoil (not at TE)
+            tr_box = fl.Box(
+                name="transition_refinement",
+                center=[x_tr_u, 0, span / 2],
+                size=[0.2, 0.05, span * 1.1],
+            )
+            refinements.append(
+                fl.UniformRefinement(
+                    name="transition",
+                    entities=[tr_box],
+                    spacing=0.005,
+                )
+            )
+
     with fl.SI_unit_system:
         params = fl.SimulationParams(
             meshing=fl.MeshingParams(
@@ -478,6 +573,7 @@ def _submit_csm(
                     boundary_layer_growth_rate=1.15,
                     boundary_layer_first_layer_thickness=first_cell,
                 ),
+                refinements=refinements if refinements else None,
                 volume_zones=[farfield],
             ),
             reference_geometry=fl.ReferenceGeometry(
@@ -599,6 +695,12 @@ def run_rans(
         if use_auto_mesh and _has_modern_sdk():
             # Primary path: CSM geometry → Flow360 automated meshing + solving
             if on_progress:
+                on_progress("Analyzing BL for mesh refinement", 0.03)
+
+            # Run FlexFoil XFOIL analysis to get BL/wake data for mesh guidance
+            bl_info = _compute_bl_info(coords, alpha=alpha, Re=Re, mach=mach)
+
+            if on_progress:
                 on_progress("Generating geometry", 0.05)
 
             csm_path = generate_and_write_csm(
@@ -610,6 +712,7 @@ def run_rans(
                 alpha=alpha, Re=Re, mach=mach, span=span,
                 max_steps=max_steps, turbulence_model=turbulence_model,
                 timeout=timeout, on_progress=on_progress,
+                bl_info=bl_info,
             )
 
         else:
