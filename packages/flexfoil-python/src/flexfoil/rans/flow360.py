@@ -350,10 +350,11 @@ def fetch_results(case_id: str, *, alpha: float, Re: float, mach: float) -> RANS
     #   CMz = pitching moment
     # Flow360's CL is in the z-direction which is the spanwise direction
     # for our mesh orientation, so we use CFy instead.
-    cl = _get_last_value(forces, "CFy")
+    # Try CL first (correct for CSM path where airfoil is in x-z plane),
+    # fall back to CFy (correct for gmsh path where airfoil is in x-y plane).
+    cl = _get_last_value(forces, "CL")
     if abs(cl) < 1e-10:
-        # Fallback: if CFy is zero, the mesh might be in x-z plane (CSM path)
-        cl = _get_last_value(forces, "CL")
+        cl = _get_last_value(forces, "CFy")
     cd = _get_last_value(forces, "CD")
     cm = _get_last_value(forces, "CMz")
     cd_pressure = _get_last_value(forces, "CDPressure")
@@ -535,35 +536,42 @@ def _submit_csm(
         # Wake refinement box: extends 3c downstream of TE,
         # width = 4× wake thickness (captures full wake spreading)
         wake_width = max(4 * wake_thick, 0.05)  # at least 0.05c
-        wake_box = fl.Box(
-            name="wake_refinement",
-            center=[1.0 + 1.5, 0, span / 2],  # 1.5c downstream of TE
-            size=[3.0, wake_width, span * 1.1],
-        )
-        refinements.append(
-            fl.UniformRefinement(
-                name="wake",
-                entities=[wake_box],
-                spacing=0.01,  # fine spacing in the wake
-            )
-        )
+        # Note: Box center/size need units inside SI_unit_system context,
+        # so we defer creation to inside the `with` block below.
+        pass
 
-        # Transition refinement box: cluster cells near transition location
-        if x_tr_u < 0.9:  # only if transition is on the airfoil (not at TE)
-            tr_box = fl.Box(
-                name="transition_refinement",
-                center=[x_tr_u, 0, span / 2],
-                size=[0.2, 0.05, span * 1.1],
+    with fl.SI_unit_system:
+        # Create BL-guided refinement zones (need units context)
+        if bl_info is not None:
+            wake_thick = bl_info.get("wake_thickness", 0.02)
+            x_tr_u = bl_info.get("x_tr_upper", 0.5)
+            wake_width = max(4 * wake_thick, 0.05)
+
+            wake_box = fl.Box(
+                name="wake_refinement",
+                center=[2.5 * fl.u.m, 0 * fl.u.m, span / 2 * fl.u.m],
+                size=[3.0 * fl.u.m, wake_width * fl.u.m, span * 1.1 * fl.u.m],
             )
             refinements.append(
                 fl.UniformRefinement(
-                    name="transition",
-                    entities=[tr_box],
-                    spacing=0.005,
+                    name="wake", entities=[wake_box],
+                    spacing=0.01 * fl.u.m,
                 )
             )
 
-    with fl.SI_unit_system:
+            if x_tr_u < 0.9:
+                tr_box = fl.Box(
+                    name="transition_refinement",
+                    center=[x_tr_u * fl.u.m, 0 * fl.u.m, span / 2 * fl.u.m],
+                    size=[0.2 * fl.u.m, 0.05 * fl.u.m, span * 1.1 * fl.u.m],
+                )
+                refinements.append(
+                    fl.UniformRefinement(
+                        name="transition", entities=[tr_box],
+                        spacing=0.005 * fl.u.m,
+                    )
+                )
+
         params = fl.SimulationParams(
             meshing=fl.MeshingParams(
                 defaults=fl.MeshingDefaults(
