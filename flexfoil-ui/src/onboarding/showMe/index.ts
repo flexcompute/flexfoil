@@ -14,6 +14,7 @@ import { dataAnalysisShowMe } from './dataAnalysis';
 import { solverQueueShowMe } from './solverQueue';
 import { seligDatabaseShowMe } from './seligDatabase';
 import { smartGroupShowMe } from './smartGroup';
+import { reTypeModesShowMe } from './reTypeModes';
 
 export const showMeTours: Record<string, TourStep[]> = {
   'showMe:flapDesign': flapDesignShowMe,
@@ -22,6 +23,7 @@ export const showMeTours: Record<string, TourStep[]> = {
   'showMe:solverQueue': solverQueueShowMe,
   'showMe:seligDatabase': seligDatabaseShowMe,
   'showMe:smartGroup': smartGroupShowMe,
+  'showMe:reTypeModes': reTypeModesShowMe,
 };
 
 export {
@@ -31,4 +33,5 @@ export {
   solverQueueShowMe,
   seligDatabaseShowMe,
   smartGroupShowMe,
+  reTypeModesShowMe,
 };

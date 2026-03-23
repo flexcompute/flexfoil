@@ -896,7 +896,7 @@ export function SolvePanel() {
         )}
 
         {isViscous && (
-          <div className="form-group">
+          <div className="form-group" data-tour="solve-re-type">
             <div className="form-label">Mode</div>
             <div style={{ display: 'flex', gap: '4px', marginBottom: '4px' }}>
               {([1, 2, 3] as ReType[]).map((m) => (

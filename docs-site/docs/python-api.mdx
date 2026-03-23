@@ -137,6 +137,26 @@ for defl in [0, 5, 10, 15]:
     polar = f.polar(alpha=(-4, 14, 1.0), Re=1e6)
 ```
 
+### Variable-Reynolds modes (Type 2 & 3)
+
+XFOIL supports three Reynolds number constraint types for polar sweeps.
+Pass `re_type=` to `solve()` or `polar()`:
+
+| Mode | Constraint | Effective Re | Use case |
+| --- | --- | --- | --- |
+| 1 (default) | Constant Re | Re | Standard wind-tunnel polar |
+| 2 | Fixed Re·√CL | Re / √\|CL\| | Aircraft cruise (lift = weight) |
+| 3 | Fixed Re·CL | Re / \|CL\| | Propeller / turbomachinery blades |
+
+```python
+# Mode 2: as CL changes, speed adjusts → effective Re varies
+result = foil.solve(alpha=5.0, Re=1e6, re_type=2)
+print(result.reynolds_eff)  # effective Re after Mode 2 adjustment
+
+# Full polar with variable Re
+polar = foil.polar(alpha=(-5, 15, 0.5), Re=1e6, re_type=2)
+```
+
 ### Inviscid analysis
 
 ```python
@@ -240,8 +260,9 @@ are byte-identical.
 | `.panel_coords` | Repaneled coordinates `list[(x, y)]` |
 | `.hash` | SHA-256 hash of panel coords (cache key) |
 | `.with_flap(hinge_x, deflection, hinge_y_frac, n_panels)` | Return new Airfoil with flap deflected |
-| `.solve(alpha, Re, mach, ncrit, max_iter, viscous, store)` | Single-point analysis |
-| `.polar(alpha, Re, mach, ncrit, max_iter, viscous, store, parallel)` | Sweep over alpha range (parallel by default) |
+| `.solve(alpha, Re, mach, ncrit, max_iter, viscous, store, re_type)` | Single-point analysis (`re_type`: 1, 2, or 3) |
+| `.polar(alpha, Re, mach, ncrit, max_iter, viscous, store, parallel, re_type)` | Sweep over alpha range (parallel by default) |
+| `.bl_distribution(alpha, Re, mach, ncrit, max_iter, re_type)` | Boundary-layer distribution at a single alpha |
 
 ### SolveResult
 
@@ -256,7 +277,8 @@ are byte-identical.
 | `.x_tr_upper` | `float` | Transition x/c, upper surface |
 | `.x_tr_lower` | `float` | Transition x/c, lower surface |
 | `.alpha` | `float` | Angle of attack (degrees) |
-| `.reynolds` | `float` | Reynolds number |
+| `.reynolds` | `float` | Reynolds number (nominal) |
+| `.reynolds_eff` | `float \| None` | Effective Reynolds after Mode 2/3 adjustment |
 | `.mach` | `float` | Mach number |
 | `.ncrit` | `float` | e^N transition criterion |
 | `.ld` | `float \| None` | Lift-to-drag ratio |
