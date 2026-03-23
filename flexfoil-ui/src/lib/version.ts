@@ -29,6 +29,33 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.1.3',
+    date: '2026-03-23',
+    items: [
+      { category: 'added', text: 'Reynolds type mode selector (Mode 1/2/3) in the Solve panel — choose between constant Re, fixed Re·√CL, or fixed Re·CL for polar sweeps', showMeTourId: 'showMe:reTypeModes' },
+      { category: 'added', text: 'Mode 2 (fixed Re·√CL): effective Reynolds varies inversely with √CL — models flight conditions where lift equals weight and speed adjusts' },
+      { category: 'added', text: 'Mode 3 (fixed Re·CL): effective Reynolds varies inversely with CL — for propeller blades and turbomachinery sections' },
+      { category: 'added', text: 'Python API: re_type parameter on solve(), polar(), and bl_distribution() — pass re_type=2 or re_type=3 for variable-Re analysis' },
+      { category: 'added', text: 'Python API: reynolds_eff field on SolveResult — reports the effective Reynolds after Mode 2/3 adjustment' },
+      { category: 'changed', text: 'Mode 1 (constant Re) remains the default — existing workflows are unaffected' },
+    ],
+    tourSlides: [
+      {
+        title: 'Reynolds Type Modes',
+        description: 'Choose how Reynolds number varies during a polar sweep',
+        icon: '🔄',
+        items: [
+          'Mode 1: constant Re (default) — standard fixed-Re polar',
+          'Mode 2: fixed Re·√CL — Re varies with flight speed as CL changes',
+          'Mode 3: fixed Re·CL — for propeller and turbomachinery conditions',
+          'Available in single-point solves, polar sweeps, and multi-parameter sweeps',
+        ],
+        goTo: { panel: 'solve', label: 'Open Solve panel' },
+        showMeTourId: 'showMe:reTypeModes',
+      },
+    ],
+  },
+  {
     version: '1.1.2',
     date: '2026-03-20',
     items: [

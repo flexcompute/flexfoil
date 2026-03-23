@@ -3,7 +3,7 @@ use pyo3::types::PyDict;
 use rayon::prelude::*;
 use rustfoil_core::{naca, point, Body, CubicSpline, PanelingParams, Point};
 use rustfoil_xfoil::oper::{solve_body_oper_point, AlphaSpec};
-use rustfoil_xfoil::XfoilOptions;
+use rustfoil_xfoil::{ReType, XfoilOptions};
 
 struct FaithfulResult {
     alpha_deg: f64,
@@ -17,8 +17,17 @@ struct FaithfulResult {
     x_tr_lower: f64,
     cd_friction: f64,
     cd_pressure: f64,
+    reynolds_eff: f64,
     success: bool,
     error: Option<String>,
+}
+
+fn re_type_from_int(v: u8) -> ReType {
+    match v {
+        2 => ReType::Type2,
+        3 => ReType::Type3,
+        _ => ReType::Type1,
+    }
 }
 
 fn points_from_flat(coords: &[f64]) -> Vec<Point> {
@@ -34,7 +43,7 @@ fn flat_from_points(pts: &[Point]) -> Vec<(f64, f64)> {
 /// Returns a dict with keys: cl, cd, cm, converged, iterations, residual,
 /// x_tr_upper, x_tr_lower, cd_friction, cd_pressure, alpha_deg, success, error.
 #[pyfunction]
-#[pyo3(signature = (coords, alpha_deg, reynolds=1.0e6, mach=0.0, ncrit=9.0, max_iterations=100))]
+#[pyo3(signature = (coords, alpha_deg, reynolds=1.0e6, mach=0.0, ncrit=9.0, max_iterations=100, re_type=1))]
 fn analyze_faithful(
     py: Python<'_>,
     coords: Vec<f64>,
@@ -43,6 +52,7 @@ fn analyze_faithful(
     mach: f64,
     ncrit: f64,
     max_iterations: usize,
+    re_type: u8,
 ) -> PyResult<Py<PyDict>> {
     if coords.len() < 6 || coords.len() % 2 != 0 {
         let d = PyDict::new(py);
@@ -67,6 +77,7 @@ fn analyze_faithful(
         mach,
         ncrit,
         max_iterations,
+        re_type: re_type_from_int(re_type),
         ..Default::default()
     };
 
@@ -84,6 +95,7 @@ fn analyze_faithful(
             d.set_item("cd_friction", r.cd_friction)?;
             d.set_item("cd_pressure", r.cd_pressure)?;
             d.set_item("alpha_deg", r.alpha_deg)?;
+            d.set_item("reynolds_eff", r.reynolds_eff)?;
             d.set_item("success", true)?;
             d.set_item("error", py.None())?;
         }
@@ -242,6 +254,7 @@ fn solve_one_faithful(body: &Body, alpha_deg: f64, options: &XfoilOptions) -> Fa
             converged: r.converged, iterations: r.iterations, residual: r.residual,
             x_tr_upper: r.x_tr_upper, x_tr_lower: r.x_tr_lower,
             cd_friction: r.cd_friction, cd_pressure: r.cd_pressure,
+            reynolds_eff: r.reynolds_eff,
             success: true, error: None,
         },
         Err(e) => FaithfulResult {
@@ -249,6 +262,7 @@ fn solve_one_faithful(body: &Body, alpha_deg: f64, options: &XfoilOptions) -> Fa
             converged: false, iterations: 0, residual: 0.0,
             x_tr_upper: 1.0, x_tr_lower: 1.0,
             cd_friction: 0.0, cd_pressure: 0.0,
+            reynolds_eff: options.reynolds,
             success: false, error: Some(format!("{e}")),
         },
     }
@@ -267,6 +281,7 @@ fn faithful_result_to_pydict(py: Python<'_>, r: &FaithfulResult) -> PyResult<Py<
     d.set_item("x_tr_lower", r.x_tr_lower)?;
     d.set_item("cd_friction", r.cd_friction)?;
     d.set_item("cd_pressure", r.cd_pressure)?;
+    d.set_item("reynolds_eff", r.reynolds_eff)?;
     d.set_item("success", r.success)?;
     d.set_item("error", r.error.as_deref())?;
     Ok(d.into())
@@ -276,7 +291,7 @@ fn faithful_result_to_pydict(py: Python<'_>, r: &FaithfulResult) -> PyResult<Py<
 ///
 /// Returns a list of dicts (same schema as analyze_faithful), one per alpha.
 #[pyfunction]
-#[pyo3(signature = (coords, alphas, reynolds=1.0e6, mach=0.0, ncrit=9.0, max_iterations=100))]
+#[pyo3(signature = (coords, alphas, reynolds=1.0e6, mach=0.0, ncrit=9.0, max_iterations=100, re_type=1))]
 fn analyze_faithful_batch(
     py: Python<'_>,
     coords: Vec<f64>,
@@ -285,6 +300,7 @@ fn analyze_faithful_batch(
     mach: f64,
     ncrit: f64,
     max_iterations: usize,
+    re_type: u8,
 ) -> PyResult<Vec<Py<PyDict>>> {
     let err_msg = if coords.len() < 6 || coords.len() % 2 != 0 {
         Some("Invalid coordinates".to_string())
@@ -298,6 +314,7 @@ fn analyze_faithful_batch(
                 converged: false, iterations: 0, residual: 0.0,
                 x_tr_upper: 1.0, x_tr_lower: 1.0,
                 cd_friction: 0.0, cd_pressure: 0.0,
+                reynolds_eff: reynolds,
                 success: false, error: Some(msg.clone()),
             };
             faithful_result_to_pydict(py, &r)
@@ -315,6 +332,7 @@ fn analyze_faithful_batch(
                     converged: false, iterations: 0, residual: 0.0,
                     x_tr_upper: 1.0, x_tr_lower: 1.0,
                     cd_friction: 0.0, cd_pressure: 0.0,
+                    reynolds_eff: reynolds,
                     success: false, error: Some(msg.clone()),
                 };
                 faithful_result_to_pydict(py, &r)
@@ -324,6 +342,7 @@ fn analyze_faithful_batch(
 
     let options = XfoilOptions {
         reynolds, mach, ncrit, max_iterations,
+        re_type: re_type_from_int(re_type),
         ..Default::default()
     };
 
@@ -421,7 +440,7 @@ fn analyze_inviscid_batch(
 /// ue_upper, ue_lower, x_tr_upper, x_tr_lower, converged, iterations,
 /// residual, success, error.
 #[pyfunction]
-#[pyo3(signature = (coords, alpha_deg, reynolds=1.0e6, mach=0.0, ncrit=9.0, max_iterations=100))]
+#[pyo3(signature = (coords, alpha_deg, reynolds=1.0e6, mach=0.0, ncrit=9.0, max_iterations=100, re_type=1))]
 fn get_bl_distribution(
     py: Python<'_>,
     coords: Vec<f64>,
@@ -430,6 +449,7 @@ fn get_bl_distribution(
     mach: f64,
     ncrit: f64,
     max_iterations: usize,
+    re_type: u8,
 ) -> PyResult<Py<PyDict>> {
     use rustfoil_xfoil::oper::{build_state_from_coords, solve_operating_point_from_state, coords_from_body, AlphaSpec};
     use rustfoil_xfoil::XfoilOptions;
@@ -455,6 +475,7 @@ fn get_bl_distribution(
     let body_coords = coords_from_body(&body);
     let options = XfoilOptions {
         reynolds, mach, ncrit, max_iterations,
+        re_type: re_type_from_int(re_type),
         ..Default::default()
     };
 

@@ -925,6 +925,14 @@ fn bl_error(message: impl Into<String>) -> BLDistribution {
     }
 }
 
+fn re_type_from_int(v: u8) -> rustfoil_xfoil::config::ReType {
+    match v {
+        2 => rustfoil_xfoil::config::ReType::Type2,
+        3 => rustfoil_xfoil::config::ReType::Type3,
+        _ => rustfoil_xfoil::config::ReType::Type1,
+    }
+}
+
 fn faithful_snapshot(
     coords: &[f64],
     alpha_deg: f64,
@@ -932,6 +940,7 @@ fn faithful_snapshot(
     mach: f64,
     ncrit: f64,
     max_iterations: usize,
+    re_type: u8,
 ) -> Result<FaithfulSnapshot, String> {
     if coords.len() < 6 || coords.len() % 2 != 0 {
         return Err("Invalid coordinates: need at least 3 points (6 values)".to_string());
@@ -996,6 +1005,7 @@ fn faithful_snapshot(
         mach,
         ncrit,
         max_iterations,
+        re_type: re_type_from_int(re_type),
         ..Default::default()
     };
     let oper_result = solve_operating_point_from_state(&mut state, &factorized, &options)
@@ -1141,8 +1151,9 @@ pub fn analyze_airfoil_faithful(
     mach: f64,
     ncrit: f64,
     max_iterations: usize,
+    re_type: u8,
 ) -> JsValue {
-    let result = match faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations) {
+    let result = match faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations, re_type) {
         Ok(snapshot) => snapshot.result,
         Err(message) => analysis_error(message),
     };
@@ -1158,7 +1169,7 @@ pub fn get_bl_distribution_faithful(
     ncrit: f64,
     max_iterations: usize,
 ) -> JsValue {
-    let result = match faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations) {
+    let result = match faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations, 1) {
         Ok(snapshot) => rows_to_bl_distribution(
             &snapshot.upper_rows,
             &snapshot.lower_rows,
@@ -1264,7 +1275,7 @@ pub fn get_bl_visualization_faithful(
     ncrit: f64,
     max_iterations: usize,
 ) -> JsValue {
-    let result = match faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations) {
+    let result = match faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations, 1) {
         Ok(snapshot) => build_bl_visualization(&snapshot),
         Err(message) => bl_vis_error(message),
     };
@@ -1442,7 +1453,7 @@ pub fn compute_streamlines_faithful(
     seed_count: u32,
     bounds: &[f64],
 ) -> JsValue {
-    let result = match faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations) {
+    let result = match faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations, 1) {
         Ok(snapshot) => {
             if bounds.len() != 4 {
                 StreamlineResult {
@@ -1585,7 +1596,7 @@ pub fn compute_dividing_streamline_faithful(
     max_iterations: usize,
     bounds: &[f64],
 ) -> JsValue {
-    let result = match faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations) {
+    let result = match faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations, 1) {
         Ok(snapshot) => {
             if bounds.len() != 4 {
                 DividingStreamlineResult {
@@ -1809,7 +1820,7 @@ pub fn compute_psi_grid_faithful(
     bounds: &[f64],
     resolution: &[u32],
 ) -> JsValue {
-    let result = match faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations) {
+    let result = match faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations, 1) {
         Ok(snapshot) => {
             if bounds.len() != 4 {
                 PsiGridResult {
@@ -1952,7 +1963,7 @@ impl WasmSmokeSystem {
         ncrit: f64,
         max_iterations: usize,
     ) {
-        if let Ok(snapshot) = faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations) {
+        if let Ok(snapshot) = faithful_snapshot(coords, alpha_deg, reynolds, mach, ncrit, max_iterations, 1) {
             let field = FaithfulFlowField::from_snapshot(&snapshot, alpha_deg);
             self.coords = field.nodes.clone();
             self.gamma = field.gamma.clone();
@@ -3503,7 +3514,7 @@ mod tests {
         let paneled_flat = repanel_xfoil(&buffer_flat, 160);
         let alpha_deg = 15.0;
 
-        let snapshot = faithful_snapshot(&paneled_flat, alpha_deg, 1.0e6, 0.0, 9.0, 100)
+        let snapshot = faithful_snapshot(&paneled_flat, alpha_deg, 1.0e6, 0.0, 9.0, 100, 1)
             .expect("faithful snapshot should solve");
         let field = FaithfulFlowField::from_snapshot(&snapshot, alpha_deg);
         let options = StreamlineOptions {

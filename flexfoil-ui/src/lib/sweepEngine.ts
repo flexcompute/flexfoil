@@ -11,6 +11,7 @@ import type {
   FlapDefinition,
   PolarPoint,
   SolverMode,
+  ReType,
   SweepAxis,
   SweepParam,
 } from '../types';
@@ -27,6 +28,7 @@ export interface SweepConfig {
   ncrit: number;
   maxIterations: number;
   solverMode: SolverMode;
+  reType: ReType;
   baseCoordinates: AirfoilPoint[];
   panels: AirfoilPoint[];
   flaps: FlapDefinition[];
@@ -234,7 +236,7 @@ export async function runSweep(
       // Solve
       try {
         const res = isViscous
-          ? analyzeAirfoil(panels, alpha, reynolds, mach, ncrit, config.maxIterations)
+          ? analyzeAirfoil(panels, alpha, reynolds, mach, ncrit, config.maxIterations, config.reType)
           : analyzeAirfoilInviscid(panels, alpha);
 
         if (res.success) {

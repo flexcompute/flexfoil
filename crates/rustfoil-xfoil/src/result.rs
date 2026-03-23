@@ -14,6 +14,7 @@ pub struct XfoilViscousResult {
     pub cd_friction: f64,
     pub cd_pressure: f64,
     pub x_separation: Option<f64>,
+    pub reynolds_eff: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

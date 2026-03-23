@@ -14,7 +14,7 @@ import { useCaseLogStore } from '../../stores/caseLogStore';
 import { analyzeAirfoil, analyzeAirfoilInviscid, isWasmReady, type AnalysisResult } from '../../lib/wasm';
 import { useSolverJobStore } from '../../stores/solverJobStore';
 import { runSweep, type SweepConfig, type SweepRunData } from '../../lib/sweepEngine';
-import type { PolarPoint, SweepAxis, SweepParam } from '../../types';
+import type { PolarPoint, SweepAxis, SweepParam, ReType } from '../../types';
 import type { RunInsert } from '../../lib/storageBackend';
 import { parseSweepValues, formatSweepValues } from '../../lib/parseSweepValues';
 
@@ -61,6 +61,8 @@ export function SolvePanel() {
     setNcrit,
     setMaxIterations,
     setSolverMode,
+    reType,
+    setReType,
     upsertPolar,
     clearAllPolars,
   } = useAirfoilStore();
@@ -178,10 +180,10 @@ export function SolvePanel() {
 
   const runSolver = useCallback((coords: { x: number; y: number }[], alpha: number) => {
     if (isViscous) {
-      return analyzeAirfoil(coords, alpha, reynolds, mach, ncrit, maxIterations);
+      return analyzeAirfoil(coords, alpha, reynolds, mach, ncrit, maxIterations, reType);
     }
     return analyzeAirfoilInviscid(coords, alpha);
-  }, [isViscous, reynolds, mach, ncrit, maxIterations]);
+  }, [isViscous, reynolds, mach, ncrit, maxIterations, reType]);
 
   /** Cache key uses Re=0/Mach=0/Ncrit=0/maxIter=0 for inviscid to separate caches. */
   const cacheRe = isViscous ? reynolds : 0;
@@ -761,6 +763,7 @@ export function SolvePanel() {
         ncrit,
         maxIterations,
         solverMode,
+        reType,
         baseCoordinates: base,
         panels,
         flaps: geometryDesign.flaps,
@@ -828,7 +831,7 @@ export function SolvePanel() {
       sweepAbortRef.current = null;
     }
   }, [panels, sweepPrimary, sweepSecondary, displayAlpha, reynolds, mach, ncrit,
-      maxIterations, solverMode, geometryDesign.flaps, name, isViscous, upsertPolar, addRun, addRunBatch,
+      maxIterations, solverMode, reType, geometryDesign.flaps, name, isViscous, upsertPolar, addRun, addRunBatch,
       jobDispatch, jobComplete, jobUpdate]);
 
   // --------------- derived ---------------
@@ -889,6 +892,31 @@ export function SolvePanel() {
               onKeyDown={(e) => { if (e.key === 'Enter') commitReynolds(); }}
               placeholder="e.g. 6e6, 1000000"
             />
+          </div>
+        )}
+
+        {isViscous && (
+          <div className="form-group" data-tour="solve-re-type">
+            <div className="form-label">Mode</div>
+            <div style={{ display: 'flex', gap: '4px', marginBottom: '4px' }}>
+              {([1, 2, 3] as ReType[]).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setReType(m)}
+                  className={reType === m ? 'active' : ''}
+                  style={{ flex: 1 }}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
+              {reType === 1
+                ? 'Constant Re'
+                : reType === 2
+                  ? 'Fixed Re·√CL (variable speed)'
+                  : 'Fixed Re·CL (propeller/turbo)'}
+            </div>
           </div>
         )}
 

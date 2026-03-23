@@ -7,6 +7,7 @@ def analyze_faithful(
     mach: float = 0.0,
     ncrit: float = 9.0,
     max_iterations: int = 100,
+    re_type: int = 1,
 ) -> dict[str, object]:
     """Viscous (XFOIL-faithful) analysis at a single operating point."""
     ...
@@ -51,6 +52,7 @@ def analyze_faithful_batch(
     mach: float = 0.0,
     ncrit: float = 9.0,
     max_iterations: int = 100,
+    re_type: int = 1,
 ) -> list[dict[str, object]]:
     """Batch viscous analysis: solve multiple alphas in parallel via rayon."""
     ...
@@ -64,4 +66,16 @@ def analyze_inviscid_batch(
 
 def parse_dat_file(path: str) -> list[tuple[float, float]]:
     """Parse a Selig/Lednicer .dat file and return coordinate tuples."""
+    ...
+
+def get_bl_distribution(
+    coords: list[float],
+    alpha_deg: float,
+    reynolds: float = 1e6,
+    mach: float = 0.0,
+    ncrit: float = 9.0,
+    max_iterations: int = 100,
+    re_type: int = 1,
+) -> dict[str, object]:
+    """Compute boundary-layer distributions for a viscous operating point."""
     ...
