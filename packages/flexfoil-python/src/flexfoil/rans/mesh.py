@@ -635,6 +635,67 @@ def generate_and_write_mesh_gmsh(
 
     gmsh.finalize()
 
+    # ---------------------------------------------------------------------------
+    # Mesh quality checks
+    # ---------------------------------------------------------------------------
+    def _hex_volume(pts):
+        """Signed volume of a hex using the Jacobian at node 0."""
+        return np.dot(pts[1] - pts[0], np.cross(pts[3] - pts[0], pts[4] - pts[0]))
+
+    def _hex_aspect_ratio(pts):
+        """Aspect ratio: max edge length / min edge length."""
+        edges = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
+        lengths = [np.linalg.norm(pts[j] - pts[i]) for i, j in edges]
+        return max(lengths) / max(min(lengths), 1e-30)
+
+    def _hex_skewness(pts):
+        """Equiangle skewness of bottom face (0-1, lower is better)."""
+        face = pts[:4]
+        angles = []
+        for i in range(4):
+            v1 = face[(i - 1) % 4] - face[i]
+            v2 = face[(i + 1) % 4] - face[i]
+            cos_a = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-30)
+            angles.append(np.arccos(np.clip(cos_a, -1, 1)))
+        max_a = max(angles)
+        min_a = min(angles)
+        return max((max_a - np.pi/2) / (np.pi/2), (np.pi/2 - min_a) / (np.pi/2))
+
+    neg_vol_count = 0
+    max_ar = 0
+    max_skew = 0
+    worst_hex_center = None
+    for h in hex_conn:
+        indices = [tag_to_idx[int(n)] for n in h]
+        pts = all_coords[indices]
+        vol = _hex_volume(pts)
+        ar = _hex_aspect_ratio(pts)
+        skew = _hex_skewness(pts)
+
+        if vol < 0:
+            neg_vol_count += 1
+        if ar > max_ar:
+            max_ar = ar
+            if ar > 1000:
+                worst_hex_center = pts.mean(axis=0)
+        max_skew = max(max_skew, skew)
+
+    quality_ok = neg_vol_count == 0 and max_skew < 0.95
+    import logging
+    logger = logging.getLogger("flexfoil.rans.mesh")
+    logger.info(
+        f"Mesh quality: {n_hexes} hexes, {neg_vol_count} negative volumes, "
+        f"max AR={max_ar:.0f}, max skewness={max_skew:.3f}"
+    )
+    if neg_vol_count > 0:
+        logger.warning(f"{neg_vol_count} hexes have negative volume!")
+    if max_ar > 100000:
+        logger.warning(f"Max aspect ratio {max_ar:.0f} is very high")
+    if max_skew > 0.95:
+        logger.warning(f"Max skewness {max_skew:.3f} > 0.95 — may cause divergence")
+    if worst_hex_center is not None:
+        logger.info(f"Worst AR hex at ({worst_hex_center[0]:.2f}, {worst_hex_center[1]:.2f}, {worst_hex_center[2]:.4f})")
+
     # Extract boundary faces from hex connectivity (guaranteed watertight)
     hex_face_defs = [
         (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6),
