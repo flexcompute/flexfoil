@@ -1,0 +1,111 @@
+---
+sidebar_position: 3
+title: Polar Types (Re Modes)
+description: Type 1, 2, and 3 polar modes — constant Re, constant Re√CL, and constant Re·CL
+---
+
+# Polar Types
+
+When running a polar sweep, the Reynolds number can be held constant or varied
+with lift coefficient. FlexFoil supports three polar types, matching XFOIL's
+`OPER` menu behaviour exactly.
+
+## Overview
+
+| Type | `re_type` | Constraint | Effective Re | Physical scenario |
+|------|-----------|------------|-------------|-------------------|
+| **1** (default) | `1` | Constant Re | `Re_eff = Re` | Wind tunnel at fixed speed |
+| **2** | `2` | Constant `Re·√CL` | `Re_eff = Re / √|CL|` | Level flight at constant weight (lift = weight) |
+| **3** | `3` | Constant `Re·CL` | `Re_eff = Re / |CL|` | Level flight at constant weight and altitude |
+
+### Type 1 — Constant Reynolds Number
+
+The default mode. Reynolds number stays fixed across the sweep. This is the
+standard wind tunnel condition: freestream velocity is constant, so Re does not
+change with angle of attack.
+
+### Type 2 — Constant `Re·√CL`
+
+In level flight, lift equals weight:
+
+```
+L = ½ ρ V² S CL = W
+```
+
+At fixed weight, altitude, and wing area, `V² CL = const`, so `V ∝ 1/√CL`.
+Since `Re ∝ V`, the effective Reynolds number varies as:
+
+```
+Re_eff = Re / √|CL|
+```
+
+The input `Re` parameter is interpreted as `Re·√CL` — a fixed constraint. This
+is the most physically meaningful mode for comparing airfoils at a given flight
+condition (same aircraft, same weight, same altitude).
+
+### Type 3 — Constant `Re·CL`
+
+Similar to Type 2 but with `V CL = const` (i.e., `V ∝ 1/CL`):
+
+```
+Re_eff = Re / |CL|
+```
+
+This represents constant dynamic pressure times CL. Less commonly used than
+Type 2.
+
+## Python Examples
+
+### Type 1 — Default (constant Re)
+
+```python
+import flexfoil
+
+foil = flexfoil.naca("2412")
+
+# Type 1 is the default — these are equivalent:
+result = foil.solve(alpha=5.0, Re=1e6)
+result = foil.solve(alpha=5.0, Re=1e6, re_type=1)
+
+print(result.reynolds_eff)  # 1000000.0 (same as input)
+```
+
+### Type 2 — Constant Re√CL
+
+```python
+# Type 2: Re input is interpreted as Re * sqrt(CL)
+result = foil.solve(alpha=5.0, Re=1e6, re_type=2)
+
+print(result.cl)            # ~0.81
+print(result.reynolds_eff)  # ~1.11e6 (Re / sqrt(CL) > Re because CL < 1)
+```
+
+### Polar sweep with Type 2
+
+```python
+polar = foil.polar(alpha=(-2, 12, 0.5), Re=1e6, re_type=2)
+
+# Each point has a different effective Re
+for r in polar.converged:
+    print(f"α={r.alpha:5.1f}°  CL={r.cl:.4f}  Re_eff={r.reynolds_eff:.0f}  CD={r.cd:.5f}")
+```
+
+### Boundary-layer distribution with Type 2
+
+```python
+bl = foil.bl_distribution(alpha=5.0, Re=1e6, re_type=2)
+print(bl.x_tr_upper)  # transition location at effective Re
+```
+
+## When to Use Each Type
+
+| Scenario | Recommended type |
+|----------|-----------------|
+| Wind tunnel comparison | Type 1 |
+| Airfoil selection for a specific aircraft (fixed weight/altitude) | Type 2 |
+| Comparing airfoils at different CL ranges | Type 2 |
+| Standard polar (most common) | Type 1 |
+
+For most users, **Type 1** (the default) is appropriate. Use **Type 2** when
+you want to simulate how an airfoil performs in actual flight, where the
+aircraft must fly faster at lower CL to maintain lift.
