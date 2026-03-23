@@ -574,39 +574,46 @@ def generate_and_write_mesh_gmsh(
         for x, y in coords:
             f.write(f"  {x:.8f}  {y:.8f}\n")
 
-    # Generate 2D structured C-grid via forked gmshairfoil2d
-    geo_dir = output_dir / "geo"
-    geo_dir.mkdir(exist_ok=True)
+    # Generate 2D structured C-grid using the forked gmshairfoil2d classes directly.
+    # We bypass gmsh_main() and read_airfoil_from_file() to avoid their
+    # point reordering issues — the coords are already in correct Selig order.
+    from flexfoil.rans.gmshairfoil2d.geometry_def import AirfoilSpline, CType
 
-    import sys
-    old_argv = sys.argv
-    sys.argv = [
-        "gmshairfoil2d",
-        "--airfoil_path", str(dat_path),
-        "--structured",
-        "--first_layer", str(first_cell),
-        "--ratio", str(growth_rate),
-        "--nb_layers", str(n_bl_layers),
-        "--airfoil_mesh_size", str(airfoil_mesh_size),
-        "--farfield", str(farfield_height),
-        "--arg_struc", "10x10",
-        "--format", "geo_unrolled",
-        "--output", str(geo_dir),
-    ]
-    try:
-        from flexfoil.rans.gmshairfoil2d.gmshairfoil2d import main as gmsh_main
-        gmsh_main()
-    finally:
-        sys.argv = old_argv
+    gmsh.initialize()
+    gmsh.model.add("flexfoil_airfoil")
+    gmsh.option.setNumber("General.Terminal", 0)
 
-    geo_files = [f for f in geo_dir.iterdir() if f.suffix == ".geo_unrolled"]
-    if not geo_files:
-        raise RuntimeError("gmshairfoil2d did not produce a .geo_unrolled file")
-    geo_path = geo_files[0]
+    # Create point cloud in (x, y, 0) format — preserving Selig ordering
+    point_cloud = [(x, y, 0) for x, y in coords]
 
-    # Append 3D extrusion and generate mesh
-    geo_3d_path = output_dir / "3d.geo"
-    geo_text = geo_path.read_text()
+    airfoil = AirfoilSpline(point_cloud, airfoil_mesh_size, name="airfoil")
+
+    dx_wake = 10.0  # wake extension length
+    dy = farfield_height * 2  # total domain height
+
+    mesh_obj = CType(
+        airfoil, dx_wake, dy,
+        airfoil_mesh_size, first_cell, growth_rate, aoa=0,
+    )
+    mesh_obj.define_bc()
+
+    # Add physical surface for the fluid domain
+    if mesh_obj.surfaces:
+        ps = gmsh.model.addPhysicalGroup(2, mesh_obj.surfaces)
+        gmsh.model.setPhysicalName(2, ps, "fluid")
+
+    gmsh.model.geo.synchronize()
+
+    # Write the 2D geo as .geo_unrolled, then re-open with extrusion appended.
+    # This ensures gmsh handles shared block-interface nodes correctly
+    # (direct extrude API creates duplicate nodes at block boundaries).
+    geo_2d_path = output_dir / "airfoil_2d.geo_unrolled"
+    gmsh.write(str(geo_2d_path))
+    gmsh.finalize()
+
+    # Append extrusion and re-generate as 3D
+    geo_3d_path = output_dir / "airfoil_3d.geo"
+    geo_text = geo_2d_path.read_text()
     geo_3d_path.write_text(
         geo_text + f"\nExtrude {{0, 0, {span}}} {{ Surface{{:}}; Layers{{1}}; Recombine; }}\n"
     )

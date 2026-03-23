@@ -620,34 +620,18 @@ class AirfoilSpline:
                     self.te_upper = p_b
                     self.te_lower = p_a
 
-                # FlexFoil modification: instead of extending curves far downstream
-                # to a sharp intersection (which distorts the airfoil shape), we
-                # close the TE with a point at the midpoint of the TE gap.
-                # This preserves the airfoil shape while satisfying the structured
-                # mesh topology requirement for a single TE reference point.
-                x, y = p_a.x, p_a.y
-                z, w = p_b.x, p_b.y
-                # Place the closure point just barely downstream of the TE
-                # (1/10th of the TE gap width) to avoid degenerate geometry
-                # from having three coincident x=1.0 points.
-                closure_offset = te_gap * 0.1
-                mid_x = max(x, z) + closure_offset
-                mid_y = (y + w) / 2
-                new = Point(mid_x, mid_y, 0, self.mesh_size)
-
-                # Insert between the two TE points. The key is to insert at the
-                # position that puts the new point BETWEEN upper and lower surfaces
-                # in the point list (so gen_skin can split there).
-                # te_up_indx and te_down_indx are adjacent in the list.
-                # We want to insert after the higher index:
-                insert_idx = max(te_up_indx, te_down_indx) + 1
-                if insert_idx > len(self.points):
-                    self.points.append(new)
-                    self.te_indx = len(self.points) - 1
-                else:
-                    self.points.insert(insert_idx, new)
-                    self.te_indx = insert_idx
-                self.te = new
+                # FlexFoil modification: preserve the open TE as two separate
+                # points. The CType structured mesh will create a 6th block (F)
+                # to fill the blunt TE gap with proper quad cells.
+                #
+                # We do NOT collapse the TE to a single point — that creates a
+                # pressure singularity that inflates CDp by ~2.5×.
+                #
+                # For the AirfoilSpline to work (gen_skin needs a single te_indx),
+                # we keep the upper TE point as the "TE" reference. The CType
+                # class checks self.open_te and self.te_lower to build the 6th block.
+                self.te = self.te_upper
+                self.te_indx = self.points.index(self.te_upper)
 
     def gen_skin(self):
         """
@@ -710,18 +694,41 @@ class AirfoilSpline:
 
     def gen_skin_struct(self, k1, k2):
         """
-        Method to generate the two splines forming the foil for structured mesh, Only call this function when the points
-        of the airfoil are in their final position
-        -------
-        """
-        # create a spline from the up middle point to the trailing edge (up part)
-        self.upper_spline = Spline(
-            self.points[k1: self.te_indx + 1])
+        Method to generate the two splines forming the foil for structured mesh.
+        Only call this function when the points of the airfoil are in their final position.
 
-        # create a spline from the trailing edge to the up down point (down part)
-        self.lower_spline = Spline(
-            self.points[self.te_indx:k2+1]
-        )
+        For blunt (open) TE: upper spline goes from k1 to te_upper,
+        lower spline goes from te_lower to k2. The TE face (te_upper→te_lower)
+        is handled separately as a Line in CType.
+        """
+        if self.open_te:
+            # Find indices by identity (not equality — Point.__eq__ may compare by value)
+            te_up_idx = next(i for i, p in enumerate(self.points) if p is self.te_upper)
+            te_lo_idx = next(i for i, p in enumerate(self.points) if p is self.te_lower)
+
+            # Selig ordering: te_upper(0) → upper surface → LE → lower surface → te_lower(N-1)
+            # Upper spline: from k1 back toward te_upper (k1 is near LE, te_upper is at start)
+            # Points go: te_upper[0] → ... → k1[78] → ... → LE[100]
+            # So upper spline = points[te_up_idx : k1+1] (te_upper to k1)
+            upper_pts = self.points[te_up_idx:k1 + 1]
+
+            # Lower spline: from k2 toward te_lower (k2 is near LE, te_lower is at end)
+            # Points go: LE[100] → ... → k2[121] → ... → te_lower[199]
+            # So lower spline = points[k2 : te_lo_idx+1] (k2 to te_lower)
+            lower_pts = self.points[k2:te_lo_idx + 1]
+
+            if len(upper_pts) < 2:
+                raise ValueError(f"Upper spline has {len(upper_pts)} points (te_up={te_up_idx}, k1={k1})")
+            if len(lower_pts) < 2:
+                raise ValueError(f"Lower spline has {len(lower_pts)} points (k2={k2}, te_lo={te_lo_idx})")
+
+            self.upper_spline = Spline(upper_pts)
+            self.lower_spline = Spline(lower_pts)
+        else:
+            # Closed TE: single te_indx point
+            self.upper_spline = Spline(self.points[k1:self.te_indx + 1])
+            self.lower_spline = Spline(self.points[self.te_indx:k2 + 1])
+
         return self.upper_spline, self.lower_spline
 
     def close_loop(self):
@@ -904,15 +911,30 @@ class CType:
         self.aoa = aoa
         self.structured = structured
 
-        # First compute k1 & k2 the first coordinate after 0.041 (up & down)
-        debut = True
-        for p in airfoil_spline.points:
-            if p.x > 0.041 and debut:
-                k1 = airfoil_spline.points.index(p)
-                debut = False
-            if p.x <= 0.041 and not debut:
-                k2 = airfoil_spline.points.index(p)-1
+        # First compute k1 & k2: the first coordinate after x=0.041 on each side
+        # For Selig ordering: points go TE_upper → (decreasing x) → LE → (increasing x) → TE_lower
+        # k1 = last point with x > 0.041 before reaching LE (upper surface split)
+        # k2 = first point with x > 0.041 after LE (lower surface split)
+        le_idx = airfoil_spline.le_indx
+        x_split = 0.041
+
+        # Find k1: scan from TE toward LE, find where x drops below x_split
+        k1 = None
+        for i in range(1, le_idx):
+            if airfoil_spline.points[i].x <= x_split:
+                k1 = i - 1  # last point with x > x_split
                 break
+        if k1 is None:
+            k1 = max(1, le_idx - 1)
+
+        # Find k2: scan from LE toward lower TE, find where x exceeds x_split
+        k2 = None
+        for i in range(le_idx + 1, len(airfoil_spline.points)):
+            if airfoil_spline.points[i].x > x_split:
+                k2 = i
+                break
+        if k2 is None:
+            k2 = min(len(airfoil_spline.points) - 2, le_idx + 1)
 
         # Only call gen_skin_struct if creating structured mesh
         # For unstructured, the airfoil already has proper splines from gen_skin()
@@ -928,10 +950,29 @@ class CType:
             upper_spline_back = airfoil_spline.upper_spline
             lower_spline_back = airfoil_spline.lower_spline
 
-        # Create the new front spline (from the two front parts)
-        upper_points_front = airfoil_spline.points[:k1+1]
-        lower_points_front = airfoil_spline.points[k2:]
-        points_front = lower_points_front + upper_points_front
+        # Create the new front spline (LE region from k2 around LE to k1).
+        # For Selig ordering: points go TE → upper → LE → lower → TE.
+        # The front region spans from k2 (lower side of LE split) backwards
+        # through LE to k1 (upper side of LE split).
+        # In terms of indices: k1 < LE < k2, so front = points[k2] → ... → LE → ... → points[k1]
+        # But the list order is: ... k1 ... LE ... k2 ...
+        # So front spline = points[k2 : ] + points[ : k1+1] for CLOSED TE (wraps around),
+        # or = points[k2 : k1-1 : -1] (reversed) for sequential indexing.
+        # Actually, the original code: lower_front = points[k2:] and upper_front = points[:k1+1]
+        # concatenates the end → start, wrapping through the TE.
+        # For open TE, we should NOT wrap through the TE. Instead, go directly
+        # from k2 backwards through LE to k1 (all sequential indices).
+        if getattr(airfoil_spline, 'open_te', False):
+            # Front spline: points[k2] down to points[k1] (reversed direction)
+            # These are indices k1, k1+1, ..., LE, ..., k2 in the list
+            # Spline goes from point[k2] → ... → LE → ... → point[k1]
+            front_pts = list(reversed(airfoil_spline.points[k1:k2+1]))
+            points_front = front_pts
+        else:
+            # Original: wrap around through TE
+            upper_points_front = airfoil_spline.points[:k1+1]
+            lower_points_front = airfoil_spline.points[k2:]
+            points_front = lower_points_front + upper_points_front
         points_front_tag = [point.tag for point in points_front]
         spline_front = gmsh.model.geo.addSpline(points_front_tag)
         self.spline_front, self.upper_spline_back, self.lower_spline_back = spline_front, upper_spline_back, lower_spline_back
@@ -997,20 +1038,59 @@ class CType:
             Point(pt7x, pt7y, z, self.mesh_size_end),  # 7
         ]
 
-        # Create all the lines : outside and surface separation
-        self.lines = [
-            Line(self.le_upper_point, self.points[1]),  # 0
-            Line(self.points[1], self.points[2]),  # 1
-            Line(self.points[2], self.points[3]),  # 2
-            Line(self.points[3], self.points[4]),  # 3
-            Line(self.points[4], self.points[5]),  # 4
-            Line(self.points[5], self.points[6]),  # 5
-            Line(self.points[6], self.points[7]),  # 6
-            Line(self.points[7], self.le_lower_point),  # 7
-            Line(self.airfoil_spline.te, self.points[2]),  # 8
-            Line(self.airfoil_spline.te, self.points[6]),  # 9
-            Line(self.points[4], self.airfoil_spline.te),  # 10
-        ]
+        # Check if we have a blunt (open) trailing edge
+        self.blunt_te = getattr(self.airfoil_spline, 'open_te', False)
+
+        if self.blunt_te:
+            te_upper = self.airfoil_spline.te_upper
+            te_lower = self.airfoil_spline.te_lower
+
+            # For blunt TE: p2 is above te_upper, p6 is below te_lower
+            # We also need p4_upper and p4_lower at the wake exit
+            self.points[2] = Point(te_upper.x, self.dy / 2, z, self.mesh_size_end)
+            self.points[6] = Point(te_lower.x, -self.dy / 2, z, self.mesh_size_end)
+
+            # Add wake exit points for upper and lower TE
+            p4_upper = Point(te_upper.x + self.dx_trail, te_upper.y, z, self.mesh_size_end)
+            p4_lower = Point(te_lower.x + self.dx_trail, te_lower.y, z, self.mesh_size_end)
+            self.points.append(p4_upper)  # index 8
+            self.points.append(p4_lower)  # index 9
+
+            # Reassign p4 to midpoint of wake exit (for block F outer edge)
+            # Actually p3 and p5 stay at the corners, p4_upper and p4_lower
+            # replace the single p4
+
+            self.lines = [
+                Line(self.le_upper_point, self.points[1]),  # 0: LE_upper → p1
+                Line(self.points[1], self.points[2]),        # 1: p1 → p2
+                Line(self.points[2], self.points[3]),        # 2: p2 → p3
+                Line(self.points[3], p4_upper),              # 3a: p3 → p4_upper
+                Line(p4_upper, p4_lower),                    # 3b: p4_upper → p4_lower (wake exit TE face)
+                Line(p4_lower, self.points[5]),              # 4: p4_lower → p5
+                Line(self.points[5], self.points[6]),        # 5: p5 → p6
+                Line(self.points[6], self.points[7]),        # 6: p6 → p7
+                Line(self.points[7], self.le_lower_point),   # 7: p7 → LE_lower
+                Line(te_upper, self.points[2]),              # 8: te_upper → p2
+                Line(te_lower, self.points[6]),              # 9: te_lower → p6
+                Line(p4_upper, te_upper),                    # 10: p4_upper → te_upper
+                Line(p4_lower, te_lower),                    # 11: p4_lower → te_lower
+                Line(te_upper, te_lower),                    # 12: TE face (blunt TE)
+            ]
+        else:
+            # Original closed-TE topology: single TE point
+            self.lines = [
+                Line(self.le_upper_point, self.points[1]),  # 0
+                Line(self.points[1], self.points[2]),  # 1
+                Line(self.points[2], self.points[3]),  # 2
+                Line(self.points[3], self.points[4]),  # 3
+                Line(self.points[4], self.points[5]),  # 4
+                Line(self.points[5], self.points[6]),  # 5
+                Line(self.points[6], self.points[7]),  # 6
+                Line(self.points[7], self.le_lower_point),  # 7
+                Line(self.airfoil_spline.te, self.points[2]),  # 8
+                Line(self.airfoil_spline.te, self.points[6]),  # 9
+                Line(self.points[4], self.airfoil_spline.te),  # 10
+            ]
 
         # Circle arc for C shape at the front
         self.circle_arc = gmsh.model.geo.addCircleArc(
@@ -1124,76 +1204,183 @@ class CType:
                 gmsh.model.geo.mesh.setTransfiniteCurve(
                     self.lines[1].tag, nb_airfoil)
 
-            # transfinite curve C
-            gmsh.model.geo.mesh.setTransfiniteCurve(
-                self.lines[2].tag, nb_points_wake, "Progression", progression_wake_inv)
-            gmsh.model.geo.mesh.setTransfiniteCurve(
-                self.lines[3].tag, nb_points_y, "Progression", progression_y_inv)
-            gmsh.model.geo.mesh.setTransfiniteCurve(
-                self.lines[10].tag, nb_points_wake, "Progression", progression_wake)  # same for plane D
+            if not self.blunt_te:
+                # transfinite curve C (closed TE)
+                gmsh.model.geo.mesh.setTransfiniteCurve(
+                    self.lines[2].tag, nb_points_wake, "Progression", progression_wake_inv)
+                gmsh.model.geo.mesh.setTransfiniteCurve(
+                    self.lines[3].tag, nb_points_y, "Progression", progression_y_inv)
+                gmsh.model.geo.mesh.setTransfiniteCurve(
+                    self.lines[10].tag, nb_points_wake, "Progression", progression_wake)  # same for plane D
 
-            # transfinite curve D
-            gmsh.model.geo.mesh.setTransfiniteCurve(
-                self.lines[9].tag, nb_points_y, "Progression", progression_y)  # same for plane E
-            gmsh.model.geo.mesh.setTransfiniteCurve(
-                self.lines[4].tag, nb_points_y, "Progression", progression_y)
-            gmsh.model.geo.mesh.setTransfiniteCurve(
-                self.lines[5].tag, nb_points_wake, "Progression", progression_wake)
+                # transfinite curve D (closed TE)
+                gmsh.model.geo.mesh.setTransfiniteCurve(
+                    self.lines[9].tag, nb_points_y, "Progression", progression_y)  # same for plane E
+                gmsh.model.geo.mesh.setTransfiniteCurve(
+                    self.lines[4].tag, nb_points_y, "Progression", progression_y)
+                gmsh.model.geo.mesh.setTransfiniteCurve(
+                    self.lines[5].tag, nb_points_wake, "Progression", progression_wake)
+            else:
+                # transfinite curves C, D for blunt TE (handled above in surface section)
+                # L2 (p2→p3), L6(p6→p7) are same as closed TE
+                gmsh.model.geo.mesh.setTransfiniteCurve(
+                    self.lines[2].tag, nb_points_wake, "Progression", progression_wake_inv)
+                gmsh.model.geo.mesh.setTransfiniteCurve(
+                    self.lines[6].tag, nb_points_wake, "Progression", progression_wake)
+                gmsh.model.geo.mesh.setTransfiniteCurve(
+                    self.lines[9].tag, nb_points_y, "Progression", progression_y)
 
             # transfinite curve E
             gmsh.model.geo.mesh.setTransfiniteCurve(
                 lower_spline_back.tag, nb_airfoil, "Progression", 1/ratio_airfoil)
             # For L6, we adapt depeding if the line is much longer than 1 or not (if goes "far in the front")
-            if pt7x < airfoil_spline.le.x-1.5:
-                gmsh.model.geo.mesh.setTransfiniteCurve(
-                    self.lines[6].tag, nb_airfoil, "Progression", ratio_airfoil)
-            elif pt7x < airfoil_spline.le.x-0.4:
-                gmsh.model.geo.mesh.setTransfiniteCurve(
-                    self.lines[6].tag, nb_airfoil, "Progression", math.sqrt(ratio_airfoil))
-            else:
-                gmsh.model.geo.mesh.setTransfiniteCurve(
-                    self.lines[6].tag, nb_airfoil)
+            if not self.blunt_te:
+                if pt7x < airfoil_spline.le.x-1.5:
+                    gmsh.model.geo.mesh.setTransfiniteCurve(
+                        self.lines[6].tag, nb_airfoil, "Progression", ratio_airfoil)
+                elif pt7x < airfoil_spline.le.x-0.4:
+                    gmsh.model.geo.mesh.setTransfiniteCurve(
+                        self.lines[6].tag, nb_airfoil, "Progression", math.sqrt(ratio_airfoil))
+                else:
+                    gmsh.model.geo.mesh.setTransfiniteCurve(
+                        self.lines[6].tag, nb_airfoil)
 
             # Now we add the surfaces
 
-            # transfinite surface A (forces structured mesh)
-            c1 = gmsh.model.geo.addCurveLoop(
-                [self.lines[7].tag, spline_front, self.lines[0].tag, - self.circle_arc])
-            surf1 = gmsh.model.geo.addPlaneSurface([c1])
-            gmsh.model.geo.mesh.setTransfiniteSurface(surf1)
+            if self.blunt_te:
+                # 6-block topology for blunt (open) TE:
+                #
+                #        p1                      p2          p3
+                #        -----------------------------------------------
+                #       / \              L1   |      L2     |
+                # circ /   \L0      B         |       C     |L3a
+                #     /  A  \               L8|             |
+                #    /      /000000000(TE_u)\  |             p4_upper
+                #   (     (00000000000000000 | |------F------| L3b (TE face at wake exit)
+                #    \      \000000000(TE_l)/  |             p4_lower
+                #     \     /               L9 |             |
+                #      \   /L7      E          |    D        |L4
+                #       \ /                    |             |
+                #        -----------------------------------------------
+                #       p7                   p6              p5
+                #
+                # Block F fills the blunt TE gap between C and D.
+                # L12 = TE face (te_upper → te_lower)
+                # L3b = wake exit TE face (p4_upper → p4_lower)
+                # L10 = p4_upper → te_upper
+                # L11 = p4_lower → te_lower
 
-            # transfinite surface B
-            c2 = gmsh.model.geo.addCurveLoop(
-                [self.lines[0].tag, self.lines[1].tag, - self.lines[8].tag, - upper_spline_back.tag])
-            surf2 = gmsh.model.geo.addPlaneSurface([c2])
-            gmsh.model.geo.mesh.setTransfiniteSurface(surf2)
+                # TE face: need transfinite with just 2 points (single cell across gap)
+                te_gap_pts = max(2, int(abs(self.airfoil_spline.te_upper.y - self.airfoil_spline.te_lower.y) / mesh_size_end) + 2)
+                te_gap_pts = min(te_gap_pts, 5)  # keep it small — it's a thin gap
 
-            # transfinite surface C
-            c3 = gmsh.model.geo.addCurveLoop(
-                [self.lines[8].tag, self.lines[2].tag, self.lines[3].tag, self.lines[10].tag])
-            surf3 = gmsh.model.geo.addPlaneSurface([c3])
-            gmsh.model.geo.mesh.setTransfiniteSurface(surf3)
+                # Set transfinite on blunt-TE specific lines
+                gmsh.model.geo.mesh.setTransfiniteCurve(self.lines[12].tag, te_gap_pts)  # TE face
+                gmsh.model.geo.mesh.setTransfiniteCurve(self.lines[3].tag, nb_points_y, "Progression", progression_y_inv)  # p3→p4_upper (replaces old L3)
+                gmsh.model.geo.mesh.setTransfiniteCurve(self.lines[4].tag, te_gap_pts)  # p4_upper→p4_lower (wake exit TE face)
+                gmsh.model.geo.mesh.setTransfiniteCurve(self.lines[5].tag, nb_points_y, "Progression", progression_y)  # p4_lower→p5
+                gmsh.model.geo.mesh.setTransfiniteCurve(self.lines[10].tag, nb_points_wake, "Progression", progression_wake)  # p4_upper→te_upper
+                gmsh.model.geo.mesh.setTransfiniteCurve(self.lines[11].tag, nb_points_wake, "Progression", progression_wake)  # p4_lower→te_lower
 
-            # transfinite surface D
-            c4 = gmsh.model.geo.addCurveLoop(
-                [- self.lines[9].tag, - self.lines[10].tag, self.lines[4].tag, self.lines[5].tag])
-            surf4 = gmsh.model.geo.addPlaneSurface([c4])
-            gmsh.model.geo.mesh.setTransfiniteSurface(surf4)
+                # Surface A: p7→k2→LE→k1→p1→(arc)→p7
+                #   L8(p7→k2) → front(k2→k1) → L0(k1→p1) → -arc(p1→p7)
+                c1 = gmsh.model.geo.addCurveLoop(
+                    [self.lines[8].tag, spline_front, self.lines[0].tag, -self.circle_arc])
+                surf1 = gmsh.model.geo.addPlaneSurface([c1])
+                gmsh.model.geo.mesh.setTransfiniteSurface(surf1)
 
-            # transfinite surface E
-            c5 = gmsh.model.geo.addCurveLoop(
-                [self.lines[7].tag, - lower_spline_back.tag, self.lines[9].tag, self.lines[6].tag])
-            surf5 = gmsh.model.geo.addPlaneSurface([c5])
-            gmsh.model.geo.mesh.setTransfiniteSurface(surf5)
-            self.curveloops = [c1, c2, c3, c4, c5]
-            self.surfaces = [surf1, surf2, surf3, surf4, surf5]
+                # Blunt TE line index reference:
+                #   L0:  k1→p1           L7:  p6→p7
+                #   L1:  p1→p2           L8:  p7→k2
+                #   L2:  p2→p3           L9:  te_upper→p2
+                #   L3:  p3→p4_upper     L10: te_lower→p6
+                #   L4:  p4_upper→p4_lower  L11: p4_upper→te_upper
+                #   L5:  p4_lower→p5     L12: p4_lower→te_lower
+                #   L6:  p5→p6           L13: te_upper→te_lower (TE face)
+                #
+                # upper_spline: te_upper(0) → k1(78)
+                # lower_spline: k2(121) → te_lower(199)
+                # front_spline: k2 → LE → k1
 
-            # Lastly, recombine surface to create quadrilateral elements
-            gmsh.model.geo.mesh.setRecombine(2, surf1, 90)
-            gmsh.model.geo.mesh.setRecombine(2, surf2, 90)
-            gmsh.model.geo.mesh.setRecombine(2, surf3, 90)
-            gmsh.model.geo.mesh.setRecombine(2, surf4, 90)
-            gmsh.model.geo.mesh.setRecombine(2, surf5, 90)
+                # Surface B: k1→p1→p2→te_upper→k1
+                #   L0(k1→p1) → L1(p1→p2) → -L9(p2→te_upper) → upper(te_upper→k1)
+                c2 = gmsh.model.geo.addCurveLoop(
+                    [self.lines[0].tag, self.lines[1].tag, -self.lines[9].tag, upper_spline_back.tag])
+                surf2 = gmsh.model.geo.addPlaneSurface([c2])
+                gmsh.model.geo.mesh.setTransfiniteSurface(surf2)
+
+                # Surface C: te_upper→p2→p3→p4_upper→te_upper
+                #   L9(te_upper→p2) → L2(p2→p3) → L3(p3→p4_upper) → L11(p4_upper→te_upper)
+                c3 = gmsh.model.geo.addCurveLoop(
+                    [self.lines[9].tag, self.lines[2].tag, self.lines[3].tag, self.lines[11].tag])
+                surf3 = gmsh.model.geo.addPlaneSurface([c3])
+                gmsh.model.geo.mesh.setTransfiniteSurface(surf3)
+
+                # Surface D: te_lower→p6→p5→p4_lower→te_lower
+                #   L10(te_lower→p6) → -L6(p6→p5) → -L5(p5→p4_lower) → L12(p4_lower→te_lower)
+                c4 = gmsh.model.geo.addCurveLoop(
+                    [self.lines[10].tag, -self.lines[6].tag, -self.lines[5].tag, self.lines[12].tag])
+                surf4 = gmsh.model.geo.addPlaneSurface([c4])
+                gmsh.model.geo.mesh.setTransfiniteSurface(surf4)
+
+                # Surface E: k2→te_lower→p6→p7→k2
+                #   lower(k2→te_lower) → L10(te_lower→p6) → L7(p6→p7) → L8(p7→k2)
+                c5 = gmsh.model.geo.addCurveLoop(
+                    [lower_spline_back.tag, self.lines[10].tag, self.lines[7].tag, self.lines[8].tag])
+                surf5 = gmsh.model.geo.addPlaneSurface([c5])
+                gmsh.model.geo.mesh.setTransfiniteSurface(surf5)
+
+                # Surface F (NEW): te_upper→p4_upper→p4_lower→te_lower→te_upper
+                #   -L11(te_upper→p4_upper) → L4(p4_upper→p4_lower) → L12(p4_lower→te_lower) → -L13(te_lower→te_upper)
+                c6 = gmsh.model.geo.addCurveLoop(
+                    [-self.lines[11].tag, self.lines[4].tag, self.lines[12].tag, -self.lines[13].tag])
+                surf6 = gmsh.model.geo.addPlaneSurface([c6])
+                gmsh.model.geo.mesh.setTransfiniteSurface(surf6)
+
+                self.curveloops = [c1, c2, c3, c4, c5, c6]
+                self.surfaces = [surf1, surf2, surf3, surf4, surf5, surf6]
+
+                for s in self.surfaces:
+                    gmsh.model.geo.mesh.setRecombine(2, s, 90)
+
+            else:
+                # Original 5-block topology for closed TE
+
+                # transfinite surface A (forces structured mesh)
+                c1 = gmsh.model.geo.addCurveLoop(
+                    [self.lines[7].tag, spline_front, self.lines[0].tag, - self.circle_arc])
+                surf1 = gmsh.model.geo.addPlaneSurface([c1])
+                gmsh.model.geo.mesh.setTransfiniteSurface(surf1)
+
+                # transfinite surface B
+                c2 = gmsh.model.geo.addCurveLoop(
+                    [self.lines[0].tag, self.lines[1].tag, - self.lines[8].tag, - upper_spline_back.tag])
+                surf2 = gmsh.model.geo.addPlaneSurface([c2])
+                gmsh.model.geo.mesh.setTransfiniteSurface(surf2)
+
+                # transfinite surface C
+                c3 = gmsh.model.geo.addCurveLoop(
+                    [self.lines[8].tag, self.lines[2].tag, self.lines[3].tag, self.lines[10].tag])
+                surf3 = gmsh.model.geo.addPlaneSurface([c3])
+                gmsh.model.geo.mesh.setTransfiniteSurface(surf3)
+
+                # transfinite surface D
+                c4 = gmsh.model.geo.addCurveLoop(
+                    [- self.lines[9].tag, - self.lines[10].tag, self.lines[4].tag, self.lines[5].tag])
+                surf4 = gmsh.model.geo.addPlaneSurface([c4])
+                gmsh.model.geo.mesh.setTransfiniteSurface(surf4)
+
+                # transfinite surface E
+                c5 = gmsh.model.geo.addCurveLoop(
+                    [self.lines[7].tag, - lower_spline_back.tag, self.lines[9].tag, self.lines[6].tag])
+                surf5 = gmsh.model.geo.addPlaneSurface([c5])
+                gmsh.model.geo.mesh.setTransfiniteSurface(surf5)
+                self.curveloops = [c1, c2, c3, c4, c5]
+                self.surfaces = [surf1, surf2, surf3, surf4, surf5]
+
+                # Lastly, recombine surface to create quadrilateral elements
+                for s in self.surfaces:
+                    gmsh.model.geo.mesh.setRecombine(2, s, 90)
         else:
             # For non-structured (hybrid) mesh, create C-type farfield boundary
             # Only create the outer curve loop - PlaneSurface will use it as a hole
@@ -1222,16 +1409,28 @@ class CType:
         -------
         """
 
-        # Airfoil
-        self.bc = gmsh.model.addPhysicalGroup(
-            1, [self.upper_spline_back.tag,
-                self.lower_spline_back.tag, self.spline_front]
-        )
+        # Airfoil (include TE face for blunt TE)
+        airfoil_curves = [self.upper_spline_back.tag,
+                          self.lower_spline_back.tag, self.spline_front]
+        if self.blunt_te:
+            airfoil_curves.append(self.lines[12].tag)  # TE face
+
+        self.bc = gmsh.model.addPhysicalGroup(1, airfoil_curves)
         gmsh.model.setPhysicalName(1, self.bc, "airfoil")
 
         # Farfield
-        self.bc = gmsh.model.addPhysicalGroup(1, [self.lines[1].tag, self.lines[2].tag,
-                                                  self.lines[3].tag, self.lines[4].tag, self.lines[5].tag, self.lines[6].tag, self.circle_arc])
+        if self.blunt_te:
+            farfield_curves = [self.lines[1].tag, self.lines[2].tag,
+                               self.lines[3].tag, self.lines[4].tag,
+                               self.lines[5].tag, self.lines[6].tag,
+                               self.circle_arc]
+        else:
+            farfield_curves = [self.lines[1].tag, self.lines[2].tag,
+                               self.lines[3].tag, self.lines[4].tag,
+                               self.lines[5].tag, self.lines[6].tag,
+                               self.circle_arc]
+
+        self.bc = gmsh.model.addPhysicalGroup(1, farfield_curves)
         gmsh.model.setPhysicalName(1, self.bc, "farfield")
 
         # Surface
