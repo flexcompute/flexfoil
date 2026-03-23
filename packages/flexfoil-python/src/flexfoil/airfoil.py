@@ -18,7 +18,6 @@ from flexfoil._rustfoil import (
 
 if TYPE_CHECKING:
     from flexfoil.polar import PolarResult
-    from flexfoil.rans import RANSPolarResult, RANSResult
 
 
 @dataclass
@@ -456,122 +455,6 @@ class Airfoil:
             h_lower=raw.get("h_lower", []),
             ue_upper=raw.get("ue_upper", []),
             ue_lower=raw.get("ue_lower", []),
-        )
-
-    def solve_rans(
-        self,
-        alpha: float = 0.0,
-        *,
-        Re: float = 1e6,
-        mach: float = 0.2,
-        n_normal: int = 100,
-        growth_rate: float = 1.08,
-        farfield_radius: float = 50.0,
-        span: float = 0.01,
-        max_steps: int = 5000,
-        turbulence_model: str = "SpalartAllmaras",
-        timeout: int = 3600,
-        on_progress=None,
-        cleanup: bool = True,
-    ) -> RANSResult:
-        """Run RANS CFD analysis via Flow360 (cloud).
-
-        Generates a pseudo-3D mesh from the airfoil geometry, uploads it to
-        Flow360, runs a steady RANS simulation, and returns the integrated forces.
-        Takes several minutes. Requires ``pip install flexfoil[rans]``.
-
-        Parameters
-        ----------
-        alpha : angle of attack in degrees
-        Re : Reynolds number
-        mach : freestream Mach number
-        n_normal : mesh cells in wall-normal direction
-        growth_rate : boundary-layer mesh growth rate
-        farfield_radius : farfield distance in chord lengths
-        span : pseudo-3D span (one cell deep)
-        max_steps : max pseudo-time iterations
-        turbulence_model : 'SpalartAllmaras' or 'kOmegaSST'
-        timeout : max wait time in seconds
-        on_progress : callback(status: str, fraction: float)
-        cleanup : remove temporary mesh files after upload
-        """
-        from flexfoil.rans.flow360 import run_rans
-
-        return run_rans(
-            self.panel_coords,
-            alpha=alpha,
-            Re=Re,
-            mach=mach,
-            airfoil_name=self.name.replace(" ", "_"),
-            n_normal=n_normal,
-            growth_rate=growth_rate,
-            farfield_radius=farfield_radius,
-            span=span,
-            max_steps=max_steps,
-            turbulence_model=turbulence_model,
-            timeout=timeout,
-            on_progress=on_progress,
-            cleanup=cleanup,
-        )
-
-    def polar_rans(
-        self,
-        alpha: tuple[float, float, float] | list[float] = (-5, 15, 2.5),
-        *,
-        Re: float = 1e6,
-        mach: float = 0.2,
-        max_steps: int = 5000,
-        turbulence_model: str = "SpalartAllmaras",
-        timeout: int = 3600,
-        max_workers: int = 4,
-        on_progress=None,
-    ) -> RANSPolarResult:
-        """Run a RANS polar sweep via Flow360.
-
-        All alpha cases are submitted **in parallel** (up to max_workers
-        concurrent Flow360 jobs). Much faster than sequential — a 9-point
-        polar takes ~5-8 minutes instead of ~45 minutes.
-
-        Parameters
-        ----------
-        alpha : (start, end, step) or explicit list of angles
-        Re, mach : flow conditions
-        max_steps : max pseudo-time iterations per case
-        turbulence_model : 'SpalartAllmaras' or 'kOmegaSST'
-        timeout : max wait time per case in seconds
-        max_workers : max concurrent Flow360 submissions (default 4)
-        on_progress : callback(status: str, completed: int, total: int)
-        """
-        import numpy as np
-
-        from flexfoil.rans import RANSPolarResult
-        from flexfoil.rans.flow360 import run_rans_batch
-
-        if isinstance(alpha, (list, np.ndarray)):
-            alphas = [float(a) for a in alpha]
-        else:
-            start, end, step = alpha
-            alphas = [float(a) for a in np.arange(start, end + step * 0.5, step)]
-
-        results = run_rans_batch(
-            self.panel_coords,
-            alphas,
-            Re=Re,
-            mach=mach,
-            airfoil_name=self.name.replace(" ", "_"),
-            span=0.01,
-            max_steps=max_steps,
-            turbulence_model=turbulence_model,
-            timeout=timeout,
-            max_workers=max_workers,
-            on_progress=on_progress,
-        )
-
-        return RANSPolarResult(
-            airfoil_name=self.name,
-            reynolds=Re,
-            mach=mach,
-            results=results,
         )
 
     def _store_run(self, result: SolveResult, *, viscous: bool, max_iter: int) -> None:
