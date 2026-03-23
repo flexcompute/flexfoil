@@ -140,6 +140,16 @@ pub fn solve_operating_point_from_state(
             cl_inv, cm_inv
         );
     }
+    // Seed state.cl from inviscid solution so Type 2/3 have an initial CL estimate.
+    {
+        let (cl_inv, _cm_inv) = compute_panel_forces_from_gamma(
+            &state.panel_x,
+            &state.panel_y,
+            &state.qinv,
+            state.alpha_rad,
+        );
+        state.cl = cl_inv;
+    }
     stfind(state);
     iblpan(state);
     xicalc(state);
@@ -163,14 +173,15 @@ pub fn solve_operating_point_from_state(
     }
 
     for iter in 1..=options.max_iterations {
-        let mut assembly = setbl(state, options.reynolds, options.ncrit, options.mach, iter);
+        let re_eff = options.effective_reynolds(state.cl);
+        let mut assembly = setbl(state, re_eff, options.ncrit, options.mach, iter);
         let solve = blsolv(state, &mut assembly, iter);
         update(
             state,
             &assembly,
             &solve,
             options.mach,
-            options.reynolds,
+            re_eff,
             iter,
         );
         if let OperatingMode::PrescribedCl { .. } = state.operating_mode {
@@ -179,7 +190,7 @@ pub fn solve_operating_point_from_state(
         }
         if is_debug_active() {
             // Match XFOIL: dump BL state after UPDATE, before QVFUE/GAMQV/STMOVE.
-            emit_full_state(state, iter, options.mach, options.reynolds);
+            emit_full_state(state, iter, options.mach, re_eff);
         }
         qvfue(state);
         gamqv(state);
@@ -190,7 +201,7 @@ pub fn solve_operating_point_from_state(
         if std::env::var("RUSTFOIL_DISABLE_STMOVE").is_err() {
             stmove(state);
         }
-        update_force_state(state, options.mach, options.reynolds);
+        update_force_state(state, options.mach, re_eff);
         state.iterations = iter;
         state.residual = solve.rms;
         state.converged = solve.rms <= options.tolerance;
@@ -211,6 +222,7 @@ pub fn solve_operating_point_from_state(
         }
     }
 
+    let final_re_eff = options.effective_reynolds(state.cl);
     Ok(XfoilViscousResult {
         alpha_deg: state.alpha_rad.to_degrees(),
         cl: state.cl,
@@ -223,8 +235,9 @@ pub fn solve_operating_point_from_state(
         residual: state.residual,
         cd_friction: state.cdf,
         cd_pressure: state.cdp,
-        x_separation: separation_x(state, crate::state::XfoilSurface::Upper, options.mach, options.reynolds)
-            .or_else(|| separation_x(state, crate::state::XfoilSurface::Lower, options.mach, options.reynolds)),
+        x_separation: separation_x(state, crate::state::XfoilSurface::Upper, options.mach, final_re_eff)
+            .or_else(|| separation_x(state, crate::state::XfoilSurface::Lower, options.mach, final_re_eff)),
+        reynolds_eff: final_re_eff,
     })
 }
 
