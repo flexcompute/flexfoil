@@ -16,6 +16,7 @@ from flexfoil.airfoil import Airfoil, BLResult, SolveResult
 from flexfoil.database import RunDatabase, get_database
 from flexfoil.polar import PolarResult
 
+
 __all__ = [
     "Airfoil",
     "BLResult",

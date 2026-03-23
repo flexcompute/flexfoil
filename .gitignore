@@ -103,3 +103,7 @@ packages/flexfoil-python/src/flexfoil/_static/
 packages/flexfoil-python/dist/
 packages/flexfoil-python/*.png
 packages/flexfoil-python/*.csv
+flow360_case.user.log
+surfaces.tar.gz
+*.pvtu
+*.vtu
