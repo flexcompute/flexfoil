@@ -342,6 +342,71 @@ class TestFlap:
 
 
 # ---------------------------------------------------------------------------
+# Polar Type 2/3 (variable Re)
+# ---------------------------------------------------------------------------
+
+class TestReType:
+    def test_solve_type1_reynolds_eff(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        r = foil.solve(5.0, Re=1e6, re_type=1, store=False)
+        assert r.success
+        assert r.reynolds_eff == 1e6
+
+    def test_solve_type2_reynolds_eff_differs(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        r = foil.solve(5.0, Re=1e6, re_type=2, store=False)
+        assert r.success
+        assert r.reynolds_eff is not None
+        assert r.reynolds_eff != 1e6
+
+    def test_solve_type2_changes_results(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        r1 = foil.solve(5.0, Re=1e6, re_type=1, store=False)
+        r2 = foil.solve(5.0, Re=1e6, re_type=2, store=False)
+        assert r1.cd != r2.cd
+
+    def test_solve_type3(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        r = foil.solve(5.0, Re=1e6, re_type=3, store=False)
+        assert r.success
+        assert r.reynolds_eff != 1e6
+
+    def test_polar_type2(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        polar = foil.polar(alpha=[3.0, 5.0, 7.0], Re=1e6, re_type=2, store=False)
+        for r in polar.converged:
+            assert r.reynolds_eff is not None
+            assert r.reynolds_eff != 1e6
+
+    def test_polar_parallel_type2_matches_sequential(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        par = foil.polar(alpha=[3.0, 5.0], Re=1e6, re_type=2, parallel=True, store=False)
+        seq = foil.polar(alpha=[3.0, 5.0], Re=1e6, re_type=2, parallel=False, store=False)
+        for p, s in zip(par.converged, seq.converged):
+            assert abs(p.cl - s.cl) < 1e-10
+            assert abs(p.reynolds_eff - s.reynolds_eff) < 1e-10
+
+    def test_inviscid_solve_reynolds_eff_is_none(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        r = foil.solve(5.0, viscous=False, store=False)
+        assert r.reynolds_eff is None
+
+    def test_bl_distribution_type2(self):
+        import flexfoil
+        foil = flexfoil.naca("2412")
+        bl = foil.bl_distribution(5.0, Re=1e6, re_type=2)
+        assert bl.success
+        assert bl.converged
+
+
+# ---------------------------------------------------------------------------
 # Matrix sweep (multi-Re)
 # ---------------------------------------------------------------------------
 
