@@ -40,6 +40,7 @@ class SolveResult:
     error: str | None = None
     cp: list[float] | None = None
     cp_x: list[float] | None = None
+    reynolds_eff: float | None = None
 
     @property
     def ld(self) -> float | None:
@@ -206,6 +207,7 @@ class Airfoil:
         max_iter: int = 100,
         viscous: bool = True,
         store: bool = True,
+        re_type: int = 1,
     ) -> SolveResult:
         """Run aerodynamic analysis at a single operating point.
 
@@ -222,7 +224,7 @@ class Airfoil:
         coords = self._flat_panels()
 
         if viscous:
-            raw = analyze_faithful(coords, alpha, Re, mach, ncrit, max_iter)
+            raw = analyze_faithful(coords, alpha, Re, mach, ncrit, max_iter, re_type)
             # For viscous, also get Cp from inviscid pass
             raw_inv = analyze_inviscid(coords, alpha)
             result = SolveResult(
@@ -242,6 +244,7 @@ class Airfoil:
                 error=raw.get("error"),
                 cp=raw_inv.get("cp") if raw_inv.get("success") else None,
                 cp_x=raw_inv.get("cp_x") if raw_inv.get("success") else None,
+                reynolds_eff=raw.get("reynolds_eff"),
             )
         else:
             raw = analyze_inviscid(coords, alpha)
@@ -280,6 +283,7 @@ class Airfoil:
         viscous: bool = True,
         store: bool = True,
         parallel: bool = True,
+        re_type: int = 1,
     ) -> PolarResult | list[PolarResult]:
         """Run a polar sweep over angles of attack, optionally with matrix sweeps.
 
@@ -324,12 +328,14 @@ class Airfoil:
                             alphas,
                             Re=re_val, mach=mach_val, ncrit=ncrit_val,
                             max_iter=max_iter, viscous=viscous, store=store,
+                            re_type=re_type,
                         )
                     else:
                         results = [
                             self.solve(
                                 a, Re=re_val, mach=mach_val, ncrit=ncrit_val,
                                 max_iter=max_iter, viscous=viscous, store=store,
+                                re_type=re_type,
                             )
                             for a in alphas
                         ]
@@ -354,6 +360,7 @@ class Airfoil:
         max_iter: int,
         viscous: bool,
         store: bool,
+        re_type: int = 1,
     ) -> list[SolveResult]:
         """Solve all alphas in a single parallel Rust call."""
         coords = self._flat_panels()
@@ -361,7 +368,7 @@ class Airfoil:
         if viscous:
             from flexfoil._rustfoil import analyze_faithful_batch
 
-            raw_list = analyze_faithful_batch(coords, alphas, Re, mach, ncrit, max_iter)
+            raw_list = analyze_faithful_batch(coords, alphas, Re, mach, ncrit, max_iter, re_type)
             results = [
                 SolveResult(
                     cl=raw.get("cl", 0.0),
@@ -378,6 +385,7 @@ class Airfoil:
                     ncrit=ncrit,
                     success=raw.get("success", False),
                     error=raw.get("error"),
+                    reynolds_eff=raw.get("reynolds_eff"),
                 )
                 for a, raw in zip(alphas, raw_list)
             ]
@@ -420,6 +428,7 @@ class Airfoil:
         mach: float = 0.0,
         ncrit: float = 9.0,
         max_iter: int = 100,
+        re_type: int = 1,
     ) -> BLResult:
         """Compute boundary-layer distributions (viscous only).
 
@@ -427,7 +436,7 @@ class Airfoil:
         theta, H, and ue for upper and lower surfaces.
         """
         coords = self._flat_panels()
-        raw = get_bl_distribution(coords, alpha, Re, mach, ncrit, max_iter)
+        raw = get_bl_distribution(coords, alpha, Re, mach, ncrit, max_iter, re_type)
 
         if not raw.get("success", False):
             return BLResult(
