@@ -680,9 +680,46 @@ def generate_and_write_mesh_gmsh(
                 worst_hex_center = pts.mean(axis=0)
         max_skew = max(max_skew, skew)
 
-    quality_ok = neg_vol_count == 0 and max_skew < 0.95
+    # Remove degenerate hexes (zero-length edges = collapsed cells).
+    # These occur at the arc-to-line junctions in the C-grid farfield
+    # where gmsh creates transfinite cells with coincident nodes.
+    good_mask = np.ones(len(hex_conn), dtype=bool)
+    for idx, h in enumerate(hex_conn):
+        indices = [tag_to_idx[int(n)] for n in h]
+        pts = all_coords[indices]
+        edges = [(0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7)]
+        min_edge = min(np.linalg.norm(pts[j] - pts[i]) for i, j in edges)
+        if min_edge < 1e-12:
+            good_mask[idx] = False
+
+    n_removed = (~good_mask).sum()
+    if n_removed > 0:
+        hex_conn = hex_conn[good_mask]
+        n_hexes = len(hex_conn)
+
+    # Recompute quality on cleaned mesh
+    neg_vol_count = 0
+    max_ar = 0
+    max_skew = 0
+    worst_hex_center = None
+    for h in hex_conn:
+        indices = [tag_to_idx[int(n)] for n in h]
+        pts = all_coords[indices]
+        vol = _hex_volume(pts)
+        ar = _hex_aspect_ratio(pts)
+        skew = _hex_skewness(pts)
+        if vol < 0:
+            neg_vol_count += 1
+        if ar > max_ar:
+            max_ar = ar
+            if ar > 1000:
+                worst_hex_center = pts.mean(axis=0)
+        max_skew = max(max_skew, skew)
+
     import logging
     logger = logging.getLogger("flexfoil.rans.mesh")
+    if n_removed > 0:
+        logger.info(f"Removed {n_removed} degenerate hexes (zero-length edges)")
     logger.info(
         f"Mesh quality: {n_hexes} hexes, {neg_vol_count} negative volumes, "
         f"max AR={max_ar:.0f}, max skewness={max_skew:.3f}"

@@ -1018,6 +1018,13 @@ class CType:
                    airfoil_spline.le.x-3.5)
         pt7x = max(min(pt7x, airfoil_spline.le.x-0.05*dy),
                    airfoil_spline.le.x-3.5)
+
+        # Offset p1 and p7 slightly from the dy/2 boundary to avoid degenerate
+        # cells at the arc-to-rectangle junction. Without this offset, the arc
+        # tangent at p1/p7 is nearly parallel to L1/L6, creating zero-angle cells.
+        corner_offset = dy * 0.05  # 5% inward from the boundary
+        pt1y = dy / 2 - corner_offset
+        pt7y = -dy / 2 + corner_offset
         # Compute the center of the circle : we want a x coordinate of 0.5, and compute cy so that p1 and p7 are at same distance from the (0.5,cy)
         centery = (pt1y+pt7y)/2 + (0.5-(pt1x+pt7x)/2)/(pt1y-pt7y)*(pt7x-pt1x)
 
@@ -1092,9 +1099,34 @@ class CType:
                 Line(self.points[4], self.airfoil_spline.te),  # 10
             ]
 
-        # Circle arc for C shape at the front
-        self.circle_arc = gmsh.model.geo.addCircleArc(
-            self.points[7].tag, self.points[0].tag, self.points[1].tag)
+        # C-shape curve at the front: use a smooth spline instead of a circle arc
+        # to avoid degenerate cells at the arc-to-line junctions (p1 and p7).
+        # The spline goes from p7 through intermediate points on a semicircle to p1,
+        # but with tangent directions that match the connecting lines L0 and L7.
+        import math as _math
+        cx, cy = self.points[0].x, self.points[0].y
+        r = _math.sqrt((self.points[7].x - cx)**2 + (self.points[7].y - cy)**2)
+
+        # Generate intermediate points on a semicircle from p7 to p1
+        angle_start = _math.atan2(self.points[7].y - cy, self.points[7].x - cx)
+        angle_end = _math.atan2(self.points[1].y - cy, self.points[1].x - cx)
+
+        # Ensure we go the "front" way (through -pi, i.e., the left side)
+        if angle_end > angle_start:
+            angle_end -= 2 * _math.pi
+
+        n_arc_pts = 20
+        arc_points = [self.points[7].tag]
+        for i in range(1, n_arc_pts):
+            t = i / n_arc_pts
+            angle = angle_start + t * (angle_end - angle_start)
+            px = cx + r * _math.cos(angle)
+            py = cy + r * _math.sin(angle)
+            pt = Point(px, py, z, self.mesh_size_end)
+            arc_points.append(pt.tag)
+        arc_points.append(self.points[1].tag)
+
+        self.circle_arc = gmsh.model.geo.addSpline(arc_points)
 
         # planar surfaces for structured grid are named from A-E
         # straight lines are numbered from L0 to L10
