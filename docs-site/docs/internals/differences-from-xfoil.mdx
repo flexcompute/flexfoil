@@ -1,0 +1,66 @@
+---
+title: Differences from XFOIL
+sidebar_label: Differences from XFOIL
+sidebar_position: 9
+description: Known behavioural differences between RustFoil and XFOIL
+---
+
+# Differences from XFOIL
+
+RustFoil is a faithful, function-by-function port of XFOIL. The goal is
+bit-level reproducibility of XFOIL's behaviour, including its known limitations
+and failure modes.
+
+## Analysis (OPER)
+
+The core analysis pipeline — inviscid panel method, boundary layer solver,
+viscous-inviscid coupling, and transition prediction — has no known behavioural
+differences from XFOIL. Validation results:
+
+| Component | Agreement |
+|-----------|-----------|
+| Paneling (PANGEN) | ~4e-7 RMS position error |
+| Inviscid CL, Cp, γ | 5–6 significant figures |
+| Closure relations (Hk, Hs, Cf, DI) | Formula-identical |
+| Viscous-inviscid coupling | Same Newton system |
+| Transition (e^N) | Same DAMPL correlation |
+| Polar types 1/2/3 | Same Re-scaling formulas |
+
+See [Inviscid Validation](./inviscid-validation), [Paneling Validation](./paneling-validation),
+and [Formula Comparison](./xfoil-formula-comparison) for detailed evidence.
+
+## Design Modes
+
+### QDES (Mixed-Inverse)
+
+RustFoil's QDES uses **Gaussian basis functions with damped least-squares**
+rather than XFOIL's original `MIXED` Newton solver. The interface is the same
+(prescribe target Cp/velocity on a surface segment), but the internal algorithm
+differs. Results may not match XFOIL exactly for the same target distribution.
+This is an intentional choice for numerical robustness in the browser
+environment.
+
+### MDES (Full-Inverse)
+
+The circle-plane conformal mapping is ported from XFOIL, but with known gaps:
+
+- Chord normalization is approximate — output chord may differ slightly from input
+- CL computation is approximate; full Karman-Tsien integration not yet ported
+- No interactive Fourier coefficient editing
+
+MDES and QDES are marked **experimental** and have not been exhaustively
+validated against XFOIL reference cases.
+
+### GDES (Geometry Design)
+
+Geometry operations (flap deflection, TE gap, LE radius, thickness/camber
+scaling) match XFOIL's approach. Flap deflection uses a high-resolution
+intermediate representation for sub-0.001c precision at the hinge.
+
+## Reporting Differences
+
+If you find a case where RustFoil's analysis output differs from XFOIL's for
+the same airfoil and operating conditions, please report it as a bug at
+[github.com/flexcompute/flexfoil/issues](https://github.com/flexcompute/flexfoil/issues).
+Include the airfoil coordinates, operating conditions (Re, Mach, Ncrit, alpha),
+and both outputs.
