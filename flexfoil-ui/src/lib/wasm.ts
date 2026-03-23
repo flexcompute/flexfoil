@@ -320,12 +320,13 @@ export function analyzeAirfoil(
     reynolds: number = 1e6,
     mach: number = 0,
     ncrit: number = 9,
-    maxIterations: number = 100
+    maxIterations: number = 100,
+    reType: number = 1,
 ): AnalysisResult {
     if (!initialized) {
         throw new Error('WASM not initialized. Call initWasm() first.');
     }
-    
+
     const coordsFlat = pointsToFlat(coordinates);
     return analyze_airfoil_faithful(
         coordsFlat,
@@ -333,7 +334,8 @@ export function analyzeAirfoil(
         reynolds,
         mach,
         ncrit,
-        maxIterations
+        maxIterations,
+        reType,
     ) as AnalysisResult;
 }
 

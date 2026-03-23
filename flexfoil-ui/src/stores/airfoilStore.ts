@@ -11,6 +11,7 @@ import type {
   AirfoilPoint, 
   ControlMode, 
   SolverMode,
+  ReType,
   BezierHandle, 
   BSplineControlPoint,
   SpacingKnot,
@@ -143,7 +144,8 @@ interface AirfoilStore extends AirfoilState {
   setNcrit: (ncrit: number) => void;
   setMaxIterations: (maxIterations: number) => void;
   setSolverMode: (mode: SolverMode) => void;
-  
+  setReType: (reType: ReType) => void;
+
   // Point manipulation (legacy, kept for compatibility)
   updatePoint: (index: number, point: AirfoilPoint) => void;
   addPoint: (index: number, point: AirfoilPoint) => void;
@@ -288,6 +290,7 @@ export const useAirfoilStore = create<AirfoilStore>()(
       ncrit: 9,
       maxIterations: 100,
       solverMode: 'viscous',
+      reType: 1 as ReType,
       polarData: [],
       spacingPanelMode: 'simple',  // Default to simple curvature-based
       sspInterpolation: 'linear',  // Default to linear (Mark Drela's original)
@@ -316,6 +319,7 @@ export const useAirfoilStore = create<AirfoilStore>()(
       setNcrit: (ncrit) => set({ ncrit: Math.max(1, Math.min(14, ncrit)) }),
       setMaxIterations: (maxIterations) => set({ maxIterations: Math.max(10, Math.min(500, maxIterations)) }),
       setSolverMode: (solverMode) => set({ solverMode }),
+      setReType: (reType) => set({ reType }),
 
       updatePoint: (index, point) => set((state) => {
         const newCoords = [...state.coordinates];

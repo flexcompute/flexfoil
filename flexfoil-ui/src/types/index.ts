@@ -19,6 +19,8 @@ export interface AirfoilPoint extends Point {
 /** Control modes for airfoil manipulation */
 export type ControlMode = 'parameters' | 'camber-spline' | 'thickness-spline' | 'inverse-design' | 'geometry-design';
 export type SolverMode = 'viscous' | 'inviscid';
+/** XFOIL Reynolds number constraint type (1=constant Re, 2=fixed Re√CL, 3=fixed Re·CL) */
+export type ReType = 1 | 2 | 3;
 export type RunMode = 'alpha' | 'cl';
 export type AxisVariable = 'alpha' | 'cl' | 'cd' | 'cm' | 'ld'
   | 'reynolds' | 'mach' | 'ncrit' | 'flapDeflection' | 'flapHingeX';
@@ -157,6 +159,8 @@ export interface AirfoilState {
   maxIterations: number;
   /** Active solver mode */
   solverMode: SolverMode;
+  /** Reynolds number constraint type (Mode 1/2/3) */
+  reType: ReType;
   /** Polar sweep data — multiple series keyed by solver config */
   polarData: PolarSeries[];
   /** Spacing panel mode: simple (curvature-based) or advanced (SSP) */
