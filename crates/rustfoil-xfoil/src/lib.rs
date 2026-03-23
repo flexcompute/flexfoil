@@ -20,7 +20,7 @@ pub mod state_ops;
 pub mod update;
 pub mod wake_panel;
 
-pub use config::{OperatingMode, XfoilOptions};
+pub use config::{OperatingMode, ReType, XfoilOptions};
 pub use error::{Result, XfoilError};
 pub use oper::{
     build_state_from_coords, coords_from_body, solve_body_oper_point, solve_coords_oper_point,

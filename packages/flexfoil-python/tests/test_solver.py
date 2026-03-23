@@ -375,6 +375,92 @@ class TestPythonAPI:
         assert 0.0 < bl.x_tr_upper < 1.0
 
 
+class TestReType:
+    """Tests for polar Type 2/3 (variable Re) at the Rust binding level."""
+
+    def _make_coords(self):
+        raw = generate_naca4(2412)
+        flat = [v for x, y in raw for v in (x, y)]
+        paneled = repanel_xfoil(flat, 160)
+        return [v for x, y in paneled for v in (x, y)]
+
+    def test_type1_reynolds_eff_equals_nominal(self):
+        coords = self._make_coords()
+        result = analyze_faithful(coords, 5.0, 1e6, 0.0, 9.0, 100, re_type=1)
+        assert result["success"]
+        assert result["reynolds_eff"] == 1e6
+
+    def test_type2_reynolds_eff_differs(self):
+        coords = self._make_coords()
+        result = analyze_faithful(coords, 5.0, 1e6, 0.0, 9.0, 100, re_type=2)
+        assert result["success"]
+        assert result["reynolds_eff"] != 1e6
+
+    def test_type3_reynolds_eff_differs(self):
+        coords = self._make_coords()
+        result = analyze_faithful(coords, 5.0, 1e6, 0.0, 9.0, 100, re_type=3)
+        assert result["success"]
+        assert result["reynolds_eff"] != 1e6
+
+    def test_type2_formula(self):
+        """Re_eff should equal Re / sqrt(|CL|) for Type 2."""
+        import math
+        coords = self._make_coords()
+        result = analyze_faithful(coords, 5.0, 1e6, 0.0, 9.0, 100, re_type=2)
+        assert result["success"]
+        expected = 1e6 / math.sqrt(abs(result["cl"]))
+        assert abs(result["reynolds_eff"] - expected) < 1.0
+
+    def test_type3_formula(self):
+        """Re_eff should equal Re / |CL| for Type 3."""
+        coords = self._make_coords()
+        result = analyze_faithful(coords, 5.0, 1e6, 0.0, 9.0, 100, re_type=3)
+        assert result["success"]
+        expected = 1e6 / abs(result["cl"])
+        assert abs(result["reynolds_eff"] - expected) < 1.0
+
+    def test_type2_changes_cd(self):
+        """Type 2 should produce different CD than Type 1 at the same nominal Re."""
+        coords = self._make_coords()
+        r1 = analyze_faithful(coords, 5.0, 1e6, 0.0, 9.0, 100, re_type=1)
+        r2 = analyze_faithful(coords, 5.0, 1e6, 0.0, 9.0, 100, re_type=2)
+        assert r1["success"] and r2["success"]
+        assert r1["cd"] != r2["cd"]
+
+    def test_default_re_type_is_type1(self):
+        """Omitting re_type should behave as Type 1."""
+        coords = self._make_coords()
+        r_default = analyze_faithful(coords, 5.0, 1e6, 0.0, 9.0, 100)
+        r_type1 = analyze_faithful(coords, 5.0, 1e6, 0.0, 9.0, 100, re_type=1)
+        assert r_default["reynolds_eff"] == r_type1["reynolds_eff"]
+        assert abs(r_default["cl"] - r_type1["cl"]) < 1e-10
+
+    def test_batch_type2_reynolds_eff(self):
+        from flexfoil._rustfoil import analyze_faithful_batch
+        coords = self._make_coords()
+        results = analyze_faithful_batch(coords, [3.0, 5.0, 7.0], 1e6, 0.0, 9.0, 100, re_type=2)
+        for r in results:
+            assert r["success"]
+            assert r["reynolds_eff"] != 1e6
+
+    def test_batch_type2_matches_single(self):
+        from flexfoil._rustfoil import analyze_faithful_batch
+        coords = self._make_coords()
+        alphas = [3.0, 5.0]
+        batch = analyze_faithful_batch(coords, alphas, 1e6, 0.0, 9.0, 100, re_type=2)
+        singles = [analyze_faithful(coords, a, 1e6, 0.0, 9.0, 100, re_type=2) for a in alphas]
+        for b, s in zip(batch, singles):
+            assert abs(b["cl"] - s["cl"]) < 1e-10
+            assert abs(b["reynolds_eff"] - s["reynolds_eff"]) < 1e-10
+
+    def test_bl_distribution_type2(self):
+        from flexfoil._rustfoil import get_bl_distribution
+        coords = self._make_coords()
+        result = get_bl_distribution(coords, 5.0, 1e6, 0.0, 9.0, 100, re_type=2)
+        assert result["success"]
+        assert result["converged"]
+
+
 class TestInviscidBatch:
     def _make_coords(self):
         raw = generate_naca4(2412)

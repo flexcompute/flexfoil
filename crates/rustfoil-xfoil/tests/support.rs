@@ -549,6 +549,7 @@ pub fn run_workflow_case(alpha_deg: f64) -> rustfoil_xfoil::result::XfoilViscous
             tolerance: 1.0e-4,
             wake_length_chords: 1.0,
             operating_mode: OperatingMode::PrescribedAlpha,
+            ..Default::default()
         },
     )
     .expect("run workflow case")
