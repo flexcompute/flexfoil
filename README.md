@@ -158,6 +158,7 @@ const solution = foil.solve();
 1. Drela, M. "XFOIL: An Analysis and Design System for Low Reynolds Number Airfoils" (1989)
 2. Katz, J. & Plotkin, A. "Low-Speed Aerodynamics" (2001)
 3. Cebeci, T. & Bradshaw, P. "Momentum Transfer in Boundary Layers" (1977)
+4. Fidkowski, K. J. "A Coupled Inviscid-Viscous Airfoil Analysis Solver, Revisited," *AIAA Journal*, Vol. 60, No. 5, 2022, pp. 2961–2971. [doi:10.2514/1.J061341](https://doi.org/10.2514/1.J061341)
 
 ## License
 
