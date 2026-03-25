@@ -47,7 +47,7 @@ TypeWithKnife.
 - **Path:** `mfoil/mfoil.py`
 - **Author:** Krzysztof J. Fidkowski
 - **License:** MIT
-- **Source:** <https://github.com/kjfid/mfoil>
+- **Source:** <https://websites.umich.edu/~kfid/codes.html>
 - **Description:** Python-based airfoil analysis code used as a reference
   implementation during development.
 
@@ -63,3 +63,4 @@ contain any XFOIL source code. The mathematical methods are documented in:
   Airfoils" (1989)
 - Drela, M. & Giles, M. B. "Viscous-Inviscid Analysis of Transonic and Low
   Reynolds Number Airfoils" (1987)
+
