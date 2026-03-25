@@ -29,6 +29,10 @@ fn reduce_wall_forces(@builtin(local_invocation_id) lid: vec3<u32>,
     let mach = params.mach_inf;
     let alpha = params.alpha;
 
+    // Touch all bindings so auto-layout includes them
+    let _m_touch = metrics[0];
+    _ = _m_touch;
+
     // Reference quantities for force coefficients
     let p_inf = 1.0 / gamma;
     let q_inf = 0.5 * gamma * p_inf * mach * mach; // Dynamic pressure
