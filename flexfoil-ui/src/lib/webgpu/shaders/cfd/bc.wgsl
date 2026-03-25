@@ -24,6 +24,15 @@ fn apply_boundary_conditions(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let gamma = params.gamma;
 
+    // Touch all bindings so the auto-layout includes them.
+    // The compiler cannot eliminate these since they are storage reads.
+    let _bc_touch = bc_type[0];
+    let _mx_touch = mesh_x[0];
+    let _my_touch = mesh_y[0];
+    _ = _bc_touch;
+    _ = _mx_touch;
+    _ = _my_touch;
+
     // === Wall boundary (j=0) ===
     {
         let j = 0u;

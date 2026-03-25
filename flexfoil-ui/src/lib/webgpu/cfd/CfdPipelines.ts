@@ -31,8 +31,10 @@ export interface CfdPipelineSet {
 export interface CfdBindGroupSet {
   metrics: GPUBindGroup;
   primitives: GPUBindGroup;
-  reconstruct: GPUBindGroup;
-  roeFlux: GPUBindGroup;
+  reconstructXi: GPUBindGroup;
+  reconstructEta: GPUBindGroup;
+  roeFluxXi: GPUBindGroup;
+  roeFluxEta: GPUBindGroup;
   residual: GPUBindGroup;
   update: GPUBindGroup;
   bc: GPUBindGroup;
@@ -137,29 +139,47 @@ export function createCfdBindGroups(
         { binding: 2, resource: { buffer: buffers.W } },
       ],
     }),
-    reconstruct: device.createBindGroup({
-      label: 'cfd_reconstruct_bg',
+    // Separate bind groups for xi/eta because auto-layout only includes
+    // bindings actually referenced by each entry point.
+    reconstructXi: device.createBindGroup({
+      label: 'cfd_reconstruct_xi_bg',
       layout: pipelines.reconstructXi.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: buffers.params } },
         { binding: 1, resource: { buffer: buffers.W } },
         { binding: 2, resource: { buffer: buffers.leftXi } },
         { binding: 3, resource: { buffer: buffers.rightXi } },
+      ],
+    }),
+    reconstructEta: device.createBindGroup({
+      label: 'cfd_reconstruct_eta_bg',
+      layout: pipelines.reconstructEta.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: buffers.params } },
+        { binding: 1, resource: { buffer: buffers.W } },
         { binding: 4, resource: { buffer: buffers.leftEta } },
         { binding: 5, resource: { buffer: buffers.rightEta } },
       ],
     }),
-    roeFlux: device.createBindGroup({
-      label: 'cfd_roe_flux_bg',
+    roeFluxXi: device.createBindGroup({
+      label: 'cfd_roe_flux_xi_bg',
       layout: pipelines.roeFluxXi.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: buffers.params } },
         { binding: 1, resource: { buffer: buffers.metrics } },
         { binding: 2, resource: { buffer: buffers.leftXi } },
         { binding: 3, resource: { buffer: buffers.rightXi } },
+        { binding: 6, resource: { buffer: buffers.fluxXi } },
+      ],
+    }),
+    roeFluxEta: device.createBindGroup({
+      label: 'cfd_roe_flux_eta_bg',
+      layout: pipelines.roeFluxEta.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: buffers.params } },
+        { binding: 1, resource: { buffer: buffers.metrics } },
         { binding: 4, resource: { buffer: buffers.leftEta } },
         { binding: 5, resource: { buffer: buffers.rightEta } },
-        { binding: 6, resource: { buffer: buffers.fluxXi } },
         { binding: 7, resource: { buffer: buffers.fluxEta } },
       ],
     }),

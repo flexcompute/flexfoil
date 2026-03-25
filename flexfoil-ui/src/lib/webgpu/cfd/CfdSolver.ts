@@ -113,14 +113,15 @@ export class CfdSolver {
     const wgXi = Math.ceil(ni / 16);
     const wgEta = Math.ceil(nj / 16);
 
-    const encoder = this.device.createCommandEncoder({ label: `cfd_steps_${this.iteration}` });
-
     for (let s = 0; s < nSteps; s++) {
       this.iteration++;
 
-      // Update params uniform
+      // Update params uniform before encoding
       const paramsData = packCfdParams(this.config, dt, this.iteration);
       this.device.queue.writeBuffer(this.buffers.params, 0, paramsData);
+
+      // One encoder per step to avoid writeBuffer/encoder interleaving issues
+      const encoder = this.device.createCommandEncoder({ label: `cfd_step_${this.iteration}` });
 
       // Pass 1: Q -> W (conservative to primitive)
       {
@@ -135,7 +136,7 @@ export class CfdSolver {
       {
         const pass = encoder.beginComputePass({ label: 'reconstruct_xi' });
         pass.setPipeline(this.pipelines.reconstructXi);
-        pass.setBindGroup(0, this.bindGroups.reconstruct);
+        pass.setBindGroup(0, this.bindGroups.reconstructXi);
         pass.dispatchWorkgroups(nj);
         pass.end();
       }
@@ -144,7 +145,7 @@ export class CfdSolver {
       {
         const pass = encoder.beginComputePass({ label: 'roe_flux_xi' });
         pass.setPipeline(this.pipelines.roeFluxXi);
-        pass.setBindGroup(0, this.bindGroups.roeFlux);
+        pass.setBindGroup(0, this.bindGroups.roeFluxXi);
         pass.dispatchWorkgroups(wgXi, wgEta);
         pass.end();
       }
@@ -153,7 +154,7 @@ export class CfdSolver {
       {
         const pass = encoder.beginComputePass({ label: 'reconstruct_eta' });
         pass.setPipeline(this.pipelines.reconstructEta);
-        pass.setBindGroup(0, this.bindGroups.reconstruct);
+        pass.setBindGroup(0, this.bindGroups.reconstructEta);
         pass.dispatchWorkgroups(ni);
         pass.end();
       }
@@ -162,7 +163,7 @@ export class CfdSolver {
       {
         const pass = encoder.beginComputePass({ label: 'roe_flux_eta' });
         pass.setPipeline(this.pipelines.roeFluxEta);
-        pass.setBindGroup(0, this.bindGroups.roeFlux);
+        pass.setBindGroup(0, this.bindGroups.roeFluxEta);
         pass.dispatchWorkgroups(wgXi, wgEta);
         pass.end();
       }
@@ -193,22 +194,26 @@ export class CfdSolver {
         pass.dispatchWorkgroups(Math.ceil(ni / 256));
         pass.end();
       }
+
+      this.device.queue.submit([encoder.finish()]);
     }
 
-    // Final pass: compute forces and residual
+    // Final pass: compute forces and residual norm
     {
+      const encoder = this.device.createCommandEncoder({ label: 'cfd_forces' });
+
       const pass = encoder.beginComputePass({ label: 'forces' });
       pass.setPipeline(this.pipelines.forcesReduce);
       pass.setBindGroup(0, this.bindGroups.forcesReduce);
       pass.dispatchWorkgroups(1); // Single workgroup reduction
       pass.end();
+
+      // Copy forces and residual to readback buffer
+      encoder.copyBufferToBuffer(this.buffers.forceAccum, 0, this.buffers.readback, 0, 16);
+      encoder.copyBufferToBuffer(this.buffers.residualNorm, 0, this.buffers.readback, 16, 16);
+
+      this.device.queue.submit([encoder.finish()]);
     }
-
-    // Copy forces and residual to readback buffer
-    encoder.copyBufferToBuffer(this.buffers.forceAccum, 0, this.buffers.readback, 0, 12);
-    encoder.copyBufferToBuffer(this.buffers.residualNorm, 0, this.buffers.readback, 12, 4);
-
-    this.device.queue.submit([encoder.finish()]);
 
     // Async readback
     await this.buffers.readback.mapAsync(GPUMapMode.READ);
@@ -219,7 +224,7 @@ export class CfdSolver {
       cl: data[0],
       cd: data[1],
       cm: data[2],
-      residualL2: data[3],
+      residualL2: data[4], // offset 4: first f32 of residualNorm (at readback byte 16)
       iteration: this.iteration,
     };
   }

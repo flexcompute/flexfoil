@@ -72,7 +72,7 @@ export function createCfdBuffers(device: GPUDevice, ni: number, nj: number): Cfd
     }),
     forceAccum: device.createBuffer({
       label: 'CFD force_accum',
-      size: 12, // 3 x f32 (Cl, Cd, Cm)
+      size: 16, // 4 x f32 (Cl, Cd, Cm, _pad) — must be >= 16 for storage
       usage: STORAGE_RW | GPUBufferUsage.COPY_SRC,
     }),
     residualNorm: device.createBuffer({
@@ -82,7 +82,7 @@ export function createCfdBuffers(device: GPUDevice, ni: number, nj: number): Cfd
     }),
     readback: device.createBuffer({
       label: 'CFD readback',
-      size: 28, // 7 x f32 (3 forces + 4 residual norms)
+      size: 32, // 8 x f32 (4 force_accum + 4 residual_norm)
       usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
     }),
   };
