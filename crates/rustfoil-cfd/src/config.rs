@@ -130,3 +130,70 @@ impl CfdParamsGpu {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let cfg = CfdConfig::default();
+        assert_eq!(cfg.ni, 256);
+        assert_eq!(cfg.nj, 128);
+        assert!((cfg.gamma - 1.4).abs() < 1e-6);
+        assert!((cfg.prandtl - 0.72).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_gpu_params_size() {
+        // Must be 48 bytes (12 x 4-byte fields) to match WGSL struct
+        assert_eq!(std::mem::size_of::<CfdParamsGpu>(), 48);
+    }
+
+    #[test]
+    fn test_gpu_params_from_config() {
+        let cfg = CfdConfig {
+            ni: 64,
+            nj: 32,
+            mach_inf: 0.5,
+            alpha: 0.035, // ~2 degrees
+            physics: PhysicsMode::Euler,
+            reconstruction: ReconstructionMode::Muscl,
+            ..CfdConfig::default()
+        };
+        let params = CfdParamsGpu::from_config(&cfg, 0.001, 42);
+        assert_eq!(params.ni, 64);
+        assert_eq!(params.nj, 32);
+        assert_eq!(params.iteration, 42);
+        assert_eq!(params.physics_mode, 0); // Euler
+        assert_eq!(params.reconstruction, 0); // MUSCL
+        assert!((params.dt - 0.001).abs() < 1e-8);
+    }
+
+    #[test]
+    fn test_gpu_params_bytes() {
+        let cfg = CfdConfig::default();
+        let params = CfdParamsGpu::from_config(&cfg, 0.01, 0);
+        let bytes = params.as_bytes();
+        assert_eq!(bytes.len(), 48);
+        // First 4 bytes should be ni=256 as u32 little-endian
+        let ni = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        assert_eq!(ni, 256);
+    }
+
+    #[test]
+    fn test_physics_mode_values() {
+        assert_eq!(PhysicsMode::Euler as u32, 0);
+        assert_eq!(PhysicsMode::LaminarNS as u32, 1);
+        assert_eq!(PhysicsMode::RansSA as u32, 2);
+    }
+
+    #[test]
+    fn test_serde_roundtrip() {
+        let cfg = CfdConfig::default();
+        let json = serde_json::to_string(&cfg).unwrap();
+        let cfg2: CfdConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(cfg2.ni, cfg.ni);
+        assert_eq!(cfg2.physics, cfg.physics);
+    }
+}

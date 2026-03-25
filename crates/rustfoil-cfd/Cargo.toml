@@ -9,3 +9,6 @@ description = "Structured mesh CFD solver support for RustFoil (mesh gen, initia
 [dependencies]
 rustfoil-core = { path = "../rustfoil-core" }
 serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1.0"
