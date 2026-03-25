@@ -3271,6 +3271,112 @@ impl Default for RustFoil {
     }
 }
 
+// ============================================================================
+// CFD Mesh Generation & Setup
+// ============================================================================
+
+/// Generate a structured O-type mesh around an airfoil for the CFD solver.
+///
+/// # Arguments
+/// * `coords_flat` - Flat array of [x0, y0, x1, y1, ...] airfoil coordinates
+/// * `ni` - Circumferential grid points
+/// * `nj` - Radial grid points (layers away from airfoil)
+/// * `far_field` - Far-field distance in chord lengths
+/// * `ds0` - First cell wall-normal spacing
+///
+/// # Returns
+/// JsValue containing { x: Float32Array, y: Float32Array, ni: u32, nj: u32 }
+#[wasm_bindgen]
+pub fn cfd_generate_mesh(
+    coords_flat: &[f64],
+    ni: u32,
+    nj: u32,
+    far_field: f64,
+    ds0: f64,
+) -> JsValue {
+    let n_pts = coords_flat.len() / 2;
+    let mut ax = Vec::with_capacity(n_pts);
+    let mut ay = Vec::with_capacity(n_pts);
+    for i in 0..n_pts {
+        ax.push(coords_flat[i * 2]);
+        ay.push(coords_flat[i * 2 + 1]);
+    }
+
+    let mesh = rustfoil_cfd::mesh::generate_o_mesh(&ax, &ay, ni, nj, far_field, ds0);
+
+    #[derive(Serialize)]
+    struct MeshOutput {
+        x: Vec<f32>,
+        y: Vec<f32>,
+        ni: u32,
+        nj: u32,
+    }
+
+    let output = MeshOutput {
+        x: mesh.x,
+        y: mesh.y,
+        ni: mesh.ni,
+        nj: mesh.nj,
+    };
+
+    serde_wasm_bindgen::to_value(&output).unwrap_or(JsValue::NULL)
+}
+
+/// Compute freestream initial conditions for the CFD solver.
+///
+/// # Arguments
+/// * `ni` - Grid circumferential points
+/// * `nj` - Grid radial points
+/// * `mach` - Freestream Mach number
+/// * `alpha_deg` - Angle of attack in degrees
+/// * `gamma` - Ratio of specific heats (1.4 for air)
+/// * `physics_mode` - 0=Euler, 1=LaminarNS, 2=RANS_SA
+/// * `reynolds` - Reynolds number (for RANS initialization)
+///
+/// # Returns
+/// Float32Array of length ni*nj*5 with Q = [rho, rho*u, rho*v, E, nu_tilde]
+#[wasm_bindgen]
+pub fn cfd_initial_conditions(
+    ni: u32,
+    nj: u32,
+    mach: f32,
+    alpha_deg: f32,
+    gamma: f32,
+    physics_mode: u32,
+    reynolds: f32,
+) -> Vec<f32> {
+    use rustfoil_cfd::config::{CfdConfig, PhysicsMode};
+
+    let physics = match physics_mode {
+        0 => PhysicsMode::Euler,
+        1 => PhysicsMode::LaminarNS,
+        2 => PhysicsMode::RansSA,
+        _ => PhysicsMode::Euler,
+    };
+
+    let config = CfdConfig {
+        ni,
+        nj,
+        gamma,
+        mach_inf: mach,
+        alpha: alpha_deg.to_radians(),
+        physics,
+        reynolds,
+        ..CfdConfig::default()
+    };
+
+    rustfoil_cfd::init::compute_initial_conditions(&config)
+}
+
+/// Generate boundary condition type array for the CFD grid.
+///
+/// # Returns
+/// Uint32Array of length ni*nj with BC types (0=interior, 1=wall, 2=farfield)
+#[wasm_bindgen]
+pub fn cfd_boundary_types(ni: u32, nj: u32) -> Vec<u32> {
+    rustfoil_cfd::boundary::generate_bc_types(ni, nj)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

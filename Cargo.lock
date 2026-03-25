@@ -606,6 +606,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustfoil-cfd"
+version = "0.1.0"
+dependencies = [
+ "rustfoil-core",
+ "serde",
+]
+
+[[package]]
 name = "rustfoil-cli"
 version = "0.1.0"
 dependencies = [
@@ -701,6 +709,7 @@ version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
+ "rustfoil-cfd",
  "rustfoil-core",
  "rustfoil-inviscid",
  "rustfoil-solver",
