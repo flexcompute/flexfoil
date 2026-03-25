@@ -11,6 +11,7 @@ import { DataExplorerPanel } from './panels/DataExplorerPanel';
 import { PlotBuilderPanel } from './panels/PlotBuilderPanel';
 import { CaseLogsPanel } from './panels/CaseLogsPanel';
 import { DistributionPanel } from './panels/DistributionPanel';
+import { CfdPanel } from './panels/CfdPanel';
 import { DarkModeToggle } from './DarkModeToggle';
 import { LayoutContext } from '../contexts/LayoutContext';
 import { useOnboarding } from '../onboarding';
@@ -30,6 +31,7 @@ const TABS: { id: PanelId; label: string }[] = [
   { id: 'plot-builder', label: 'Plots' },
   { id: 'case-logs', label: 'Logs' },
   { id: 'distributions', label: 'Distrib.' },
+  { id: 'cfd', label: 'CFD' },
 ];
 
 const PANEL_COMPONENTS: Record<PanelId, React.FC> = {
@@ -45,6 +47,7 @@ const PANEL_COMPONENTS: Record<PanelId, React.FC> = {
   'plot-builder': PlotBuilderPanel,
   'case-logs': CaseLogsPanel,
   'distributions': DistributionPanel,
+  'cfd': CfdPanel,
 };
 
 interface MobileLayoutProps {

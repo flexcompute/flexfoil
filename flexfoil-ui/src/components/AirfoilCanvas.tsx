@@ -945,7 +945,8 @@ export function AirfoilCanvas() {
     }
     
     try {
-      const result = computeStreamlines(panels, displayAlpha, reynolds, adaptiveStreamlineCount, streamlineBounds, mach, ncrit, maxIterations, solverMode);
+      const panelSolverMode = solverMode === 'cfd' ? undefined : solverMode;
+      const result = computeStreamlines(panels, displayAlpha, reynolds, adaptiveStreamlineCount, streamlineBounds, mach, ncrit, maxIterations, panelSolverMode);
       if (result.success) {
         setStreamlines(result.streamlines);
       }
@@ -976,7 +977,8 @@ export function AirfoilCanvas() {
         Math.min(200, Math.round(xRange * 40)),
         Math.min(120, Math.round(yRange * 40))
       ];
-      const result = computePsiGrid(panels, displayAlpha, reynolds, bounds, resolution, mach, ncrit, maxIterations, solverMode);
+      const panelSolverMode = solverMode === 'cfd' ? undefined : solverMode;
+      const result = computePsiGrid(panels, displayAlpha, reynolds, bounds, resolution, mach, ncrit, maxIterations, panelSolverMode);
       
       if (!result.success) {
         console.error('Psi grid computation failed:', result.error);
@@ -1029,6 +1031,7 @@ export function AirfoilCanvas() {
       }
       
       let psi0Lines: [number, number][][] = [];
+      const dividingPanelMode = solverMode === 'cfd' ? undefined : solverMode;
       const dividingResult = computeDividingStreamline(
         panels,
         displayAlpha,
@@ -1037,7 +1040,7 @@ export function AirfoilCanvas() {
         mach,
         ncrit,
         maxIterations,
-        solverMode
+        dividingPanelMode
       );
 
       if (dividingResult.success && dividingResult.streamline.length >= 2) {

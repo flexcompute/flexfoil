@@ -13,6 +13,7 @@ export const PANELS = [
   { id: 'plot-builder', name: 'Plot Builder', component: 'plot-builder' },
   { id: 'case-logs', name: 'Case Logs', component: 'case-logs' },
   { id: 'distributions', name: 'Distributions', component: 'distributions' },
+  { id: 'cfd', name: 'CFD', component: 'cfd' },
 ] as const;
 
 export type PanelId = (typeof PANELS)[number]['id'];

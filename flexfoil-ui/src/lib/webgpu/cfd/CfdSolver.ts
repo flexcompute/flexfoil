@@ -5,11 +5,12 @@
  * Dispatches per-timestep compute passes and handles async readback.
  */
 
-import { CfdConfig, packCfdParams } from './CfdConfig';
-import { CfdBufferSet, createCfdBuffers, destroyCfdBuffers } from './CfdBuffers';
+import type { CfdConfig } from './CfdConfig';
+import { packCfdParams } from './CfdConfig';
+import type { CfdBufferSet } from './CfdBuffers';
+import { createCfdBuffers, destroyCfdBuffers } from './CfdBuffers';
+import type { CfdPipelineSet, CfdBindGroupSet } from './CfdPipelines';
 import {
-  CfdPipelineSet,
-  CfdBindGroupSet,
   createCfdPipelines,
   createCfdBindGroups,
 } from './CfdPipelines';
@@ -68,10 +69,10 @@ export class CfdSolver {
     const bindGroups = createCfdBindGroups(device, pipelines, buffers);
 
     // Upload mesh data
-    device.queue.writeBuffer(buffers.meshX, 0, meshX);
-    device.queue.writeBuffer(buffers.meshY, 0, meshY);
-    device.queue.writeBuffer(buffers.Q, 0, initialQ);
-    device.queue.writeBuffer(buffers.bcType, 0, bcTypes);
+    device.queue.writeBuffer(buffers.meshX, 0, meshX as Float32Array<ArrayBuffer>);
+    device.queue.writeBuffer(buffers.meshY, 0, meshY as Float32Array<ArrayBuffer>);
+    device.queue.writeBuffer(buffers.Q, 0, initialQ as Float32Array<ArrayBuffer>);
+    device.queue.writeBuffer(buffers.bcType, 0, bcTypes as Uint32Array<ArrayBuffer>);
 
     // Upload initial params
     const dt = config.cfl * 0.01 / (1.0 + config.machInf);
@@ -246,7 +247,7 @@ export class CfdSolver {
   /** Reset solver to initial conditions. */
   reset(initialQ: Float32Array): void {
     this.iteration = 0;
-    this.device.queue.writeBuffer(this.buffers.Q, 0, initialQ);
+    this.device.queue.writeBuffer(this.buffers.Q, 0, initialQ as Float32Array<ArrayBuffer>);
   }
 
   /** Clean up all GPU resources. */

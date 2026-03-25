@@ -11,6 +11,7 @@ import { useAirfoilStore } from '../../stores/airfoilStore';
 import { CfdSolver } from '../../lib/webgpu/cfd/CfdSolver';
 import type { CfdSolverResult } from '../../lib/webgpu/cfd/CfdSolver';
 import type { PhysicsMode } from '../../lib/webgpu/cfd/CfdConfig';
+import { cfd_generate_mesh, cfd_initial_conditions, cfd_boundary_types } from 'rustfoil-wasm';
 
 export function CfdPanel() {
   const {
@@ -18,7 +19,6 @@ export function CfdPanel() {
     isRunning,
     iteration,
     convergenceHistory,
-    forceHistory,
     cl,
     cd,
     cm,
@@ -56,10 +56,14 @@ export function CfdPanel() {
 
     try {
       setError(null);
-      // Import WASM functions dynamically
-      const wasm = await import('rustfoil-wasm');
-      const meshResult = wasm.cfd_generate_mesh(
-        coordinates,
+      // Flatten [x,y] pairs into a flat Float64Array for WASM
+      const flat = new Float64Array(coordinates.length * 2);
+      for (let i = 0; i < coordinates.length; i++) {
+        flat[i * 2] = coordinates[i].x;
+        flat[i * 2 + 1] = coordinates[i].y;
+      }
+      const meshResult = cfd_generate_mesh(
+        flat,
         config.ni,
         config.nj,
         config.farField,
@@ -73,7 +77,7 @@ export function CfdPanel() {
 
       // Get initial conditions
       const physicsMode = config.physics === 'euler' ? 0 : config.physics === 'laminar_ns' ? 1 : 2;
-      const initialQ = wasm.cfd_initial_conditions(
+      const initialQ = cfd_initial_conditions(
         config.ni,
         config.nj,
         config.machInf,
@@ -83,7 +87,7 @@ export function CfdPanel() {
         config.reynolds,
       );
 
-      const bcTypes = wasm.cfd_boundary_types(config.ni, config.nj);
+      const bcTypes = cfd_boundary_types(config.ni, config.nj);
 
       // Check for WebGPU
       if (!navigator.gpu) {
