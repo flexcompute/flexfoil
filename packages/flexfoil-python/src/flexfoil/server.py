@@ -572,7 +572,7 @@ function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   const W = canvas.clientWidth, H = canvas.clientHeight;
-  ctx.fillStyle = '#111118';
+  ctx.fillStyle = '#000005';
   ctx.fillRect(0, 0, W, H);
 
   if (!meshData) return;
@@ -587,9 +587,9 @@ function draw() {
   const sy = (wy) => cy - (wy - viewY) * viewScale;
 
   if (showGrid) {
-    // j-lines (circumferential) — teal
-    ctx.strokeStyle = 'rgba(0, 210, 170, 1.0)';
-    ctx.lineWidth = 0.7;
+    // j-lines (circumferential) — bright cyan
+    ctx.strokeStyle = '#00e8c0';
+    ctx.lineWidth = 1;
     for (let j = 0; j < nj; j++) {
       ctx.beginPath();
       for (let i = 0; i <= ni; i++) {
@@ -601,9 +601,9 @@ function draw() {
       ctx.stroke();
     }
 
-    // i-lines (radial) — blue
-    ctx.strokeStyle = 'rgba(60, 160, 220, 1.0)';
-    ctx.lineWidth = 0.7;
+    // i-lines (radial) — bright sky blue
+    ctx.strokeStyle = '#50b0ff';
+    ctx.lineWidth = 1;
     for (let i = 0; i < ni; i++) {
       ctx.beginPath();
       for (let j = 0; j < nj; j++) {
