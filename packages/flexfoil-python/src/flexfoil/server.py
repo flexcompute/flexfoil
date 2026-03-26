@@ -587,9 +587,11 @@ function draw() {
   const sy = (wy) => cy - (wy - viewY) * viewScale;
 
   if (showGrid) {
+    const lw = Math.max(1.5, 3 / (window.devicePixelRatio || 1));
+
     // j-lines (circumferential) — bright cyan
-    ctx.strokeStyle = '#00e8c0';
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#00ffd0';
+    ctx.lineWidth = lw;
     for (let j = 0; j < nj; j++) {
       ctx.beginPath();
       for (let i = 0; i <= ni; i++) {
@@ -602,8 +604,8 @@ function draw() {
     }
 
     // i-lines (radial) — bright sky blue
-    ctx.strokeStyle = '#50b0ff';
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#66ccff';
+    ctx.lineWidth = lw;
     for (let i = 0; i < ni; i++) {
       ctx.beginPath();
       for (let j = 0; j < nj; j++) {
