@@ -572,7 +572,7 @@ function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   const W = canvas.clientWidth, H = canvas.clientHeight;
-  ctx.fillStyle = '#0a0a1a';
+  ctx.fillStyle = '#111118';
   ctx.fillRect(0, 0, W, H);
 
   if (!meshData) return;
@@ -587,10 +587,9 @@ function draw() {
   const sy = (wy) => cy - (wy - viewY) * viewScale;
 
   if (showGrid) {
-    ctx.strokeStyle = 'rgba(0, 180, 140, 0.2)';
-    ctx.lineWidth = 0.5;
-
-    // Draw j-lines (circumferential)
+    // j-lines (circumferential) — teal
+    ctx.strokeStyle = 'rgba(0, 210, 170, 0.55)';
+    ctx.lineWidth = 0.7;
     for (let j = 0; j < nj; j++) {
       ctx.beginPath();
       for (let i = 0; i <= ni; i++) {
@@ -602,8 +601,9 @@ function draw() {
       ctx.stroke();
     }
 
-    // Draw i-lines (radial)
-    ctx.strokeStyle = 'rgba(0, 140, 180, 0.15)';
+    // i-lines (radial) — blue
+    ctx.strokeStyle = 'rgba(60, 160, 220, 0.45)';
+    ctx.lineWidth = 0.7;
     for (let i = 0; i < ni; i++) {
       ctx.beginPath();
       for (let j = 0; j < nj; j++) {
@@ -615,9 +615,9 @@ function draw() {
     }
   }
 
-  // Draw airfoil surface (j=0 wall boundary, thicker)
-  ctx.strokeStyle = '#00ff88';
-  ctx.lineWidth = 2;
+  // Airfoil surface (j=0 wall boundary)
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2.5;
   ctx.beginPath();
   for (let i = 0; i <= ni; i++) {
     const ii = i % ni;
@@ -626,12 +626,12 @@ function draw() {
   }
   ctx.stroke();
 
-  // Draw original airfoil points if available
+  // Original airfoil points
   if (showAirfoil && airfoil) {
-    ctx.fillStyle = '#ff6644';
+    ctx.fillStyle = '#ff8855';
     for (const [ax, ay] of airfoil) {
       const px = sx(ax), py = sy(ay);
-      ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
+      ctx.fillRect(px - 2, py - 2, 4, 4);
     }
   }
 }
