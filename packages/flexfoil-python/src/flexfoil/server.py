@@ -566,12 +566,12 @@ function autoView(zoom) {
 function draw() {
   const canvas = $('canvas');
   const ctx = canvas.getContext('2d');
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = canvas.clientWidth * dpr;
-  canvas.height = canvas.clientHeight * dpr;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // Use 1:1 pixel mapping — no DPR scaling (avoids sub-pixel line issues)
+  const W = canvas.clientWidth;
+  const H = canvas.clientHeight;
+  canvas.width = W;
+  canvas.height = H;
 
-  const W = canvas.clientWidth, H = canvas.clientHeight;
   ctx.fillStyle = '#000005';
   ctx.fillRect(0, 0, W, H);
 
@@ -587,11 +587,9 @@ function draw() {
   const sy = (wy) => cy - (wy - viewY) * viewScale;
 
   if (showGrid) {
-    const lw = Math.max(1.5, 3 / (window.devicePixelRatio || 1));
-
     // j-lines (circumferential) — bright cyan
     ctx.strokeStyle = '#00ffd0';
-    ctx.lineWidth = lw;
+    ctx.lineWidth = 1;
     for (let j = 0; j < nj; j++) {
       ctx.beginPath();
       for (let i = 0; i <= ni; i++) {
@@ -605,7 +603,7 @@ function draw() {
 
     // i-lines (radial) — bright sky blue
     ctx.strokeStyle = '#66ccff';
-    ctx.lineWidth = lw;
+    ctx.lineWidth = 1;
     for (let i = 0; i < ni; i++) {
       ctx.beginPath();
       for (let j = 0; j < nj; j++) {
