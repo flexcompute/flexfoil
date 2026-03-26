@@ -588,7 +588,7 @@ function draw() {
 
   if (showGrid) {
     // j-lines (circumferential) — teal
-    ctx.strokeStyle = 'rgba(0, 210, 170, 0.55)';
+    ctx.strokeStyle = 'rgba(0, 210, 170, 1.0)';
     ctx.lineWidth = 0.7;
     for (let j = 0; j < nj; j++) {
       ctx.beginPath();
@@ -602,7 +602,7 @@ function draw() {
     }
 
     // i-lines (radial) — blue
-    ctx.strokeStyle = 'rgba(60, 160, 220, 0.45)';
+    ctx.strokeStyle = 'rgba(60, 160, 220, 1.0)';
     ctx.lineWidth = 0.7;
     for (let i = 0; i < ni; i++) {
       ctx.beginPath();
