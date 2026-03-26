@@ -245,9 +245,77 @@ class _SPAStaticFiles(StaticFiles):
             raise
 
 
+# ─── CFD endpoints ──────────────────────────────────────────────────────
+
+async def cfd_mesh(request: Request) -> JSONResponse:
+    """Generate a structured O-mesh around an airfoil."""
+    from flexfoil._rustfoil import cfd_generate_mesh as _cfd_mesh
+
+    body = await request.json()
+    coords = body.get("coordinates", [])
+    ni = int(body.get("ni", 128))
+    nj = int(body.get("nj", 64))
+    far_field = float(body.get("far_field", 15.0))
+    ds0 = float(body.get("ds0", 0.001))
+
+    # Flatten [{x,y},...] to [x0,y0,x1,y1,...] if needed
+    if coords and isinstance(coords[0], dict):
+        flat = []
+        for p in coords:
+            flat.append(p["x"])
+            flat.append(p["y"])
+        coords = flat
+
+    result = _cfd_mesh(coords, ni, nj, far_field, ds0)
+    return JSONResponse({
+        "x": result["x"],
+        "y": result["y"],
+        "ni": result["ni"],
+        "nj": result["nj"],
+    })
+
+
+async def cfd_naca_mesh(request: Request) -> JSONResponse:
+    """Generate a NACA 4-digit airfoil and mesh it in one call."""
+    from flexfoil._rustfoil import generate_naca4, cfd_generate_mesh as _cfd_mesh
+
+    body = await request.json()
+    code = int(body.get("naca", 12))  # NACA designation as integer
+    n_pts = int(body.get("n_points", 128))
+    ni = int(body.get("ni", 128))
+    nj = int(body.get("nj", 64))
+    far_field = float(body.get("far_field", 15.0))
+    ds0 = float(body.get("ds0", 0.001))
+
+    # Generate airfoil
+    foil = generate_naca4(code, n_pts)
+    coords_flat = []
+    for x, y in foil:
+        coords_flat.append(x)
+        coords_flat.append(y)
+
+    result = _cfd_mesh(coords_flat, ni, nj, far_field, ds0)
+    return JSONResponse({
+        "x": result["x"],
+        "y": result["y"],
+        "ni": result["ni"],
+        "nj": result["nj"],
+        "airfoil": foil,
+    })
+
+
+async def cfd_page(request: Request) -> Response:
+    """Serve the CFD mesh visualization page."""
+    html = _CFD_HTML
+    return Response(content=html, media_type="text/html")
+
+
 def _build_routes() -> list:
     routes = [
         Route("/api/health", health),
+        Route("/api/cfd/mesh", cfd_mesh, methods=["POST"]),
+        Route("/api/cfd/naca-mesh", cfd_naca_mesh, methods=["POST"]),
+        Route("/cfd", cfd_page),
         Route("/api/runs", list_runs, methods=["GET"]),
         Route("/api/runs", create_run, methods=["POST"]),
         Route("/api/runs", delete_runs, methods=["DELETE"]),
@@ -340,4 +408,262 @@ def run_server(
     print(f"  API:      {url}/api/health")
     print()
 
+    print(f"  CFD Mesh: {url}/cfd")
+    print()
+
     uvicorn.run(app, host=host, port=port, log_level="info")
+
+
+# ─── Inline CFD mesh visualization frontend ─────────────────────────────
+
+_CFD_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlexFoil CFD Mesh</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #1a1a2e; color: #e0e0e0; }
+  .header { background: #16213e; padding: 12px 24px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #0f3460; }
+  .header h1 { font-size: 18px; font-weight: 600; color: #00d4aa; }
+  .header span { font-size: 13px; color: #8888aa; }
+  .container { display: flex; height: calc(100vh - 48px); }
+  .sidebar { width: 280px; padding: 16px; background: #16213e; border-right: 1px solid #0f3460; overflow-y: auto; flex-shrink: 0; }
+  .canvas-wrap { flex: 1; position: relative; }
+  canvas { width: 100%; height: 100%; display: block; }
+  fieldset { border: 1px solid #0f3460; border-radius: 6px; padding: 10px; margin-bottom: 12px; }
+  legend { font-size: 11px; color: #00d4aa; text-transform: uppercase; letter-spacing: 0.5px; padding: 0 6px; }
+  label { display: flex; justify-content: space-between; align-items: center; font-size: 13px; margin: 4px 0; }
+  input, select { background: #0a0a1a; border: 1px solid #333; color: #e0e0e0; padding: 4px 8px; border-radius: 4px; width: 90px; font-size: 13px; }
+  select { width: 100%; }
+  .btn { display: block; width: 100%; padding: 10px; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 8px; }
+  .btn-primary { background: #00d4aa; color: #1a1a2e; }
+  .btn-primary:hover { background: #00e6bb; }
+  .btn-primary:disabled { background: #335; color: #666; cursor: not-allowed; }
+  .status { font-size: 12px; color: #8888aa; padding: 8px 0; text-align: center; }
+  .status.ok { color: #00d4aa; }
+  .status.err { color: #ff4466; }
+  .info { font-size: 12px; color: #8888aa; margin-top: 8px; font-family: monospace; line-height: 1.6; }
+  .info span { color: #00d4aa; }
+  .zoom-hint { position: absolute; bottom: 8px; right: 12px; font-size: 11px; color: #555; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>FlexFoil CFD Mesh</h1>
+  <span>Structured O-grid mesh generation</span>
+</div>
+<div class="container">
+  <div class="sidebar">
+    <fieldset>
+      <legend>Airfoil</legend>
+      <label>NACA <input id="naca" type="text" value="0012" style="width:70px"></label>
+      <label>Points <input id="npts" type="number" value="128" min="32" max="512" step="16" style="width:70px"></label>
+    </fieldset>
+    <fieldset>
+      <legend>Grid</legend>
+      <label>ni (circum.) <input id="ni" type="number" value="128" min="32" max="512" step="16"></label>
+      <label>nj (radial) <input id="nj" type="number" value="64" min="16" max="256" step="8"></label>
+      <label>Far-field <input id="ff" type="number" value="15" min="5" max="50" step="1"></label>
+      <label>ds0 <input id="ds0" type="number" value="0.001" min="0.0001" max="0.1" step="0.0001"></label>
+    </fieldset>
+    <fieldset>
+      <legend>Display</legend>
+      <label>Show grid lines <input id="showGrid" type="checkbox" checked style="width:auto"></label>
+      <label>Show airfoil <input id="showAirfoil" type="checkbox" checked style="width:auto"></label>
+      <label>Zoom level
+        <select id="zoomLevel">
+          <option value="full">Full domain</option>
+          <option value="near" selected>Near field</option>
+          <option value="wall">Wall region</option>
+        </select>
+      </label>
+    </fieldset>
+    <button class="btn btn-primary" id="genBtn" onclick="generate()">Generate Mesh</button>
+    <div id="status" class="status">Ready</div>
+    <div id="info" class="info"></div>
+  </div>
+  <div class="canvas-wrap">
+    <canvas id="canvas"></canvas>
+    <div class="zoom-hint">Scroll to zoom, drag to pan</div>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+let meshData = null;
+let viewX = 0.5, viewY = 0, viewScale = 1;
+let dragging = false, dragX = 0, dragY = 0;
+
+async function generate() {
+  const btn = $('genBtn');
+  const status = $('status');
+  btn.disabled = true;
+  status.className = 'status';
+  status.textContent = 'Generating mesh...';
+
+  try {
+    const t0 = performance.now();
+    const resp = await fetch('/api/cfd/naca-mesh', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        naca: parseInt($('naca').value),
+        n_points: +$('npts').value,
+        ni: +$('ni').value,
+        nj: +$('nj').value,
+        far_field: +$('ff').value,
+        ds0: +$('ds0').value,
+      }),
+    });
+    const data = await resp.json();
+    const dt = ((performance.now() - t0) / 1000).toFixed(2);
+
+    meshData = data;
+
+    // Auto-set view
+    const zoom = $('zoomLevel').value;
+    autoView(zoom);
+
+    status.className = 'status ok';
+    status.textContent = `Mesh generated in ${dt}s`;
+
+    const ni = data.ni, nj = data.nj;
+    $('info').innerHTML =
+      `Grid: <span>${ni} x ${nj}</span> = <span>${(ni*nj).toLocaleString()}</span> cells<br>` +
+      `Points: <span>${data.x.length.toLocaleString()}</span><br>` +
+      `Memory: <span>${((data.x.length * 8) / 1024).toFixed(0)} KB</span>`;
+
+    draw();
+  } catch (e) {
+    status.className = 'status err';
+    status.textContent = 'Error: ' + e.message;
+  }
+  btn.disabled = false;
+}
+
+function autoView(zoom) {
+  if (!meshData) return;
+  const {x, y, ni, nj} = meshData;
+  if (zoom === 'wall') {
+    viewX = 0.5; viewY = 0; viewScale = 8;
+  } else if (zoom === 'near') {
+    viewX = 0.5; viewY = 0; viewScale = 2.5;
+  } else {
+    // Fit full domain
+    let xmin=Infinity, xmax=-Infinity, ymin=Infinity, ymax=-Infinity;
+    for (let k = 0; k < x.length; k++) {
+      if (x[k]<xmin) xmin=x[k]; if (x[k]>xmax) xmax=x[k];
+      if (y[k]<ymin) ymin=y[k]; if (y[k]>ymax) ymax=y[k];
+    }
+    viewX = (xmin+xmax)/2; viewY = (ymin+ymax)/2;
+    const canvas = $('canvas');
+    const range = Math.max(xmax-xmin, (ymax-ymin)*canvas.width/canvas.height);
+    viewScale = canvas.width / range * 0.9;
+  }
+}
+
+function draw() {
+  const canvas = $('canvas');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * dpr;
+  canvas.height = canvas.clientHeight * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  ctx.fillStyle = '#0a0a1a';
+  ctx.fillRect(0, 0, W, H);
+
+  if (!meshData) return;
+
+  const {x, y, ni, nj, airfoil} = meshData;
+  const showGrid = $('showGrid').checked;
+  const showAirfoil = $('showAirfoil').checked;
+
+  // Transform: world → screen
+  const cx = W / 2, cy = H / 2;
+  const sx = (wx) => cx + (wx - viewX) * viewScale;
+  const sy = (wy) => cy - (wy - viewY) * viewScale;
+
+  if (showGrid) {
+    ctx.strokeStyle = 'rgba(0, 180, 140, 0.2)';
+    ctx.lineWidth = 0.5;
+
+    // Draw j-lines (circumferential)
+    for (let j = 0; j < nj; j++) {
+      ctx.beginPath();
+      for (let i = 0; i <= ni; i++) {
+        const ii = i % ni;
+        const idx = j * ni + ii;
+        const px = sx(x[idx]), py = sy(y[idx]);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+
+    // Draw i-lines (radial)
+    ctx.strokeStyle = 'rgba(0, 140, 180, 0.15)';
+    for (let i = 0; i < ni; i++) {
+      ctx.beginPath();
+      for (let j = 0; j < nj; j++) {
+        const idx = j * ni + i;
+        const px = sx(x[idx]), py = sy(y[idx]);
+        if (j === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+  }
+
+  // Draw airfoil surface (j=0 wall boundary, thicker)
+  ctx.strokeStyle = '#00ff88';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i <= ni; i++) {
+    const ii = i % ni;
+    const px = sx(x[ii]), py = sy(y[ii]);
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+
+  // Draw original airfoil points if available
+  if (showAirfoil && airfoil) {
+    ctx.fillStyle = '#ff6644';
+    for (const [ax, ay] of airfoil) {
+      const px = sx(ax), py = sy(ay);
+      ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
+    }
+  }
+}
+
+// Zoom / Pan
+const canvas = $('canvas');
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = e.deltaY > 0 ? 0.9 : 1.1;
+  viewScale *= factor;
+  draw();
+});
+canvas.addEventListener('mousedown', e => { dragging = true; dragX = e.clientX; dragY = e.clientY; });
+canvas.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  viewX -= (e.clientX - dragX) / viewScale;
+  viewY += (e.clientY - dragY) / viewScale;
+  dragX = e.clientX; dragY = e.clientY;
+  draw();
+});
+canvas.addEventListener('mouseup', () => dragging = false);
+canvas.addEventListener('mouseleave', () => dragging = false);
+
+$('zoomLevel').addEventListener('change', () => { autoView($('zoomLevel').value); draw(); });
+$('showGrid').addEventListener('change', draw);
+$('showAirfoil').addEventListener('change', draw);
+
+window.addEventListener('resize', draw);
+
+// Auto-generate on load
+generate();
+</script>
+</body>
+</html>
+"""

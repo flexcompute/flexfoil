@@ -672,6 +672,7 @@ version = "0.1.0"
 dependencies = [
  "pyo3",
  "rayon",
+ "rustfoil-cfd",
  "rustfoil-core",
  "rustfoil-inviscid",
  "rustfoil-solver",

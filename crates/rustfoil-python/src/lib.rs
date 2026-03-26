@@ -504,6 +504,94 @@ fn get_bl_distribution(
     Ok(d.into())
 }
 
+// ─── CFD mesh generation ───────────────────────────────────────────────
+
+/// Generate an O-type structured mesh around an airfoil.
+///
+/// Args:
+///     coords_flat: Flat [x0,y0,x1,y1,...] airfoil coordinates
+///     ni: Circumferential grid points
+///     nj: Radial grid layers
+///     far_field: Far-field distance in chord lengths
+///     ds0: First cell wall-normal spacing
+///
+/// Returns:
+///     dict with keys: x (list[float]), y (list[float]), ni (int), nj (int)
+#[pyfunction]
+fn cfd_generate_mesh<'py>(
+    py: Python<'py>,
+    coords_flat: Vec<f64>,
+    ni: u32,
+    nj: u32,
+    far_field: f64,
+    ds0: f64,
+) -> PyResult<Bound<'py, PyDict>> {
+    let n_pts = coords_flat.len() / 2;
+    let mut ax = Vec::with_capacity(n_pts);
+    let mut ay = Vec::with_capacity(n_pts);
+    for i in 0..n_pts {
+        ax.push(coords_flat[i * 2]);
+        ay.push(coords_flat[i * 2 + 1]);
+    }
+
+    let mesh = rustfoil_cfd::mesh::generate_o_mesh(&ax, &ay, ni, nj, far_field, ds0);
+
+    let d = PyDict::new(py);
+    d.set_item("x", mesh.x.iter().map(|v| *v as f64).collect::<Vec<f64>>())?;
+    d.set_item("y", mesh.y.iter().map(|v| *v as f64).collect::<Vec<f64>>())?;
+    d.set_item("ni", mesh.ni)?;
+    d.set_item("nj", mesh.nj)?;
+    Ok(d)
+}
+
+/// Compute freestream initial conditions for the CFD grid.
+///
+/// Args:
+///     ni, nj: Grid dimensions
+///     mach: Freestream Mach number
+///     alpha_deg: Angle of attack (degrees)
+///     gamma: Ratio of specific heats
+///     physics_mode: 0=Euler, 1=LaminarNS, 2=RANS_SA
+///     reynolds: Reynolds number
+///
+/// Returns:
+///     list[float] of length ni*nj*5, Q=[rho, rho*u, rho*v, E, nu_tilde]
+#[pyfunction]
+fn cfd_initial_conditions(
+    ni: u32,
+    nj: u32,
+    mach: f32,
+    alpha_deg: f32,
+    gamma: f32,
+    physics_mode: u32,
+    reynolds: f32,
+) -> Vec<f32> {
+    use rustfoil_cfd::config::{CfdConfig, PhysicsMode};
+    let config = CfdConfig {
+        ni,
+        nj,
+        mach_inf: mach,
+        alpha: alpha_deg.to_radians(),
+        gamma,
+        reynolds,
+        physics: match physics_mode {
+            1 => PhysicsMode::LaminarNS,
+            2 => PhysicsMode::RansSA,
+            _ => PhysicsMode::Euler,
+        },
+        ..CfdConfig::default()
+    };
+    rustfoil_cfd::init::compute_initial_conditions(&config)
+}
+
+/// Generate boundary condition type array for the O-grid.
+///
+/// Returns: list[int] of length ni*nj (0=Interior, 1=Wall, 2=FarField)
+#[pyfunction]
+fn cfd_boundary_types(ni: u32, nj: u32) -> Vec<u32> {
+    rustfoil_cfd::boundary::generate_bc_types(ni, nj)
+}
+
 #[pymodule]
 fn _rustfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(analyze_faithful, m)?)?;
@@ -515,5 +603,8 @@ fn _rustfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deflect_flap, m)?)?;
     m.add_function(wrap_pyfunction!(parse_dat_file, m)?)?;
     m.add_function(wrap_pyfunction!(get_bl_distribution, m)?)?;
+    m.add_function(wrap_pyfunction!(cfd_generate_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(cfd_initial_conditions, m)?)?;
+    m.add_function(wrap_pyfunction!(cfd_boundary_types, m)?)?;
     Ok(())
 }

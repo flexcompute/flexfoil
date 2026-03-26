@@ -15,5 +15,6 @@ rustfoil-core = { path = "../rustfoil-core" }
 rustfoil-solver = { path = "../rustfoil-solver" }
 rustfoil-inviscid = { path = "../rustfoil-inviscid" }
 rustfoil-xfoil = { path = "../rustfoil-xfoil" }
+rustfoil-cfd = { path = "../rustfoil-cfd" }
 pyo3 = { version = "0.23", features = ["extension-module"] }
 rayon = "1.10"
