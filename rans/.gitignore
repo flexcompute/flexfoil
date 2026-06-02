@@ -1,0 +1,12 @@
+# Machine-specific prebuilt mesher binary (rpath into the local compute install).
+# Rebuild with mesher/build.sh.
+bin/mesh2d
+
+# Case/run output directories created by run_case.py -o <dir>
+out/
+*.cgns
+*.cgns.json
+*.vtu
+*.pvtu
+*.msh
+*.meshb
