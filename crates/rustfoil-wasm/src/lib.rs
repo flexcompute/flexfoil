@@ -23,7 +23,10 @@
 //! ```
 
 use rustfoil_core::{naca, point, Body, CubicSpline, Point, flap::xfoil_flap};
-use rustfoil_inviscid::{FlowConditions as FaithfulFlowConditions, InviscidSolver as FaithfulInviscidSolver};
+use rustfoil_inviscid::{
+    build_and_factorize_multi, AirfoilGeometry, FlowConditions as FaithfulFlowConditions,
+    InviscidSolver as FaithfulInviscidSolver,
+};
 use rustfoil_solver::inviscid::{
     FlowConditions, InviscidSolver,
     build_dividing_streamline, build_dividing_streamline_viscous, build_streamlines,
@@ -620,6 +623,35 @@ pub struct AnalysisResult {
     pub error: Option<String>,
 }
 
+/// One element's inviscid result in a coupled multi-element solve.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ElementResult {
+    /// Lift coefficient (normalized by this element's chord).
+    pub cl: f64,
+    /// Moment coefficient about this element's quarter-chord.
+    pub cm: f64,
+    /// Pressure coefficient at each node.
+    pub cp: Vec<f64>,
+    /// Node x-coordinates (same length as `cp`).
+    pub cp_x: Vec<f64>,
+    /// Vortex strength (= surface tangential velocity) at each node.
+    pub gamma: Vec<f64>,
+}
+
+/// Result of a coupled multi-element inviscid solve.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiElementResult {
+    /// One result per element, in input order.
+    pub elements: Vec<ElementResult>,
+    /// Naive sum of per-element Cl (each normalized by its own chord; not a
+    /// reference-chord system Cl — informational only).
+    pub cl_total: f64,
+    /// Naive sum of per-element Cm.
+    pub cm_total: f64,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BLDistribution {
     pub x_upper: Vec<f64>,
@@ -1145,6 +1177,81 @@ fn analyze_airfoil_impl(coords: &[f64], alpha_deg: f64) -> AnalysisResult {
         }
         Err(e) => analysis_error(format!("Solver error: {}", e)),
     }
+}
+
+/// Coupled multi-element inviscid analysis.
+///
+/// `coords_flat` concatenates every element's `[x0,y0,x1,y1,…]` nodes;
+/// `element_sizes` gives each element's node count (so element k consumes
+/// `2*element_sizes[k]` floats). Returns per-element + total results.
+#[wasm_bindgen]
+pub fn analyze_multi_element(coords_flat: &[f64], element_sizes: &[u32], alpha_deg: f64) -> JsValue {
+    let result = analyze_multi_element_impl(coords_flat, element_sizes, alpha_deg);
+    serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
+}
+
+fn multi_element_error(msg: impl Into<String>) -> MultiElementResult {
+    MultiElementResult {
+        elements: Vec::new(),
+        cl_total: 0.0,
+        cm_total: 0.0,
+        success: false,
+        error: Some(msg.into()),
+    }
+}
+
+fn analyze_multi_element_impl(
+    coords_flat: &[f64],
+    element_sizes: &[u32],
+    alpha_deg: f64,
+) -> MultiElementResult {
+    let total_nodes: usize = element_sizes.iter().map(|&s| s as usize).sum();
+    if total_nodes * 2 != coords_flat.len() {
+        return multi_element_error("coords_flat length must equal 2 * sum(element_sizes)");
+    }
+
+    // Split the flat buffer into one geometry per element.
+    let mut geoms = Vec::with_capacity(element_sizes.len());
+    let mut cursor = 0usize;
+    for (k, &size) in element_sizes.iter().enumerate() {
+        let n = size as usize;
+        if n < 3 {
+            return multi_element_error(format!("element {k} needs at least 3 nodes"));
+        }
+        let pts: Vec<(f64, f64)> = coords_flat[cursor..cursor + 2 * n]
+            .chunks(2)
+            .map(|c| (c[0], c[1]))
+            .collect();
+        cursor += 2 * n;
+        match AirfoilGeometry::from_points(&pts) {
+            Ok(g) => geoms.push(g),
+            Err(e) => return multi_element_error(format!("element {k} geometry error: {e}")),
+        }
+    }
+
+    let flow = FaithfulFlowConditions::with_alpha_deg(alpha_deg);
+    let factorized = match build_and_factorize_multi(&geoms) {
+        Ok(f) => f,
+        Err(e) => return multi_element_error(format!("solver error: {e}")),
+    };
+    let solution = factorized.solve_alpha(&flow);
+
+    let elements: Vec<ElementResult> = solution
+        .bodies
+        .iter()
+        .zip(geoms.iter())
+        .map(|(b, g)| ElementResult {
+            cl: b.cl,
+            cm: b.cm,
+            cp: b.cp.clone(),
+            cp_x: g.x.clone(),
+            gamma: b.gamma.clone(),
+        })
+        .collect();
+
+    let cl_total = elements.iter().map(|e| e.cl).sum();
+    let cm_total = elements.iter().map(|e| e.cm).sum();
+    MultiElementResult { elements, cl_total, cm_total, success: true, error: None }
 }
 
 #[wasm_bindgen]

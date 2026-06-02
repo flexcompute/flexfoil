@@ -10,6 +10,7 @@ import init, {
     compute_curvature_spacing,
     analyze_airfoil as analyze_airfoil_inviscid_wasm,
     analyze_airfoil_faithful,
+    analyze_multi_element,
     compute_streamlines as compute_streamlines_inviscid_wasm,
     compute_streamlines_faithful,
     compute_dividing_streamline as compute_dividing_streamline_inviscid_wasm,
@@ -341,6 +342,56 @@ export function analyzeAirfoil(
         xstripUpper,
         xstripLower,
     ) as AnalysisResult;
+}
+
+/** One element's result from a coupled multi-element inviscid solve. */
+export interface ElementAero {
+    cl: number;
+    cm: number;
+    cp: number[];
+    /** Node x-coordinates (global frame), same length as cp. */
+    cpX: number[];
+    gamma: number[];
+}
+
+export interface MultiElementResult {
+    elements: ElementAero[];
+    /** Naive sum of per-element Cl (informational; not a reference-chord Cl). */
+    clTotal: number;
+    cmTotal: number;
+    success: boolean;
+    error?: string;
+}
+
+/**
+ * Coupled multi-element inviscid analysis. Each element is its own closed
+ * contour in the global frame; element interaction is fully modelled.
+ */
+export function analyzeMultiElement(
+    elements: { x: number; y: number }[][],
+    alphaDeg: number,
+): MultiElementResult {
+    if (!initialized) {
+        throw new Error('WASM not initialized. Call initWasm() first.');
+    }
+    const sizes = new Uint32Array(elements.map((e) => e.length));
+    const total = elements.reduce((s, e) => s + e.length, 0);
+    const flat = new Float64Array(total * 2);
+    let i = 0;
+    for (const e of elements) {
+        for (const p of e) { flat[i++] = p.x; flat[i++] = p.y; }
+    }
+    const r = analyze_multi_element(flat, sizes, alphaDeg) as {
+        elements: { cl: number; cm: number; cp: number[]; cp_x: number[]; gamma: number[] }[];
+        cl_total: number; cm_total: number; success: boolean; error?: string;
+    };
+    return {
+        elements: (r.elements ?? []).map((e) => ({ cl: e.cl, cm: e.cm, cp: e.cp, cpX: e.cp_x, gamma: e.gamma })),
+        clTotal: r.cl_total,
+        cmTotal: r.cm_total,
+        success: r.success,
+        error: r.error ?? undefined,
+    };
 }
 
 /**

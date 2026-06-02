@@ -47,6 +47,7 @@
 pub mod geometry;
 pub mod influence;
 pub mod system;
+pub mod multibody;
 pub mod solution;
 pub mod stagnation;
 
@@ -55,6 +56,10 @@ mod error;
 pub use error::InviscidError;
 pub use geometry::AirfoilGeometry;
 pub use system::FactorizedSystem;
+pub use multibody::{
+    build_and_factorize_multi, solve_multi, BodyInviscidResult, FactorizedMultiSystem,
+    MultiInviscidSolution,
+};
 pub use solution::{InviscidSolution, FlowConditions};
 
 use std::f64::consts::PI;
