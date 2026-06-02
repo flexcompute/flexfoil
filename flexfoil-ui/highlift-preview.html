@@ -3,16 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>High-Lift Geometry Preview (Phase A)</title>
+    <title>High-Lift Design Tool</title>
     <style>
       :root { color-scheme: dark; }
       body { margin: 0; font: 13px/1.4 system-ui, sans-serif; background: #14141c; color: #e6e6ef; }
-      header { padding: 10px 16px; border-bottom: 1px solid #2a2a38; }
-      header h1 { font-size: 15px; margin: 0 0 2px; }
-      header p { margin: 0; color: #9a9aab; font-size: 12px; }
       .wrap { display: flex; gap: 16px; padding: 16px; align-items: flex-start; flex-wrap: wrap; }
       .canvas-box { flex: 1 1 560px; min-width: 360px; }
-      canvas { width: 100%; height: 540px; background: #fff; border-radius: 6px; display: block; }
+      canvas { width: 100%; height: 360px; background: #fff; border-radius: 6px; display: block; }
       .controls { flex: 0 0 300px; display: flex; flex-direction: column; gap: 14px; }
       fieldset { border: 1px solid #2a2a38; border-radius: 6px; padding: 10px 12px; margin: 0; }
       legend { color: #b9b9c8; font-weight: 600; font-size: 11px; padding: 0 4px; }
@@ -24,21 +21,33 @@
       .presets { display: flex; gap: 6px; margin-bottom: 8px; }
       .presets button { flex: 1; background: #24243a; color: #e6e6ef; border: 1px solid #3a3a55; border-radius: 4px; padding: 5px; cursor: pointer; }
       .presets button:hover { background: #2f2f4d; }
-      .legend-swatches { display: flex; gap: 14px; font-size: 12px; margin-top: 4px; }
-      .legend-swatches span::before { content: ""; display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
-      .sw-main::before { background: #cfd8e6; border: 1px solid #1f3a68; }
-      .sw-vane::before { background: #fbd4b4; border: 1px solid #9c3d1a; }
-      .sw-flap::before { background: #cfe9c8; border: 1px solid #2c6b2c; }
+      .note { color: #d9a441; font-size: 12px; margin: 0 16px 8px; }
+      .plots { display: flex; gap: 14px; flex-wrap: wrap; padding: 0 16px 16px; }
+      .plot-window { flex: 1 1 420px; min-width: 320px; display: flex; flex-direction: column; gap: 8px; }
+      .plot-controls { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+      .plot-controls .row { margin: 0; min-width: 150px; }
+      .plot-controls .row label { flex: 0 0 64px; }
+      .plot-controls button { background: #2f5fbf; color: #fff; border: none; border-radius: 4px; padding: 6px 12px; cursor: pointer; }
+      .plot-controls button:hover { background: #3a6fd6; }
+      .plot { height: 340px; background: #fff; border-radius: 6px; transition: opacity 0.15s; }
+      .plot.busy { opacity: 0.4; pointer-events: none; }
     </style>
   </head>
   <body>
-    <header>
-      <h1>High-Lift Geometry Preview — Phase A</h1>
-      <p>Live output of the ported geometry engine (<code>src/highlift/geometry.ts</code>). Geometry only — no aerodynamics yet. The <b>deploy</b> slider drives the vane+flap assembly along the flap track (1-DOF); the track sliders reshape the track. The track is the dashed purple curve; the two axels are the red dots joined by the rigid bar.</p>
-    </header>
     <div class="wrap">
       <div class="canvas-box"><canvas id="view"></canvas></div>
       <div class="controls" id="controls"></div>
+    </div>
+    <p class="note">Coupled inviscid multi-element — element interaction is modelled. Viscous drag (and Re / Ncrit) return in the next phase, so the polar shows Cl vs α for now.</p>
+    <div class="plots">
+      <div class="plot-window">
+        <div class="plot-controls" id="polar-controls"></div>
+        <div id="polar" class="plot"></div>
+      </div>
+      <div class="plot-window">
+        <div class="plot-controls" id="cp-controls"></div>
+        <div id="cp" class="plot"></div>
+      </div>
     </div>
     <script type="module" src="/src/highlift/preview.ts"></script>
   </body>

@@ -20,12 +20,30 @@ import {
   trackPoint,
   trailingAxel,
 } from './geometry';
-import { DEFAULT_ESTOL_CONFIG as CFG } from './estolConfig';
-import type { V2 } from './estolConfig';
+import { DEFAULT_HIGH_LIFT_AIRFOIL as CFG } from './estolConfig';
+import type { HighLiftAirfoil, V2 } from './estolConfig';
 
 const norm = (a: V2, b: V2) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
 const TOL = 1e-6;
+const AXEL = CFG.design.axelSpacing;
+
+/**
+ * A config clone at a given lead-axel arc-length `sLead` (so `sLead = AXEL` is
+ * stowed), with optional flaperon angle / hinge pivot overrides. Lets the
+ * kinematic tests drive deployment the way the old `buildConfiguration(cfg, sLead)`
+ * signature did, now that deploy lives in `operation`.
+ */
+function at(sLead: number, over: { flaperonAngleDeg?: number; pivot?: V2 } = {}): HighLiftAirfoil {
+  return {
+    ...CFG,
+    design: { ...CFG.design, flaperonHinge: { pivot: over.pivot ?? CFG.design.flaperonHinge.pivot } },
+    operation: {
+      deploy: sLead - AXEL,
+      flaperonAngleDeg: over.flaperonAngleDeg ?? CFG.operation.flaperonAngleDeg,
+    },
+  };
+}
 
 function loadFixture(name: string): V2[] {
   const path = fileURLToPath(new URL(`./__fixtures__/${name}`, import.meta.url));
@@ -54,19 +72,19 @@ const chord = (le: V2, te: V2) => Math.hypot(te[0] - le[0], te[1] - le[1]);
 
 describe('high-lift geometry engine vs reference build_estol_geometry.py', () => {
   it('coved main wing matches main_wing.dat', () => {
-    const got = buildMainWing(CFG.mainAirfoil, CFG.mainCutouts, CFG.bluntThickness);
+    const got = buildMainWing(CFG.main.coords, CFG.design.cove, CFG.main.bluntThickness);
     expectContourMatches(got, loadFixture('main_wing.dat'));
   });
 
   it('NACA 9621 vane matches vane_stowed.dat', () => {
-    const te = CFG.bluntThickness / chord(CFG.vane.stowedLe, CFG.vane.stowedTe);
-    const got = buildNacaElement(CFG.vane.naca, te, CFG.vane.stowedLe, CFG.vane.stowedTe);
+    const te = CFG.main.bluntThickness / chord(CFG.design.vane.stowedLe, CFG.design.vane.stowedTe);
+    const got = buildNacaElement(CFG.design.vane.naca, te, CFG.design.vane.stowedLe, CFG.design.vane.stowedTe);
     expectContourMatches(got, loadFixture('vane_stowed.dat'));
   });
 
-  it('NACA 6311 aft flap matches flap_stowed.dat', () => {
-    const te = CFG.bluntThickness / chord(CFG.aftFlap.stowedLe, CFG.aftFlap.stowedTe);
-    const got = buildNacaElement(CFG.aftFlap.naca, te, CFG.aftFlap.stowedLe, CFG.aftFlap.stowedTe);
+  it('NACA 6311 flaperon matches flap_stowed.dat', () => {
+    const te = CFG.main.bluntThickness / chord(CFG.design.flaperon.stowedLe, CFG.design.flaperon.stowedTe);
+    const got = buildNacaElement(CFG.design.flaperon.naca, te, CFG.design.flaperon.stowedLe, CFG.design.flaperon.stowedTe);
     expectContourMatches(got, loadFixture('flap_stowed.dat'));
   });
 });
@@ -97,10 +115,11 @@ describe('geometry primitives', () => {
 });
 
 describe('flap-track kinematics (1-DOF)', () => {
-  const { track, axelSpacing: d } = CFG;
+  const track = CFG.design.track;
+  const d = AXEL;
   // Same TE thickness buildConfiguration derives, so the reference foil matches.
-  const vaneTe = CFG.bluntThickness / norm(CFG.vane.stowedTe, CFG.vane.stowedLe);
-  const vaneFlat = buildNacaElement(CFG.vane.naca, vaneTe, CFG.vane.stowedLe, CFG.vane.stowedTe);
+  const vaneTe = CFG.main.bluntThickness / norm(CFG.design.vane.stowedTe, CFG.design.vane.stowedLe);
+  const vaneFlat = buildNacaElement(CFG.design.vane.naca, vaneTe, CFG.design.vane.stowedLe, CFG.design.vane.stowedTe);
   const leIdx = (() => {
     let k = 0;
     for (let i = 1; i < vaneFlat.length; i++) if (vaneFlat[i][0] < vaneFlat[k][0]) k = i;
@@ -108,8 +127,8 @@ describe('flap-track kinematics (1-DOF)', () => {
   })();
   const angle = (pts: V2[]) => Math.atan2(pts[0][1] - pts[leIdx][1], pts[0][0] - pts[leIdx][0]);
 
-  it('deployment is the identity when stowed (sLead = axelSpacing)', () => {
-    const { vane } = buildConfiguration(CFG, d);
+  it('deployment is the identity when stowed (deploy = 0)', () => {
+    const { vane } = buildConfiguration(at(d));
     for (let i = 0; i < vaneFlat.length; i++) {
       expect(vane[i][0]).toBeCloseTo(vaneFlat[i][0], 9);
       expect(vane[i][1]).toBeCloseTo(vaneFlat[i][1], 9);
@@ -126,7 +145,7 @@ describe('flap-track kinematics (1-DOF)', () => {
 
   it('pure translation while both axels are on the linear segment', () => {
     const sLead = track.linearLength - 1e-3; // both axels still on the line ⇒ no rotation
-    const { vane } = buildConfiguration(CFG, sLead);
+    const { vane } = buildConfiguration(at(sLead));
     const t0: V2 = [vane[0][0] - vaneFlat[0][0], vane[0][1] - vaneFlat[0][1]];
     for (let i = 1; i < vaneFlat.length; i++) {
       expect(vane[i][0] - vaneFlat[i][0]).toBeCloseTo(t0[0], 9);
@@ -135,8 +154,42 @@ describe('flap-track kinematics (1-DOF)', () => {
   });
 
   it('develops TE-down rotation once on the arc (negative radius)', () => {
-    const { vane } = buildConfiguration(CFG, 0.5);
+    const { vane } = buildConfiguration(at(0.5));
     // Chord vector (LE→TE) rotates clockwise (TE down) relative to stowed.
     expect(angle(vane) - angle(vaneFlat)).toBeLessThan(-0.3);
+  });
+});
+
+describe('flaperon hinge (relative to the assembly)', () => {
+  // Orientation from two fixed material points (TE corner → LE), so the measure
+  // tracks the same vertices regardless of rotation. LE is the contour midpoint.
+  const mid = Math.floor(buildConfiguration(at(AXEL)).flaperon.length / 2);
+  const flaperonAngle = (pts: V2[]) => Math.atan2(pts[0][1] - pts[mid][1], pts[0][0] - pts[mid][0]);
+
+  it('rotates the flaperon by exactly the relative angle, at any deployment', () => {
+    for (const sLead of [AXEL, 0.2, 0.35]) {
+      const f0 = buildConfiguration(at(sLead, { flaperonAngleDeg: 0 })).flaperon;
+      const fA = buildConfiguration(at(sLead, { flaperonAngleDeg: -15 })).flaperon;
+      expect(((flaperonAngle(fA) - flaperonAngle(f0)) * 180) / Math.PI).toBeCloseTo(-15, 6);
+    }
+  });
+
+  it('leaves the vane unaffected by the flaperon angle', () => {
+    const v0 = buildConfiguration(at(0.25, { flaperonAngleDeg: 0 })).vane;
+    const vA = buildConfiguration(at(0.25, { flaperonAngleDeg: -20 })).vane;
+    for (let i = 0; i < v0.length; i++) {
+      expect(vA[i][0]).toBeCloseTo(v0[i][0], 12);
+      expect(vA[i][1]).toBeCloseTo(v0[i][1], 12);
+    }
+  });
+
+  it('reports the pivot at its stowed location when stowed, carried otherwise', () => {
+    const pivot: V2 = [0.72, -0.02];
+    const stowed = buildConfiguration(at(AXEL, { pivot, flaperonAngleDeg: -25 })).flaperonPivot;
+    expect(stowed[0]).toBeCloseTo(0.72, 9);
+    expect(stowed[1]).toBeCloseTo(-0.02, 9);
+    // deployed: the pivot is carried off its stowed spot by the track motion.
+    const deployed = buildConfiguration(at(0.3, { pivot, flaperonAngleDeg: -25 })).flaperonPivot;
+    expect(norm(deployed, stowed)).toBeGreaterThan(0.05);
   });
 });

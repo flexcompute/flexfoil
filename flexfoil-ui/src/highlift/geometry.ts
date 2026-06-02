@@ -16,7 +16,7 @@
 import type {
   AirfoilCoords,
   CoveCutouts,
-  EstolConfig,
+  HighLiftAirfoil,
   NacaElementCfg,
   TrackConfig,
   V2,
@@ -319,23 +319,36 @@ export interface Configuration {
   main: V2[];
   /** Vane contour at the current deployment. */
   vane: V2[];
-  /** Aft-flap contour at the current deployment. */
-  flap: V2[];
+  /** Flaperon contour at the current deployment. */
+  flaperon: V2[];
+  /** Flaperon hinge pivot, carried to the current deployment. */
+  flaperonPivot: V2;
 }
 
 const chord = (cfg: NacaElementCfg): number => norm(sub(cfg.stowedTe, cfg.stowedLe));
 
 /**
- * Build the three element contours at deployment `sLead` (lead-axel arc-length;
- * `sLead = axelSpacing` is stowed). The main element is fixed; the vane and flap
- * deploy together as one rigid assembly riding the track. The blunt TE thickness
- * (overall-chord units) is expressed in each element's own chord units before
- * truncation, matching the reference build.
+ * Build the element contours for the configuration's operating point. The lead-axel
+ * arc-length is `sLead = design.axelSpacing + operation.deploy` (deploy = 0 is
+ * stowed). The main element is fixed; the vane and flaperon deploy together as one
+ * rigid assembly riding the track. The flaperon is first rotated about its hinge
+ * (relative to the assembly), then carried by the track motion along with its pivot.
+ * The blunt TE thickness (overall-chord units) is expressed in each element's own
+ * chord units before truncation, matching the reference build.
  */
-export function buildConfiguration(config: EstolConfig, sLead: number): Configuration {
-  const main = buildMainWing(config.mainAirfoil, config.mainCutouts, config.bluntThickness);
-  const vaneFlat = buildNacaElement(config.vane.naca, config.bluntThickness / chord(config.vane), config.vane.stowedLe, config.vane.stowedTe);
-  const flapFlat = buildNacaElement(config.aftFlap.naca, config.bluntThickness / chord(config.aftFlap), config.aftFlap.stowedLe, config.aftFlap.stowedTe);
-  const move = trackMotion(config.track, config.axelSpacing, sLead);
-  return { main, vane: vaneFlat.map(move), flap: flapFlat.map(move) };
+export function buildConfiguration(cfg: HighLiftAirfoil): Configuration {
+  const { main: m, design: d, operation: op } = cfg;
+  const sLead = d.axelSpacing + op.deploy;
+  const main = buildMainWing(m.coords, d.cove, m.bluntThickness);
+  const vaneFlat = buildNacaElement(d.vane.naca, m.bluntThickness / chord(d.vane), d.vane.stowedLe, d.vane.stowedTe);
+  const flaperonFlat = buildNacaElement(d.flaperon.naca, m.bluntThickness / chord(d.flaperon), d.flaperon.stowedLe, d.flaperon.stowedTe);
+  const move = trackMotion(d.track, d.axelSpacing, sLead);
+  const pivot = d.flaperonHinge.pivot;
+  const flaperonHinged = rotate(flaperonFlat, (op.flaperonAngleDeg * Math.PI) / 180.0, pivot);
+  return {
+    main,
+    vane: vaneFlat.map(move),
+    flaperon: flaperonHinged.map(move),
+    flaperonPivot: move(pivot),
+  };
 }

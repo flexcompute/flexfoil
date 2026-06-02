@@ -1,9 +1,16 @@
 /**
- * Configuration for the 3-element STOL high-lift airfoil.
+ * Configuration for the 3-element high-lift airfoil, organized as a 3-level
+ * hierarchy that mirrors the design dependency chain:
  *
- * Ported from ~/himalaya/geometry/airfoils/estol_config.yaml. This is the
- * single source of truth for the default geometry consumed by the /highlift
- * design tool and by the geometry engine in ./geometry.ts.
+ *   L1  main      — the base airfoil (fixed LS(1)-0417). Changing it invalidates
+ *                   everything downstream.
+ *   L2  design    — the high-lift element design built on that airfoil: main cove
+ *                   cutout, vane & flaperon shapes, flap track, flaperon hinge.
+ *   L3  operation — the operating point on a fixed design: deployment + flaperon angle.
+ *
+ * Single source of truth for the default geometry consumed by the /highlift
+ * design tool and by the geometry engine in ./geometry.ts. Originally ported from
+ * ~/himalaya/geometry/airfoils/estol_config.yaml.
  */
 
 export type V2 = [number, number];
@@ -42,7 +49,7 @@ export interface NacaElementCfg {
 
 /**
  * Flap track: a linear segment from `anchor` along `angleDeg`, followed by a
- * circular arc tangent to it at the junction. The vane+flap assembly rides the
+ * circular arc tangent to it at the junction. The vane+flaperon assembly rides the
  * track on two axels spaced `axelSpacing` apart (see geometry.ts), giving a
  * 1-DOF deployment driven by a single slider.
  */
@@ -57,19 +64,61 @@ export interface TrackConfig {
   arcRadius: number;
 }
 
-export interface EstolConfig {
+// ---------------------------------------------------------------------------
+// Level 1 — main airfoil (foundational; changing it invalidates everything below)
+// ---------------------------------------------------------------------------
+
+export interface MainAirfoil {
+  /** Base airfoil coordinates (fixed to LS(1)-0417 for now). */
+  coords: AirfoilCoords;
   /** Flat blunt TE thickness, in overall-chord units, applied to all elements. */
   bluntThickness: number;
-  /** Main element base airfoil (tabulated). */
-  mainAirfoil: AirfoilCoords;
+}
+
+// ---------------------------------------------------------------------------
+// Level 2 — high-lift element design (the system geometry on the main airfoil)
+// ---------------------------------------------------------------------------
+
+/**
+ * Flaperon hinge geometry: the pivot (at stowed deployment, global coords) about
+ * which the flaperon rotates relative to the vane+flaperon assembly. The rotation
+ * angle itself is an operating-point quantity and lives in {@link Operation}.
+ */
+export interface FlaperonHinge {
+  /** Pivot at stowed deployment (global coords); carried by the track motion. */
+  pivot: V2;
+}
+
+export interface HighLiftDesign {
   /** Main element cove cutout. */
-  mainCutouts: CoveCutouts;
+  cove: CoveCutouts;
+  /** Vane element shape + stowed anchors. */
   vane: NacaElementCfg;
-  aftFlap: NacaElementCfg;
-  /** Flap track shared by the vane + flap assembly. */
+  /** Flaperon element shape + stowed anchors. */
+  flaperon: NacaElementCfg;
+  /** Flap track shared by the vane + flaperon assembly. */
   track: TrackConfig;
   /** Chord distance between the two track axels. */
   axelSpacing: number;
+  /** Flaperon hinge pivot (geometry only; the angle is in operation). */
+  flaperonHinge: FlaperonHinge;
+}
+
+// ---------------------------------------------------------------------------
+// Level 3 — operating point on a fixed design
+// ---------------------------------------------------------------------------
+
+export interface Operation {
+  /** Deployment: travel beyond stowed along the track; sLead = design.axelSpacing + deploy. */
+  deploy: number;
+  /** Flaperon rotation about its hinge, relative to the assembly (deg, negative = TE down). */
+  flaperonAngleDeg: number;
+}
+
+export interface HighLiftAirfoil {
+  main: MainAirfoil;
+  design: HighLiftDesign;
+  operation: Operation;
 }
 
 /** NASA LS(1)-0417 ("GA(W)-1") tabulated coordinates. */
@@ -91,18 +140,27 @@ export const LS1_0417: AirfoilCoords = {
 };
 
 /** Default configuration matching the reference paper geometry. */
-export const DEFAULT_ESTOL_CONFIG: EstolConfig = {
-  bluntThickness: 0.003,
-  mainAirfoil: LS1_0417,
-  mainCutouts: {
-    lowerCutX: 0.51,
-    upperLipCutX: 0.85,
-    coveVertexX: 0.62,
-    coveVertexY: 0.055,
-    coveFilletRadius: 0.2,
+export const DEFAULT_HIGH_LIFT_AIRFOIL: HighLiftAirfoil = {
+  main: {
+    coords: LS1_0417,
+    bluntThickness: 0.003,
   },
-  vane: { naca: '9621', stowedLe: [0.55, -0.048], stowedTe: [0.73, 0.035] },
-  aftFlap: { naca: '6311', stowedLe: [0.69, -0.011], stowedTe: [1.0, 0.0] },
-  track: { anchor: [0.675, -0.03], angleDeg: -6.0, linearLength: 0.155, arcRadius: -0.135 },
-  axelSpacing: 0.095,
+  design: {
+    cove: {
+      lowerCutX: 0.51,
+      upperLipCutX: 0.85,
+      coveVertexX: 0.62,
+      coveVertexY: 0.055,
+      coveFilletRadius: 0.2,
+    },
+    vane: { naca: '9621', stowedLe: [0.55, -0.048], stowedTe: [0.73, 0.035] },
+    flaperon: { naca: '6311', stowedLe: [0.69, -0.011], stowedTe: [1.0, 0.0] },
+    track: { anchor: [0.675, -0.03], angleDeg: -6.0, linearLength: 0.155, arcRadius: -0.135 },
+    axelSpacing: 0.095,
+    flaperonHinge: { pivot: [0.69, -0.011] },
+  },
+  operation: {
+    deploy: 0.12,
+    flaperonAngleDeg: 0.0,
+  },
 };
