@@ -1,12 +1,12 @@
 /**
- * Standalone interactive high-lift design tool (geometry + per-element aero).
+ * Standalone interactive high-lift design tool (geometry + RANS flow field).
  *
  * Vanilla TS, served by Vite at /highlift-preview.html. Deployment is a single
  * slider along the flap track (1-DOF); the other sliders shape the track, cove,
- * hinge and NACA elements. The drag polar and Cp plots come from the per-element
- * independent solver and re-run automatically as inputs change. The polar run is
- * async + cancellable: it greys out while computing and restarts if geometry or
- * polar parameters change mid-run.
+ * vane and flaperon. Geometry drawing is live. Aero comes from the RANS bridge
+ * (rans_server.py): "Run RANS" sweeps α and plots a clickable CD–CL polar; the
+ * selected point's center-span flow field is drawn as a two-pass LIC overlay
+ * (see lic.ts) behind the airfoil canvas.
  */
 
 // Prebuilt browser bundle (self-contained) — the plotly.js source entry pulls
@@ -15,17 +15,20 @@ import Plotly from 'plotly.js/dist/plotly-basic.min.js';
 import { DEFAULT_HIGH_LIFT_AIRFOIL } from './estolConfig';
 import type { HighLiftAirfoil } from './estolConfig';
 import { buildConfiguration, toPoints, trackPoint, trailingAxel } from './geometry';
-// The solver (and the WASM layer it imports) is loaded lazily so the geometry
-// view still works when the WASM package isn't built. Types are erased.
-import type { ElementName } from './solve';
+import { LicView } from './lic';
+import type { FlowMesh } from './lic';
+
+// This is a stateful vanilla entry (module-level state + appended DOM + Plotly
+// listeners), so hot-swapping would stack duplicate handlers and run twice. Force a
+// full reload on any change instead.
+if ((import.meta as any).hot) (import.meta as any).hot.accept(() => location.reload());
 
 const cfg: HighLiftAirfoil = structuredClone(DEFAULT_HIGH_LIFT_AIRFOIL);
-let alphaDeg = 4;
-const COLORS: Record<ElementName, string> = { main: '#1f3a68', vane: '#9c3d1a', flaperon: '#2c6b2c' };
 
-const VIEW = { xmin: -0.1, xmax: 1.2, ymin: -0.3, ymax: 0.2 };
+const VIEW = { xmin: -0.1, xmax: 1.2, ymin: -0.4, ymax: 0.2 };
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
+const VIEW_H = 360;
 
 function world(w: number, h: number) {
   const s = Math.min(w / (VIEW.xmax - VIEW.xmin), h / (VIEW.ymax - VIEW.ymin));
@@ -52,7 +55,7 @@ function fill(pts: { x: number; y: number }[], t: ReturnType<typeof world>, face
 function render() {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth;
-  const h = 360;
+  const h = VIEW_H;
   canvas.width = Math.round(w * dpr);
   canvas.height = Math.round(h * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -67,44 +70,84 @@ function render() {
     ctx.beginPath(); ctx.moveTo(t.x(gx), t.y(VIEW.ymax)); ctx.lineTo(t.x(gx), t.y(VIEW.ymin)); ctx.stroke();
     ctx.fillText(gx.toFixed(1), t.x(gx) - 8, t.y(VIEW.ymin) - 4);
   }
-  for (let gy = -0.3; gy <= 0.2 + 1e-9; gy += 0.1) {
+  for (let gy = VIEW.ymin; gy <= VIEW.ymax + 1e-9; gy += 0.1) {
     ctx.beginPath(); ctx.moveTo(t.x(VIEW.xmin), t.y(gy)); ctx.lineTo(t.x(VIEW.xmax), t.y(gy)); ctx.stroke();
     ctx.fillText(gy.toFixed(1), t.x(VIEW.xmin) + 2, t.y(gy) - 3);
   }
 
-  // flap track (dashed), under the elements
-  ctx.setLineDash([6, 5]);
-  ctx.strokeStyle = '#9c5bd1';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(t.x(trackPoint(cfg.design.track, 0)[0]), t.y(trackPoint(cfg.design.track, 0)[1]));
-  for (let i = 1; i <= 70; i++) {
-    const p = trackPoint(cfg.design.track, (0.7 * i) / 70);
-    ctx.lineTo(t.x(p[0]), t.y(p[1]));
+  // flap track (dashed) + axels — only while the Flap-track pane is open.
+  if (trackPane.open) {
+    ctx.setLineDash([6, 5]);
+    ctx.strokeStyle = '#9c5bd1';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    const trackLen = cfg.design.track.linearLength + cfg.design.axelSpacing + cfg.design.track.length;
+    ctx.moveTo(t.x(trackPoint(cfg.design.track, 0)[0]), t.y(trackPoint(cfg.design.track, 0)[1]));
+    for (let i = 1; i <= 70; i++) {
+      const p = trackPoint(cfg.design.track, (trackLen * i) / 70);
+      ctx.lineTo(t.x(p[0]), t.y(p[1]));
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // axels: the rigid bar between the two track carriages
+    const sLead = cfg.design.axelSpacing + cfg.operation.deploy;
+    const lead = trackPoint(cfg.design.track, sLead);
+    const trail = trackPoint(cfg.design.track, trailingAxel(cfg.design.track, cfg.design.axelSpacing, sLead));
+    ctx.strokeStyle = '#c0392b';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(t.x(lead[0]), t.y(lead[1]));
+    ctx.lineTo(t.x(trail[0]), t.y(trail[1]));
+    ctx.stroke();
+    ctx.fillStyle = '#c0392b';
+    for (const a of [lead, trail]) {
+      ctx.beginPath();
+      ctx.arc(t.x(a[0]), t.y(a[1]), 4, 0, 2 * Math.PI);
+      ctx.fill();
+    }
   }
-  ctx.stroke();
-  ctx.setLineDash([]);
 
-  const sLead = cfg.design.axelSpacing + cfg.operation.deploy;
-  const { main, vane, flaperon } = buildConfiguration(cfg);
+  const { main, vane, vaneControls, flaperon, flaperonControls, flaperonPivot } = buildConfiguration(cfg);
   fill(toPoints(main), t, '#cfd8e6', '#1f3a68');
   fill(toPoints(vane), t, '#fbd4b4', '#9c3d1a');
   fill(toPoints(flaperon), t, '#cfe9c8', '#2c6b2c');
 
-  // axels: the rigid bar between the two track carriages, on top
-  const lead = trackPoint(cfg.design.track, sLead);
-  const trail = trackPoint(cfg.design.track, trailingAxel(cfg.design.track, cfg.design.axelSpacing, sLead));
-  ctx.strokeStyle = '#c0392b';
-  ctx.lineWidth = 2.5;
-  ctx.beginPath();
-  ctx.moveTo(t.x(lead[0]), t.y(lead[1]));
-  ctx.lineTo(t.x(trail[0]), t.y(trail[1]));
-  ctx.stroke();
-  ctx.fillStyle = '#c0392b';
-  for (const a of [lead, trail]) {
+  // B-spline control points / polygon, shown only while the matching pane is open.
+  const drawControlNet = (pts: number[][], color: string, closed: boolean) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
     ctx.beginPath();
-    ctx.arc(t.x(a[0]), t.y(a[1]), 4, 0, 2 * Math.PI);
-    ctx.fill();
+    ctx.moveTo(t.x(pts[0][0]), t.y(pts[0][1]));
+    for (const p of pts.slice(1)) ctx.lineTo(t.x(p[0]), t.y(p[1]));
+    if (closed) ctx.closePath();
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = color;
+    ctx.font = '10px system-ui';
+    pts.forEach((p, i) => {
+      ctx.beginPath();
+      ctx.arc(t.x(p[0]), t.y(p[1]), 3.5, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.fillText(`P${i}`, t.x(p[0]) + 5, t.y(p[1]) - 5);
+    });
+  };
+  if (vanePane.open) drawControlNet(vaneControls, '#1b8a8a', true);        // closed loop (teal)
+  if (flaperonPane.open) drawControlNet(flaperonControls, '#7a4fc0', false); // open nose (purple)
+
+  // flaperon hinge pivot — only while the Flaperon-hinge pane is open.
+  if (hingePane.open) {
+    const [px, py] = [t.x(flaperonPivot[0]), t.y(flaperonPivot[1])];
+    ctx.strokeStyle = '#e08a1e';
+    ctx.fillStyle = '#e08a1e';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(px, py, 5, 0, 2 * Math.PI);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(px - 8, py); ctx.lineTo(px + 8, py);
+    ctx.moveTo(px, py - 8); ctx.lineTo(px, py + 8);
+    ctx.stroke();
   }
 }
 
@@ -133,22 +176,12 @@ function slider(
   return row;
 }
 
-function naca(label: string, get: () => string, set: (v: string) => void): HTMLElement {
-  const row = document.createElement('div');
-  row.className = 'row';
-  row.innerHTML = `<label>${label}</label>`;
-  const input = document.createElement('input');
-  input.type = 'text'; input.value = get(); input.maxLength = 4;
-  input.oninput = () => /^\d{4}$/.test(input.value.trim()) && (set(input.value.trim()), refresh());
-  row.append(input);
-  return row;
-}
-
-function fieldset(legend: string, ...rows: HTMLElement[]): HTMLElement {
-  const fs = document.createElement('fieldset');
-  fs.innerHTML = `<legend>${legend}</legend>`;
-  fs.append(...rows);
-  return fs;
+/** A collapsible section (collapsed by default). Nests for the design sub-boxes. */
+function section(title: string, ...rows: HTMLElement[]): HTMLDetailsElement {
+  const d = document.createElement('details');           // no `open` attr ⇒ collapsed
+  d.innerHTML = `<summary>${title}</summary>`;
+  d.append(...rows);
+  return d;
 }
 
 /** A read-only row (e.g. the fixed main airfoil at level 1). */
@@ -159,67 +192,155 @@ function info(label: string, value: string): HTMLElement {
   return row;
 }
 
-// --- aero: solving runs in a Web Worker (off the main thread) ---
-const worker = new Worker(new URL('./solveWorker.ts', import.meta.url), { type: 'module' });
-const setPolarBusy = (b: boolean) => document.getElementById('polar')!.classList.toggle('busy', b);
-let cpReq = 0;
-let polarReq = 0;
+// --- RANS flow field (LIC overlay) + clickable CD–CL polar, via the local bridge ---
+// The GPU solver can't run in the browser; a local `rans_server.py` (user's shell)
+// runs the fast pipeline and returns forces + a center-span slice mesh per α. The
+// LIC layer draws that flow field behind the 2D airfoil canvas; the CD–CL polar is
+// clickable to switch which point's flow field is shown.
+const licCanvas = document.getElementById('view-lic') as HTMLCanvasElement;
+const licView = new LicView(licCanvas);
 
-worker.onmessage = (e: MessageEvent) => {
-  const m = e.data;
-  if (m.kind === 'cp' && m.id === cpReq) drawCp(m.res);
-  else if (m.kind === 'polar' && m.id === polarReq) { drawPolar(m.rows); setPolarBusy(false); }
-};
-worker.onerror = () => {
-  for (const id of ['polar', 'cp']) {
-    document.getElementById(id)!.innerHTML =
-      '<div style="padding:16px;color:#444;font:13px system-ui">Aero solver unavailable — build the WASM package (see README).</div>';
+interface PolarPoint { alpha: number; CL: number; CD: number; flow: FlowMesh | null; }
+let polarPts: PolarPoint[] = [];
+let licShown = false;
+let ransBusy = false;
+
+const ALPHA_SWEEP = [-2, 0, 2, 4, 6, 8];
+
+function setStatus(msg: string): void {
+  document.getElementById('rans-status')!.textContent = msg;
+}
+
+/** Size the LIC canvas to the airfoil canvas and align its camera to the 2D view. */
+function syncLicCamera(): void {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  const h = VIEW_H;
+  licCanvas.style.width = w + 'px';
+  licCanvas.style.height = h + 'px';
+  licView.resize(Math.round(w * dpr), Math.round(h * dpr));
+  // world rect covering the full pixel buffer (mirrors world()'s letterbox math)
+  const s = Math.min(w / (VIEW.xmax - VIEW.xmin), h / (VIEW.ymax - VIEW.ymin));
+  const ox = (w - s * (VIEW.xmax - VIEW.xmin)) / 2;
+  const oy = (h - s * (VIEW.ymax - VIEW.ymin)) / 2;
+  licView.setCamera(VIEW.xmin - ox / s, VIEW.xmax + ox / s, VIEW.ymin - oy / s, VIEW.ymax + oy / s);
+}
+
+/** Show (or, with null, clear) a flow field on the LIC overlay. */
+function showFlow(fm: FlowMesh | null): void {
+  syncLicCamera();
+  if (fm) {
+    licView.setFlow(fm);
+    licView.render();
+    licShown = true;
+  } else {
+    licView.clear();
+    licShown = false;
   }
-};
-
-function drawCp(res: { name: ElementName; cpX: number[]; cp: number[] }[]) {
-  const traces = res.map((r) => ({ x: r.cpX, y: r.cp, name: r.name, mode: 'lines', line: { color: COLORS[r.name] } }));
-  Plotly.react('cp', traces, {
-    title: { text: `Cp at α = ${alphaDeg.toFixed(1)}°`, font: { size: 13 } },
-    xaxis: { title: 'x/c' },
-    yaxis: { title: 'Cp', autorange: 'reversed' },
-    margin: { t: 30, r: 10, b: 40, l: 48 },
-    legend: { orientation: 'h', y: -0.2 },
-  }, { displayModeBar: false, responsive: true });
 }
 
-function drawPolar(rows: Record<ElementName, { alpha: number; cl: number }[]>) {
-  const traces = (['main', 'vane', 'flaperon'] as ElementName[]).map((name) => ({
-    x: rows[name].map((p) => p.alpha),
-    y: rows[name].map((p) => p.cl),
-    name, mode: 'lines+markers', line: { color: COLORS[name] }, marker: { size: 4 },
-  }));
-  Plotly.react('polar', traces, {
-    title: { text: 'Cl vs α (coupled inviscid)', font: { size: 13 } },
-    xaxis: { title: 'α (deg)' },
-    yaxis: { title: 'Cl' },
-    margin: { t: 30, r: 10, b: 40, l: 48 },
-    legend: { orientation: 'h', y: -0.2 },
-  }, { displayModeBar: false, responsive: true });
+function drawPolar(): void {
+  const gd = document.getElementById('polar')!;
+  const base = { xaxis: { title: 'CD' }, yaxis: { title: 'CL' }, margin: { t: 30, r: 10, b: 40, l: 52 } };
+  if (!polarPts.length) {
+    Plotly.react('polar', [], { title: { text: 'CD vs CL (RANS) — click “Run RANS”', font: { size: 13 } }, ...base },
+      { displayModeBar: false, responsive: true });
+    return;
+  }
+  const trace = {
+    x: polarPts.map((p) => p.CD), y: polarPts.map((p) => p.CL),
+    text: polarPts.map((p) => `α=${p.alpha}°`), mode: 'lines+markers',
+    line: { color: '#1f3a68' }, marker: { size: 9, color: '#1f3a68' },
+    hovertemplate: '%{text}<br>CD=%{x:.4f}<br>CL=%{y:.3f}<extra></extra>',
+  };
+  Plotly.react('polar', [trace], { title: { text: 'CD vs CL (RANS) — click a point', font: { size: 13 } }, ...base },
+    { displayModeBar: false, responsive: true });
+  (gd as any).removeAllListeners?.('plotly_click');
+  (gd as any).on('plotly_click', (ev: any) => {
+    const pt = ev.points[0];
+    const i = pt.pointNumber ?? pt.pointIndex ?? 0;
+    if (polarPts[i]) showFlow(polarPts[i].flow);
+  });
 }
 
-function requestCp() {
-  worker.postMessage({ id: ++cpReq, kind: 'cp', cfg, alphaDeg });
-}
-function requestPolar() {
-  setPolarBusy(true);
-  worker.postMessage({ id: ++polarReq, kind: 'polar', cfg });
+/** The deployed configuration as the rans bridge's element list ([[x,y]…] contours). */
+function ransElements() {
+  const { main, vane, flaperon } = buildConfiguration(cfg);
+  return [
+    { name: 'main', contour: main },
+    { name: 'vane', contour: vane },
+    { name: 'flaperon', contour: flaperon },
+  ];
 }
 
-let cpTimer = 0;
-let polarTimer = 0;
-function scheduleCp() { clearTimeout(cpTimer); cpTimer = window.setTimeout(requestCp, 150); }
-function schedulePolar() { clearTimeout(polarTimer); polarTimer = window.setTimeout(requestPolar, 200); }
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function runRans(): Promise<void> {
+  if (ransBusy) return;
+  ransBusy = true;
+  const btn = document.getElementById('run-rans') as HTMLButtonElement;
+  btn.disabled = true;
+  document.getElementById('polar')!.classList.add('busy');
+  const elements = ransElements();
+  polarPts = [];
+  drawPolar();
+  // One unsteady-as-steady run marches through every α (warm-started). The points
+  // stream back as each physical step converges, so the polar fills in live — and if a
+  // late α stalls/diverges, the converged points still show.
+  setStatus(`Starting RANS α sweep (${ALPHA_SWEEP.length} points, one run)…`);
+  try {
+    const start = await fetch('/api/rans/sweep', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ elements, alphas: ALPHA_SWEEP }),
+    }).then((r) => r.json());
+    if (start.error) throw new Error(start.error);
+    const { jobId, n } = start;
+    let fails = 0;
+    let shown = 0;
+    for (;;) {
+      await sleep(1500);
+      let st: any;
+      try {
+        st = await fetch(`/api/rans/sweep/status?job=${jobId}`).then((r) => r.json());
+      } catch (e) {
+        if (++fails > 5) throw e;                 // tolerate transient poll failures
+        continue;
+      }
+      fails = 0;
+      polarPts = (st.points ?? []).map((p: any) => ({
+        alpha: p.alpha, CL: p.CL, CD: p.CD, flow: p.flowField ?? null,
+      }));
+      drawPolar();
+      if (polarPts.length > shown) {              // a new α landed → preview its field
+        shown = polarPts.length;
+        showFlow(polarPts[shown - 1].flow);
+      }
+      if (st.done) {
+        setStatus(st.error
+          ? `${st.error} — ${polarPts.length} converged point(s) shown.`
+          : `Done — ${polarPts.length} points. Click a polar point to view its flow field.`);
+        break;
+      }
+      const stage = polarPts.length ? `${polarPts.length}/${n} α` : (st.stage ?? 'meshing…');
+      setStatus(`Running RANS sweep — ${stage}`);
+    }
+  } catch (err) {
+    setStatus(`RANS error: ${(err as Error).message}. Is rans_server.py running in your shell?`);
+  } finally {
+    document.getElementById('polar')!.classList.remove('busy');
+    btn.disabled = false;
+    ransBusy = false;
+  }
+}
 
 function refresh() {
   render();
-  scheduleCp();
-  schedulePolar();
+  // Geometry changed ⇒ the last RANS results no longer match what's drawn. Drop BOTH
+  // the flow-field overlay and the polar so new/old never mix on screen — the user
+  // re-runs "Run RANS" for the new geometry. (Ignored while a run is streaming.)
+  if (ransBusy) return;
+  if (licShown) showFlow(null);
+  if (polarPts.length) { polarPts = []; drawPolar(); }
 }
 
 // --- geometry controls, grouped by the 3-level hierarchy ---
@@ -228,55 +349,105 @@ const d = cfg.design;        // L2
 const op = cfg.operation;    // L3
 const tr = d.track;
 const c = d.cove;
+const f = d.flaperon;
 const pivot = d.flaperonHinge.pivot;
+
+// The flaperon sub-pane is held in a variable so render() can show the B-spline
+// control points only while it is open (and re-render on toggle).
+const flaperonPane = section('Flaperon shape',
+  slider('upper cut x', 0.5, 0.95, 0.005, () => f.upperCutX, (v) => (f.upperCutX = v)),
+  slider('lower cut x', 0.5, 0.95, 0.005, () => f.lowerCutX, (v) => (f.lowerCutX = v)),
+  slider('nose tan up', 0.0, 0.15, 0.005, () => f.noseTangentUpper, (v) => (f.noseTangentUpper = v)),
+  slider('nose tan low', 0.0, 0.15, 0.005, () => f.noseTangentLower, (v) => (f.noseTangentLower = v)),
+  slider('nose tip x', 0.4, 0.9, 0.005, () => f.noseTip[0], (v) => (f.noseTip[0] = v)),
+  slider('nose tip y', -0.1, 0.15, 0.005, () => f.noseTip[1], (v) => (f.noseTip[1] = v)),
+);
+flaperonPane.addEventListener('toggle', render);   // show/hide control points immediately
+
+// Vane shape pane (its B-spline control points show while it is open, like the flaperon).
+const v = d.vane;
+const vanePane = section('Vane shape',
+  slider('te x', 0.55, 0.85, 0.005, () => v.te[0], (x) => (v.te[0] = x)),
+  slider('te y', -0.05, 0.12, 0.005, () => v.te[1], (x) => (v.te[1] = x)),
+  ...v.points.flatMap((p, i) => [
+    slider(`p${i + 1} x`, 0.45, 0.85, 0.005, () => p[0], (x) => (p[0] = x)),
+    slider(`p${i + 1} y`, -0.12, 0.12, 0.005, () => p[1], (x) => (p[1] = x)),
+  ]),
+);
+vanePane.addEventListener('toggle', render);
+
+// Deploy slider: its max is the track `length` (the max deployment); kept in sync
+// when the length slider moves.
+const deployRow = slider('deploy', 0, tr.length, 0.005, () => op.deploy, (val) => (op.deploy = val));
+const deployInput = deployRow.querySelector('input') as HTMLInputElement;
+const deployVal = deployRow.querySelector('.val') as HTMLElement;
+function setDeployMax(maxv: number): void {
+  deployInput.max = String(maxv);
+  if (op.deploy > maxv) {
+    op.deploy = maxv;
+    deployInput.value = String(maxv);
+    deployVal.textContent = maxv.toFixed(3);
+  }
+}
+
+// Track + hinge panes are held in variables so render() can show the track/axels
+// and the flaperon pivot only while the respective pane is open.
+const trackPane = section('Flap track',
+  slider('start x', 0.4, 0.9, 0.005, () => tr.anchor[0], (v) => (tr.anchor[0] = v)),
+  slider('start y', -0.2, 0.05, 0.005, () => tr.anchor[1], (v) => (tr.anchor[1] = v)),
+  slider('axel gap', 0.05, 0.2, 0.005, () => d.axelSpacing, (v) => (d.axelSpacing = v)),
+  slider('line angle°', -30, 10, 0.5, () => tr.angleDeg, (v) => (tr.angleDeg = v)),
+  slider('linear len', 0.05, 0.3, 0.005, () => tr.linearLength, (v) => (tr.linearLength = v)),
+  slider('arc radius', -0.25, -0.05, 0.005, () => tr.arcRadius, (v) => (tr.arcRadius = v)),
+  slider('length', 0.05, 0.5, 0.005, () => tr.length, (v) => { tr.length = v; setDeployMax(v); }),
+);
+trackPane.addEventListener('toggle', render);
+
+const hingePane = section('Flaperon hinge (pivot)',
+  slider('pivot x', 0.6, 1.05, 0.005, () => pivot[0], (v) => (pivot[0] = v)),
+  slider('pivot y', -0.15, 0.1, 0.005, () => pivot[1], (v) => (pivot[1] = v)),
+);
+hingePane.addEventListener('toggle', render);
+
 document.getElementById('controls')!.append(
   // ── Level 1: main airfoil (foundational; fixed for now) ──
-  fieldset('① Main airfoil',
+  section('① Main airfoil',
     info('airfoil', 'LS(1)-0417 (fixed)'),
     slider('blunt TE', 0.0, 0.02, 0.001, () => m.bluntThickness, (v) => (m.bluntThickness = v)),
   ),
-  // ── Level 2: high-lift element design ──
-  fieldset('② High-lift design',
-    fieldset('Main cove cutout',
-      slider('lower cut x', 0.4, 0.62, 0.005, () => c.lowerCutX, (v) => (c.lowerCutX = v)),
-      slider('upper lip x', 0.74, 0.95, 0.005, () => c.upperLipCutX, (v) => (c.upperLipCutX = v)),
-      slider('cove vtx x', 0.54, 0.72, 0.005, () => c.coveVertexX, (v) => (c.coveVertexX = v)),
-      slider('cove vtx y', 0.0, 0.1, 0.002, () => c.coveVertexY, (v) => (c.coveVertexY = v)),
-      slider('fillet r', 0.05, 0.4, 0.005, () => c.coveFilletRadius, (v) => (c.coveFilletRadius = v)),
+  // ── Level 2: high-lift element design (sub-boxes are individually collapsible) ──
+  section('② High-lift design',
+    section('Main cove cutout',
+      slider('upper cut x', 0.5, 1.0, 0.005, () => c.upperCutX, (v) => (c.upperCutX = v)),
+      slider('lower cut x', 0.5, 1.0, 0.005, () => c.lowerCutX, (v) => (c.lowerCutX = v)),
+      slider('cove x', 0.5, 1.0, 0.005, () => c.coveX, (v) => (c.coveX = v)),
     ),
-    fieldset('Vane & flaperon (NACA 4-digit)',
-      naca('vane', () => d.vane.naca, (v) => (d.vane.naca = v)),
-      naca('flaperon', () => d.flaperon.naca, (v) => (d.flaperon.naca = v)),
-    ),
-    fieldset('Flap track',
-      slider('start x', 0.4, 0.9, 0.005, () => tr.anchor[0], (v) => (tr.anchor[0] = v)),
-      slider('start y', -0.2, 0.05, 0.005, () => tr.anchor[1], (v) => (tr.anchor[1] = v)),
-      slider('axel gap', 0.05, 0.2, 0.005, () => d.axelSpacing, (v) => (d.axelSpacing = v)),
-      slider('line angle°', -30, 10, 0.5, () => tr.angleDeg, (v) => (tr.angleDeg = v)),
-      slider('linear len', 0.05, 0.3, 0.005, () => tr.linearLength, (v) => (tr.linearLength = v)),
-      slider('arc radius', -0.25, -0.05, 0.005, () => tr.arcRadius, (v) => (tr.arcRadius = v)),
-    ),
-    fieldset('Flaperon hinge (pivot)',
-      slider('pivot x', 0.6, 1.05, 0.005, () => pivot[0], (v) => (pivot[0] = v)),
-      slider('pivot y', -0.15, 0.1, 0.005, () => pivot[1], (v) => (pivot[1] = v)),
-    ),
+    vanePane,
+    flaperonPane,
+    trackPane,
+    hingePane,
   ),
   // ── Level 3: deployment & flaperon angle (operating point) ──
-  fieldset('③ Deployment',
-    slider('deploy', 0, 0.45, 0.005, () => op.deploy, (v) => (op.deploy = v)),
+  section('③ Deployment',
+    deployRow,
     slider('flaperon angle°', -60, 30, 0.5, () => op.flaperonAngleDeg, (v) => (op.flaperonAngleDeg = v)),
   ),
 );
 
-// Polar window has no controls in the inviscid phase (no Re/Ncrit/drag yet);
-// Re/Ncrit and a true drag polar return with the viscous phase.
-
-// --- Cp window control (α only updates Cp, not the polar) ---
-document.getElementById('cp-controls')!.append(
-  slider('α (deg)', -5, 15, 0.5, () => alphaDeg, (v) => (alphaDeg = v), scheduleCp),
-);
+// --- RANS run control (drives the CD–CL polar + flow-field overlay) ---
+const runBtn = document.createElement('button');
+runBtn.id = 'run-rans';
+runBtn.className = 'run-rans';
+runBtn.textContent = `Run RANS (α sweep: ${ALPHA_SWEEP[0]}…${ALPHA_SWEEP[ALPHA_SWEEP.length - 1]}°)`;
+runBtn.onclick = runRans;
+const statusEl = document.createElement('div');
+statusEl.id = 'rans-status';
+statusEl.className = 'rans-status';
+document.getElementById('polar-controls')!.append(runBtn, statusEl);
 
 render();
-window.addEventListener('resize', render);
-requestCp();
-requestPolar();
+drawPolar();
+window.addEventListener('resize', () => {
+  render();
+  if (licShown) { syncLicCamera(); licView.render(); }
+});

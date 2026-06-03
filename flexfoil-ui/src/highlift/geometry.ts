@@ -16,11 +16,13 @@
 import type {
   AirfoilCoords,
   CoveCutouts,
+  FlaperonShape,
   HighLiftAirfoil,
-  NacaElementCfg,
   TrackConfig,
   V2,
+  VaneShape,
 } from './estolConfig';
+import { evaluateBSpline } from '../lib/bspline';
 
 // ---------------------------------------------------------------------------
 // Vector / array helpers (numpy-equivalent semantics)
@@ -210,14 +212,20 @@ function mod(a: number, b: number): number {
 // Element builders
 // ---------------------------------------------------------------------------
 
-/** Coved main wing. Port of `build_main_wing()` (returns the `flat` contour). */
+/**
+ * Coved main wing. The cove follows the airfoil's own surfaces offset inward by
+ * `bluntThickness`: the ceiling parallels the upper surface from `upperCutX`
+ * forward to `coveX`; the floor parallels the lower surface from `coveX` out to
+ * `lowerCutX`; a vertical back wall at `coveX` joins them with sharp corners. Both
+ * cuts carry a blunt-TE edge of `bluntThickness` (the lip dropped below the upper
+ * surface, the lower cut raised above the lower surface). Returns the closed `flat`
+ * contour: upper-lip-tip → LE → lower-surface → lower-cut → (blunt) → floor → back
+ * wall → ceiling → lip-bottom, closing the upper blunt TE back to the lip tip.
+ */
 export function buildMainWing(airfoil: AirfoilCoords, cutouts: CoveCutouts, bluntThickness: number): V2[] {
   const upper = airfoil.upper;
   const lower = airfoil.lower;
-  const xLoCut = cutouts.lowerCutX;
-  const xUpCut = cutouts.upperLipCutX;
-  const vertex: V2 = [cutouts.coveVertexX, cutouts.coveVertexY];
-  const rFillet = cutouts.coveFilletRadius;
+  const { upperCutX: xUpCut, lowerCutX: xLoCut, coveX } = cutouts;
 
   const upX = upper.map((q) => q[0]);
   const upY = upper.map((q) => q[1]);
@@ -225,25 +233,42 @@ export function buildMainWing(airfoil: AirfoilCoords, cutouts: CoveCutouts, blun
   const loY = lower.map((q) => q[1]);
   const yUpAtCut = interp(xUpCut, upX, upY);
   const yLoAtCut = interp(xLoCut, loX, loY);
+  const yUpCove = interp(coveX, upX, upY);
+  const yLoCove = interp(coveX, loX, loY);
 
   const upKept: V2[] = [...upper.filter((q) => q[0] < xUpCut), [xUpCut, yUpAtCut]];
   const loKept: V2[] = [...lower.filter((q) => q[0] < xLoCut), [xLoCut, yLoAtCut]];
-  const lipBottom: V2 = [xUpCut, yUpAtCut - bluntThickness];
-  const lowerCutPt: V2 = [xLoCut, yLoAtCut];
+  const lipBottom: V2 = [xUpCut, yUpAtCut - bluntThickness];     // upper blunt-TE inner point
+  const lowerCutTop: V2 = [xLoCut, yLoAtCut + bluntThickness];   // lower blunt-TE inner point
 
-  // fillet_corner returns tangent points on each leg: tIn toward lip_bottom
-  // (upper side), tOut toward lower_cut_pt (lower side). The arc traces
-  // lip-side → lower-side.
-  const { arc, tOut: tLower } = filletCorner(lipBottom, vertex, lowerCutPt, rFillet);
-  // main_contour: upper-lip-tip → LE → lower-cut-pt
+  // Cove floor: lower surface offset +bt, from the lower cut forward to coveX.
+  const floorMid: V2[] = lower
+    .filter((q) => q[0] > coveX && q[0] < xLoCut)
+    .sort((a, b) => b[0] - a[0])                                 // decreasing x
+    .map((q) => [q[0], q[1] + bluntThickness]);
+  const floorCove: V2 = [coveX, yLoCove + bluntThickness];       // back-wall bottom corner (sharp)
+  // Cove ceiling: upper surface offset -bt, from coveX aft to the upper cut.
+  const ceilCove: V2 = [coveX, yUpCove - bluntThickness];        // back-wall top corner (sharp)
+  const ceilMid: V2[] = upper
+    .filter((q) => q[0] > coveX && q[0] < xUpCut)
+    .sort((a, b) => a[0] - b[0])                                 // increasing x
+    .map((q) => [q[0], q[1] - bluntThickness]);
+
+  // main_contour: upper-lip-tip → LE → lower-cut-pt (the kept outer surfaces)
   const mainContour: V2[] = [...upKept.slice().reverse(), ...loKept.slice(1)];
-  // Reverse so the flat traversal runs lower-side → upper-side.
-  const arcLowerToUpper = arc.slice().reverse();
 
-  return [...mainContour, tLower, ...arcLowerToUpper.slice(1), lipBottom];
+  return [
+    ...mainContour,        // lip tip → LE → lower cut point
+    lowerCutTop,           // lower blunt-TE edge
+    ...floorMid,           // floor: lowerCut → coveX (offset +bt)
+    floorCove,             // back-wall bottom corner
+    ceilCove,              // back-wall top corner
+    ...ceilMid,            // ceiling: coveX → upperCut (offset -bt)
+    lipBottom,             // upper blunt-TE inner point; closes to the lip tip
+  ];
 }
 
-/** Vane / aft flap: anchored NACA airfoil. Port of `build_naca_element()` (`flat`). */
+/** Vane: anchored NACA airfoil. Port of `build_naca_element()` (`flat`). */
 export function buildNacaElement(
   code: string,
   teThickness: number,
@@ -253,6 +278,100 @@ export function buildNacaElement(
 ): V2[] {
   const raw = naca4(code, teThickness, nPanels);
   return anchorAirfoil(raw, targetLe, targetTe);
+}
+
+/** Forward (decreasing-x) unit tangent of a tabulated surface at chordwise `xc`. */
+function forwardTangent(xs: number[], ys: number[], xc: number): V2 {
+  const h = 1e-3;
+  const x0 = Math.max(xs[0], xc - h);
+  const x1 = Math.min(xs[xs.length - 1], xc + h);
+  const dx = x1 - x0;
+  const dy = interp(x1, xs, ys) - interp(x0, xs, ys);
+  return unit([-dx, -dy]);
+}
+
+/**
+ * Flaperon contour, derived from the main airfoil (not an independent foil). Aft
+ * of the cuts the upper/lower surfaces are exactly the airfoil, blunt-truncated at
+ * the TE by `bluntThickness` (matching the other elements). Forward of the cuts the
+ * nose is a clamped cubic B-spline through 5 control points: the two cut points,
+ * two tangent-handle points along the airfoil slope at each cut (lengths
+ * `noseTangent{Upper,Lower}`), and the free middle `noseTip` — so the nose meets the
+ * airfoil with matching slope (C1) at each cut. Built in the airfoil (global) frame,
+ * Selig-ordered: upper-TE-corner → upper-cut → nose → lower-cut → lower-TE-corner.
+ */
+/**
+ * The five B-spline nose control points (stowed/airfoil frame): the two cut points
+ * (P0, P4), the two slope-locked tangent handles (P1, P3), and the free middle
+ * `noseTip` (P2). Exposed so the UI can draw them.
+ */
+export function flaperonControlPoints(airfoil: AirfoilCoords, shape: FlaperonShape): [V2, V2, V2, V2, V2] {
+  const { upperCutX, lowerCutX, noseTangentUpper, noseTangentLower, noseTip } = shape;
+  const upX = airfoil.upper.map((q) => q[0]);
+  const upY = airfoil.upper.map((q) => q[1]);
+  const loX = airfoil.lower.map((q) => q[0]);
+  const loY = airfoil.lower.map((q) => q[1]);
+  const P0: V2 = [upperCutX, interp(upperCutX, upX, upY)];
+  const P4: V2 = [lowerCutX, interp(lowerCutX, loX, loY)];
+  const P1: V2 = add(P0, scale(forwardTangent(upX, upY, upperCutX), noseTangentUpper));
+  const P3: V2 = add(P4, scale(forwardTangent(loX, loY, lowerCutX), noseTangentLower));
+  return [P0, P1, noseTip, P3, P4];
+}
+
+export function buildFlaperon(airfoil: AirfoilCoords, shape: FlaperonShape, bluntThickness: number): V2[] {
+  const { upperCutX, lowerCutX } = shape;
+  const upX = airfoil.upper.map((q) => q[0]);
+  const upY = airfoil.upper.map((q) => q[1]);
+  const loX = airfoil.lower.map((q) => q[0]);
+  const loY = airfoil.lower.map((q) => q[1]);
+
+  // Blunt-truncate the TE: gap = yUp - yLo decreases to 0 at the TE; find the x
+  // (nearest the TE) where it equals bluntThickness. Reverse for ascending interp.
+  const scan = linspace(0.6, 1.0, 2001);
+  const gap = scan.map((x) => interp(x, upX, upY) - interp(x, loX, loY));
+  const xTE = interp(bluntThickness, gap.slice().reverse(), scan.slice().reverse());
+
+  const ctrl = flaperonControlPoints(airfoil, shape);
+  const [P0, , , , P4] = ctrl;
+  const cps = ctrl.map((p, i) => ({ x: p[0], y: p[1], id: String(i) }));
+  const nose: V2[] = evaluateBSpline(cps, 3, 41).map((p) => [p.x, p.y]);
+
+  // Airfoil surfaces aft of each cut, blunt-truncated at xTE.
+  const upperAft: V2[] = [P0, ...airfoil.upper.filter((q) => q[0] > upperCutX && q[0] < xTE), [xTE, interp(xTE, upX, upY)]];
+  const lowerAft: V2[] = [P4, ...airfoil.lower.filter((q) => q[0] > lowerCutX && q[0] < xTE), [xTE, interp(xTE, loX, loY)]];
+
+  return [
+    ...upperAft.slice().reverse(),   // upper TE corner → upper cut (P0)
+    ...nose.slice(1, -1),            // nose interior (P0..P4 endpoints dropped — they're the cuts)
+    ...lowerAft,                     // lower cut (P4) → lower TE corner
+  ];
+}
+
+/** The vane's 5 logical control points: [te, ...points] (the TE + 4 others). */
+export function vaneControlPoints(shape: VaneShape): V2[] {
+  return [shape.te, ...shape.points];
+}
+
+/**
+ * Vane contour: an open clamped cubic B-spline. The TE location is split into the
+ * spline's start and end points by the blunt-TE thickness, added orthogonal to the
+ * averaged direction of the TE's two adjacent control points (`points[0]` and
+ * `points[3]`); the 4 control points shape the loop in between. The spline passes
+ * through the two TE corners (gap = `bluntThickness`) and approximates the 4 points.
+ * Selig-ordered: TE-corner → P1 → … → P4 → other-TE-corner.
+ */
+export function buildVane(shape: VaneShape, bluntThickness: number): V2[] {
+  const { te, points } = shape;
+  const [p1, p2, p3, p4] = points;
+  // averaged direction toward the two control points adjacent to the TE
+  const dir = unit(add(unit(sub(p1, te)), unit(sub(p4, te))));
+  let n: V2 = [-dir[1], dir[0]];                       // orthogonal to that direction
+  if (dot(sub(p1, te), n) < 0) n = [-n[0], -n[1]];     // orient toward p1's side
+  const h = bluntThickness / 2;
+  const teStart: V2 = [te[0] + h * n[0], te[1] + h * n[1]];   // start (adjacent to p1)
+  const teEnd: V2 = [te[0] - h * n[0], te[1] - h * n[1]];     // end (adjacent to p4)
+  const cps = [teStart, p1, p2, p3, p4, teEnd].map((p, i) => ({ x: p[0], y: p[1], id: String(i) }));
+  return evaluateBSpline(cps, 3, 81).map((q) => [q.x, q.y]);
 }
 
 // ---------------------------------------------------------------------------
@@ -319,36 +438,40 @@ export interface Configuration {
   main: V2[];
   /** Vane contour at the current deployment. */
   vane: V2[];
+  /** The 5 vane B-spline control points, carried to the current deployment. */
+  vaneControls: V2[];
   /** Flaperon contour at the current deployment. */
   flaperon: V2[];
   /** Flaperon hinge pivot, carried to the current deployment. */
   flaperonPivot: V2;
+  /** The 5 flaperon nose control points, carried to the current deployment. */
+  flaperonControls: V2[];
 }
-
-const chord = (cfg: NacaElementCfg): number => norm(sub(cfg.stowedTe, cfg.stowedLe));
 
 /**
  * Build the element contours for the configuration's operating point. The lead-axel
  * arc-length is `sLead = design.axelSpacing + operation.deploy` (deploy = 0 is
  * stowed). The main element is fixed; the vane and flaperon deploy together as one
- * rigid assembly riding the track. The flaperon is first rotated about its hinge
- * (relative to the assembly), then carried by the track motion along with its pivot.
- * The blunt TE thickness (overall-chord units) is expressed in each element's own
- * chord units before truncation, matching the reference build.
+ * rigid assembly riding the track. The flaperon is additionally rotated about its
+ * hinge (relative to the assembly), then carried by the track motion along with its
+ * pivot. All elements share the same blunt TE thickness (`main.bluntThickness`).
  */
 export function buildConfiguration(cfg: HighLiftAirfoil): Configuration {
   const { main: m, design: d, operation: op } = cfg;
   const sLead = d.axelSpacing + op.deploy;
   const main = buildMainWing(m.coords, d.cove, m.bluntThickness);
-  const vaneFlat = buildNacaElement(d.vane.naca, m.bluntThickness / chord(d.vane), d.vane.stowedLe, d.vane.stowedTe);
-  const flaperonFlat = buildNacaElement(d.flaperon.naca, m.bluntThickness / chord(d.flaperon), d.flaperon.stowedLe, d.flaperon.stowedTe);
+  const vaneFlat = buildVane(d.vane, m.bluntThickness);
+  const flaperonFlat = buildFlaperon(m.coords, d.flaperon, m.bluntThickness);
   const move = trackMotion(d.track, d.axelSpacing, sLead);
   const pivot = d.flaperonHinge.pivot;
-  const flaperonHinged = rotate(flaperonFlat, (op.flaperonAngleDeg * Math.PI) / 180.0, pivot);
+  const angleRad = (op.flaperonAngleDeg * Math.PI) / 180.0;
+  const deploy = (pts: V2[]): V2[] => rotate(pts, angleRad, pivot).map(move);
   return {
     main,
     vane: vaneFlat.map(move),
-    flaperon: flaperonHinged.map(move),
+    vaneControls: vaneControlPoints(d.vane).map(move),
+    flaperon: deploy(flaperonFlat),
     flaperonPivot: move(pivot),
+    flaperonControls: deploy(flaperonControlPoints(m.coords, d.flaperon)),
   };
 }

@@ -54,13 +54,31 @@ def run_solver(workdir: str | Path, find, env: dict, *,
         pp_log.close()
 
 
+def _read_total_forces(workdir: Path):
+    """(header, data-rows) from total_forces_v2.csv (whitespace stripped, blanks dropped)."""
+    rows = list(csv.reader(open(workdir / "total_forces_v2.csv")))
+    hdr = [h.strip() for h in rows[0]]
+    data = [[c.strip() for c in r if c.strip() != ""] for r in rows[1:] if len(r) > 6]
+    return hdr, data
+
+
+def extract_forces_per_physical_step(workdir: str | Path) -> list[dict]:
+    """The converged CL/CD at the END of each physical time step (last pseudo-step row
+    per step). For the unsteady α-sweep each physical step is a different α; on a steady
+    file there's a single step 0."""
+    hdr, data = _read_total_forces(Path(workdir))
+    iCL, iCD, iPS = hdr.index("CL"), hdr.index("CD"), hdr.index("physical_step")
+    last_of = {int(float(r[iPS])): r for r in data}       # later rows overwrite ⇒ keep the last
+    return [{"physical_step": ps, "CL": float(r[iCL]), "CD": float(r[iCD]),
+             "L_over_D": float(r[iCL]) / float(r[iCD]) if float(r[iCD]) else float("nan")}
+            for ps, r in sorted(last_of.items())]
+
+
 def extract_forces(workdir: str | Path) -> dict:
     """Final CL/CD/(L/D) from total_forces_v2.csv + a listing of result files."""
     workdir = Path(workdir)
-    rows = list(csv.reader(open(workdir / "total_forces_v2.csv")))
-    hdr = [h.strip() for h in rows[0]]
+    hdr, data = _read_total_forces(workdir)
     iCL, iCD = hdr.index("CL"), hdr.index("CD")
-    data = [[c.strip() for c in r if c.strip() != ""] for r in rows[1:] if len(r) > 6]
     last = data[-1]
     CL, CD = float(last[iCL]), float(last[iCD])
     return {

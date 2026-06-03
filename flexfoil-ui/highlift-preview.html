@@ -8,11 +8,31 @@
       :root { color-scheme: dark; }
       body { margin: 0; font: 13px/1.4 system-ui, sans-serif; background: #14141c; color: #e6e6ef; }
       .wrap { display: flex; gap: 16px; padding: 16px; align-items: flex-start; flex-wrap: wrap; }
-      .canvas-box { flex: 1 1 560px; min-width: 360px; }
-      canvas { width: 100%; height: 360px; background: #fff; border-radius: 6px; display: block; }
+      /* Left column = airfoil view + polar (stays put); right column = the controls,
+         so expanding control sections grows the right column, never the left.
+         Cap the width: the view world is ~1.3×0.6 (≈2.17:1) and the canvas is a fixed
+         360px tall, so beyond ~780px the canvas gets wider than the content and white
+         letterbox appears on the sides. 780px ≈ the content aspect ⇒ fills with no gap. */
+      .left-col { flex: 1 1 560px; min-width: 360px; max-width: 780px; display: flex; flex-direction: column; gap: 14px; }
+      .canvas-box { width: 100%; }
+      /* Airfoil view = a 2D canvas (#view) stacked on top of the LIC flow-field
+         canvas (#view-lic); element fills on #view occlude the body interiors. */
+      .view-stack { position: relative; width: 100%; height: 360px; }
+      .view-stack canvas { position: absolute; inset: 0; width: 100%; height: 360px; border-radius: 6px; display: block; }
+      #view-lic { background: #fff; }       /* white until a flow field is rendered */
+      #view { background: transparent; }    /* 2D geometry draws over the LIC */
       .controls { flex: 0 0 300px; display: flex; flex-direction: column; gap: 14px; }
       fieldset { border: 1px solid #2a2a38; border-radius: 6px; padding: 10px 12px; margin: 0; }
       legend { color: #b9b9c8; font-weight: 600; font-size: 11px; padding: 0 4px; }
+      /* Collapsible hierarchy sections (collapsed by default). */
+      details { border: 1px solid #2a2a38; border-radius: 6px; background: #181822; padding-bottom: 4px; }
+      summary { cursor: pointer; padding: 8px 12px; color: #d8d8e4; font-weight: 600; font-size: 12px; user-select: none; }
+      summary:hover { color: #fff; }
+      details[open] > summary { border-bottom: 1px solid #2a2a38; margin-bottom: 8px; }
+      details > .row { margin: 0 12px 6px; }
+      /* Nested sub-boxes (within "② High-lift design"): inset, lighter, smaller header. */
+      details > details { margin: 8px 12px; background: #14141c; }
+      details > details > summary { font-size: 11px; color: #b9b9c8; padding: 6px 10px; }
       .row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
       .row label { flex: 0 0 96px; color: #9a9aab; }
       .row input[type="range"] { flex: 1; }
@@ -21,33 +41,37 @@
       .presets { display: flex; gap: 6px; margin-bottom: 8px; }
       .presets button { flex: 1; background: #24243a; color: #e6e6ef; border: 1px solid #3a3a55; border-radius: 4px; padding: 5px; cursor: pointer; }
       .presets button:hover { background: #2f2f4d; }
-      .note { color: #d9a441; font-size: 12px; margin: 0 16px 8px; }
-      .plots { display: flex; gap: 14px; flex-wrap: wrap; padding: 0 16px 16px; }
-      .plot-window { flex: 1 1 420px; min-width: 320px; display: flex; flex-direction: column; gap: 8px; }
+      .note { color: #d9a441; font-size: 12px; margin: 0; }
+      .plot-window { width: 100%; display: flex; flex-direction: column; gap: 8px; }
       .plot-controls { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
       .plot-controls .row { margin: 0; min-width: 150px; }
       .plot-controls .row label { flex: 0 0 64px; }
       .plot-controls button { background: #2f5fbf; color: #fff; border: none; border-radius: 4px; padding: 6px 12px; cursor: pointer; }
       .plot-controls button:hover { background: #3a6fd6; }
       .plot { height: 340px; background: #fff; border-radius: 6px; transition: opacity 0.15s; }
-      .plot.busy { opacity: 0.4; pointer-events: none; }
+      .plot.busy { opacity: 0.5; pointer-events: none; }
+      .run-rans { background: #2f5fbf; color: #fff; border: none; border-radius: 4px; padding: 7px 14px; cursor: pointer; font-weight: 600; }
+      .run-rans:hover:not(:disabled) { background: #3a6fd6; }
+      .run-rans:disabled { opacity: 0.5; cursor: progress; }
+      .rans-status { color: #9aa0aa; font-size: 12px; min-width: 180px; }
     </style>
   </head>
   <body>
     <div class="wrap">
-      <div class="canvas-box"><canvas id="view"></canvas></div>
+      <div class="left-col">
+        <div class="canvas-box">
+          <div class="view-stack">
+            <canvas id="view-lic"></canvas>
+            <canvas id="view"></canvas>
+          </div>
+        </div>
+        <div class="plot-window">
+          <div class="plot-controls" id="polar-controls"></div>
+          <div id="polar" class="plot"></div>
+        </div>
+        <p class="note">RANS (Flow360, fast preview). “Run RANS” sweeps α in one unsteady-as-steady run (~30 s) and plots the CD–CL polar; click a polar point to draw its flow field (LIC) on the airfoil view. Requires <code>rans_server.py</code> running in a non-sandboxed shell.</p>
+      </div>
       <div class="controls" id="controls"></div>
-    </div>
-    <p class="note">Coupled inviscid multi-element — element interaction is modelled. Viscous drag (and Re / Ncrit) return in the next phase, so the polar shows Cl vs α for now.</p>
-    <div class="plots">
-      <div class="plot-window">
-        <div class="plot-controls" id="polar-controls"></div>
-        <div id="polar" class="plot"></div>
-      </div>
-      <div class="plot-window">
-        <div class="plot-controls" id="cp-controls"></div>
-        <div id="cp" class="plot"></div>
-      </div>
     </div>
     <script type="module" src="/src/highlift/preview.ts"></script>
   </body>

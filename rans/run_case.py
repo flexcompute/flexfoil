@@ -29,10 +29,15 @@ def main() -> int:
     ap.add_argument("--compute-root", default=None,
                     help="Flow360 compute install root (else $FLOW360_COMPUTE_ROOT)")
     ap.add_argument("--gpu", type=int, default=0, help="CUDA device for the solve")
+    ap.add_argument("--fast", action="store_true",
+                    help="fast-iteration mode: cache the SDK case JSONs + skip auto-vis")
     args = ap.parse_args()
 
+    # `fast` may also be set by a top-level "fast": true in the case JSON, so the
+    # daemon (which calls run_case.py unchanged) can request it per-job.
+    fast = args.fast or bool(json.loads(Path(args.config).read_text()).get("fast", False))
     summary = run(args.config, args.out, solve=args.solve,
-                  compute_root=args.compute_root, gpu=args.gpu)
+                  compute_root=args.compute_root, gpu=args.gpu, fast=fast)
     print(json.dumps(summary, indent=2))
     if "forces" in summary:
         f = summary["forces"]

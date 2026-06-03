@@ -30,6 +30,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/uiuc-proxy/, '/ads/coord'),
       },
+      // Local RANS bridge (rans_server.py) — runs the GPU pipeline in the user's shell.
+      '/api/rans': {
+        target: 'http://localhost:8077',
+        changeOrigin: true,
+      },
     },
   },
 })

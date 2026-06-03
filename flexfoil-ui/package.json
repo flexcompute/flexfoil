@@ -13,6 +13,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@types/three": "^0.184.1",
     "ag-grid-community": "^35.1.0",
     "ag-grid-enterprise": "^35.1.0",
     "ag-grid-react": "^35.1.0",
@@ -28,6 +29,7 @@
     "react-plotly.js": "^2.6.0",
     "rustfoil-wasm": "file:../pkg",
     "sql.js": "^1.14.1",
+    "three": "^0.184.0",
     "zundo": "^2.3.0",
     "zustand": "^5.0.10"
   },

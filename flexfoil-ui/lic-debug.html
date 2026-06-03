@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>LIC debug</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; background: #14141c; color: #e6e6ef; font: 13px/1.4 system-ui, sans-serif; }
+      .bar { display: flex; gap: 16px; align-items: center; padding: 12px 16px; flex-wrap: wrap; }
+      button { background: #2f5fbf; color: #fff; border: 0; border-radius: 4px; padding: 6px 12px; cursor: pointer; }
+      button:hover { background: #3a6fd6; }
+      label { display: flex; gap: 6px; align-items: center; color: #9aa0aa; }
+      /* The LIC canvas over a white box (so empty = white, like the real view). */
+      #box { position: relative; width: 900px; max-width: calc(100% - 32px); height: 360px; margin: 0 16px; background: #fff; border-radius: 6px; }
+      #box canvas { position: absolute; inset: 0; width: 100%; height: 360px; border-radius: 6px; display: block; }
+      #log { padding: 10px 16px; white-space: pre-wrap; color: #9aa0aa; font-variant-numeric: tabular-nums; }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <button id="reload">Reload flow</button>
+      <button id="colors">Raw colors (no LIC)</button>
+      <button id="lic">LIC</button>
+      <label>passStep <input id="passStep" type="range" min="0.0005" max="0.012" step="0.0005" value="0.003" /><span id="passStepV">0.003</span></label>
+      <label>texRepeat <input id="texRepeat" type="range" min="40" max="800" step="10" value="500" /><span id="texRepeatV">500</span></label>
+    </div>
+    <div id="box"><canvas id="lic-canvas"></canvas></div>
+    <div id="log">loading…</div>
+    <script type="module" src="/src/highlift/lic-debug.ts"></script>
+  </body>
+</html>

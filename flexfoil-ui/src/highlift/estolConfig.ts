@@ -23,18 +23,19 @@ export interface AirfoilCoords {
   lower: V2[];
 }
 
-/** Cove-cutout parameters for the main element (chord-normalized). */
+/**
+ * Cove-cutout parameters for the main element (chord-normalized). The cove
+ * follows the airfoil's own upper and lower surfaces (offset inward by the
+ * blunt-TE thickness) from each cut forward to `coveX`, joined by a vertical back
+ * wall at `coveX` with sharp corners. `coveX` sits forward of both cuts.
+ */
 export interface CoveCutouts {
-  /** x where the lower surface is cut to start the cove. */
+  /** x where the upper surface is cut (the lip). */
+  upperCutX: number;
+  /** x where the lower surface is cut. */
   lowerCutX: number;
-  /** x where the upper surface lip is cut. */
-  upperLipCutX: number;
-  /** Cove vertex (deepest interior corner) x. */
-  coveVertexX: number;
-  /** Cove vertex y. */
-  coveVertexY: number;
-  /** Fillet radius applied at the cove vertex. */
-  coveFilletRadius: number;
+  /** x of the cove back wall (forward of both cuts). */
+  coveX: number;
 }
 
 /** A NACA 4-digit element anchored between an LE and TE point. */
@@ -45,6 +46,41 @@ export interface NacaElementCfg {
   stowedLe: V2;
   /** Stowed trailing-edge anchor (global coordinates). */
   stowedTe: V2;
+}
+
+/**
+ * Flaperon shape, derived from the main airfoil rather than an independent foil.
+ * Aft of `upperCutX` / `lowerCutX` the surfaces are exactly LS(1)-0417 (blunt-
+ * truncated at the TE like the other elements). Forward of the cuts the nose is a
+ * 5-control-point clamped cubic B-spline whose end tangents match the airfoil
+ * slope at each cut: P0 = upper cut, P1 = P0 + noseTangentUpper·tHat(upperCutX),
+ * P2 = noseTip, P3 = P4 + noseTangentLower·tHat(lowerCutX), P4 = lower cut.
+ * Defined in the airfoil (global) frame; deployment is applied on top.
+ */
+/**
+ * Vane shape: a free-form outline (no longer a NACA foil). The outline is a closed
+ * periodic cubic B-spline through 5 control points — the trailing-edge location
+ * `te` plus 4 other `points` (loop order [te, ...points]) — with a blunt TE of the
+ * airfoil's `bluntThickness` cut at `te` (shared with the cove lips and flaperon).
+ */
+export interface VaneShape {
+  /** Trailing-edge location; the blunt TE is cut here. */
+  te: V2;
+  /** The 4 other B-spline control points (with `te`, a 5-point closed loop). */
+  points: V2[];
+}
+
+export interface FlaperonShape {
+  /** Upper-surface cut x; aft of it the upper surface = the airfoil. */
+  upperCutX: number;
+  /** Lower-surface cut x; aft of it the lower surface = the airfoil. */
+  lowerCutX: number;
+  /** P1 distance from the upper cut along the forward airfoil tangent. */
+  noseTangentUpper: number;
+  /** P3 distance from the lower cut along the forward airfoil tangent. */
+  noseTangentLower: number;
+  /** P2, the free middle nose control point (global coordinates). */
+  noseTip: V2;
 }
 
 /**
@@ -62,6 +98,8 @@ export interface TrackConfig {
   linearLength: number;
   /** Signed arc radius (negative curves the track / assembly TE-down). */
   arcRadius: number;
+  /** Maximum deployment (the deploy slider's upper bound), in chord units. */
+  length: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,10 +130,10 @@ export interface FlaperonHinge {
 export interface HighLiftDesign {
   /** Main element cove cutout. */
   cove: CoveCutouts;
-  /** Vane element shape + stowed anchors. */
-  vane: NacaElementCfg;
-  /** Flaperon element shape + stowed anchors. */
-  flaperon: NacaElementCfg;
+  /** Vane shape (free-form B-spline). */
+  vane: VaneShape;
+  /** Flaperon shape, derived from the main airfoil. */
+  flaperon: FlaperonShape;
   /** Flap track shared by the vane + flaperon assembly. */
   track: TrackConfig;
   /** Chord distance between the two track axels. */
@@ -147,20 +185,27 @@ export const DEFAULT_HIGH_LIFT_AIRFOIL: HighLiftAirfoil = {
   },
   design: {
     cove: {
-      lowerCutX: 0.51,
-      upperLipCutX: 0.85,
-      coveVertexX: 0.62,
-      coveVertexY: 0.055,
-      coveFilletRadius: 0.2,
+      upperCutX: 0.83,
+      lowerCutX: 0.7,
+      coveX: 0.55,
     },
-    vane: { naca: '9621', stowedLe: [0.55, -0.048], stowedTe: [0.73, 0.035] },
-    flaperon: { naca: '6311', stowedLe: [0.69, -0.011], stowedTe: [1.0, 0.0] },
-    track: { anchor: [0.675, -0.03], angleDeg: -6.0, linearLength: 0.155, arcRadius: -0.135 },
-    axelSpacing: 0.095,
-    flaperonHinge: { pivot: [0.69, -0.011] },
+    vane: {
+      te: [0.75, 0.05],
+      points: [[0.655, 0.055], [0.555, 0.015], [0.55, -0.08], [0.66, 0.045]],
+    },
+    flaperon: {
+      upperCutX: 0.9,
+      lowerCutX: 0.75,
+      noseTangentUpper: 0.025,
+      noseTangentLower: 0.11,
+      noseTip: [0.715, 0.075],
+    },
+    track: { anchor: [0.675, -0.03], angleDeg: -5.5, linearLength: 0.1, arcRadius: -0.15, length: 0.25 },
+    axelSpacing: 0.135,
+    flaperonHinge: { pivot: [0.775, -0.11] },
   },
   operation: {
-    deploy: 0.12,
+    deploy: 0.0,
     flaperonAngleDeg: 0.0,
   },
 };
