@@ -22,6 +22,7 @@ GET  /api/rans/last-flowfield → most recent solve's flow field (LIC debugging)
 """
 import csv
 import json
+import shutil
 import sys
 import threading
 import time
@@ -69,6 +70,7 @@ def do_run(payload: dict) -> dict:
     with _lock:                                  # one GPU solve at a time
         _counter[0] += 1
         job = RUN_DIR / f"run{_counter[0]}"
+        shutil.rmtree(job, ignore_errors=True)   # a reused dir (counter resets on restart) may hold stale outputs
         job.mkdir(parents=True, exist_ok=True)
         (job / "case.json").write_text(json.dumps(build_case(payload)))
         summary = run(job / "case.json", job / "out", solve=True, fast=True)
@@ -159,6 +161,9 @@ def start_sweep(payload: dict) -> dict:
     _counter[0] += 1
     job_id = f"sweep{_counter[0]}"
     job_dir = RUN_DIR / job_id
+    # The counter resets on restart, so a reused dir can hold a prior run's per-step
+    # slices — _scan would report them as "done" instantly. Start clean.
+    shutil.rmtree(job_dir, ignore_errors=True)
     job_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "case.json").write_text(json.dumps(build_case(payload)))
     n = len(payload["alphas"])
