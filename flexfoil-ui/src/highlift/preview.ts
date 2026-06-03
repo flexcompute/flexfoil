@@ -204,9 +204,11 @@ interface PolarPoint { alpha: number; CL: number; CD: number; flow: FlowMesh | n
 // One polar per operation point (deploy + flap angle), swept over α. They overlay so
 // different deployments can be compared; the design geometry is shared across them.
 interface Polar { deploy: number; flapAngle: number; color: string; points: PolarPoint[]; }
+// `polars` holds the sweeps; `current` is the cursor into them — the one point shown in
+// the LIC and ring-highlighted on the polar. These two are the entire view state: set
+// `current` (or clear polars) and call renderFlow()/drawPolar(); everything follows.
 let polars: Polar[] = [];
-let current: { polar: number; point: number } | null = null;   // point shown in the LIC + highlighted
-let licShown = false;
+let current: { polar: number; point: number } | null = null;
 let ransBusy = false;
 
 const ALPHA_SWEEP = [-2, 0, 2, 4, 6, 8];
@@ -231,17 +233,13 @@ function syncLicCamera(): void {
   licView.setCamera(VIEW.xmin - ox / s, VIEW.xmax + ox / s, VIEW.ymin - oy / s, VIEW.ymax + oy / s);
 }
 
-/** Show (or, with null, clear) a flow field on the LIC overlay. */
-function showFlow(fm: FlowMesh | null): void {
+/** Draw the current point's flow field on the LIC overlay (or clear it if no point is
+ *  selected). `current` alone decides what's shown. */
+function renderFlow(): void {
   syncLicCamera();
-  if (fm) {
-    licView.setFlow(fm);
-    licView.render();
-    licShown = true;
-  } else {
-    licView.clear();
-    licShown = false;
-  }
+  const flow = current && polars[current.polar]?.points[current.point]?.flow;
+  if (flow) { licView.setFlow(flow); licView.render(); }
+  else licView.clear();
 }
 
 function drawPolar(): void {
@@ -269,7 +267,14 @@ function drawPolar(): void {
   });
   Plotly.react('polar', traces, { title: { text: 'CD vs CL (RANS) — click a point', font: { size: 13 } }, ...base },
     { displayModeBar: false, responsive: true });
-  (gd as any).removeAllListeners?.('plotly_click');
+  bindPolarClick(gd);
+}
+
+let polarClickBound = false;
+/** Bind the polar's click handler once (it reads live module state, so it needn't rebind). */
+function bindPolarClick(gd: HTMLElement): void {
+  if (polarClickBound) return;
+  polarClickBound = true;
   (gd as any).on('plotly_click', (ev: any) => {
     const pt = ev.points[0];
     if (pt.curveNumber >= polars.length) return;          // the highlight marker
@@ -280,12 +285,10 @@ function drawPolar(): void {
 /** Click a polar point: show its flow field and move the operation (deploy + flap
  *  angle) to that polar's state, so the airfoil view matches what's shown. */
 function selectPoint(pi: number, ki: number): void {
-  const pl = polars[pi];
-  const p = pl?.points[ki];
-  if (!p) return;
+  if (!polars[pi]?.points[ki]) return;
   current = { polar: pi, point: ki };
-  setOperation(pl.deploy, pl.flapAngle);                  // moves the flap geometry + the sliders
-  showFlow(p.flow);
+  setOperation(polars[pi].deploy, polars[pi].flapAngle);  // moves the flap geometry + the sliders
+  renderFlow();
   drawPolar();                                            // reposition the highlight
 }
 
@@ -347,7 +350,7 @@ async function runRans(): Promise<void> {
       if (polar.points.length > shown) {          // a new α landed → preview + highlight it
         shown = polar.points.length;
         current = { polar: idx, point: shown - 1 };
-        showFlow(polar.points[shown - 1].flow);
+        renderFlow();
       }
       drawPolar();
       if (st.done) {
@@ -369,23 +372,26 @@ async function runRans(): Promise<void> {
 }
 
 /** A design (geometry) change invalidates every polar — they were swept on the old
- *  shape. Drop the polars + the flow overlay so new/old never mix. */
+ *  shape. An operation-only change (deploy / flap angle) keeps the polars (the user can
+ *  run another to overlay it). Either way the shown flow + highlight are now stale. */
 function refresh() {
   render();
   if (ransBusy) return;
-  current = null;
-  if (licShown) showFlow(null);
-  if (polars.length) { polars = []; drawPolar(); }
+  polars = [];
+  invalidateView();
 }
 
-/** An operation-only change (deploy / flap angle) keeps the existing polars — the
- *  user can run another polar to overlay it — but the shown flow field is now stale. */
 function refreshOperation() {
   render();
   if (ransBusy) return;
+  invalidateView();
+}
+
+/** Drop the displayed flow + highlight and repaint. */
+function invalidateView() {
   current = null;
-  if (licShown) showFlow(null);
-  drawPolar();                          // redraw to drop the now-stale highlight
+  renderFlow();
+  drawPolar();
 }
 
 /** Move the operation to a state and reflect it in the two operation sliders. */
@@ -513,5 +519,5 @@ drawPolar();
 // a separate canvas, so it must re-sync its buffer + camera or it desyncs from #view.
 new ResizeObserver(() => {
   render();
-  if (licShown) { syncLicCamera(); licView.render(); }
+  renderFlow();        // re-syncs the LIC buffer/camera (and redraws the current flow, if any)
 }).observe(canvas);
