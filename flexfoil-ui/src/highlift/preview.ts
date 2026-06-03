@@ -447,7 +447,10 @@ document.getElementById('polar-controls')!.append(runBtn, statusEl);
 
 render();
 drawPolar();
-window.addEventListener('resize', () => {
+// Re-render whenever the canvas box actually changes size (window resize, or a layout
+// reflow such as a control pane opening and bringing up the page scrollbar). The LIC is
+// a separate canvas, so it must re-sync its buffer + camera or it desyncs from #view.
+new ResizeObserver(() => {
   render();
   if (licShown) { syncLicCamera(); licView.render(); }
-});
+}).observe(canvas);
