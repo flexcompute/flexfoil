@@ -73,5 +73,4 @@ def extract_flow_mesh(workdir: str | Path, clip: tuple[float, float, float, floa
         "mach": np.round(mach, 5).tolist(),
         "machRange": [float(mach.min()), float(mach.max())],
         "bounds": [float(px.min()), float(px.max()), float(py.min()), float(py.max())],
-        "nPoints": int(len(px)), "nTris": int(len(tris)),
     }

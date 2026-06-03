@@ -8,9 +8,7 @@ interactive shell — it runs the pipeline in that shell context, where the solv
 
 Vite proxies /api/rans → http://localhost:8077 (see flexfoil-ui/vite.config.ts).
 
-POST /api/rans/run     body: { elements:[{name,contour:[[x,y]…]}…], alpha, mesh?, steps? }
-                       resp: { alpha, CL, CD, L_over_D, step, flowField:{…}, wall_s }
-POST /api/rans/sweep   body: { elements, alphas:[…], max_pseudo? }
+POST /api/rans/sweep   body: { elements:[{name,contour:[[x,y]…]}…], alphas:[…], max_pseudo? }
                        resp: { jobId, n }   (starts an unsteady-as-steady sweep job)
 GET  /api/rans/sweep/status?job=ID
                        resp: { points:[{alpha,CL,CD,L_over_D,flowField}], done, error, n }
@@ -67,21 +65,6 @@ def build_case(payload: dict) -> dict:
         "solver": {"max_steps": payload.get("steps", 1000)},
         "fast": True,
     }
-
-
-def do_run(payload: dict) -> dict:
-    with _lock:                                  # one GPU solve at a time
-        _counter[0] += 1
-        job = RUN_DIR / f"run{_counter[0]}"
-        shutil.rmtree(job, ignore_errors=True)   # a reused dir (counter resets on restart) may hold stale outputs
-        job.mkdir(parents=True, exist_ok=True)
-        (job / "case.json").write_text(json.dumps(build_case(payload)))
-        summary = run(job / "case.json", job / "out", solve=True, fast=True)
-    f = summary.get("forces", {})
-    ff = json.loads(Path(summary["flow_field"]).read_text()) if "flow_field" in summary else None
-    return {"alpha": payload.get("alpha", 0.0), "CL": f.get("CL"), "CD": f.get("CD"),
-            "L_over_D": f.get("L_over_D"), "step": f.get("step"),
-            "timing_s": summary.get("timing_s", {}), "flowField": ff}
 
 
 # --- progressive α-sweep (background job) ---
@@ -213,25 +196,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
 
     def do_POST(self) -> None:
-        u = urlparse(self.path)
-        if u.path not in ("/api/rans/run", "/api/rans/sweep"):
+        if urlparse(self.path).path != "/api/rans/sweep":
             self._send(404, {"error": "not found"})
             return
         try:
-            n = int(self.headers.get("Content-Length", 0))
-            payload = json.loads(self.rfile.read(n))
-            if u.path == "/api/rans/sweep":
-                print(f"[rans-server] sweep alphas={payload.get('alphas')} "
-                      f"elements={len(payload.get('elements', []))}", flush=True)
-                self._send(200, start_sweep(payload))
-            else:
-                t = time.time()
-                print(f"[rans-server] run alpha={payload.get('alpha')} "
-                      f"elements={len(payload.get('elements', []))}", flush=True)
-                res = do_run(payload)
-                res["wall_s"] = round(time.time() - t, 1)
-                print(f"[rans-server]   -> CL={res['CL']} CD={res['CD']} ({res['wall_s']}s)", flush=True)
-                self._send(200, res)
+            payload = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+            print(f"[rans-server] sweep alphas={payload.get('alphas')} "
+                  f"elements={len(payload.get('elements', []))}", flush=True)
+            self._send(200, start_sweep(payload))
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
             self._send(500, {"error": str(e)})
@@ -242,5 +214,5 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print(f"[rans-server] listening on http://localhost:{PORT}  "
-          f"(POST /api/rans/run · /api/rans/sweep)", flush=True)
+          f"(POST /api/rans/sweep)", flush=True)
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
