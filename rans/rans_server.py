@@ -42,12 +42,14 @@ _lock = threading.Lock()       # serialize GPU work (one solver at a time)
 _counter = [0]
 _env, _find = make_env(None)   # locate the compute install once
 
-# Accuracy-oriented defaults (overridable per request). vs the old fast-preview
-# (growth 1.4 / hwall 0.02 / farfield r22 n120 ≈ 7.6k cells) this is growth 1.2 /
-# hwall 0.006 / farfield r50 n240 ≈ 48k cells — finer surface + BL gradation + a
-# farther boundary, the level needed for trustworthy CL/CD (~6× slower solve).
-DEFAULT_FARFIELD = {"type": "circle", "center": [0.5, -0.1], "radius": 50, "n": 240}
-DEFAULT_MESH = {"span": 0.1, "nspan": 1, "yplus": 1, "growth": 1.2, "hwall": 0.006, "hmax": 1.5}
+# Mesh-quality presets, chosen per request by `quality`. "fast" ≈ 7.6k cells (~20 s
+# solve) for quick iteration; "accurate" ≈ 48k cells (finer surface + BL gradation +
+# farther boundary, ~6× slower) for trustworthy CL/CD.
+MESH_QUALITY = {
+    "fast":     {"growth": 1.4, "hwall": 0.02,  "hmax": 3.0, "radius": 22, "n": 120, "max_pseudo": 2000},
+    "accurate": {"growth": 1.2, "hwall": 0.006, "hmax": 1.5, "radius": 50, "n": 240, "max_pseudo": 3000},
+}
+DEFAULT_QUALITY = "accurate"
 
 # In-flight / finished sweep jobs: id -> {points, done, error, n}.
 _jobs: dict[str, dict] = {}
@@ -55,14 +57,14 @@ _jobs_lock = threading.Lock()
 
 
 def build_case(payload: dict) -> dict:
-    mesh = {**DEFAULT_MESH, **(payload.get("mesh") or {})}
+    q = MESH_QUALITY[payload.get("quality", DEFAULT_QUALITY)]
     return {
         "elements": payload["elements"],
-        "farfield": {**DEFAULT_FARFIELD, **(payload.get("farfield") or {})},
-        "flow": {"reynolds": payload.get("reynolds", 1.0e7), "mach": payload.get("mach", 0.2),
-                 "alpha_deg": payload.get("alpha", 0.0), "temperature": 288.15},
-        "mesh": mesh,
-        "solver": {"max_steps": payload.get("steps", 1000)},
+        "farfield": {"type": "circle", "center": [0.5, -0.1], "radius": q["radius"], "n": q["n"]},
+        "flow": {"reynolds": 1.0e7, "mach": 0.2, "alpha_deg": 0.0, "temperature": 288.15},
+        "mesh": {"span": 0.1, "nspan": 1, "yplus": 1,
+                 "growth": q["growth"], "hwall": q["hwall"], "hmax": q["hmax"]},
+        "solver": {"max_steps": 1000},
         "fast": True,
     }
 
@@ -109,10 +111,11 @@ def _sweep_worker(job_id: str, payload: dict, job_dir: Path) -> None:
     out = job_dir / "out"
     t0 = time.time()
     try:
+        max_pseudo = MESH_QUALITY[payload.get("quality", DEFAULT_QUALITY)]["max_pseudo"]
         with _lock:                              # serialize the GPU portion
             # mesh + preprocess only → the unsteady+UDD Flow360.json (no solve yet)
             run(job_dir / "case.json", out, solve=False, fast=True, alpha_sweep=alphas,
-                sweep_max_pseudo=int(payload.get("max_pseudo", 3000)))
+                sweep_max_pseudo=max_pseudo)
             _set_job(job_id, stage="solving")
 
             # solve in a thread; append each α as its per-step slice lands

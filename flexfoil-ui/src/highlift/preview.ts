@@ -203,13 +203,14 @@ const licView = new LicView(licCanvas);
 interface PolarPoint { alpha: number; CL: number; CD: number; flow: FlowMesh | null; }
 // One polar per operation point (deploy + flap angle), swept over α. They overlay so
 // different deployments can be compared; the design geometry is shared across them.
-interface Polar { deploy: number; flapAngle: number; color: string; points: PolarPoint[]; }
+interface Polar { deploy: number; flapAngle: number; quality: string; color: string; points: PolarPoint[]; }
 // `polars` holds the sweeps; `current` is the cursor into them — the one point shown in
 // the LIC and ring-highlighted on the polar. These two are the entire view state: set
 // `current` (or clear polars) and call renderFlow()/drawPolar(); everything follows.
 let polars: Polar[] = [];
 let current: { polar: number; point: number } | null = null;
 let ransBusy = false;
+let meshQuality: 'fast' | 'accurate' = 'accurate';   // mesh refinement for the next sweep
 
 const ALPHA_SWEEP = [-2, 0, 2, 4, 6, 8];
 const POLAR_COLORS = ['#1f3a68', '#9c3d1a', '#2c6b2c', '#7a4fc0', '#b8860b', '#1b8a8a'];
@@ -255,7 +256,7 @@ function drawPolar(): void {
   }
   const traces: any[] = polars.map((pl) => ({
     x: pl.points.map((p) => p.CD), y: pl.points.map((p) => p.CL),
-    name: `d=${pl.deploy.toFixed(2)} δ=${pl.flapAngle.toFixed(0)}°`,
+    name: `d=${pl.deploy.toFixed(2)} δ=${pl.flapAngle.toFixed(0)}° ${pl.quality[0]}`,
     text: pl.points.map((p) => `α=${p.alpha}°`), mode: 'lines+markers',
     line: { color: pl.color }, marker: { size: 8, color: pl.color },
     hovertemplate: '%{fullData.name}<br>%{text}<br>CD=%{x:.4f}  CL=%{y:.3f}<extra></extra>',
@@ -315,10 +316,12 @@ async function runRans(): Promise<void> {
   // an existing polar at the same operation, else add a new (differently-coloured) one.
   const deploy = op.deploy;
   const flapAngle = op.flaperonAngleDeg;
-  const key = (d: number, f: number) => `${d.toFixed(3)}|${f.toFixed(1)}`;
-  let idx = polars.findIndex((pl) => key(pl.deploy, pl.flapAngle) === key(deploy, flapAngle));
+  const quality = meshQuality;
+  const key = (pl: { deploy: number; flapAngle: number; quality: string }) =>
+    `${pl.deploy.toFixed(3)}|${pl.flapAngle.toFixed(1)}|${pl.quality}`;
+  let idx = polars.findIndex((pl) => key(pl) === key({ deploy, flapAngle, quality }));
   const color = idx >= 0 ? polars[idx].color : POLAR_COLORS[polars.length % POLAR_COLORS.length];
-  const polar: Polar = { deploy, flapAngle, color, points: [] };
+  const polar: Polar = { deploy, flapAngle, quality, color, points: [] };
   if (idx >= 0) polars[idx] = polar; else { idx = polars.length; polars.push(polar); }
   current = null;
   drawPolar();
@@ -328,7 +331,7 @@ async function runRans(): Promise<void> {
   try {
     const start = await fetch('/api/rans/sweep', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ elements, alphas: ALPHA_SWEEP }),
+      body: JSON.stringify({ elements, alphas: ALPHA_SWEEP, quality }),
     }).then((r) => r.json());
     if (start.error) throw new Error(start.error);
     const { jobId, n } = start;
@@ -507,10 +510,16 @@ runBtn.id = 'run-rans';
 runBtn.className = 'run-rans';
 runBtn.textContent = `Run RANS (α sweep: ${ALPHA_SWEEP[0]}…${ALPHA_SWEEP[ALPHA_SWEEP.length - 1]}°)`;
 runBtn.onclick = runRans;
+// Mesh quality for the next sweep: accurate (~48k cells) or fast preview (~7.6k).
+const qualitySel = document.createElement('select');
+qualitySel.className = 'rans-quality';
+qualitySel.innerHTML = '<option value="accurate">accurate mesh</option><option value="fast">fast mesh</option>';
+qualitySel.value = meshQuality;
+qualitySel.onchange = () => { meshQuality = qualitySel.value as 'fast' | 'accurate'; };
 const statusEl = document.createElement('div');
 statusEl.id = 'rans-status';
 statusEl.className = 'rans-status';
-document.getElementById('polar-controls')!.append(runBtn, statusEl);
+document.getElementById('polar-controls')!.append(runBtn, qualitySel, statusEl);
 
 render();
 drawPolar();
