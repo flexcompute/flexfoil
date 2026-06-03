@@ -185,8 +185,8 @@ export const DEFAULT_HIGH_LIFT_AIRFOIL: HighLiftAirfoil = {
   },
   design: {
     cove: {
-      upperCutX: 0.83,
-      lowerCutX: 0.7,
+      upperCutX: 0.8,
+      lowerCutX: 0.68,
       coveX: 0.55,
     },
     vane: {
@@ -202,7 +202,7 @@ export const DEFAULT_HIGH_LIFT_AIRFOIL: HighLiftAirfoil = {
     },
     track: { anchor: [0.675, -0.03], angleDeg: -5.5, linearLength: 0.1, arcRadius: -0.15, length: 0.25 },
     axelSpacing: 0.135,
-    flaperonHinge: { pivot: [0.775, -0.11] },
+    flaperonHinge: { pivot: [0.76, -0.02] },
   },
   operation: {
     deploy: 0.0,

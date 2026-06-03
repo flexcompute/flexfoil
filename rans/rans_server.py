@@ -44,9 +44,12 @@ _lock = threading.Lock()       # serialize GPU work (one solver at a time)
 _counter = [0]
 _env, _find = make_env(None)   # locate the compute install once
 
-# Coarse, fast-preview defaults (overridable per request).
-DEFAULT_FARFIELD = {"type": "circle", "center": [0.5, -0.1], "radius": 22, "n": 120}
-DEFAULT_MESH = {"span": 0.1, "nspan": 1, "yplus": 1, "growth": 1.4, "hwall": 0.02, "hmax": 3.0}
+# Accuracy-oriented defaults (overridable per request). vs the old fast-preview
+# (growth 1.4 / hwall 0.02 / farfield r22 n120 ≈ 7.6k cells) this is growth 1.2 /
+# hwall 0.006 / farfield r50 n240 ≈ 48k cells — finer surface + BL gradation + a
+# farther boundary, the level needed for trustworthy CL/CD (~6× slower solve).
+DEFAULT_FARFIELD = {"type": "circle", "center": [0.5, -0.1], "radius": 50, "n": 240}
+DEFAULT_MESH = {"span": 0.1, "nspan": 1, "yplus": 1, "growth": 1.2, "hwall": 0.006, "hmax": 1.5}
 
 # In-flight / finished sweep jobs: id -> {points, done, error, n}.
 _jobs: dict[str, dict] = {}

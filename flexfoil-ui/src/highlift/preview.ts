@@ -1,12 +1,12 @@
 /**
  * Standalone interactive high-lift design tool (geometry + RANS flow field).
  *
- * Vanilla TS, served by Vite at /highlift-preview.html. Deployment is a single
- * slider along the flap track (1-DOF); the other sliders shape the track, cove,
- * vane and flaperon. Geometry drawing is live. Aero comes from the RANS bridge
- * (rans_server.py): "Run RANS" sweeps α and plots a clickable CD–CL polar; the
- * selected point's center-span flow field is drawn as a two-pass LIC overlay
- * (see lic.ts) behind the airfoil canvas.
+ * Vanilla TS, served by Vite at /highlift-preview.html. The operation is a deploy
+ * slider along the flap track (1-DOF) + a flap angle; the other sliders shape the
+ * track, cove, vane and flaperon. Geometry drawing is live. Aero comes from the RANS
+ * bridge (rans_server.py): "Run RANS" sweeps α and plots a clickable CD–CL polar (one
+ * per operation, overlaid); the selected point's center-span flow field is drawn as a
+ * two-pass LIC overlay (see lic.ts) behind the airfoil canvas.
  */
 
 // Prebuilt browser bundle (self-contained) — the plotly.js source entry pulls
@@ -201,11 +201,16 @@ const licCanvas = document.getElementById('view-lic') as HTMLCanvasElement;
 const licView = new LicView(licCanvas);
 
 interface PolarPoint { alpha: number; CL: number; CD: number; flow: FlowMesh | null; }
-let polarPts: PolarPoint[] = [];
+// One polar per operation point (deploy + flap angle), swept over α. They overlay so
+// different deployments can be compared; the design geometry is shared across them.
+interface Polar { deploy: number; flapAngle: number; color: string; points: PolarPoint[]; }
+let polars: Polar[] = [];
+let current: { polar: number; point: number } | null = null;   // point shown in the LIC + highlighted
 let licShown = false;
 let ransBusy = false;
 
 const ALPHA_SWEEP = [-2, 0, 2, 4, 6, 8];
+const POLAR_COLORS = ['#1f3a68', '#9c3d1a', '#2c6b2c', '#7a4fc0', '#b8860b', '#1b8a8a'];
 
 function setStatus(msg: string): void {
   document.getElementById('rans-status')!.textContent = msg;
@@ -241,26 +246,47 @@ function showFlow(fm: FlowMesh | null): void {
 
 function drawPolar(): void {
   const gd = document.getElementById('polar')!;
-  const base = { xaxis: { title: 'CD' }, yaxis: { title: 'CL' }, margin: { t: 30, r: 10, b: 40, l: 52 } };
-  if (!polarPts.length) {
+  const base = {
+    xaxis: { title: 'CD' }, yaxis: { title: 'CL' }, margin: { t: 30, r: 10, b: 56, l: 52 },
+    legend: { orientation: 'h', y: -0.2, font: { size: 11 } },
+  };
+  if (!polars.length) {
     Plotly.react('polar', [], { title: { text: 'CD vs CL (RANS) — click “Run RANS”', font: { size: 13 } }, ...base },
       { displayModeBar: false, responsive: true });
     return;
   }
-  const trace = {
-    x: polarPts.map((p) => p.CD), y: polarPts.map((p) => p.CL),
-    text: polarPts.map((p) => `α=${p.alpha}°`), mode: 'lines+markers',
-    line: { color: '#1f3a68' }, marker: { size: 9, color: '#1f3a68' },
-    hovertemplate: '%{text}<br>CD=%{x:.4f}<br>CL=%{y:.3f}<extra></extra>',
-  };
-  Plotly.react('polar', [trace], { title: { text: 'CD vs CL (RANS) — click a point', font: { size: 13 } }, ...base },
+  const traces: any[] = polars.map((pl) => ({
+    x: pl.points.map((p) => p.CD), y: pl.points.map((p) => p.CL),
+    name: `d=${pl.deploy.toFixed(2)} δ=${pl.flapAngle.toFixed(0)}°`,
+    text: pl.points.map((p) => `α=${p.alpha}°`), mode: 'lines+markers',
+    line: { color: pl.color }, marker: { size: 8, color: pl.color },
+    hovertemplate: '%{fullData.name}<br>%{text}<br>CD=%{x:.4f}  CL=%{y:.3f}<extra></extra>',
+  }));
+  const cur = current && polars[current.polar]?.points[current.point];
+  if (cur) traces.push({                                  // ring on the point shown in the LIC
+    x: [cur.CD], y: [cur.CL], mode: 'markers', showlegend: false, hoverinfo: 'skip',
+    marker: { size: 16, symbol: 'circle-open', color: '#111', line: { width: 3 } },
+  });
+  Plotly.react('polar', traces, { title: { text: 'CD vs CL (RANS) — click a point', font: { size: 13 } }, ...base },
     { displayModeBar: false, responsive: true });
   (gd as any).removeAllListeners?.('plotly_click');
   (gd as any).on('plotly_click', (ev: any) => {
     const pt = ev.points[0];
-    const i = pt.pointNumber ?? pt.pointIndex ?? 0;
-    if (polarPts[i]) showFlow(polarPts[i].flow);
+    if (pt.curveNumber >= polars.length) return;          // the highlight marker
+    selectPoint(pt.curveNumber, pt.pointNumber ?? pt.pointIndex ?? 0);
   });
+}
+
+/** Click a polar point: show its flow field and move the operation (deploy + flap
+ *  angle) to that polar's state, so the airfoil view matches what's shown. */
+function selectPoint(pi: number, ki: number): void {
+  const pl = polars[pi];
+  const p = pl?.points[ki];
+  if (!p) return;
+  current = { polar: pi, point: ki };
+  setOperation(pl.deploy, pl.flapAngle);                  // moves the flap geometry + the sliders
+  showFlow(p.flow);
+  drawPolar();                                            // reposition the highlight
 }
 
 /** The deployed configuration as the rans bridge's element list ([[x,y]…] contours). */
@@ -282,11 +308,19 @@ async function runRans(): Promise<void> {
   btn.disabled = true;
   document.getElementById('polar')!.classList.add('busy');
   const elements = ransElements();
-  polarPts = [];
+  // A polar is one operation point (current deploy + flap angle) swept over α. Replace
+  // an existing polar at the same operation, else add a new (differently-coloured) one.
+  const deploy = op.deploy;
+  const flapAngle = op.flaperonAngleDeg;
+  const key = (d: number, f: number) => `${d.toFixed(3)}|${f.toFixed(1)}`;
+  let idx = polars.findIndex((pl) => key(pl.deploy, pl.flapAngle) === key(deploy, flapAngle));
+  const color = idx >= 0 ? polars[idx].color : POLAR_COLORS[polars.length % POLAR_COLORS.length];
+  const polar: Polar = { deploy, flapAngle, color, points: [] };
+  if (idx >= 0) polars[idx] = polar; else { idx = polars.length; polars.push(polar); }
+  current = null;
   drawPolar();
-  // One unsteady-as-steady run marches through every α (warm-started). The points
-  // stream back as each physical step converges, so the polar fills in live — and if a
-  // late α stalls/diverges, the converged points still show.
+  // One unsteady-as-steady run marches through every α (warm-started); points stream
+  // back as each physical step converges, so the polar fills in live.
   setStatus(`Starting RANS α sweep (${ALPHA_SWEEP.length} points, one run)…`);
   try {
     const start = await fetch('/api/rans/sweep', {
@@ -307,21 +341,22 @@ async function runRans(): Promise<void> {
         continue;
       }
       fails = 0;
-      polarPts = (st.points ?? []).map((p: any) => ({
+      polar.points = (st.points ?? []).map((p: any) => ({
         alpha: p.alpha, CL: p.CL, CD: p.CD, flow: p.flowField ?? null,
       }));
-      drawPolar();
-      if (polarPts.length > shown) {              // a new α landed → preview its field
-        shown = polarPts.length;
-        showFlow(polarPts[shown - 1].flow);
+      if (polar.points.length > shown) {          // a new α landed → preview + highlight it
+        shown = polar.points.length;
+        current = { polar: idx, point: shown - 1 };
+        showFlow(polar.points[shown - 1].flow);
       }
+      drawPolar();
       if (st.done) {
         setStatus(st.error
-          ? `${st.error} — ${polarPts.length} converged point(s) shown.`
-          : `Done — ${polarPts.length} points. Click a polar point to view its flow field.`);
+          ? `${st.error} — ${polar.points.length} converged point(s) shown.`
+          : `Done — ${polar.points.length} points. Click any polar point to view its flow field.`);
         break;
       }
-      const stage = polarPts.length ? `${polarPts.length}/${n} α` : (st.stage ?? 'meshing…');
+      const stage = polar.points.length ? `${polar.points.length}/${n} α` : (st.stage ?? 'meshing…');
       setStatus(`Running RANS sweep — ${stage}`);
     }
   } catch (err) {
@@ -333,14 +368,38 @@ async function runRans(): Promise<void> {
   }
 }
 
+/** A design (geometry) change invalidates every polar — they were swept on the old
+ *  shape. Drop the polars + the flow overlay so new/old never mix. */
 function refresh() {
   render();
-  // Geometry changed ⇒ the last RANS results no longer match what's drawn. Drop BOTH
-  // the flow-field overlay and the polar so new/old never mix on screen — the user
-  // re-runs "Run RANS" for the new geometry. (Ignored while a run is streaming.)
   if (ransBusy) return;
+  current = null;
   if (licShown) showFlow(null);
-  if (polarPts.length) { polarPts = []; drawPolar(); }
+  if (polars.length) { polars = []; drawPolar(); }
+}
+
+/** An operation-only change (deploy / flap angle) keeps the existing polars — the
+ *  user can run another polar to overlay it — but the shown flow field is now stale. */
+function refreshOperation() {
+  render();
+  if (ransBusy) return;
+  current = null;
+  if (licShown) showFlow(null);
+  drawPolar();                          // redraw to drop the now-stale highlight
+}
+
+/** Move the operation to a state and reflect it in the two operation sliders. */
+function setOperation(deploy: number, flapAngle: number): void {
+  op.deploy = deploy;
+  op.flaperonAngleDeg = flapAngle;
+  syncSlider(deployRow, deploy, 3);
+  syncSlider(flapRow, flapAngle, 1);
+  render();
+}
+
+function syncSlider(row: HTMLElement, value: number, dp: number): void {
+  (row.querySelector('input') as HTMLInputElement).value = String(value);
+  (row.querySelector('.val') as HTMLElement).textContent = value.toFixed(dp);
 }
 
 // --- geometry controls, grouped by the 3-level hierarchy ---
@@ -376,9 +435,11 @@ const vanePane = section('Vane shape',
 );
 vanePane.addEventListener('toggle', render);
 
-// Deploy slider: its max is the track `length` (the max deployment); kept in sync
-// when the length slider moves.
-const deployRow = slider('deploy', 0, tr.length, 0.005, () => op.deploy, (val) => (op.deploy = val));
+// Operation sliders (deploy + flap angle) use refreshOperation: changing them keeps
+// the existing polars (so a new one can overlay) rather than clearing like a design edit.
+// Deploy's max is the track `length`, kept in sync when the length slider moves.
+const deployRow = slider('deploy', 0, tr.length, 0.005, () => op.deploy, (val) => (op.deploy = val), refreshOperation);
+const flapRow = slider('flaperon angle°', -60, 30, 0.5, () => op.flaperonAngleDeg, (v) => (op.flaperonAngleDeg = v), refreshOperation);
 const deployInput = deployRow.querySelector('input') as HTMLInputElement;
 const deployVal = deployRow.querySelector('.val') as HTMLElement;
 function setDeployMax(maxv: number): void {
@@ -427,10 +488,10 @@ document.getElementById('controls')!.append(
     trackPane,
     hingePane,
   ),
-  // ── Level 3: deployment & flaperon angle (operating point) ──
-  section('③ Deployment',
+  // ── Level 3: operation — deploy & flaperon angle (operating point) ──
+  section('③ Operation',
     deployRow,
-    slider('flaperon angle°', -60, 30, 0.5, () => op.flaperonAngleDeg, (v) => (op.flaperonAngleDeg = v)),
+    flapRow,
   ),
 );
 
