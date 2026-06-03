@@ -106,15 +106,19 @@ function naturalCubicSpline(xs: number[], ys: number[]): (x: number) => number {
   };
 }
 
-/** Resample a y(x) surface onto `n` cosine-clustered (dense at LE/TE) spline points. */
+/** Resample a surface onto `n` cosine-clustered points via a PARAMETRIC (arc-length)
+ *  cubic spline x(t), y(t). Parameterizing by chord length — not x — keeps the
+ *  near-vertical leading-edge tangent smooth (a y(x) spline kinks there). Cosine
+ *  clustering puts the points where curvature is highest (the LE and TE). */
 function densifySurface(pts: V2[], n: number): V2[] {
-  const xs = pts.map((p) => p[0]);
-  const f = naturalCubicSpline(xs, pts.map((p) => p[1]));
-  const x0 = xs[0];
-  const x1 = xs[xs.length - 1];
+  const t = [0];
+  for (let i = 1; i < pts.length; i++) t.push(t[i - 1] + norm(sub(pts[i], pts[i - 1])));
+  const fx = naturalCubicSpline(t, pts.map((p) => p[0]));
+  const fy = naturalCubicSpline(t, pts.map((p) => p[1]));
+  const tEnd = t[t.length - 1];
   return linspace(0, Math.PI, n).map((beta) => {
-    const x = x0 + (x1 - x0) * 0.5 * (1 - Math.cos(beta));
-    return [x, f(x)] as V2;
+    const s = tEnd * 0.5 * (1 - Math.cos(beta));
+    return [fx(s), fy(s)] as V2;
   });
 }
 
