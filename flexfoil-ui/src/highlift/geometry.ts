@@ -77,6 +77,57 @@ export function toPoints(contour: V2[]): { x: number; y: number }[] {
   return contour.map(([x, y]) => ({ x, y }));
 }
 
+/** Natural cubic spline through ascending samples `(xs, ys)`; returns an evaluator. */
+function naturalCubicSpline(xs: number[], ys: number[]): (x: number) => number {
+  const n = xs.length;
+  const h = xs.slice(1).map((x, i) => x - xs[i]);
+  const l = new Array(n).fill(1);
+  const mu = new Array(n).fill(0);
+  const z = new Array(n).fill(0);
+  for (let i = 1; i < n - 1; i++) {
+    const a = (3 / h[i]) * (ys[i + 1] - ys[i]) - (3 / h[i - 1]) * (ys[i] - ys[i - 1]);
+    l[i] = 2 * (xs[i + 1] - xs[i - 1]) - h[i - 1] * mu[i - 1];
+    mu[i] = h[i] / l[i];
+    z[i] = (a - h[i - 1] * z[i - 1]) / l[i];
+  }
+  const c = new Array(n).fill(0);
+  const b = new Array(n).fill(0);
+  const d = new Array(n).fill(0);
+  for (let j = n - 2; j >= 0; j--) {
+    c[j] = z[j] - mu[j] * c[j + 1];
+    b[j] = (ys[j + 1] - ys[j]) / h[j] - (h[j] * (c[j + 1] + 2 * c[j])) / 3;
+    d[j] = (c[j + 1] - c[j]) / (3 * h[j]);
+  }
+  return (x) => {
+    let i = n - 2;
+    while (i > 0 && x < xs[i]) i--;
+    const t = x - xs[i];
+    return ys[i] + t * (b[i] + t * (c[i] + t * d[i]));
+  };
+}
+
+/** Resample a y(x) surface onto `n` cosine-clustered (dense at LE/TE) spline points. */
+function densifySurface(pts: V2[], n: number): V2[] {
+  const xs = pts.map((p) => p[0]);
+  const f = naturalCubicSpline(xs, pts.map((p) => p[1]));
+  const x0 = xs[0];
+  const x1 = xs[xs.length - 1];
+  return linspace(0, Math.PI, n).map((beta) => {
+    const x = x0 + (x1 - x0) * 0.5 * (1 - Math.cos(beta));
+    return [x, f(x)] as V2;
+  });
+}
+
+/**
+ * Spline-smooth a tabulated airfoil onto a dense, cosine-clustered surface. The raw
+ * tables are coarse (LS(1)-0417 is 25 points/surface, ~0.05c apart mid-chord); drawn
+ * or meshed as straight segments they facet the surface, which inflates RANS drag.
+ * Densifying once feeds both the rendered contour and the RANS mesh boundary.
+ */
+export function densifyAirfoil(c: AirfoilCoords, n = 160): AirfoilCoords {
+  return { upper: densifySurface(c.upper, n), lower: densifySurface(c.lower, n) };
+}
+
 // ---------------------------------------------------------------------------
 // NACA 4-digit airfoil (unit chord, LE at origin, TE near (1,0))
 // ---------------------------------------------------------------------------
@@ -458,10 +509,13 @@ export interface Configuration {
  */
 export function buildConfiguration(cfg: HighLiftAirfoil): Configuration {
   const { main: m, design: d, operation: op } = cfg;
+  // Spline-smooth the coarse table once; the main + flaperon-aft surfaces (and so the
+  // rendered contour and the RANS mesh boundary) follow the smooth curve, not facets.
+  const coords = densifyAirfoil(m.coords);
   const sLead = d.axelSpacing + op.deploy;
-  const main = buildMainWing(m.coords, d.cove, m.bluntThickness);
+  const main = buildMainWing(coords, d.cove, m.bluntThickness);
   const vaneFlat = buildVane(d.vane, m.bluntThickness);
-  const flaperonFlat = buildFlaperon(m.coords, d.flaperon, m.bluntThickness);
+  const flaperonFlat = buildFlaperon(coords, d.flaperon, m.bluntThickness);
   const move = trackMotion(d.track, d.axelSpacing, sLead);
   const pivot = d.flaperonHinge.pivot;
   const angleRad = (op.flaperonAngleDeg * Math.PI) / 180.0;
@@ -472,6 +526,6 @@ export function buildConfiguration(cfg: HighLiftAirfoil): Configuration {
     vaneControls: vaneControlPoints(d.vane).map(move),
     flaperon: deploy(flaperonFlat),
     flaperonPivot: move(pivot),
-    flaperonControls: deploy(flaperonControlPoints(m.coords, d.flaperon)),
+    flaperonControls: deploy(flaperonControlPoints(coords, d.flaperon)),
   };
 }
