@@ -149,6 +149,10 @@ enum Commands {
         /// Angle of attack step (degrees)
         #[arg(long, default_value = "1.0")]
         alpha_step: f64,
+
+        /// XFOIL-style flap "hinge_x_frac:hinge_y_frac:deflection_deg" (e.g. 0.72:0.5:12)
+        #[arg(long)]
+        flap: Option<String>,
     },
 
     /// Repanel an airfoil using cosine spacing
@@ -326,6 +330,10 @@ struct FaithfulPolarCmd {
 
     #[arg(long)]
     parallel: bool,
+
+    /// XFOIL-style flap "hinge_x_frac:hinge_y_frac:deflection_deg"
+    #[arg(long)]
+    flap: Option<String>,
 }
 
 fn main() {
@@ -348,7 +356,8 @@ fn main() {
             alpha_start,
             alpha_end,
             alpha_step,
-        } => run_polar(&file, alpha_start, alpha_end, alpha_step),
+            flap,
+        } => run_polar(&file, alpha_start, alpha_end, alpha_step, flap),
         Commands::Repanel {
             file,
             panels,
@@ -508,8 +517,17 @@ fn run_polar(
     alpha_start: f64,
     alpha_end: f64,
     alpha_step: f64,
+    flap: Option<String>,
 ) -> Result<(), CliError> {
-    let (name, points) = load_airfoil(file)?;
+    let (name, mut points) = load_airfoil(file)?;
+    if let Some(spec) = flap.as_ref() {
+        if let Some(parts) = parse_flap_spec(spec) {
+            points = rustfoil_core::flap::xfoil_flap(&points, parts[0], parts[1], parts[2]);
+            eprintln!("# applied XFOIL flap hinge_x={} hinge_y={} defl={} deg", parts[0], parts[1], parts[2]);
+        } else {
+            eprintln!("# WARN: bad --flap '{}' (need hinge_x:hinge_y:deflection); ignoring", spec);
+        }
+    }
     let body = Body::from_points(&name, &points)?;
 
     println!("Polar for: {}", name);
@@ -539,6 +557,19 @@ fn run_polar(
     }
 
     Ok(())
+}
+
+fn parse_flap_spec(spec: &str) -> Option<[f64; 3]> {
+    let fields: Vec<&str> = spec.split(':').collect();
+    if fields.len() != 3 {
+        return None;
+    }
+
+    Some([
+        fields[0].parse().ok()?,
+        fields[1].parse().ok()?,
+        fields[2].parse().ok()?,
+    ])
 }
 
 fn run_repanel(file: &PathBuf, n_panels: usize, output: Option<PathBuf>) -> Result<(), CliError> {
@@ -1023,14 +1054,23 @@ fn build_body_for_faithful(
     no_repanel: bool,
 ) -> Result<(String, Body), CliError> {
     let (name, points) = load_airfoil(file)?;
+    build_body_for_faithful_points(&name, points, panels, no_repanel)
+}
+
+fn build_body_for_faithful_points(
+    name: &str,
+    points: Vec<Point>,
+    panels: usize,
+    no_repanel: bool,
+) -> Result<(String, Body), CliError> {
     let final_points = if no_repanel {
         points
     } else {
         let spline = CubicSpline::from_points(&points)?;
         spline.resample_xfoil(panels, &PanelingParams::default())
     };
-    let body = Body::from_points(&name, &final_points)?;
-    Ok((name, body))
+    let body = Body::from_points(name, &final_points)?;
+    Ok((name.to_string(), body))
 }
 
 fn run_faithful_viscous(cmd: FaithfulViscousCmd) -> Result<(), CliError> {
@@ -1097,7 +1137,19 @@ fn run_faithful_viscous(cmd: FaithfulViscousCmd) -> Result<(), CliError> {
 }
 
 fn run_faithful_polar(cmd: FaithfulPolarCmd) -> Result<(), CliError> {
-    let (name, body) = build_body_for_faithful(&cmd.file, cmd.panels, false)?;
+    let (name, body) = if let Some(spec) = cmd.flap.as_ref() {
+        if let Some(parts) = parse_flap_spec(spec) {
+            let (_n, pts) = load_airfoil(&cmd.file)?;
+            let flapped = rustfoil_core::flap::xfoil_flap(&pts, parts[0], parts[1], parts[2]);
+            eprintln!("# applied XFOIL flap {}", spec);
+            build_body_for_faithful_points("flapped", flapped, cmd.panels, false)?
+        } else {
+            eprintln!("# WARN: bad --flap '{}' (need hinge_x:hinge_y:deflection); ignoring", spec);
+            build_body_for_faithful(&cmd.file, cmd.panels, false)?
+        }
+    } else {
+        build_body_for_faithful(&cmd.file, cmd.panels, false)?
+    };
     let options = XfoilOptions {
         reynolds: cmd.re,
         mach: cmd.mach,
