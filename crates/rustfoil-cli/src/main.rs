@@ -149,6 +149,10 @@ enum Commands {
         /// Angle of attack step (degrees)
         #[arg(long, default_value = "1.0")]
         alpha_step: f64,
+
+        /// XFOIL-style flap "hinge_x_frac:hinge_y_frac:deflection_deg" (e.g. 0.72:0.5:12)
+        #[arg(long)]
+        flap: Option<String>,
     },
 
     /// Repanel an airfoil using cosine spacing
@@ -326,6 +330,10 @@ struct FaithfulPolarCmd {
 
     #[arg(long)]
     parallel: bool,
+
+    /// XFOIL-style flap "hinge_x_frac:hinge_y_frac:deflection_deg"
+    #[arg(long)]
+    flap: Option<String>,
 }
 
 fn main() {
@@ -348,7 +356,8 @@ fn main() {
             alpha_start,
             alpha_end,
             alpha_step,
-        } => run_polar(&file, alpha_start, alpha_end, alpha_step),
+            flap,
+        } => run_polar(&file, alpha_start, alpha_end, alpha_step, flap),
         Commands::Repanel {
             file,
             panels,
@@ -508,8 +517,18 @@ fn run_polar(
     alpha_start: f64,
     alpha_end: f64,
     alpha_step: f64,
+    flap: Option<String>,
 ) -> Result<(), CliError> {
-    let (name, points) = load_airfoil(file)?;
+    let (name, mut points) = load_airfoil(file)?;
+    if let Some(spec) = flap.as_ref() {
+        let parts: Vec<f64> = spec.split(':').filter_map(|s| s.parse().ok()).collect();
+        if parts.len() == 3 {
+            points = rustfoil_core::flap::xfoil_flap(&points, parts[0], parts[1], parts[2]);
+            eprintln!("# applied XFOIL flap hinge_x={} hinge_y={} defl={} deg", parts[0], parts[1], parts[2]);
+        } else {
+            eprintln!("# WARN: bad --flap '{}' (need hinge_x:hinge_y:deflection); ignoring", spec);
+        }
+    }
     let body = Body::from_points(&name, &points)?;
 
     println!("Polar for: {}", name);
@@ -1097,7 +1116,23 @@ fn run_faithful_viscous(cmd: FaithfulViscousCmd) -> Result<(), CliError> {
 }
 
 fn run_faithful_polar(cmd: FaithfulPolarCmd) -> Result<(), CliError> {
-    let (name, body) = build_body_for_faithful(&cmd.file, cmd.panels, false)?;
+    let mut src = cmd.file.clone();
+    if let Some(spec) = cmd.flap.as_ref() {
+        let parts: Vec<f64> = spec.split(':').filter_map(|s| s.parse().ok()).collect();
+        if parts.len() == 3 {
+            let (_n, pts) = load_airfoil(&cmd.file)?;
+            let flapped = rustfoil_core::flap::xfoil_flap(&pts, parts[0], parts[1], parts[2]);
+            let tmp = std::env::temp_dir().join("rustfoil_flapped.dat");
+            let mut s = String::from("flapped\n");
+            for p in &flapped {
+                s.push_str(&format!("{:.6} {:.6}\n", p.x, p.y));
+            }
+            std::fs::write(&tmp, s).map_err(|e| CliError::Parse { line: 0, message: format!("write temp: {}", e) })?;
+            eprintln!("# applied XFOIL flap {}", spec);
+            src = tmp;
+        }
+    }
+    let (name, body) = build_body_for_faithful(&src, cmd.panels, false)?;
     let options = XfoilOptions {
         reynolds: cmd.re,
         mach: cmd.mach,
