@@ -49,6 +49,14 @@ export function initAnalyticsConsent() {
   }
 }
 
+/**
+ * Send a custom GA4 event. Consent Mode gates delivery, so callers do not need
+ * to check consent first. gtag is absent when the tag is blocked, hence optional.
+ */
+export function trackEvent(name: string, params?: Record<string, string | number | boolean>) {
+  window.gtag?.('event', name, params);
+}
+
 declare global {
   interface Window {
     gtag?: (...args: unknown[]) => void;
