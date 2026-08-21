@@ -1,11 +1,16 @@
 """Tests for placement-aware geometry hashing (the run-cache key).
 
 The hash keys ``runs.idx_cache_key``, so a collision between two different
-geometries is a silently wrong answer. These tests pin (a) backward
-compatibility with the coordinate-only digest that existing local databases
-are keyed on, and (b) the exact element/placement encoding, which must stay
-byte-for-byte identical to the browser implementation in
-``flexfoil-ui/src/lib/airfoilHash.ts``.
+geometries returns the wrong answer for one of them. These tests pin
+
+* backward compatibility with the coordinate-only digest that existing local
+  databases are keyed on (the frozen legacy digest, which is deliberately not
+  comparable with the browser's legacy digest — see the module notes in
+  ``src/flexfoil/airfoil.py``), and
+* the shared assembly digest, whose exact hex literals also appear in
+  ``flexfoil-ui/src/lib/airfoilHash.test.ts``. Those literals are the
+  cross-language contract: if either implementation's canonicalisation drifts,
+  one of the two suites fails.
 """
 
 from __future__ import annotations
@@ -71,28 +76,36 @@ GeometryElement = _mod.GeometryElement
 Placement = _mod.Placement
 canonical_geometry = _mod.canonical_geometry
 geometry_hash = _mod.geometry_hash
+is_legacy_single_element = _mod.is_legacy_single_element
+shared_canonical_geometry = _mod.shared_canonical_geometry
 
 
 # ---------------------------------------------------------------------------
-# Shared cross-language fixture.
+# Shared cross-language fixtures.
 #
-# The identical fixture and the identical expected canonical strings appear in
-# flexfoil-ui/src/lib/airfoilHash.test.ts. If either side's canonicalisation
-# drifts, one of the two pinned strings stops matching.
+# The identical fixtures, canonical strings and digest literals appear in
+# flexfoil-ui/src/lib/airfoilHash.test.ts.
 # ---------------------------------------------------------------------------
 
 MAIN = [(0.0, 0.0), (1.0, 0.0), (0.5, 0.06), (0.25, -0.03)]
 FLAP = [(0.8, 0.0), (1.2, 0.0), (1.0, 0.02)]
 
-MAIN_COORDS = (
+# Legacy encoding joins nodes with "|"; the shared encoding joins them with ";"
+# (which happens to be what the browser's frozen legacy encoding also uses).
+MAIN_LEGACY_COORDS = (
     "0.00000000,0.00000000|1.00000000,0.00000000|"
     "0.50000000,0.06000000|0.25000000,-0.03000000"
 )
-FLAP_COORDS = "0.80000000,0.00000000|1.20000000,0.00000000|1.00000000,0.02000000"
+MAIN_SHARED_COORDS = (
+    "0.00000000,0.00000000;1.00000000,0.00000000;"
+    "0.50000000,0.06000000;0.25000000,-0.03000000"
+)
+FLAP_SHARED_COORDS = "0.80000000,0.00000000;1.20000000,0.00000000;1.00000000,0.02000000"
 
 # Digest of MAIN alone, as produced by the coordinate-only implementation that
 # shipped in flexfoil 1.1.6. Every run already cached in a user's
-# ~/.flexfoil/runs.db is keyed on this; it must never change.
+# ~/.flexfoil/runs.db is keyed on this; it must never change. It is not
+# comparable with the browser's legacy digest for the same coordinates.
 MAIN_LEGACY_DIGEST = "cadb528511d42bd7"
 
 PLACEMENT = Placement(
@@ -102,10 +115,40 @@ PLACEMENT = Placement(
     scale=1.0,
 )
 
-# The placement/element encoding is the part that MUST agree byte-for-byte with
-# the TypeScript implementation. This exact literal is asserted on both sides.
+SHARED_SCHEMA = "ffgeom1:"
 PLACEMENT_SUFFIX = "@25.00000000,0.80000000,0.01000000,0.02000000,-0.05000000,1.00000000"
 ELEMENT_SEP = "#"
+
+# Vector 1 — a two-element assembly with a non-identity placement on the second
+# element. Pinned byte-for-byte against TypeScript.
+SHARED_ASSEMBLY_CANONICAL = (
+    SHARED_SCHEMA + MAIN_SHARED_COORDS + ELEMENT_SEP + FLAP_SHARED_COORDS + PLACEMENT_SUFFIX
+)
+SHARED_ASSEMBLY_DIGEST = (
+    "cbec85f2a62ddd0613c392aec6b3ecc751665d6096a2206e67bed2e2b1c5e53f"
+)
+
+# Vector 2 — float-formatting edge cases, which is where the two languages
+# diverge if the formatter is not shared: negative zero in a coordinate and in a
+# placement field, and 0.001953125 (an odd multiple of 1/512, the smallest
+# family of doubles that lands exactly on a half at the eighth decimal, where
+# Python's round-half-to-even and JavaScript's round-half-away-from-zero
+# disagree). Both must render 0.00195313.
+EDGE = [(-0.0, 0.0), (0.001953125, -0.001953125), (0.5, -0.0)]
+EDGE_PLACEMENT = Placement(
+    rotation=-0.0,
+    pivot=(0.0, 0.0),
+    translation=(0.001953125, -0.0),
+    scale=1.001953125,
+)
+SHARED_EDGE_CANONICAL = (
+    SHARED_SCHEMA
+    + "0.00000000,0.00000000;0.00195313,-0.00195313;0.50000000,0.00000000"
+    + "@0.00000000,0.00000000,0.00000000,0.00195313,0.00000000,1.00195313"
+)
+SHARED_EDGE_DIGEST = (
+    "3b3c8bf81354ec30ee2fe3f151771c7ed2791eff9a70d76cb2080b5807ed9c98"
+)
 
 
 def _hash(coords, placement=None) -> str:
@@ -121,7 +164,7 @@ class TestBackwardCompatibility:
         assert _hash(MAIN) == MAIN_LEGACY_DIGEST
 
     def test_single_unplaced_element_canonicalises_to_coordinates_alone(self):
-        assert canonical_geometry([GeometryElement(MAIN)]) == MAIN_COORDS
+        assert canonical_geometry([GeometryElement(MAIN, None)]) == MAIN_LEGACY_COORDS
 
     def test_airfoil_hash_matches_legacy_digest(self):
         assert Airfoil("t", [], MAIN).hash == MAIN_LEGACY_DIGEST
@@ -139,20 +182,30 @@ class TestBackwardCompatibility:
     def test_airfoil_placement_defaults_to_none(self):
         assert Airfoil("t", [], MAIN).placement is None
 
-    def test_negative_zero_collapses(self):
-        # Python's %.8f would emit "-0.00000000" where JS toFixed emits
-        # "0.00000000"; the formatter collapses -0.0 so the two agree.
-        assert _hash(MAIN, Placement(translation=(-0.0, 0.1))) == _hash(
-            MAIN, Placement(translation=(0.0, 0.1))
+    def test_legacy_digest_length_unchanged(self):
+        assert len(_hash(MAIN)) == 16
+
+    def test_only_the_lone_unplaced_element_routes_to_legacy(self):
+        assert is_legacy_single_element([GeometryElement(MAIN, None)])
+        assert is_legacy_single_element([GeometryElement(MAIN, Placement())])
+        assert not is_legacy_single_element([GeometryElement(MAIN, PLACEMENT)])
+        assert not is_legacy_single_element(
+            [GeometryElement(MAIN, None), GeometryElement(FLAP, None)]
         )
 
-    def test_digest_length_unchanged(self):
-        assert len(_hash(MAIN)) == 16
-        assert len(_hash(MAIN, PLACEMENT)) == 16
+    def test_shared_form_cannot_collide_with_the_legacy_form(self):
+        # The schema tag keeps the two canonical spaces disjoint, so one
+        # geometry always maps to exactly one digest.
+        assert shared_canonical_geometry([GeometryElement(MAIN, None)]).startswith(
+            SHARED_SCHEMA
+        )
+        assert not canonical_geometry([GeometryElement(MAIN, None)]).startswith(
+            SHARED_SCHEMA
+        )
 
 
 # ---------------------------------------------------------------------------
-# Placement sensitivity — the bug this hash exists to prevent
+# Placement sensitivity — the collision this hash exists to prevent
 # ---------------------------------------------------------------------------
 
 class TestPlacementSensitivity:
@@ -189,40 +242,76 @@ class TestPlacementSensitivity:
 
 
 # ---------------------------------------------------------------------------
-# Element count / order, and cross-language encoding
+# Element count and order
 # ---------------------------------------------------------------------------
 
 class TestAssembly:
-    def test_placement_suffix_matches_the_typescript_encoding(self):
-        canonical = canonical_geometry(
-            [GeometryElement(MAIN), GeometryElement(FLAP, PLACEMENT)]
-        )
-        assert canonical == MAIN_COORDS + ELEMENT_SEP + FLAP_COORDS + PLACEMENT_SUFFIX
-
     def test_element_count_matters(self):
-        one = geometry_hash([GeometryElement(MAIN)])
-        two = geometry_hash([GeometryElement(MAIN), GeometryElement(MAIN)])
+        one = geometry_hash([GeometryElement(MAIN, None)])
+        two = geometry_hash([GeometryElement(MAIN, None), GeometryElement(MAIN, None)])
         assert one != two
 
     def test_element_order_matters(self):
-        ab = geometry_hash([GeometryElement(MAIN), GeometryElement(FLAP)])
-        ba = geometry_hash([GeometryElement(FLAP), GeometryElement(MAIN)])
+        ab = geometry_hash([GeometryElement(MAIN, None), GeometryElement(FLAP, None)])
+        ba = geometry_hash([GeometryElement(FLAP, None), GeometryElement(MAIN, None)])
         assert ab != ba
 
     def test_same_shapes_different_gap_do_not_collide(self):
         closed = geometry_hash([
-            GeometryElement(MAIN),
+            GeometryElement(MAIN, None),
             GeometryElement(FLAP, Placement(translation=(0.0, -0.01))),
         ])
         opened = geometry_hash([
-            GeometryElement(MAIN),
+            GeometryElement(MAIN, None),
             GeometryElement(FLAP, Placement(translation=(0.0, -0.03))),
         ])
         assert closed != opened
 
     def test_repeated_calls_are_stable(self):
-        elements = [GeometryElement(MAIN), GeometryElement(FLAP, PLACEMENT)]
+        elements = [GeometryElement(MAIN, None), GeometryElement(FLAP, PLACEMENT)]
         assert geometry_hash(elements) == geometry_hash(elements)
 
     def test_empty_assembly_does_not_raise(self):
-        assert len(geometry_hash([])) == 16
+        assert len(geometry_hash([])) == 64
+
+
+# ---------------------------------------------------------------------------
+# Shared cross-language vectors. These digests are pinned as the same literal
+# hex strings in flexfoil-ui/src/lib/airfoilHash.test.ts.
+# ---------------------------------------------------------------------------
+
+class TestSharedVectors:
+    ASSEMBLY = [GeometryElement(MAIN, None), GeometryElement(FLAP, PLACEMENT)]
+    EDGE_ELEMENTS = [GeometryElement(EDGE, EDGE_PLACEMENT)]
+
+    def test_assembly_vector_canonicalises_as_typescript_does(self):
+        assert shared_canonical_geometry(self.ASSEMBLY) == SHARED_ASSEMBLY_CANONICAL
+        assert canonical_geometry(self.ASSEMBLY) == SHARED_ASSEMBLY_CANONICAL
+
+    def test_assembly_vector_digest_is_shared_with_typescript(self):
+        assert geometry_hash(self.ASSEMBLY) == SHARED_ASSEMBLY_DIGEST
+
+    def test_float_formatting_vector_canonicalises_as_typescript_does(self):
+        assert canonical_geometry(self.EDGE_ELEMENTS) == SHARED_EDGE_CANONICAL
+
+    def test_float_formatting_vector_digest_is_shared_with_typescript(self):
+        assert geometry_hash(self.EDGE_ELEMENTS) == SHARED_EDGE_DIGEST
+
+    def test_signed_zero_normalises_in_coordinates_and_placement_fields(self):
+        neg_coord = geometry_hash([GeometryElement([(-0.0, -0.0)], PLACEMENT)])
+        pos_coord = geometry_hash([GeometryElement([(0.0, 0.0)], PLACEMENT)])
+        assert neg_coord == pos_coord
+
+        neg_field = _hash(MAIN, Placement(translation=(-0.0, 0.1)))
+        pos_field = _hash(MAIN, Placement(translation=(0.0, 0.1)))
+        assert neg_field == pos_field
+
+    def test_non_zero_negative_rounding_to_zero_keeps_its_sign(self):
+        # Both languages emit "-0.00000000" here; only exact -0.0 is normalised.
+        canonical = shared_canonical_geometry(
+            [GeometryElement([(-1e-12, 0.0)], PLACEMENT)]
+        )
+        assert "-0.00000000,0.00000000" in canonical
+
+    def test_shared_digest_is_the_full_sha256(self):
+        assert len(geometry_hash(self.ASSEMBLY)) == 64

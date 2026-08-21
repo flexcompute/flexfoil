@@ -9,31 +9,61 @@
  * problems, and hashing coordinates alone would serve one's cached results for
  * the other.
  *
- * Canonical form:
+ * Two distinct digests live here, and which one you get matters:
  *
- *     element_0 [# element_1 [# element_2 ...]]
- *     element_i = <coords_i>[@<placement_i>]
- *     coords_i  = "x,y" per node, 8 decimal places, joined with ";"
- *     placement = rot,pivot_x,pivot_y,trans_x,trans_y,scale  (8 decimals each)
+ * 1. LEGACY SINGLE-ELEMENT DIGEST — one element, no (or identity) placement.
+ *    This is what this module has always returned, so every run already cached
+ *    in a user's browser database is keyed on it and its encoding is frozen:
+ *    nodes joined with ";", all 64 hex characters of the digest. It is
+ *    deliberately *not* comparable with the Python digest for the same
+ *    coordinates — packages/flexfoil-python/src/flexfoil/airfoil.py froze its
+ *    own legacy encoding ("|" between nodes, truncated to 16 hex characters)
+ *    against the runs already in users' ~/.flexfoil/runs.db. Unifying the two
+ *    invalidates one of the caches, so it belongs with the database-migration
+ *    workstream.
  *
- * The placement suffix is emitted only when the placement is present *and*
- * non-identity, and the element separator only appears between elements, so a
- * single element with no (or identity) placement canonicalises to exactly the
- * coordinate string this module has always produced — every run already cached
- * in a user's browser database stays valid.
+ * 2. SHARED ASSEMBLY DIGEST — everything else: more than one element, or an
+ *    element carrying a non-identity placement. Nothing is cached against this
+ *    yet, so it is defined to be byte-for-byte identical to the Python
+ *    implementation: same schema tag, separators, field order, float
+ *    formatting (see `fmtShared`) and no truncation. The shared test vectors
+ *    in airfoilHash.test.ts pin the exact digests, and the identical literals
+ *    are pinned in packages/flexfoil-python/tests/test_geometry_hash.py, so a
+ *    change to one side alone fails CI.
  *
- * NOTE (known divergence, pre-existing): the Python implementation in
- * packages/flexfoil-python/src/flexfoil/airfoil.py joins nodes with "|" and
- * truncates the digest to 16 hex chars, so Python-side and browser-side hashes
- * for the *same* coordinates have never matched. The element/placement
- * encoding below is byte-for-byte identical to Python's, and both sides pin
- * the exact shared suffix in their tests; unifying the coordinate half is a
- * cache-invalidating change and belongs with the database migration.
+ * Canonical forms:
+ *
+ *     legacy = "x,y" per node, 8 decimals, joined with ";"
+ *     shared = "ffgeom1:" + element_0 ["#" element_1 ["#" element_2 ...]]
+ *              element_i = <coords_i>["@" <placement_i>]
+ *              coords_i  = "x,y" per node, 8 decimals, joined with ";"
+ *              placement = rot,pivot_x,pivot_y,trans_x,trans_y,scale
+ *
+ * `canonicalGeometryString` and `computeGeometryHash` select between the two on
+ * the shape of their input (see `isLegacySingleElement`). The shared form
+ * carries a schema tag, so the two canonical strings can never coincide and one
+ * geometry always has exactly one digest.
  */
 
-const COORDINATE_PRECISION = 8;
+// Legacy encoding. Changing this invalidates every run already cached against
+// the old digest; the pinned test in airfoilHash.test.ts exists to catch that.
+// (It happens to be the same character as SHARED_NODE_SEP below; Python's two
+// separators differ, which is why both are named here.)
+const LEGACY_NODE_SEP = ';';
+
+// Shared encoding. Nothing is cached against these yet, but changing one
+// without the matching change in
+// packages/flexfoil-python/src/flexfoil/airfoil.py splits the two
+// implementations' cache keys; bump the schema tag if the form has to change.
+// Both sides' pinned shared vectors exist to catch that.
+const SHARED_SCHEMA = 'ffgeom1:';
+const SHARED_NODE_SEP = ';';
 const ELEMENT_SEP = '#';
 const PLACEMENT_PREFIX = '@';
+
+// Used by both encodings, so a change here invalidates the cache *and* has to
+// be mirrored on the Python side.
+const PRECISION = 8;
 
 export interface HashPoint {
   x: number;
@@ -53,10 +83,18 @@ export interface Placement {
   scale?: number;
 }
 
-/** One element of an assembly: its own panel nodes plus where it sits. */
+/**
+ * One element of an assembly: its own panel nodes plus where it sits.
+ *
+ * `placement` is a required property on purpose. Inside an assembly the
+ * placement is part of the aerodynamic problem, so an element built without one
+ * would key its results under the wrong geometry; requiring the property means
+ * a caller has to write `placement: null` deliberately for an element that
+ * really does sit in its own coordinates.
+ */
 export interface GeometryElement {
   panels: HashPoint[];
-  placement?: Placement | null;
+  placement: Placement | null;
 }
 
 /** True if the placement moves nothing (a pivot on its own is a no-op). */
@@ -71,20 +109,41 @@ export function isIdentityPlacement(placement?: Placement | null): boolean {
 }
 
 /**
- * Format a placement scalar. `-0` collapses to `0` so that JavaScript and
- * Python (whose `%.8f` would otherwise emit "-0.00000000") agree.
+ * Format one scalar for the shared canonical form. `toFixed` is the reference
+ * behaviour for both languages here; Python's `_shared_fmt` reproduces it.
+ *
+ * `-0` collapses to `0` because `toFixed` strips the sign before rounding, so
+ * JavaScript never emits "-0.00000000" for a true negative zero while Python's
+ * `%.8f` does. Non-zero negatives keep their sign on both sides
+ * (`(-1e-12).toFixed(8)` is "-0.00000000" too), so only exact zero is
+ * normalised.
  */
-function fmt(value: number): string {
-  return (value === 0 ? 0 : value).toFixed(COORDINATE_PRECISION);
+function fmtShared(value: number): string {
+  return (value === 0 ? 0 : value).toFixed(PRECISION);
 }
 
-function canonicalCoords(panels: HashPoint[]): string {
+/**
+ * Frozen legacy coordinate encoding: raw `toFixed`, ";" between nodes.
+ *
+ * Deliberately not routed through `fmtShared` — the raw format is what the
+ * already-cached digests were produced with. One consequence is that a
+ * coordinate of exactly -0 renders "0.00000000" here (`toFixed` drops the sign)
+ * while Python's frozen legacy encoding renders "-0.00000000" for the same
+ * input. The two legacy encodings were frozen independently and are not
+ * comparable in any case (different node separator, different digest length);
+ * the shared form below normalises signed zero on both sides.
+ */
+function legacyCanonicalCoords(panels: HashPoint[]): string {
   return panels
-    .map(p => `${p.x.toFixed(COORDINATE_PRECISION)},${p.y.toFixed(COORDINATE_PRECISION)}`)
-    .join(';');
+    .map(p => `${p.x.toFixed(PRECISION)},${p.y.toFixed(PRECISION)}`)
+    .join(LEGACY_NODE_SEP);
 }
 
-function canonicalPlacement(placement?: Placement | null): string {
+function sharedCanonicalCoords(panels: HashPoint[]): string {
+  return panels.map(p => `${fmtShared(p.x)},${fmtShared(p.y)}`).join(SHARED_NODE_SEP);
+}
+
+function sharedCanonicalPlacement(placement: Placement | null): string {
   if (isIdentityPlacement(placement)) return '';
   const p = placement as Placement;
   return (
@@ -97,16 +156,40 @@ function canonicalPlacement(placement?: Placement | null): string {
       p.translation?.y ?? 0,
       p.scale ?? 1,
     ]
-      .map(fmt)
+      .map(v => fmtShared(v))
       .join(',')
   );
 }
 
-/** Canonical string for an assembly (see the module notes above). */
+/**
+ * True for the one input shape the frozen legacy digest covers: exactly one
+ * element, with no placement or an identity placement.
+ */
+export function isLegacySingleElement(elements: GeometryElement[]): boolean {
+  return elements.length === 1 && isIdentityPlacement(elements[0].placement);
+}
+
+/**
+ * Cross-language canonical string for an assembly. Byte-for-byte identical to
+ * `shared_canonical_geometry` in
+ * packages/flexfoil-python/src/flexfoil/airfoil.py.
+ */
+export function sharedCanonicalGeometryString(elements: GeometryElement[]): string {
+  return (
+    SHARED_SCHEMA +
+    elements
+      .map(e => sharedCanonicalCoords(e.panels) + sharedCanonicalPlacement(e.placement))
+      .join(ELEMENT_SEP)
+  );
+}
+
+/**
+ * Canonical string for an assembly: the frozen legacy coordinate string for a
+ * lone unplaced element, the shared form for everything else.
+ */
 export function canonicalGeometryString(elements: GeometryElement[]): string {
-  return elements
-    .map(e => canonicalCoords(e.panels) + canonicalPlacement(e.placement))
-    .join(ELEMENT_SEP);
+  if (isLegacySingleElement(elements)) return legacyCanonicalCoords(elements[0].panels);
+  return sharedCanonicalGeometryString(elements);
 }
 
 async function sha256Hex(canonical: string): Promise<string> {
@@ -117,16 +200,30 @@ async function sha256Hex(canonical: string): Promise<string> {
 }
 
 /**
- * Placement-aware geometry hash. Reduces to the historical coordinate-only
- * digest for a single element with no (or identity) placement.
+ * Geometry half of the run-cache key. Returns the frozen legacy digest for a
+ * single element with no (or identity) placement — the shape every
+ * already-cached run has — and the cross-language shared digest for everything
+ * else. Both are 64 hex characters on this side; Python truncates only its
+ * legacy digest.
  */
 export async function computeGeometryHash(elements: GeometryElement[]): Promise<string> {
   return sha256Hex(canonicalGeometryString(elements));
 }
 
+/**
+ * Single-element convenience wrapper.
+ *
+ * Omitting `placement` hashes the element as sitting in its own coordinates
+ * and yields the frozen legacy digest, which is what a lone airfoil wants. The
+ * current callers — `hashPanels` in src/stores/runStore.ts and the three call
+ * sites in src/lib/sweepEngine.ts — all hash lone airfoils and pass nothing.
+ * Code that hashes an element *of an assembly* must go through
+ * `computeGeometryHash`, whose `GeometryElement.placement` is a required
+ * property, so the placement has to be stated rather than defaulted.
+ */
 export async function computeAirfoilHash(
   panels: HashPoint[],
   placement?: Placement | null
 ): Promise<string> {
-  return computeGeometryHash([{ panels, placement }]);
+  return computeGeometryHash([{ panels, placement: placement ?? null }]);
 }

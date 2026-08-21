@@ -11,7 +11,7 @@ import { useDistributionStore } from '../../stores/distributionStore';
 import { useRunStore } from '../../stores/runStore';
 import { useTheme } from '../../contexts/ThemeContext';
 import { colorForKey } from '../../lib/plotStyling';
-import { splitSurfaces } from '../../lib/surfaceSplit';
+import { sampleMidpointY, splitContourSurfaces, SurfaceSplitError } from '../../lib/surfaceSplit';
 import {
   analyzeAirfoil,
   analyzeAirfoilInviscid,
@@ -94,7 +94,7 @@ function extractSurfaceData(
       const cpX = result.cp_x;
       const cp = result.cp;
 
-      const split = splitSurfaces(panels, { sampleCount: cpX.length });
+      const split = splitContourSurfaces(panels, { sampleCount: cpX.length });
       const upperIdx = split.upperIndices;
       const lowerIdx = split.lowerIndices;
 
@@ -102,15 +102,20 @@ function extractSurfaceData(
       const lowerPanels = panels.slice(...split.lowerNodeSlice);
       const sUpper = computeArcLength(upperPanels);
       const sLower = computeArcLength(lowerPanels);
-      // midpoints of arc-length (index j is the j-th sample of that surface)
-      const sMidUpper = upperIdx.map((_, j) => (sUpper[j] + sUpper[j + 1]) / 2);
-      const sMidLower = lowerIdx.map((_, j) => (sLower[j] + sLower[j + 1]) / 2);
+      // midpoints of arc-length (index j is the j-th sample of that surface).
+      // The last sample of node-based data has no station after it on either
+      // surface, so it falls back to its own station.
+      const sMidUpper = upperIdx.map((_, j) => (sUpper[j] + (sUpper[j + 1] ?? sUpper[j])) / 2);
+      const sMidLower = lowerIdx.map((_, j) => (sLower[j] + (sLower[j + 1] ?? sLower[j])) / 2);
 
       return {
         x_upper: upperIdx.map((i) => cpX[i]),
         x_lower: lowerIdx.map((i) => cpX[i]),
-        y_upper: upperIdx.map((i) => (panels[i].y + panels[i + 1].y) / 2),
-        y_lower: lowerIdx.map((i) => (panels[i].y + (panels[i + 1]?.y ?? panels[i].y)) / 2),
+        // Both surfaces go through the same guarded lookup: node-based Cp data
+        // has one sample more than there are panels, and either surface can own
+        // that last sample depending on the contour's ordering.
+        y_upper: upperIdx.map((i) => sampleMidpointY(panels, i)),
+        y_lower: lowerIdx.map((i) => sampleMidpointY(panels, i)),
         s_upper: sMidUpper,
         s_lower: sMidLower,
         val_upper: upperIdx.map((i) => cp[i]),
@@ -173,6 +178,9 @@ function extractSurfaceData(
       val_lower: [...valKey.lower],
     };
   } catch (e) {
+    // Geometry the split cannot describe - a multi-element contour, say - is
+    // shown to the user rather than turned into a missing trace.
+    if (e instanceof SurfaceSplitError) throw e;
     console.warn('[DistributionPanel] solver error for run', run.id, e);
     return null;
   }
@@ -213,14 +221,24 @@ export function DistributionPanel() {
     [allRuns, pinnedRunIds],
   );
 
-  const traces = useMemo(() => {
+  const { traces, notices } = useMemo(() => {
     const result: Plotly.Data[] = [];
+    // Reasons a pinned run has no curves, for the user rather than the console.
+    const messages: string[] = [];
+
     for (const run of pinnedRuns) {
-      const data = extractSurfaceData(run, yAxis);
+      const label = buildRunLabel(run);
+
+      let data: SurfaceData | null;
+      try {
+        data = extractSurfaceData(run, yAxis);
+      } catch (e) {
+        messages.push(`${label}: ${e instanceof Error ? e.message : String(e)}`);
+        continue;
+      }
       if (!data) continue;
 
       const color = colorForKey(`dist_${run.id}`);
-      const label = buildRunLabel(run);
 
       if (showUpper) {
         result.push({
@@ -246,7 +264,7 @@ export function DistributionPanel() {
         });
       }
     }
-    return result;
+    return { traces: result, notices: messages };
   }, [pinnedRuns, xAxis, yAxis, showUpper, showLower]);
 
   const isCp = yAxis === 'cp';
@@ -435,6 +453,26 @@ export function DistributionPanel() {
           </button>
         )}
       </div>
+
+      {/* Runs that could not be plotted, and why */}
+      {notices.length > 0 && (
+        <div
+          style={{
+            padding: '6px 10px',
+            borderBottom: '1px solid var(--border-color)',
+            fontSize: '10px',
+            color: 'var(--accent-warning)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '2px',
+            flexShrink: 0,
+          }}
+        >
+          {notices.map((notice, i) => (
+            <span key={i}>{notice}</span>
+          ))}
+        </div>
+      )}
 
       {/* Plot area */}
       <div ref={plotAreaRef} style={{ flex: 1, minHeight: 0, position: 'relative' }}>

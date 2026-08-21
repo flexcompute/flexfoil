@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   findLeadingEdgeIndex,
-  splitSurfaces,
+  sampleMidpointY,
+  splitContourSurfaces,
+  SurfaceSplitError,
   trailingEdgePoint,
   type SurfaceSplitPoint,
 } from './surfaceSplit';
@@ -61,7 +63,38 @@ function transform(
   }));
 }
 
-/** The buggy split this module replaces: bare index arithmetic on the node count. */
+/**
+ * Place a copy of a contour as a second element: scaled to `chord`, rotated by
+ * `degrees` about its leading edge and moved so that leading edge sits at
+ * (`x0`, `y0`) - i.e. what a deflected flap looks like behind a main element.
+ */
+function placeElement(
+  pts: SurfaceSplitPoint[],
+  chord: number,
+  degrees: number,
+  x0: number,
+  y0: number,
+): SurfaceSplitPoint[] {
+  const a = (degrees * Math.PI) / 180;
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  return pts.map(({ x, y }) => ({
+    x: x0 + chord * (x * c - y * s),
+    y: y0 + chord * (x * s + y * c),
+  }));
+}
+
+/** Run `fn` and return whatever it threw, or `null` when it did not throw. */
+function captureError(fn: () => unknown): unknown {
+  try {
+    fn();
+    return null;
+  } catch (e) {
+    return e;
+  }
+}
+
+/** The split this module replaces: bare index arithmetic on the node count. */
 function midpointSplit(nodeCount: number, panelCount: number) {
   const mid = Math.floor(nodeCount / 2);
   const upper: number[] = [];
@@ -121,7 +154,7 @@ describe('findLeadingEdgeIndex', () => {
   });
 });
 
-describe('splitSurfaces - conventional single-element section', () => {
+describe('splitContourSurfaces - conventional single-element section', () => {
   it('reproduces the midpoint split when the LE really is at the midpoint', () => {
     // 41 nodes, LE at node 20 === Math.floor(41 / 2): the one case the old
     // index arithmetic got right, so the visual result must be unchanged.
@@ -129,7 +162,7 @@ describe('splitSurfaces - conventional single-element section', () => {
     expect(pts.length).toBe(41);
     expect(Math.floor(pts.length / 2)).toBe(20);
 
-    const split = splitSurfaces(pts);
+    const split = splitContourSurfaces(pts);
     const old = midpointSplit(pts.length, pts.length - 1);
 
     expect(split.leadingEdgeIndex).toBe(20);
@@ -142,7 +175,7 @@ describe('splitSurfaces - conventional single-element section', () => {
 
   it('partitions every panel exactly once', () => {
     const pts = buildContour(21, 20);
-    const split = splitSurfaces(pts);
+    const split = splitContourSurfaces(pts);
     expect([...split.upperIndices, ...split.lowerIndices]).toEqual(
       indexRange(0, pts.length - 1),
     );
@@ -150,7 +183,7 @@ describe('splitSurfaces - conventional single-element section', () => {
 
   it('puts positive-y nodes on the upper surface and negative-y on the lower', () => {
     const pts = buildContour(21, 20);
-    const split = splitSurfaces(pts);
+    const split = splitContourSurfaces(pts);
     const upperNodes = pts.slice(...split.upperNodeSlice);
     const lowerNodes = pts.slice(...split.lowerNodeSlice);
     expect(upperNodes.every((p) => p.y >= 0)).toBe(true);
@@ -163,20 +196,20 @@ describe('splitSurfaces - conventional single-element section', () => {
     // with its LE at index 79), so the old split mislabelled one panel.
     const pts = buildContour(20, 20);
     expect(pts.length).toBe(40);
-    const split = splitSurfaces(pts);
+    const split = splitContourSurfaces(pts);
     expect(split.leadingEdgeIndex).toBe(19);
     expect(split.upperIndices).toEqual(indexRange(0, 19));
     expect(midpointSplit(40, 39).upper).toEqual(indexRange(0, 20));
   });
 });
 
-describe('splitSurfaces - non-uniform paneling', () => {
+describe('splitContourSurfaces - non-uniform paneling', () => {
   it('splits at the real LE when the LE is nowhere near the midpoint', () => {
     // 20 upper nodes against 6 lower nodes: LE at 19, midpoint says 13.
     const pts = buildContour(20, 6);
     expect(pts.length).toBe(26);
 
-    const split = splitSurfaces(pts);
+    const split = splitContourSurfaces(pts);
     expect(split.leadingEdgeIndex).toBe(19);
     expect(split.upperIndices).toEqual(indexRange(0, 19));
     expect(split.lowerIndices).toEqual(indexRange(19, 25));
@@ -191,7 +224,7 @@ describe('splitSurfaces - non-uniform paneling', () => {
 
   it('keeps upper and lower surfaces on the correct side of the chord', () => {
     const pts = buildContour(20, 6);
-    const split = splitSurfaces(pts);
+    const split = splitContourSurfaces(pts);
     expect(pts.slice(...split.upperNodeSlice).every((p) => p.y >= 0)).toBe(true);
     expect(pts.slice(...split.lowerNodeSlice).every((p) => p.y <= 0)).toBe(true);
 
@@ -202,11 +235,11 @@ describe('splitSurfaces - non-uniform paneling', () => {
   });
 });
 
-describe('splitSurfaces - rotated and offset section', () => {
+describe('splitContourSurfaces - rotated and offset section', () => {
   it('splits a cambered section rotated nose-down and translated', () => {
     const pts = buildContour(18, 11, 0.04);
     const moved = transform(pts, 25, 12, -4);
-    const split = splitSurfaces(moved);
+    const split = splitContourSurfaces(moved);
 
     expect(split.leadingEdgeIndex).toBe(17);
     expect(split.reversed).toBe(false);
@@ -215,16 +248,16 @@ describe('splitSurfaces - rotated and offset section', () => {
 
     // Same partition as the un-transformed geometry: the split follows the
     // section, not the axes.
-    expect(splitSurfaces(pts).upperIndices).toEqual(split.upperIndices);
+    expect(splitContourSurfaces(pts).upperIndices).toEqual(split.upperIndices);
   });
 });
 
-describe('splitSurfaces - reversed contour ordering', () => {
+describe('splitContourSurfaces - reversed contour ordering', () => {
   it('detects TE -> lower -> LE -> upper -> TE and swaps the surfaces', () => {
     const forward = buildContour(21, 20, 0.03);
     const reversed = [...forward].reverse();
 
-    const split = splitSurfaces(reversed);
+    const split = splitContourSurfaces(reversed);
     expect(split.reversed).toBe(true);
     expect(split.leadingEdgeIndex).toBe(20);
     // First segment is now the lower surface.
@@ -243,14 +276,109 @@ describe('splitSurfaces - reversed contour ordering', () => {
 
   it('still detects reversed ordering after rotation', () => {
     const reversed = transform([...buildContour(21, 20)].reverse(), 20, 0, 0);
-    expect(splitSurfaces(reversed).reversed).toBe(true);
+    expect(splitContourSurfaces(reversed).reversed).toBe(true);
+  });
+
+  it('keeps the last node-based sample readable when the upper surface comes second', () => {
+    // The viscous path reports Cp at nodes, so the last sample is node n - 1 and
+    // has no node after it. On a reversed contour that sample belongs to the
+    // upper surface, so a panel-midpoint lookup written as
+    // `(nodes[i].y + nodes[i + 1].y) / 2` reads past the end of the array -
+    // which is what `sampleMidpointY` exists to prevent, on both surfaces.
+    const reversed = [...buildContour(21, 20)].reverse();
+    const split = splitContourSurfaces(reversed, { sampleCount: reversed.length });
+    const last = reversed.length - 1;
+
+    expect(split.reversed).toBe(true);
+    expect(split.upperIndices).toContain(last);
+    expect(reversed[last + 1]).toBeUndefined();
+
+    for (const i of [...split.upperIndices, ...split.lowerIndices]) {
+      expect(Number.isFinite(sampleMidpointY(reversed, i))).toBe(true);
+    }
+    expect(sampleMidpointY(reversed, last)).toBe(reversed[last].y);
   });
 });
 
-describe('splitSurfaces - explicit leading-edge index', () => {
+describe('splitContourSurfaces - more than one contour in the array', () => {
+  /** A main element plus a deflected flap, concatenated into one array. */
+  function mainPlusFlap(): SurfaceSplitPoint[] {
+    const main = buildContour(21, 20);
+    const flap = placeElement(buildContour(11, 10), 0.3, -25, 0.85, -0.03);
+    expect(main.length).toBe(41);
+    expect(flap.length).toBe(21);
+    return [...main, ...flap];
+  }
+
+  it('reports a concatenated main-plus-flap array rather than splitting it', () => {
+    const pts = mainPlusFlap();
+    expect(pts.length).toBe(62);
+
+    // Left to the geometric derivation, the array yields the main element's LE,
+    // which puts every flap node on one surface: a single curve that jumps
+    // between two elements. Two contours have no one upper/lower pair.
+    expect(findLeadingEdgeIndex(pts)).toBe(20);
+
+    const error = captureError(() => splitContourSurfaces(pts));
+    expect(error).toBeInstanceOf(SurfaceSplitError);
+    expect((error as SurfaceSplitError).code).toBe('multiple-contours');
+    expect((error as SurfaceSplitError).message).toContain('node 41');
+    expect((error as SurfaceSplitError).message).toContain(
+      'per-element splitting is not yet supported',
+    );
+  });
+
+  it('reports a slat-main-flap array, where the first closure found is not the split', () => {
+    // Three elements in file order, as testdata/mda_30p_30n_trimmed.dat lists
+    // them. The first element's apparent closure can fall a node early, so
+    // every closure of the first loop has to be tried before concluding that
+    // the array holds one contour.
+    const slat = placeElement(buildContour(9, 8), 0.15, -30, -0.1, 0.01);
+    const main = buildContour(21, 20);
+    const flap = placeElement(buildContour(11, 10), 0.3, -25, 0.85, -0.03);
+    const pts = [...slat, ...main, ...flap];
+
+    const error = captureError(() => splitContourSurfaces(pts));
+    expect((error as SurfaceSplitError).code).toBe('multiple-contours');
+    expect((error as SurfaceSplitError).message).toContain(`of ${pts.length}`);
+  });
+
+  it('reports it whatever the caller says the leading edge is', () => {
+    const pts = mainPlusFlap();
+    for (const options of [{}, { leadingEdgeIndex: 20 }, { sampleCount: pts.length }]) {
+      const error = captureError(() => splitContourSurfaces(pts, options));
+      expect((error as SurfaceSplitError).code).toBe('multiple-contours');
+    }
+  });
+
+  it('leaves single elements alone, including fine paneling and a blunt TE', () => {
+    const blunt = buildContour(81, 80);
+    blunt[0] = { x: 1, y: 0.01 };
+    blunt[blunt.length - 1] = { x: 1, y: -0.01 };
+
+    const singles: SurfaceSplitPoint[][] = [
+      buildContour(21, 20),
+      buildContour(20, 6),
+      buildContour(41, 40, 0.04),
+      // 161 nodes, i.e. XFOIL-scale paneling: the nodes either side of the TE
+      // are a few thousandths of a chord apart, which is the case most likely
+      // to read as a closure.
+      buildContour(81, 80),
+      blunt,
+      transform(buildContour(21, 20), 25, -3, 7.5),
+      [...buildContour(21, 20)].reverse(),
+    ];
+
+    for (const pts of singles) {
+      expect(captureError(() => splitContourSurfaces(pts))).toBeNull();
+    }
+  });
+});
+
+describe('splitContourSurfaces - explicit leading-edge index', () => {
   it('prefers a caller-supplied LE index over the derived one', () => {
     const pts = buildContour(21, 20);
-    const split = splitSurfaces(pts, { leadingEdgeIndex: 7 });
+    const split = splitContourSurfaces(pts, { leadingEdgeIndex: 7 });
     expect(split.leadingEdgeIndex).toBe(7);
     expect(split.upperIndices).toEqual(indexRange(0, 7));
     expect(split.lowerIndices).toEqual(indexRange(7, 40));
@@ -260,24 +388,47 @@ describe('splitSurfaces - explicit leading-edge index', () => {
 
   it('honours an explicit index on a contour where derivation would disagree', () => {
     const pts = buildContour(20, 6);
-    expect(splitSurfaces(pts).leadingEdgeIndex).toBe(19);
-    expect(splitSurfaces(pts, { leadingEdgeIndex: 19 }).leadingEdgeIndex).toBe(19);
-    expect(splitSurfaces(pts, { leadingEdgeIndex: 4 }).leadingEdgeIndex).toBe(4);
+    expect(splitContourSurfaces(pts).leadingEdgeIndex).toBe(19);
+    expect(splitContourSurfaces(pts, { leadingEdgeIndex: 19 }).leadingEdgeIndex).toBe(19);
+    expect(splitContourSurfaces(pts, { leadingEdgeIndex: 4 }).leadingEdgeIndex).toBe(4);
   });
 
-  it('ignores unusable explicit indices and falls back to the geometry', () => {
+  it('derives the LE only when no index is supplied', () => {
     const pts = buildContour(21, 20);
-    const derived = 20;
-    for (const bad of [null, undefined, -1, 0, 40, 99, 3.5, NaN]) {
-      expect(splitSurfaces(pts, { leadingEdgeIndex: bad }).leadingEdgeIndex).toBe(derived);
+    for (const options of [{}, { leadingEdgeIndex: null }, { leadingEdgeIndex: undefined }]) {
+      expect(splitContourSurfaces(pts, options).leadingEdgeIndex).toBe(20);
     }
+  });
+
+  it('rejects an index that does not split the contour, rather than clamping it', () => {
+    // 41 nodes and 40 panel samples, so only [1, 39] divides the contour in two.
+    // Clamping such an index - or quietly deriving one instead - would answer a
+    // caller's wrong index with a wrong split and no error.
+    const pts = buildContour(21, 20);
+    for (const bad of [-1, 0, 40, 99, 3.5, NaN]) {
+      const error = captureError(() => splitContourSurfaces(pts, { leadingEdgeIndex: bad }));
+      expect(error).toBeInstanceOf(SurfaceSplitError);
+      expect((error as SurfaceSplitError).code).toBe('invalid-leading-edge-index');
+      expect((error as SurfaceSplitError).message).toContain('[1, 39]');
+    }
+  });
+
+  it('rejects an index that no sample reaches', () => {
+    // Ten samples of a 41-node contour cover panels 0-9, so an LE at node 20
+    // would leave the second surface empty.
+    const pts = buildContour(21, 20);
+    const error = captureError(() =>
+      splitContourSurfaces(pts, { leadingEdgeIndex: 20, sampleCount: 10 }),
+    );
+    expect((error as SurfaceSplitError).code).toBe('invalid-leading-edge-index');
+    expect((error as SurfaceSplitError).message).toContain('[1, 9]');
   });
 });
 
-describe('splitSurfaces - sample count', () => {
+describe('splitContourSurfaces - sample count', () => {
   it('defaults to one sample per panel', () => {
     const pts = buildContour(21, 20);
-    const split = splitSurfaces(pts);
+    const split = splitContourSurfaces(pts);
     expect(split.upperIndices.concat(split.lowerIndices)).toEqual(indexRange(0, 40));
   });
 
@@ -287,7 +438,7 @@ describe('splitSurfaces - sample count', () => {
     // the lower surface instead of being dropped; the node slice stops at the
     // end of the contour, so callers must guard their own node lookups.
     const pts = buildContour(21, 20);
-    const split = splitSurfaces(pts, { sampleCount: pts.length });
+    const split = splitContourSurfaces(pts, { sampleCount: pts.length });
     expect(split.leadingEdgeIndex).toBe(20);
     expect(split.upperIndices).toEqual(indexRange(0, 20));
     expect(split.lowerIndices).toEqual(indexRange(20, 41));
@@ -296,7 +447,7 @@ describe('splitSurfaces - sample count', () => {
 
   it('respects a shorter sampleCount than the node count implies', () => {
     const pts = buildContour(21, 20);
-    const split = splitSurfaces(pts, { sampleCount: 30 });
+    const split = splitContourSurfaces(pts, { sampleCount: 30 });
     expect(split.leadingEdgeIndex).toBe(20);
     expect(split.upperIndices).toEqual(indexRange(0, 20));
     expect(split.lowerIndices).toEqual(indexRange(20, 30));
@@ -305,14 +456,14 @@ describe('splitSurfaces - sample count', () => {
 
   it('keeps both surfaces non-empty when there are fewer samples than the LE index', () => {
     const pts = buildContour(21, 20);
-    const split = splitSurfaces(pts, { sampleCount: 5 });
+    const split = splitContourSurfaces(pts, { sampleCount: 5 });
     expect(split.leadingEdgeIndex).toBe(4);
     expect(split.upperIndices).toEqual(indexRange(0, 4));
     expect(split.lowerIndices).toEqual([4]);
   });
 });
 
-describe('splitSurfaces - degenerate input', () => {
+describe('splitContourSurfaces - degenerate input', () => {
 
   it('never emits an empty surface for a splittable contour', () => {
     const pts: SurfaceSplitPoint[] = [
@@ -320,13 +471,13 @@ describe('splitSurfaces - degenerate input', () => {
       { x: 0, y: 0.05 },
       { x: 1, y: -0.01 },
     ];
-    const split = splitSurfaces(pts);
+    const split = splitContourSurfaces(pts);
     expect(split.upperIndices.length).toBeGreaterThan(0);
     expect(split.lowerIndices.length).toBeGreaterThan(0);
   });
 
   it('degrades to a single surface when there is not enough contour', () => {
-    const split = splitSurfaces([
+    const split = splitContourSurfaces([
       { x: 1, y: 0 },
       { x: 0, y: 0 },
     ]);
@@ -334,7 +485,7 @@ describe('splitSurfaces - degenerate input', () => {
     expect(split.lowerIndices).toEqual([]);
     expect(split.reversed).toBe(false);
 
-    const empty = splitSurfaces([]);
+    const empty = splitContourSurfaces([]);
     expect(empty.upperIndices).toEqual([]);
     expect(empty.lowerIndices).toEqual([]);
   });
@@ -347,7 +498,7 @@ describe('splitSurfaces - degenerate input', () => {
       { x: 0.5, y: 0 },
       { x: 1, y: 0 },
     ];
-    const split = splitSurfaces(pts);
+    const split = splitContourSurfaces(pts);
     expect(split.leadingEdgeIndex).toBe(2);
     expect(split.reversed).toBe(false);
     expect(split.upperIndices).toEqual([0, 1]);

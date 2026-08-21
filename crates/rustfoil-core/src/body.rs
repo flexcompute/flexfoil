@@ -3,12 +3,15 @@
 //! A `Body` represents a single aerodynamic element (airfoil, slat, flap, etc.)
 //! as a closed contour discretized into panels.
 //!
-//! # Multi-Body Support
-//! Unlike XFOIL's single-body limitation, RustFoil is designed from the ground
-//! up to support multiple bodies. A typical multi-element configuration might be:
-//! ```text
-//! bodies: Vec<Body> = vec![slat, main_wing, flap]
-//! ```
+//! # Multi-Element Groundwork
+//! `Body` is a single-element type: each instance owns its own contour, panels,
+//! and per-body trailing- and leading-edge indices, so a multi-element
+//! configuration can be held as a `Vec<Body>` without special-casing. That
+//! representation is groundwork rather than a working multi-body solver —
+//! paneling a configuration as a whole, inviscid interaction between elements,
+//! and viscous treatment of the resulting wakes and gaps are not implemented,
+//! and the current solve path operates on a single body. See the development
+//! phases in `README.md` for status.
 //!
 //! # Panel Ordering Convention
 //! Panels are ordered **counter-clockwise** starting from the trailing edge:

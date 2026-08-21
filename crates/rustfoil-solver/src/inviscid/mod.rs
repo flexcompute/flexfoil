@@ -1,23 +1,33 @@
 //! Inviscid flow solver using Mark Drela's Linear Vorticity Panel Method.
 //!
-//! # Status: visualization support, NOT the authoritative inviscid solver
+//! # Status: not the XFOIL-faithful inviscid path
 //!
-//! **This module is not the production inviscid solver.** It is an older,
-//! self-contained implementation that is retained because the [`velocity`] and
-//! [`smoke`] modules are built on top of it: they provide the flowfield,
-//! streamline and smoke visualizations (`compute_psi_grid`, `build_streamlines`,
-//! [`SmokeSystem`], ...) that the UI and WASM bindings draw.
+//! This module is an older, self-contained panel-method implementation. The
+//! XFOIL-faithful inviscid solver is the **`rustfoil-inviscid`** crate
+//! (`rustfoil_inviscid::InviscidSolver` / `rustfoil_inviscid::FactorizedSystem`),
+//! and new inviscid solver work belongs there rather than here.
 //!
-//! The XFOIL-faithful production inviscid path is the **`rustfoil-inviscid`**
-//! crate (`rustfoil_inviscid::InviscidSolver` / `rustfoil_inviscid::FactorizedSystem`).
-//! That is what `rustfoil-xfoil`, this crate's [`crate::viscous`] module, and the
-//! WASM/Python bindings use for the aerodynamic numbers they report.
+//! This module is still on live paths, in two distinct roles:
 //!
-//! **New inviscid solver work belongs in `rustfoil-inviscid`, not here.** In
-//! particular, multi-element / multi-body support must be built there: neither
-//! implementation solves more than one body today, and this one now rejects
-//! multi-body input outright rather than silently discarding geometry (see
-//! [`InviscidSolver::factorize`]).
+//! 1. **Flowfield visualization.** The [`velocity`] and [`smoke`] modules are
+//!    built on top of it and supply the streamline, ψ-grid and smoke data
+//!    (`compute_psi_grid`, `build_streamlines`, [`SmokeSystem`], ...) that the
+//!    UI draws through the WASM bindings.
+//! 2. **The inviscid-only analysis entry points**, which report the `cl`, `cm`
+//!    and `cp` they obtain from this module: `analyze_airfoil` and the
+//!    `RustFoil` class in `rustfoil-wasm`, and `analyze_inviscid` /
+//!    `analyze_inviscid_batch` in `rustfoil-python`.
+//!
+//! What does route through `rustfoil-inviscid` is the viscous, XFOIL-faithful
+//! path: `rustfoil-xfoil`, this crate's [`crate::viscous`] module, and the
+//! faithful binding entry points (`analyze_airfoil_faithful` in
+//! `rustfoil-wasm`, `analyze_faithful` / `analyze_faithful_batch` in
+//! `rustfoil-python`).
+//!
+//! Neither implementation solves more than one body today. Multi-element /
+//! multi-body capability is to be built in `rustfoil-inviscid`; this module
+//! reports multi-body input as unsupported rather than solving only the first
+//! body and dropping the rest (see [`InviscidSolver::factorize`]).
 //!
 //! This implements the exact panel method from XFOIL, using:
 //! - Linear vorticity distribution across each panel (node-based unknowns)
@@ -104,6 +114,14 @@ impl FlowConditions {
 /// [`cp`](Self::cp) are indexed by node over that one contour. There is no
 /// per-body segmentation, because this solver only accepts one body — see the
 /// module docs and [`InviscidSolver::factorize`].
+///
+/// # API note
+///
+/// A `nodes_per_body: Vec<usize>` field was removed from this struct while the
+/// crate is at 0.1.0. It could only ever hold one element, since the solver
+/// accepts exactly one body, and it had no readers. Per-body indexing will come
+/// from `rustfoil-inviscid` when multi-element support is built there, rather
+/// than from a placeholder here.
 #[derive(Debug, Clone)]
 pub struct InviscidSolution {
     /// Vorticity values at each node (γᵢ = surface velocity)
@@ -280,15 +298,16 @@ impl InviscidSolver {
     /// # Single body only
     ///
     /// The `&[Body]` parameter is historical: this solver has always handled
-    /// exactly one body. It used to take `bodies[0]` and silently discard the
-    /// rest; it now returns an error instead, so that dropped geometry cannot
-    /// pass unnoticed. Multi-element inviscid capability must be built in the
-    /// `rustfoil-inviscid` crate, not here — see the module docs.
+    /// exactly one body. It used to take `bodies[0]` and discard the rest
+    /// without reporting it; it now returns an error instead, so that dropped
+    /// geometry cannot pass unnoticed. Multi-element inviscid capability is to
+    /// be built in the `rustfoil-inviscid` crate, not here — see the module
+    /// docs.
     ///
     /// # Errors
     ///
     /// - [`SolverError::NoBodies`] if `bodies` is empty.
-    /// - [`SolverError::InvalidFlowConditions`] if `bodies` holds more than one body.
+    /// - [`SolverError::UnsupportedGeometry`] if `bodies` holds more than one body.
     /// - [`SolverError::InsufficientPanels`] if the body has fewer than 3 panels.
     /// - [`SolverError::SingularMatrix`] if the influence matrix cannot be solved.
     pub fn factorize(&self, bodies: &[Body]) -> SolverResult<FactorizedSolution> {
@@ -296,14 +315,13 @@ impl InviscidSolver {
             return Err(SolverError::NoBodies);
         }
 
-        // Single body only. Extra bodies were previously discarded in silence,
-        // which made this look multi-body-ready when it never was.
+        // Single body only. Extra bodies were previously dropped without being
+        // reported, which made this path look multi-body-ready when it is not.
         if bodies.len() > 1 {
-            return Err(SolverError::InvalidFlowConditions {
-                reason: "more than one body was supplied, but this solver \
-                         (rustfoil-solver's visualization-only inviscid path) handles \
-                         exactly one body; multi-element inviscid support belongs in the \
-                         rustfoil-inviscid crate, which is the authoritative solver",
+            return Err(SolverError::UnsupportedGeometry {
+                reason: "more than one body was supplied, but this inviscid solver \
+                         handles exactly one body; multi-element inviscid support is \
+                         to be built in the rustfoil-inviscid crate",
             });
         }
 
@@ -805,8 +823,8 @@ mod tests {
 
     #[test]
     fn test_multiple_bodies_rejected() {
-        // This solver is single-body only. Extra bodies used to be silently
-        // discarded; they must now produce a clear error instead.
+        // This solver is single-body only. Extra bodies used to be dropped
+        // without notice; they must now produce a clear error instead.
         let solver = InviscidSolver::new();
         let flow = FlowConditions::default();
         let main = make_naca0012(20);
@@ -814,10 +832,18 @@ mod tests {
 
         let result = solver.factorize(&[main.clone(), flap]);
         match result {
-            Err(SolverError::InvalidFlowConditions { reason }) => {
+            Err(err @ SolverError::UnsupportedGeometry { .. }) => {
+                // The rendered message is what reaches WASM/Python callers, so
+                // check it reads as a geometry problem and names where
+                // multi-element support is to be built.
+                let rendered = err.to_string();
                 assert!(
-                    reason.contains("rustfoil-inviscid"),
-                    "error should point at the authoritative solver, got: {reason}"
+                    rendered.starts_with("Unsupported geometry:"),
+                    "should render as a geometry problem, got: {rendered}"
+                );
+                assert!(
+                    rendered.contains("rustfoil-inviscid"),
+                    "should name where multi-element support belongs, got: {rendered}"
                 );
             }
             other => panic!("expected a multi-body rejection, got {other:?}"),

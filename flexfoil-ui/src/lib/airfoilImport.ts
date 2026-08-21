@@ -9,7 +9,7 @@ export interface ParsedAirfoilFile {
  * Result of parsing a `.dat` file, which may describe more than one element
  * (slat / main / flap). `elements` holds every element contour in file order;
  * `coordinates` is `elements[0]`, chosen explicitly for the single-element
- * consumers rather than by flattening every block into one bogus multi-loop
+ * consumers rather than a concatenation of every block into one multi-loop
  * contour.
  */
 export interface ParsedAirfoilDat extends ParsedAirfoilFile {
@@ -41,6 +41,22 @@ const MONOTONE_TOLERANCE = 1e-4;
 
 /** Minimum x-range overlap (as a fraction of the wider block's span) for two Lednicer surfaces. */
 const MIN_LEDNICER_X_OVERLAP = 0.5;
+
+/**
+ * Fewest points for a block to be accepted as a separate element on the strength
+ * of an annotation boundary alone. A coarse element contour still has to resolve
+ * both of its surfaces.
+ */
+const MIN_ANNOTATION_SPLIT_POINTS = 8;
+
+/**
+ * Chordwise distance travelled along a block divided by the block's chordwise
+ * span, above which the block is taken to be a contour rather than a single
+ * surface. A contour wraps round the leading edge, so x doubles back and the
+ * ratio is about 2 (the three elements of `30p-30n.dat` score 1.99 to 2.32); a
+ * surface runs one way only and scores about 1.
+ */
+const MIN_CONTOUR_TRAVERSAL_RATIO = 1.5;
 
 type RepanelAirfoil = (coordinates: AirfoilPoint[], nPanels: number) => AirfoilPoint[];
 
@@ -119,15 +135,18 @@ function annotateSurfaces(coordinates: AirfoilPoint[]): AirfoilPoint[] {
 }
 
 /**
- * One lexical item of a `.dat` file's coordinate section.
- *
- * `explicit` separators come from an XFOIL `999.0 999.0` line — the file states
- * an element boundary there. Implicit separators are blank lines, count lines,
- * comments and other non-coordinate text.
+ * What stated an element boundary in a `.dat` file.
+ *  - `sentinel`: an XFOIL `999.0 999.0` line — the file declares a boundary.
+ *  - `blank`: a blank line or a Lednicer count line.
+ *  - `annotation`: a comment or other text line. Honoured as a boundary only
+ *    when the resulting blocks look like separate parts (see `splitIntoElements`).
  */
+type SeparatorKind = 'sentinel' | 'blank' | 'annotation';
+
+/** One lexical item of a `.dat` file's coordinate section. */
 type DatToken =
   | { kind: 'point'; point: AirfoilPoint }
-  | { kind: 'separator'; explicit: boolean };
+  | { kind: 'separator'; separator: SeparatorKind };
 
 /** Split the file into a header plus a stream of points and element separators. */
 function tokenizeDat(text: string): { header: string | null; tokens: DatToken[] } {
@@ -138,10 +157,11 @@ function tokenizeDat(text: string): { header: string | null; tokens: DatToken[] 
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim();
 
-    // Checked before coordinate parsing so a separator can never be injected as
-    // a (999, 999) point.
+    // Checked before coordinate parsing so the sentinel is recognised as a
+    // declared element boundary. (`parseCoordinateLine` would reject it as an
+    // out-of-range coordinate, leaving only an implicit boundary behind.)
     if (isElementSeparatorLine(trimmed)) {
-      tokens.push({ kind: 'separator', explicit: true });
+      tokens.push({ kind: 'separator', separator: 'sentinel' });
       continue;
     }
 
@@ -152,13 +172,15 @@ function tokenizeDat(text: string): { header: string | null; tokens: DatToken[] 
       continue;
     }
 
-    // Any other line ends the current block. Blank lines are the block separator
-    // in multi-element files, and so are comment lines: the one multi-element
-    // file in the bundled library (`30p-30n.dat`) labels its elements with
-    // `# Slat` / `# Main Element` / `# Flap` and uses nothing else.
-    tokens.push({ kind: 'separator', explicit: false });
+    // Any other line ends the current block. A blank line is the block separator
+    // in Lednicer and multi-element files. A comment or other text line may be a
+    // boundary too (`30p-30n.dat` in the bundled library labels its elements
+    // `# Slat` / `# Main Element` / `# Flap` and uses nothing else) or may
+    // annotate one contour; which it is is decided in `splitIntoElements`.
+    const structural = !trimmed || isLikelyCountLine(trimmed);
+    tokens.push({ kind: 'separator', separator: structural ? 'blank' : 'annotation' });
 
-    if (!trimmed || isLikelyCountLine(trimmed)) continue;
+    if (structural) continue;
 
     // First non-blank, non-count, non-coordinate line is the header
     if (header === null && !sawPoint) {
@@ -176,11 +198,15 @@ function tokenizeDat(text: string): { header: string | null; tokens: DatToken[] 
  * and real `.dat` files do contain stray blank lines mid-contour (`cap21c.dat`
  * in the bundled library separates its closing trailing-edge point with two
  * blank lines). Such a fragment is re-joined to its neighbouring block so no
- * coordinate is lost and no bogus one-point "element" appears. A fragment after
- * an explicit `999.0` separator is kept as its own block: the file declared an
- * element there, so a degenerate element should be reported, not absorbed.
+ * coordinate is lost and no spurious one-point "element" appears. A fragment
+ * after an explicit `999.0` separator is kept as its own block: the file
+ * declared an element there, so a degenerate element should be reported, not
+ * absorbed.
+ *
+ * `annotationsSplit` selects whether annotation lines act as boundaries; see
+ * `splitIntoElements`, which folds the same tokens both ways.
  */
-function foldBlocks(tokens: DatToken[]): AirfoilPoint[][] {
+function foldBlocks(tokens: DatToken[], annotationsSplit: boolean): AirfoilPoint[][] {
   const raw: { points: AirfoilPoint[]; explicit: boolean }[] = [];
   let current: AirfoilPoint[] = [];
   // Whether the separator that opened `current` was an explicit 999.0 line.
@@ -192,13 +218,18 @@ function foldBlocks(tokens: DatToken[]): AirfoilPoint[][] {
       continue;
     }
 
+    if (token.separator === 'annotation' && !annotationsSplit) {
+      continue;
+    }
+    const explicit = token.separator === 'sentinel';
+
     if (current.length > 0) {
       raw.push({ points: current, explicit: currentExplicit });
       current = [];
-      currentExplicit = token.explicit;
+      currentExplicit = explicit;
     } else {
       // Consecutive separators: an explicit one still marks the next block.
-      currentExplicit = currentExplicit || token.explicit;
+      currentExplicit = currentExplicit || explicit;
     }
   }
   if (current.length > 0) {
@@ -257,6 +288,29 @@ function isMonotoneSurface(block: AirfoilPoint[]): boolean {
   return true;
 }
 
+/**
+ * True when a block looks like an element contour in its own right, rather than
+ * one annotated stretch of a longer contour.
+ *
+ * A contour that encloses an element wraps round its leading edge, so the
+ * chordwise distance travelled along it is about twice its chordwise span. A
+ * single surface (`# upper surface` up to `# lower surface`) runs one way only,
+ * so the two are about equal. See `MIN_CONTOUR_TRAVERSAL_RATIO`.
+ */
+function looksLikeElementContour(block: AirfoilPoint[]): boolean {
+  if (block.length < MIN_ANNOTATION_SPLIT_POINTS) return false;
+
+  const { min, max } = xRange(block);
+  const span = max - min;
+  if (span <= 0) return false;
+
+  let travelled = 0;
+  for (let i = 1; i < block.length; i += 1) {
+    travelled += Math.abs(block[i].x - block[i - 1].x);
+  }
+  return travelled / span >= MIN_CONTOUR_TRAVERSAL_RATIO;
+}
+
 /** Overlap of two blocks' x-ranges, as a fraction of the wider block's span. */
 function xOverlapFraction(a: AirfoilPoint[], b: AirfoilPoint[]): number {
   const ra = xRange(a);
@@ -270,8 +324,9 @@ function xOverlapFraction(a: AirfoilPoint[], b: AirfoilPoint[]): number {
 /**
  * Distinguish a genuine Lednicer file (two blocks that are the two SURFACES of
  * ONE airfoil) from a genuine two-ELEMENT configuration (e.g. main + flap).
- * Both can start near x = 0, so "starts at the LE" alone is not enough — that
- * ambiguity used to mangle two-element files into a reversed, concatenated loop.
+ * Both can start near x = 0, so "starts at the LE" alone is not enough: on that
+ * test alone a two-element file converts as though it were one airfoil, its first
+ * block reversed and the second appended.
  *
  * A Lednicer surface runs LE→TE and stops there, so:
  *  - it is NOT a closed contour (first point ≠ last point), and
@@ -313,13 +368,49 @@ function lednicerToSelig(groups: AirfoilPoint[][]): AirfoilPoint[] | null {
   return [...reversed, ...lower.slice(1)];
 }
 
+/**
+ * Whether honouring annotation lines as element boundaries produced blocks that
+ * really do look like separate parts of the file, rather than one contour cut up
+ * by its own annotations.
+ */
+function annotationSplitIsCredible(blocks: AirfoilPoint[][]): boolean {
+  // Two Lednicer surfaces are collapsed into one element downstream, so honouring
+  // an annotation between them changes nothing but keeps Lednicer detection
+  // working for a file whose only surface boundary is a comment line.
+  if (looksLikeLednicer(blocks)) return true;
+
+  return blocks.every(looksLikeElementContour);
+}
+
+/**
+ * Group the token stream into element blocks, deciding whether annotation lines
+ * are element boundaries or decoration.
+ *
+ * Blank lines and `999.0` sentinels always separate elements. A comment line is
+ * ambiguous: `30p-30n.dat` in the bundled library labels its three elements
+ * `# Slat` / `# Main Element` / `# Flap` and uses nothing else as a boundary,
+ * while a single-element file may just as reasonably carry `# upper surface`
+ * annotations mid-contour. Annotations are therefore honoured as boundaries only
+ * when the blocks they produce stand up as separate parts; otherwise they are
+ * decoration and the blocks stay joined.
+ */
+function splitIntoElements(tokens: DatToken[]): AirfoilPoint[][] {
+  const joined = foldBlocks(tokens, false);
+  const split = foldBlocks(tokens, true);
+
+  if (split.length > joined.length && annotationSplitIsCredible(split)) {
+    return split;
+  }
+  return joined;
+}
+
 export function parseAirfoilDat(text: string, fileName: string): ParsedAirfoilDat {
   const { header, tokens } = tokenizeDat(text);
-  const groups = foldBlocks(tokens);
+  const groups = splitIntoElements(tokens);
 
   // Lednicer's two blocks are two surfaces of one element, so they collapse to a
-  // single contour. Otherwise every block is its own element — never flattened
-  // together, which silently produced one bogus multi-loop contour.
+  // single contour. Otherwise every block is its own element, kept separate
+  // rather than concatenated into one multi-loop contour.
   const fromLednicer = lednicerToSelig(groups);
   const blocks = fromLednicer ? [fromLednicer] : groups;
 

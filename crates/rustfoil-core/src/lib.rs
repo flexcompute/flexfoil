@@ -27,15 +27,28 @@
 //!
 //! The intended shape of a configuration:
 //!
-//! ```text
+//! ```rust
+//! use rustfoil_core::body::Body;
+//! use rustfoil_core::point::point;
+//!
+//! // Placeholder contour, translated to stand in for each element.
+//! let coords = |x0: f64| vec![
+//!     point(x0 + 1.0, 0.0),
+//!     point(x0 + 0.5, -0.05),
+//!     point(x0, 0.0),
+//!     point(x0 + 0.5, 0.05),
+//!     point(x0 + 1.0, 0.0),
+//! ];
+//!
 //! // Each element is an independent Body.
-//! let slat = Body::from_points("slat", &slat_coords)?;
-//! let main = Body::from_points("main", &main_coords)?;
-//! let flap = Body::from_points("flap", &flap_coords)?;
+//! let slat = Body::from_points("slat", &coords(-0.9)).expect("closed contour");
+//! let main = Body::from_points("main", &coords(0.0)).expect("closed contour");
+//! let flap = Body::from_points("flap", &coords(0.9)).expect("closed contour");
 //!
 //! // Building the collection is supported today; solving the aerodynamic
 //! // interaction between its members is not yet.
 //! let configuration = vec![slat, main, flap];
+//! assert_eq!(configuration.len(), 3);
 //! ```
 //!
 //! Flap deflection in [`flap`] is XFOIL's plain flap: it rotates a region of

@@ -227,27 +227,226 @@ fn interp_y(surface: &[Point], target_x: f64) -> f64 {
     0.0
 }
 
-/// Parse a Selig/Lednicer .dat file and return coordinate tuples.
+/// Fewest coordinates that can plausibly describe one element contour. Shorter
+/// runs are treated as stray fragments, not elements (see [`fold_blocks`]).
+const MIN_ELEMENT_POINTS: usize = 3;
+
+/// XFOIL / MSES element separator sentinel. A `999.0  999.0` line marks an
+/// element boundary; per XFOIL convention any coordinate pair whose both values
+/// reach the sentinel is a separator, never a real point.
+const ELEMENT_SEPARATOR_SENTINEL: f64 = 999.0;
+
+/// Largest first-to-last-point distance, as a fraction of chord, still read as a
+/// closed element contour. Elements in the bundled airfoil library close to
+/// within 2.3% of chord, whereas a single surface run spans a full chord.
+const MAX_CONTOUR_GAP_FRACTION: f64 = 0.25;
+
+/// One lexical item of the coordinate section of a `.dat` file.
+enum DatToken {
+    Point((f64, f64)),
+    /// Element boundary stated by the file: a `999.0 999.0` line.
+    ExplicitSeparator,
+    /// Blank line: an element boundary in multi-element files.
+    BlankSeparator,
+    /// Comment line: a boundary only when the file reads as multi-element, see
+    /// [`comment_lines_delimit_elements`].
+    Comment,
+}
+
+/// Split the coordinate section of a `.dat` file into tokens.
 ///
-/// Returns a list of (x, y) tuples. Skips header lines automatically.
-#[pyfunction]
-fn parse_dat_file(path: &str) -> PyResult<Vec<(f64, f64)>> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{e}")))?;
-    let mut coords = Vec::new();
+/// Lines that do not read as a coordinate pair (name lines, Lednicer counts,
+/// prose) contribute nothing, as before: only coordinate pairs become points.
+fn tokenize_dat(text: &str) -> Vec<DatToken> {
+    let mut tokens = Vec::new();
+
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
+            tokens.push(DatToken::BlankSeparator);
+            continue;
+        }
+        if trimmed.starts_with('#') {
+            tokens.push(DatToken::Comment);
             continue;
         }
         let parts: Vec<&str> = trimmed.split_whitespace().collect();
         if parts.len() >= 2 {
             if let (Ok(x), Ok(y)) = (parts[0].parse::<f64>(), parts[1].parse::<f64>()) {
-                coords.push((x, y));
+                // Checked before the point is kept, so a `999.0 999.0`
+                // separator can never be spliced into the contour.
+                if x >= ELEMENT_SEPARATOR_SENTINEL && y >= ELEMENT_SEPARATOR_SENTINEL {
+                    tokens.push(DatToken::ExplicitSeparator);
+                } else {
+                    tokens.push(DatToken::Point((x, y)));
+                }
             }
         }
     }
-    Ok(coords)
+
+    tokens
+}
+
+/// Fold a token stream into element blocks, optionally treating comment lines
+/// as boundaries.
+///
+/// A run of fewer than [`MIN_ELEMENT_POINTS`] points cannot be an element
+/// contour, and real `.dat` files do contain stray blank lines mid-contour, so
+/// such a fragment is re-joined to its neighbouring block: no coordinate is lost
+/// and no bogus one-point "element" appears. A fragment following an explicit
+/// `999.0` separator is kept as its own block, because the file declared an
+/// element there and a degenerate element should be reported, not absorbed.
+fn fold_blocks(tokens: &[DatToken], comments_split: bool) -> Vec<Vec<(f64, f64)>> {
+    // (points, whether the separator that opened this block was explicit)
+    let mut raw: Vec<(Vec<(f64, f64)>, bool)> = Vec::new();
+    let mut current: Vec<(f64, f64)> = Vec::new();
+    let mut current_explicit = false;
+
+    for token in tokens {
+        let explicit = match token {
+            DatToken::Point(p) => {
+                current.push(*p);
+                continue;
+            }
+            DatToken::ExplicitSeparator => true,
+            DatToken::BlankSeparator => false,
+            DatToken::Comment => {
+                if !comments_split {
+                    continue;
+                }
+                false
+            }
+        };
+
+        if current.is_empty() {
+            // Consecutive separators: an explicit one still marks the block
+            // that follows.
+            current_explicit = current_explicit || explicit;
+        } else {
+            raw.push((std::mem::take(&mut current), current_explicit));
+            current_explicit = explicit;
+        }
+    }
+    if !current.is_empty() {
+        raw.push((current, current_explicit));
+    }
+
+    let mut blocks: Vec<Vec<(f64, f64)>> = Vec::new();
+    // Fragment held over because there is no preceding block to join it to.
+    let mut carry: Vec<(f64, f64)> = Vec::new();
+
+    for (points, explicit) in raw {
+        let mut block = std::mem::take(&mut carry);
+        block.extend(points);
+
+        if block.len() < MIN_ELEMENT_POINTS && !explicit {
+            match blocks.last_mut() {
+                Some(previous) => previous.extend(block),
+                None => carry = block,
+            }
+            continue;
+        }
+
+        blocks.push(block);
+    }
+    if !carry.is_empty() {
+        blocks.push(carry);
+    }
+
+    blocks
+}
+
+/// Whether a run of coordinates reads as one element contour on its own: enough
+/// points, extent in both directions, and ends that meet near a trailing edge
+/// rather than at opposite ends of the chord.
+fn looks_like_element_contour(points: &[(f64, f64)]) -> bool {
+    if points.len() < MIN_ELEMENT_POINTS {
+        return false;
+    }
+
+    let (mut x_min, mut x_max) = (f64::INFINITY, f64::NEG_INFINITY);
+    let (mut y_min, mut y_max) = (f64::INFINITY, f64::NEG_INFINITY);
+    for &(x, y) in points {
+        if !x.is_finite() || !y.is_finite() {
+            return false;
+        }
+        x_min = x_min.min(x);
+        x_max = x_max.max(x);
+        y_min = y_min.min(y);
+        y_max = y_max.max(y);
+    }
+
+    let chord = x_max - x_min;
+    if chord <= 0.0 || y_max - y_min <= 0.0 {
+        return false;
+    }
+
+    let (first, last) = (points[0], points[points.len() - 1]);
+    let gap = ((last.0 - first.0).powi(2) + (last.1 - first.1).powi(2)).sqrt();
+    gap <= MAX_CONTOUR_GAP_FRACTION * chord
+}
+
+/// Whether the comment lines in a file delimit elements rather than annotate
+/// one.
+///
+/// Conservative on purpose: splitting on comments is accepted only when it
+/// yields additional blocks *and* every resulting block reads as an element
+/// contour on its own. Otherwise the comments are ignored, which is how
+/// annotated single-element files (a licence banner, a note between two
+/// coordinates) have always been read.
+///
+/// `rustfoil-cli` applies its own comment rule to the same files; the two are
+/// kept in single named helpers so they can be reconciled.
+fn comment_lines_delimit_elements(
+    candidate: &[Vec<(f64, f64)>],
+    baseline: &[Vec<(f64, f64)>],
+) -> bool {
+    candidate.len() > baseline.len()
+        && candidate
+            .iter()
+            .all(|block| looks_like_element_contour(block))
+}
+
+/// Parse the coordinate section of a `.dat` file into one block per element.
+///
+/// Blank lines and XFOIL `999.0 999.0` separator lines always split elements, so
+/// a slat/main/flap file yields one block per element instead of one
+/// concatenated multi-loop contour with a (999, 999) point spliced in. Comment
+/// lines split only under [`comment_lines_delimit_elements`].
+fn parse_dat_elements(text: &str) -> Vec<Vec<(f64, f64)>> {
+    let tokens = tokenize_dat(text);
+    let baseline = fold_blocks(&tokens, false);
+    let candidate = fold_blocks(&tokens, true);
+
+    if comment_lines_delimit_elements(&candidate, &baseline) {
+        candidate
+    } else {
+        baseline
+    }
+}
+
+/// Parse a Selig/Lednicer .dat file and return coordinate tuples.
+///
+/// Returns a list of (x, y) tuples. Skips header lines automatically. A
+/// multi-element file is reported instead of being concatenated into one
+/// multi-loop contour.
+#[pyfunction]
+fn parse_dat_file(path: &str) -> PyResult<Vec<(f64, f64)>> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("{e}")))?;
+    let elements = parse_dat_elements(&text);
+
+    if elements.len() > 1 {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "{path}: this file contains {} elements; multi-element configurations are not yet \
+             supported by parse_dat_file",
+            elements.len()
+        )));
+    }
+
+    // A file with no coordinates at all still returns an empty list, as before;
+    // the caller reports it.
+    Ok(elements.into_iter().next().unwrap_or_default())
 }
 
 fn solve_one_faithful(body: &Body, alpha_deg: f64, options: &XfoilOptions) -> FaithfulResult {
@@ -547,4 +746,334 @@ fn _rustfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_dat_file, m)?)?;
     m.add_function(wrap_pyfunction!(get_bl_distribution, m)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod dat_parsing_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn read(relative: &str) -> String {
+        let path = repo_root().join(relative);
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    }
+
+    /// The parser as it read files before element blocks existed: every line
+    /// that yields a coordinate pair, in file order. Used as the reference for
+    /// the corpus differential below.
+    fn legacy_coords(text: &str) -> Vec<(f64, f64)> {
+        let mut coords = Vec::new();
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if parts.len() >= 2 {
+                if let (Ok(x), Ok(y)) = (parts[0].parse::<f64>(), parts[1].parse::<f64>()) {
+                    coords.push((x, y));
+                }
+            }
+        }
+        coords
+    }
+
+    /// Chordwise stations, TE -> LE.
+    const STATIONS: [f64; 7] = [1.0, 0.8, 0.6, 0.4, 0.2, 0.05, 0.0];
+    const POINTS_PER_ELEMENT: usize = STATIONS.len() * 2 - 1;
+
+    /// A closed element contour (TE -> upper -> LE -> lower -> TE) with leading
+    /// edge at `x_le` and the given chord.
+    fn closed_element(x_le: f64, chord: f64) -> String {
+        let half = |t: f64| chord * 0.08 * (std::f64::consts::PI * t).sin();
+        let place = |t: f64| x_le + chord * t;
+
+        let mut lines: Vec<String> = STATIONS
+            .iter()
+            .map(|&t| format!(" {:.6} {:.6}", place(t), half(t)))
+            .collect();
+        lines.extend(
+            STATIONS
+                .iter()
+                .rev()
+                .skip(1)
+                .map(|&t| format!(" {:.6} {:.6}", place(t), -half(t))),
+        );
+        lines.join("\n")
+    }
+
+    fn three_elements(joiner: &str) -> String {
+        format!(
+            "MULTI\n{}{joiner}{}{joiner}{}\n",
+            closed_element(-0.1, 0.15),
+            closed_element(0.0, 1.0),
+            closed_element(0.85, 0.45),
+        )
+    }
+
+    #[test]
+    fn blank_lines_split_elements() {
+        let elements = parse_dat_elements(&three_elements("\n\n\n"));
+
+        assert_eq!(elements.len(), 3);
+        for element in &elements {
+            assert_eq!(element.len(), POINTS_PER_ELEMENT);
+        }
+    }
+
+    #[test]
+    fn sentinel_line_is_a_separator_not_a_coordinate() {
+        let elements = parse_dat_elements(&three_elements("\n 999.0 999.0\n"));
+
+        assert_eq!(elements.len(), 3);
+        assert_eq!(
+            elements.iter().map(|e| e.len()).sum::<usize>(),
+            3 * POINTS_PER_ELEMENT
+        );
+        assert!(
+            elements
+                .iter()
+                .flatten()
+                .all(|&(x, y)| x < ELEMENT_SEPARATOR_SENTINEL && y < ELEMENT_SEPARATOR_SENTINEL),
+            "a (999, 999) point was kept as a coordinate"
+        );
+    }
+
+    #[test]
+    fn sentinel_tolerates_whitespace_and_format_variation() {
+        for separator in [
+            "\n   999.   999.  \n",
+            "\n999.000000\t999.000000\n",
+            "\n 1e3 1e3\n",
+        ] {
+            let elements = parse_dat_elements(&three_elements(separator));
+            assert_eq!(
+                elements.len(),
+                3,
+                "separator {separator:?} was not recognised"
+            );
+            assert!(elements
+                .iter()
+                .flatten()
+                .all(|&(x, _)| x < ELEMENT_SEPARATOR_SENTINEL));
+        }
+    }
+
+    #[test]
+    fn explicitly_declared_degenerate_element_is_not_absorbed() {
+        let text = format!(
+            "BROKEN\n{}\n 999.0 999.0\n 0.5 0.0\n",
+            closed_element(0.0, 1.0)
+        );
+
+        let elements = parse_dat_elements(&text);
+
+        assert_eq!(elements.len(), 2);
+        assert_eq!(elements[0].len(), POINTS_PER_ELEMENT);
+        assert_eq!(elements[1].len(), 1);
+    }
+
+    #[test]
+    fn comment_labelled_elements_are_split() {
+        let text = format!(
+            "# Mini 30P-30N\n# Slat\n{}\n# Main Element\n{}\n# Flap\n{}\n",
+            closed_element(-0.1, 0.15),
+            closed_element(0.0, 1.0),
+            closed_element(0.85, 0.45),
+        );
+
+        let elements = parse_dat_elements(&text);
+
+        assert_eq!(elements.len(), 3);
+        for element in &elements {
+            assert_eq!(element.len(), POINTS_PER_ELEMENT);
+        }
+    }
+
+    /// A comment that annotates one element must not split it. Surface labels
+    /// are the realistic case: each half spans the whole chord and its ends do
+    /// not meet, so neither half reads as a contour.
+    #[test]
+    fn comment_between_surfaces_is_annotation_not_a_boundary() {
+        let element = closed_element(0.0, 1.0);
+        let lines: Vec<&str> = element.lines().collect();
+        let (upper, lower) = lines.split_at(STATIONS.len());
+        let text = format!(
+            "ANNOTATED\n# upper surface\n{}\n# lower surface\n{}\n",
+            upper.join("\n"),
+            lower.join("\n"),
+        );
+
+        let elements = parse_dat_elements(&text);
+
+        assert_eq!(elements.len(), 1, "an annotated single element was split");
+        assert_eq!(elements[0].len(), POINTS_PER_ELEMENT);
+        assert_eq!(elements[0], legacy_coords(&text));
+    }
+
+    #[test]
+    fn stray_blank_line_inside_an_element_is_rejoined() {
+        let text = format!(
+            "CAP 21 (mini)\n{}\n\n\n 0.998900 -0.001006\n",
+            closed_element(0.0, 1.0)
+        );
+
+        let elements = parse_dat_elements(&text);
+
+        assert_eq!(elements.len(), 1);
+        assert_eq!(elements[0].len(), POINTS_PER_ELEMENT + 1);
+        assert_eq!(elements[0].last().unwrap().0, 0.9989);
+    }
+
+    #[test]
+    fn short_input_is_returned_rather_than_rejected() {
+        // Two points is not an airfoil, but reporting that is the caller's job:
+        // the parser has always handed back whatever coordinates it found.
+        let elements = parse_dat_elements("SHORT\n 1.0 0.0\n 0.0 0.0\n");
+
+        assert_eq!(elements.len(), 1);
+        assert_eq!(elements[0].len(), 2);
+    }
+
+    #[test]
+    fn file_without_coordinates_yields_no_elements() {
+        assert!(parse_dat_elements("JUST A NAME\n# and a note\n").is_empty());
+        assert!(parse_dat_elements("").is_empty());
+    }
+
+    /// The one genuine multi-element file in the bundled airfoil library: three
+    /// elements labelled with comments, previously read as a single 664-point
+    /// three-loop contour.
+    #[test]
+    fn real_mda_30p_30n_file_is_three_elements() {
+        let text = read("flexfoil-ui/public/airfoils/30p-30n.dat");
+
+        let elements = parse_dat_elements(&text);
+
+        assert_eq!(
+            elements.iter().map(|e| e.len()).collect::<Vec<_>>(),
+            vec![201, 221, 242]
+        );
+        // No coordinate is lost or reordered by the split.
+        assert_eq!(
+            elements.into_iter().flatten().collect::<Vec<_>>(),
+            legacy_coords(&text)
+        );
+    }
+
+    #[test]
+    fn real_single_element_files_are_unchanged() {
+        for relative in [
+            "testdata/naca0012.dat",
+            "testdata/naca2412.dat",
+            // Licence banner on line 2, before any coordinate.
+            "flexfoil-ui/public/airfoils/s9104.dat",
+            // Closing trailing-edge point after two blank lines.
+            "flexfoil-ui/public/airfoils/cap21c.dat",
+        ] {
+            let text = read(relative);
+            let elements = parse_dat_elements(&text);
+
+            assert_eq!(elements.len(), 1, "{relative} was split");
+            assert_eq!(elements[0], legacy_coords(&text), "{relative} changed");
+        }
+    }
+
+    /// Differential over the whole bundled corpus: no coordinate may be added,
+    /// dropped or reordered in any file, and every file that stops reading as a
+    /// single element must consist of blocks that each read as an element
+    /// contour on their own.
+    #[test]
+    fn corpus_differential_keeps_single_element_files_intact() {
+        let mut checked: Vec<String> = Vec::new();
+        let mut multi_element: Vec<String> = Vec::new();
+
+        for directory in ["flexfoil-ui/public/airfoils", "testdata"] {
+            let dir = repo_root().join(directory);
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                // The corpus is not vendored in every checkout; the targeted
+                // tests above still cover the behaviour.
+                Err(_) => continue,
+            };
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("dat") {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let name = entry.file_name().to_string_lossy().into_owned();
+
+                let elements = parse_dat_elements(&text);
+                let flattened: Vec<(f64, f64)> = elements.iter().flatten().copied().collect();
+                assert_eq!(
+                    flattened,
+                    legacy_coords(&text),
+                    "coordinates changed for {}",
+                    path.display()
+                );
+
+                if elements.len() > 1 {
+                    // The split has to justify itself: a file read as several
+                    // elements must be several element contours.
+                    for (i, element) in elements.iter().enumerate() {
+                        assert!(
+                            looks_like_element_contour(element),
+                            "{}: block {i} ({} points) is not an element contour",
+                            path.display(),
+                            element.len()
+                        );
+                    }
+                    multi_element.push(name.clone());
+                }
+                checked.push(name);
+            }
+        }
+
+        assert!(!checked.is_empty(), "no .dat files were checked");
+        // The bundled airfoil library is single-element apart from the MDA
+        // 30P-30N high-lift section and its test fixtures.
+        assert!(
+            multi_element.len() * 100 < checked.len(),
+            "{} of {} files were read as multi-element: {multi_element:?}",
+            multi_element.len(),
+            checked.len()
+        );
+        if checked.iter().any(|name| name == "30p-30n.dat") {
+            assert!(
+                multi_element.iter().any(|name| name == "30p-30n.dat"),
+                "30p-30n.dat was not recognised as multi-element"
+            );
+        }
+    }
+
+    #[test]
+    fn contour_plausibility_discriminates_surfaces_from_elements() {
+        let element: Vec<(f64, f64)> = legacy_coords(&closed_element(0.0, 1.0));
+        assert!(looks_like_element_contour(&element));
+
+        // Half a contour: ends a chord apart.
+        assert!(!looks_like_element_contour(&element[..STATIONS.len()]));
+        // Too few points, no thickness, and no chordwise extent.
+        assert!(!looks_like_element_contour(&element[..2]));
+        assert!(!looks_like_element_contour(&[
+            (0.0, 0.0),
+            (0.5, 0.0),
+            (1.0, 0.0),
+            (0.0, 0.0)
+        ]));
+        assert!(!looks_like_element_contour(&[
+            (0.5, -0.1),
+            (0.5, 0.0),
+            (0.5, 0.1),
+            (0.5, -0.1)
+        ]));
+    }
 }

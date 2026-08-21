@@ -34,19 +34,22 @@
 //!   flowfield/streamline/smoke visualization helpers built on it
 //! - [`viscous`] - Viscous boundary layer solver (VISCAL)
 //!
-//! # Which inviscid solver is authoritative?
+//! # Which inviscid solver is XFOIL-faithful?
 //!
-//! Not this crate's. The XFOIL-faithful production inviscid solver is the
+//! Not this crate's. The XFOIL-faithful inviscid solver is the
 //! **`rustfoil-inviscid`** crate, and that is what [`viscous`] itself calls.
-//! [`inviscid`] is an older self-contained duplicate kept alive because the
-//! visualization code ([`inviscid::velocity`], [`inviscid::smoke`]) is built on
-//! it. It is single-body only, and new inviscid solver work — multi-element
-//! included — belongs in `rustfoil-inviscid`.
+//! [`inviscid`] is an older, self-contained implementation of the same panel
+//! method. It is still live on two paths: the visualization code
+//! ([`inviscid::velocity`], [`inviscid::smoke`]) is built on it, and the
+//! inviscid-only entry points of the WASM and Python bindings report its `cl`,
+//! `cm` and `cp`. It is single-body only, and new inviscid solver work —
+//! multi-element included — belongs in `rustfoil-inviscid`. See the
+//! [`inviscid`] module docs for the per-entry-point breakdown.
 //!
 //! # Example
 //!
-//! Note: this sketch drives the visualization inviscid solver in [`inviscid`].
-//! Production code should factorize with `rustfoil_inviscid::InviscidSolver`
+//! Note: this sketch drives the inviscid solver in [`inviscid`]. For the
+//! XFOIL-faithful path, factorize with `rustfoil_inviscid::InviscidSolver`
 //! instead (see [`viscous::setup_from_body`]).
 //!
 //! ```ignore
@@ -73,17 +76,18 @@
 //! println!("CL = {:.4}, CD = {:.5}", result.cl, result.cd);
 //! ```
 
-// NOT the authoritative inviscid solver: kept for the flowfield/streamline/smoke
-// visualizations (`inviscid::velocity`, `inviscid::smoke`) that are built on it, and
-// single-body only. The XFOIL-faithful production solver is the `rustfoil-inviscid`
-// crate — put new inviscid work (including multi-element) there.
+// Not the XFOIL-faithful inviscid solver, and single-body only. Live for the
+// flowfield/streamline/smoke visualizations (`inviscid::velocity`,
+// `inviscid::smoke`) built on it and for the bindings' inviscid-only entry
+// points. The XFOIL-faithful solver is the `rustfoil-inviscid` crate — put new
+// inviscid work (including multi-element) there.
 pub mod inviscid;
 pub mod viscous;
 
 // Re-export main types for convenience
 pub use inviscid::{SolverError, SolverResult};
 
-// Re-export inviscid types (visualization solver — see the note on `mod inviscid`)
+// Re-export inviscid types (see the note on `mod inviscid`)
 pub use inviscid::{FlowConditions, InviscidSolution, InviscidSolver, FactorizedSolution};
 
 // Re-export viscous types

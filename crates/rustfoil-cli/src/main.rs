@@ -1188,12 +1188,34 @@ const MIN_ELEMENT_POINTS: usize = 3;
 /// reach the sentinel is a separator, never a real point.
 const ELEMENT_SEPARATOR_SENTINEL: f64 = 999.0;
 
+/// Fewest points for a block to be accepted as a separate element on the
+/// strength of a comment boundary alone. A coarse element contour still has to
+/// resolve both of its surfaces.
+const MIN_COMMENT_SPLIT_POINTS: usize = 8;
+
+/// Chordwise distance travelled along a block divided by the block's chordwise
+/// span, above which the block is taken to be a contour rather than a single
+/// surface. A contour wraps round the leading edge, so x doubles back and the
+/// ratio is about 2 (the three elements of `30p-30n.dat` score 1.99 to 2.32); a
+/// surface runs one way only and scores about 1.
+const MIN_CONTOUR_TRAVERSAL_RATIO: f64 = 1.5;
+
+/// What stated an element boundary in a `.dat` file.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SeparatorKind {
+    /// A `999.0 999.0` line: the file declares a boundary here.
+    Sentinel,
+    /// A blank line.
+    Blank,
+    /// A comment line. Honoured as a boundary only when the resulting blocks
+    /// all look like element contours (see [`split_into_elements`]).
+    Comment,
+}
+
 /// One lexical item of the coordinate section of a `.dat` file.
 enum DatToken {
     Point(Point),
-    /// Element boundary. `explicit` is true for a `999.0 999.0` line (the file
-    /// states a boundary), false for a blank or comment line.
-    Separator { explicit: bool },
+    Separator(SeparatorKind),
 }
 
 /// Fold a token stream into element blocks.
@@ -1201,10 +1223,13 @@ enum DatToken {
 /// A run of fewer than [`MIN_ELEMENT_POINTS`] points cannot be an element
 /// contour, and real `.dat` files do contain stray blank lines mid-contour, so
 /// such a fragment is re-joined to its neighbouring block: no coordinate is lost
-/// and no bogus one-point "element" appears. A fragment following an explicit
+/// and no spurious one-point "element" appears. A fragment following an explicit
 /// `999.0` separator is kept as its own block, because the file declared an
 /// element there and a degenerate element should be reported, not absorbed.
-fn fold_blocks(tokens: Vec<DatToken>) -> Vec<Vec<Point>> {
+///
+/// `comments_split` selects whether comment lines act as boundaries; see
+/// [`split_into_elements`], which folds the same tokens both ways.
+fn fold_blocks(tokens: &[DatToken], comments_split: bool) -> Vec<Vec<Point>> {
     // (points, whether the separator that opened this block was explicit)
     let mut raw: Vec<(Vec<Point>, bool)> = Vec::new();
     let mut current: Vec<Point> = Vec::new();
@@ -1212,8 +1237,12 @@ fn fold_blocks(tokens: Vec<DatToken>) -> Vec<Vec<Point>> {
 
     for token in tokens {
         match token {
-            DatToken::Point(p) => current.push(p),
-            DatToken::Separator { explicit } => {
+            DatToken::Point(p) => current.push(*p),
+            DatToken::Separator(kind) => {
+                if *kind == SeparatorKind::Comment && !comments_split {
+                    continue;
+                }
+                let explicit = *kind == SeparatorKind::Sentinel;
                 if current.is_empty() {
                     // Consecutive separators: an explicit one still marks the
                     // block that follows.
@@ -1254,11 +1283,58 @@ fn fold_blocks(tokens: Vec<DatToken>) -> Vec<Vec<Point>> {
     blocks
 }
 
+/// True when a block looks like an element contour in its own right, rather than
+/// one annotated stretch of a longer contour.
+///
+/// A contour that encloses an element wraps round its leading edge, so the
+/// chordwise distance travelled along it is about twice its chordwise span. A
+/// single surface (`# upper surface` up to `# lower surface`) runs one way only,
+/// so the two are about equal. See [`MIN_CONTOUR_TRAVERSAL_RATIO`].
+fn looks_like_element_contour(block: &[Point]) -> bool {
+    if block.len() < MIN_COMMENT_SPLIT_POINTS {
+        return false;
+    }
+
+    let (min_x, max_x) = block
+        .iter()
+        .fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p.x), hi.max(p.x)));
+    let span = max_x - min_x;
+    if span <= 0.0 {
+        return false;
+    }
+
+    let travelled: f64 = block.windows(2).map(|w| (w[1].x - w[0].x).abs()).sum();
+    travelled / span >= MIN_CONTOUR_TRAVERSAL_RATIO
+}
+
+/// Group a token stream into element blocks, deciding whether comment lines are
+/// element boundaries or decoration.
+///
+/// Blank lines and `999.0` sentinels always separate elements. A comment line is
+/// ambiguous: `30p-30n.dat` in the bundled airfoil library labels its three
+/// elements `# Slat` / `# Main Element` / `# Flap` and uses nothing else as a
+/// boundary, while a single-element file may just as reasonably carry
+/// `# upper surface` annotations mid-contour. Comments are therefore honoured as
+/// boundaries only when every resulting block looks like an element contour in
+/// its own right; otherwise they are decoration and the blocks stay joined.
+fn split_into_elements(tokens: &[DatToken]) -> Vec<Vec<Point>> {
+    let joined = fold_blocks(tokens, false);
+    let split = fold_blocks(tokens, true);
+
+    if split.len() > joined.len() && split.iter().all(|b| looks_like_element_contour(b)) {
+        split
+    } else {
+        joined
+    }
+}
+
 /// Load every element of a Selig/XFOIL format .dat file.
 ///
-/// Blank lines, comment lines and XFOIL `999.0 999.0` separator lines all split
-/// elements, so a slat/main/flap file yields one block per element instead of
-/// one concatenated multi-loop contour with a (999, 999) point spliced in.
+/// Blank lines and XFOIL `999.0 999.0` separator lines split elements, as do
+/// comment lines when the blocks they produce all look like element contours
+/// (see [`split_into_elements`]). A slat/main/flap file therefore yields one
+/// block per element instead of one concatenated multi-loop contour with a
+/// (999, 999) point spliced in.
 ///
 /// Format:
 /// ```text
@@ -1307,14 +1383,17 @@ fn load_airfoil_blocks(path: &PathBuf) -> Result<(String, Vec<Vec<Point>>), CliE
     for (i, raw_line) in lines.enumerate() {
         let line = raw_line.trim();
 
-        // A blank line separates elements in multi-element files. So does a
-        // comment line: the one multi-element file in the bundled library
-        // (`30p-30n.dat`) labels its elements with `# Slat` / `# Main Element` /
-        // `# Flap` and uses nothing else as a boundary. A run of fewer than
-        // MIN_ELEMENT_POINTS points is re-joined by `fold_blocks`, so leading
-        // comment banners and stray comments between two points cost nothing.
-        if line.is_empty() || line.starts_with('#') {
-            tokens.push(DatToken::Separator { explicit: false });
+        // A blank line separates elements in multi-element files. A comment line
+        // may do the same (`30p-30n.dat` in the bundled library labels its
+        // elements `# Slat` / `# Main Element` / `# Flap` and uses nothing else
+        // as a boundary) or may be a mid-contour annotation; which one it is is
+        // decided in `split_into_elements`, not here.
+        if line.is_empty() {
+            tokens.push(DatToken::Separator(SeparatorKind::Blank));
+            continue;
+        }
+        if line.starts_with('#') {
+            tokens.push(DatToken::Separator(SeparatorKind::Comment));
             continue;
         }
 
@@ -1336,14 +1415,14 @@ fn load_airfoil_blocks(path: &PathBuf) -> Result<(String, Vec<Vec<Point>>), CliE
         // Checked before the point is kept, so a `999.0 999.0` separator can
         // never be spliced into the contour as a coordinate.
         if x >= ELEMENT_SEPARATOR_SENTINEL && y >= ELEMENT_SEPARATOR_SENTINEL {
-            tokens.push(DatToken::Separator { explicit: true });
+            tokens.push(DatToken::Separator(SeparatorKind::Sentinel));
             continue;
         }
 
         tokens.push(DatToken::Point(point(x, y)));
     }
 
-    let blocks = fold_blocks(tokens);
+    let blocks = split_into_elements(&tokens);
 
     if blocks.is_empty() {
         return Err(CliError::Parse {
@@ -1358,8 +1437,8 @@ fn load_airfoil_blocks(path: &PathBuf) -> Result<(String, Vec<Vec<Point>>), CliE
 /// Load a single-element airfoil from a Selig/XFOIL format .dat file.
 ///
 /// Thin wrapper over [`load_airfoil_blocks`] for the commands that only handle
-/// one element. A multi-element file is reported instead of being silently
-/// concatenated into one bogus multi-loop contour.
+/// one element. A multi-element file is reported rather than concatenated into
+/// one multi-loop contour.
 fn load_airfoil(path: &PathBuf) -> Result<(String, Vec<Point>), CliError> {
     let (name, mut blocks) = load_airfoil_blocks(path)?;
 
@@ -1492,21 +1571,60 @@ mod tests {
         }
     }
 
-    /// The one genuine multi-element file in the bundled airfoil library: three
-    /// elements labelled with comments, previously concatenated into a single
-    /// 664-point three-loop contour with no error at all.
+    /// Real coordinates, comment-labelled elements: a trimmed subsample of the
+    /// MDA 30P-30N slat/main/flap file, whose only element boundaries are
+    /// `# Slat` / `# Main Element` / `# Flap`.
     #[test]
-    fn real_mda_30p_30n_file_is_three_elements() {
+    fn real_comment_labelled_multi_element_file_is_three_elements() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../flexfoil-ui/public/airfoils/30p-30n.dat");
+            .join("../../testdata/mda_30p_30n_trimmed.dat");
 
-        let (_, blocks) = load_airfoil_blocks(&path).expect("parse 30p-30n.dat");
+        let (_, blocks) = load_airfoil_blocks(&path).expect("parse mda_30p_30n_trimmed.dat");
 
-        assert_eq!(
-            blocks.iter().map(|b| b.len()).collect::<Vec<_>>(),
-            vec![201, 221, 242]
-        );
+        let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
+        assert_eq!(blocks.len(), 3, "block sizes: {sizes:?}");
+        // Slat forward of the main element, flap aft of it.
+        let (slat_lo, _) = x_range(&blocks[0]);
+        let (_, main_hi) = x_range(&blocks[1]);
+        let (_, flap_hi) = x_range(&blocks[2]);
+        assert!(slat_lo < 0.0, "slat lo = {slat_lo}");
+        assert!(main_hi < flap_hi, "main hi = {main_hi}, flap hi = {flap_hi}");
         assert!(load_airfoil(&path).is_err(), "must not be read as one element");
+    }
+
+    /// A single-element file whose comments annotate its two surfaces: the
+    /// comments are decoration, not element boundaries. Both surfaces are longer
+    /// than MIN_COMMENT_SPLIT_POINTS, so the decision rests on the chordwise
+    /// traversal test rather than on the point count.
+    #[test]
+    fn comments_annotating_one_contour_do_not_split_it() {
+        const N: usize = 20;
+        let half = |t: f64| 0.08 * (std::f64::consts::PI * t).sin();
+        let station = |i: usize| i as f64 / N as f64;
+
+        let upper: Vec<String> = (0..=N)
+            .map(|i| station(N - i))
+            .map(|t| format!(" {:.6} {:.6}", t, half(t)))
+            .collect();
+        let lower: Vec<String> = (1..=N)
+            .map(station)
+            .map(|t| format!(" {:.6} {:.6}", t, -half(t)))
+            .collect();
+
+        let file = TempDat::new(
+            "annotated_surfaces",
+            &format!(
+                "ANNOTATED\n# upper surface\n{}\n# lower surface\n{}\n",
+                upper.join("\n"),
+                lower.join("\n"),
+            ),
+        );
+
+        let (_, points) = load_airfoil(&file.path).expect("one element");
+
+        assert_eq!(points.len(), 2 * N + 1);
+        assert!((points[0].x - 1.0).abs() < 1e-9);
+        assert!((points.last().unwrap().x - 1.0).abs() < 1e-9);
     }
 
     #[test]

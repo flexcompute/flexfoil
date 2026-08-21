@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from decimal import ROUND_HALF_UP, Context, Decimal
 from typing import TYPE_CHECKING
 
 from flexfoil._rustfoil import (
@@ -101,33 +103,63 @@ class BLResult:
 # same element shapes but with a different gap/overlap/deflection are entirely
 # different aerodynamic problems.
 #
-# Canonical form:
+# Two distinct digests live here, and which one you get matters:
 #
-#     element_0 [# element_1 [# element_2 ...]]
-#     element_i = <coords_i>[@<placement_i>]
-#     coords_i  = "x,y" per node, 8 decimal places, joined with "|"
-#     placement = rot,pivot_x,pivot_y,trans_x,trans_y,scale  (8 decimals each)
+# 1. LEGACY SINGLE-ELEMENT DIGEST — one element, no (or identity) placement.
+#    This is what ``Airfoil.hash`` has always returned, so every run already
+#    cached in a user's ~/.flexfoil/runs.db is keyed on it and its encoding is
+#    frozen: nodes joined with "|", SHA-256 truncated to 16 hex characters.
+#    It is deliberately *not* comparable with the browser digest for the same
+#    coordinates — ``flexfoil-ui/src/lib/airfoilHash.ts`` froze its own legacy
+#    encoding (";" between nodes, all 64 hex characters) against the runs
+#    already in users' browser databases. Unifying the two invalidates one of
+#    the caches, so it belongs with the database-migration workstream.
 #
-# The placement suffix is emitted only when the placement is present *and*
-# non-identity, and the element separator only appears between elements, so a
-# single element with no (or identity) placement canonicalises to exactly the
-# coordinate string this function has always produced. That keeps every run
-# already cached in a user's ~/.flexfoil/runs.db valid — see
-# ``tests/test_geometry_hash.py::test_legacy_single_element_digest_is_pinned``.
+# 2. SHARED ASSEMBLY DIGEST — everything else: more than one element, or an
+#    element carrying a non-identity placement. Nothing is cached against this
+#    yet, so it is defined to be byte-for-byte identical to the browser
+#    implementation: same schema tag, separators, field order, float
+#    formatting (see ``_shared_fmt``) and no truncation. The shared test
+#    vectors in ``tests/test_geometry_hash.py`` pin the exact digests, and the
+#    identical literals are pinned in
+#    ``flexfoil-ui/src/lib/airfoilHash.test.ts``, so a change to one side
+#    alone fails CI.
 #
-# NOTE (known divergence, pre-existing): the browser implementation in
-# ``flexfoil-ui/src/lib/airfoilHash.ts`` uses ";" between nodes and does not
-# truncate the digest, so browser-side and Python-side hashes for the *same*
-# coordinates have never matched. The element/placement encoding added here is
-# byte-for-byte identical between the two, and both sides pin the exact shared
-# suffix in their tests; unifying the coordinate half is a cache-invalidating
-# change and belongs with the database migration workstream.
+# Canonical forms:
+#
+#     legacy = "x,y" per node, 8 decimals, joined with "|"
+#     shared = "ffgeom1:" + element_0 ["#" element_1 ["#" element_2 ...]]
+#              element_i = <coords_i>["@" <placement_i>]
+#              coords_i  = "x,y" per node, 8 decimals, joined with ";"
+#              placement = rot,pivot_x,pivot_y,trans_x,trans_y,scale
+#
+# ``canonical_geometry`` and ``geometry_hash`` select between the two on the
+# shape of their input (see ``is_legacy_single_element``). The shared form
+# carries a schema tag, so the two canonical strings can never coincide and one
+# geometry always has exactly one digest.
 
+# Legacy encoding. Changing any of these invalidates every run already cached
+# against the old digest; the pinned tests in tests/test_geometry_hash.py exist
+# to catch that.
+_LEGACY_NODE_SEP = "|"
+_LEGACY_DIGEST_CHARS = 16
+
+# Shared encoding. Nothing is cached against these yet, but changing one
+# without the matching change in flexfoil-ui/src/lib/airfoilHash.ts splits the
+# two implementations' cache keys; bump the schema tag if the form has to
+# change. Both sides' pinned shared vectors exist to catch that.
+_SHARED_SCHEMA = "ffgeom1:"
+_SHARED_NODE_SEP = ";"
 _ELEMENT_SEP = "#"
 _PLACEMENT_PREFIX = "@"
-# Changing this invalidates every run already cached against the old digest;
-# the pinned test in tests/test_geometry_hash.py exists to catch that.
+
+# Used by both encodings, so a change here invalidates the cache *and* has to
+# be mirrored on the browser side.
 _PRECISION = 8
+_QUANTUM = Decimal(1).scaleb(-_PRECISION)
+# Wide enough that quantising any finite double to 8 decimals stays inside the
+# context; the default 28-digit context would reject magnitudes above 1e20.
+_SHARED_CONTEXT = Context(prec=400, rounding=ROUND_HALF_UP)
 
 
 @dataclass(frozen=True)
@@ -157,31 +189,80 @@ class Placement:
 
 @dataclass(frozen=True)
 class GeometryElement:
-    """One element of an assembly: its own coordinates plus where it sits."""
+    """One element of an assembly: its own coordinates plus where it sits.
+
+    ``placement`` has no default on purpose. Inside an assembly the placement
+    is part of the aerodynamic problem, so an element built without one would
+    key its results under the wrong geometry; requiring the argument means a
+    caller has to say ``None`` deliberately for an element that really does
+    sit in its own coordinates.
+    """
 
     coords: Sequence[tuple[float, float]]
-    placement: Placement | None = None
+    placement: Placement | None
 
 
-def _fmt(value: float) -> str:
-    """Format a placement scalar. -0.0 collapses to 0.0 so that Python and
-    JavaScript (whose ``toFixed`` never emits "-0.00000000") agree."""
+def _shared_fmt(value: float) -> str:
+    """Format one scalar for the shared canonical form, reproducing
+    JavaScript's ``Number.prototype.toFixed(8)`` byte for byte.
+
+    Two rules are needed for the two languages to agree on every double:
+
+    * ``-0.0`` formats as "0.00000000". ``toFixed`` strips the sign before
+      rounding, so JavaScript never emits "-0.00000000" for a true negative
+      zero while ``%.8f`` does. Non-zero negatives keep their sign on both
+      sides (``(-1e-12).toFixed(8)`` is "-0.00000000" too), so only exact zero
+      is normalised.
+    * ties round away from zero. ``%.8f`` rounds half to even on the exact
+      binary value where ``toFixed`` takes the larger magnitude; the two differ
+      for doubles that land exactly on a half at the eighth decimal, i.e. odd
+      multiples of 1/512 such as 0.001953125.
+
+    The two agree for every finite double below 1e21 in magnitude. At and above
+    that, ``toFixed`` falls back to exponential notation; geometry does not
+    reach that range.
+    """
+    value = float(value)
     if value == 0.0:
         value = 0.0
-    return f"{value:.{_PRECISION}f}"
+    if not math.isfinite(value):
+        # ``toFixed`` passes non-finite input through as text.
+        if math.isnan(value):
+            return "NaN"
+        return "Infinity" if value > 0 else "-Infinity"
+    quantized = Decimal(value).quantize(
+        _QUANTUM, rounding=ROUND_HALF_UP, context=_SHARED_CONTEXT
+    )
+    return f"{quantized:.{_PRECISION}f}"
 
 
-def _canonical_coords(coords: Sequence[tuple[float, float]]) -> str:
-    return "|".join(
+def _legacy_canonical_coords(coords: Sequence[tuple[float, float]]) -> str:
+    """Frozen legacy coordinate encoding: raw ``%.8f``, "|" between nodes.
+
+    Deliberately not routed through ``_shared_fmt`` — the raw format is what
+    the already-cached digests were produced with. One consequence is that a
+    coordinate of exactly -0.0 renders "-0.00000000" here while the browser's
+    frozen legacy encoding renders "0.00000000" for the same input. The two
+    legacy encodings were frozen independently and are not comparable in any
+    case (different node separator, different digest length); the shared form
+    below normalises signed zero on both sides.
+    """
+    return _LEGACY_NODE_SEP.join(
         f"{x:.{_PRECISION}f},{y:.{_PRECISION}f}" for x, y in coords
     )
 
 
-def _canonical_placement(placement: Placement | None) -> str:
+def _shared_canonical_coords(coords: Sequence[tuple[float, float]]) -> str:
+    return _SHARED_NODE_SEP.join(
+        f"{_shared_fmt(x)},{_shared_fmt(y)}" for x, y in coords
+    )
+
+
+def _shared_canonical_placement(placement: Placement | None) -> str:
     if placement is None or placement.is_identity:
         return ""
     return _PLACEMENT_PREFIX + ",".join(
-        _fmt(v)
+        _shared_fmt(v)
         for v in (
             placement.rotation,
             placement.pivot[0],
@@ -193,21 +274,47 @@ def _canonical_placement(placement: Placement | None) -> str:
     )
 
 
-def canonical_geometry(elements: Sequence[GeometryElement]) -> str:
-    """Canonical string for an assembly (see module notes above)."""
-    return _ELEMENT_SEP.join(
-        _canonical_coords(e.coords) + _canonical_placement(e.placement)
+def is_legacy_single_element(elements: Sequence[GeometryElement]) -> bool:
+    """True for the one input shape the frozen legacy digest covers: exactly
+    one element, with no placement or an identity placement."""
+    return len(elements) == 1 and (
+        elements[0].placement is None or elements[0].placement.is_identity
+    )
+
+
+def shared_canonical_geometry(elements: Sequence[GeometryElement]) -> str:
+    """Cross-language canonical string for an assembly.
+
+    Byte-for-byte identical to ``sharedCanonicalGeometryString`` in
+    ``flexfoil-ui/src/lib/airfoilHash.ts``.
+    """
+    return _SHARED_SCHEMA + _ELEMENT_SEP.join(
+        _shared_canonical_coords(e.coords) + _shared_canonical_placement(e.placement)
         for e in elements
     )
 
 
-def geometry_hash(elements: Sequence[GeometryElement]) -> str:
-    """Placement-aware geometry hash used as the run-cache key.
+def canonical_geometry(elements: Sequence[GeometryElement]) -> str:
+    """Canonical string for an assembly: the frozen legacy coordinate string
+    for a lone unplaced element, the shared form for everything else."""
+    if is_legacy_single_element(elements):
+        return _legacy_canonical_coords(elements[0].coords)
+    return shared_canonical_geometry(elements)
 
-    Reduces to the historical coordinate-only digest for a single element with
-    no (or identity) placement.
+
+def geometry_hash(elements: Sequence[GeometryElement]) -> str:
+    """Geometry half of the run-cache key.
+
+    Returns the frozen 16-character legacy digest for a single element with no
+    (or identity) placement — the shape every already-cached run has — and the
+    64-character cross-language shared digest for everything else. See the
+    module notes above.
     """
-    return hashlib.sha256(canonical_geometry(elements).encode()).hexdigest()[:16]
+    if is_legacy_single_element(elements):
+        legacy = _legacy_canonical_coords(elements[0].coords)
+        digest = hashlib.sha256(legacy.encode()).hexdigest()
+        return digest[:_LEGACY_DIGEST_CHARS]
+    return hashlib.sha256(shared_canonical_geometry(elements).encode()).hexdigest()
 
 
 class Airfoil:
@@ -221,6 +328,17 @@ class Airfoil:
         *,
         placement: Placement | None = None,
     ):
+        """Build an airfoil from raw and paneled coordinates.
+
+        ``placement`` records where this element sits inside a multi-element
+        assembly and feeds ``hash``. It defaults to ``None`` — the element sits
+        in its own coordinates — which is correct for a standalone airfoil and
+        is what every classmethod on this class currently builds
+        (``from_naca``, ``from_dat``, ``from_xy``, ``with_flap``). When
+        assembly construction lands, the paths that build a *placed* element
+        have to pass it explicitly; otherwise two configurations of the same
+        shapes at different gap/overlap share a cache key.
+        """
         self.name = name
         self.raw_coords = raw_coords
         self.panel_coords = panel_coords
@@ -309,6 +427,12 @@ class Airfoil:
     def hash(self) -> str:
         """SHA-256 of the canonical geometry — panel coordinates plus
         placement, if any — used as the geometry half of the cache key.
+
+        Without a placement (every current construction path) this is the
+        frozen 16-character legacy digest, which is not comparable with the
+        browser's digest for the same coordinates. With a non-identity
+        placement it is the 64-character cross-language digest. See the module
+        notes above.
 
         Computed once; do not mutate ``panel_coords`` or ``placement`` after
         construction.

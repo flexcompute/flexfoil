@@ -393,7 +393,7 @@ describe('parseAirfoilDat multi-element', () => {
       POINTS_PER_ELEMENT,
     ]);
 
-    // The old parser flattened every block into one 39-point 3-loop contour.
+    // Element 0 is the single-element view, not a 39-point three-loop contour.
     expect(parsed.coordinates).toBe(parsed.elements[0]);
     expect(parsed.coordinates).toHaveLength(POINTS_PER_ELEMENT);
 
@@ -418,7 +418,8 @@ describe('parseAirfoilDat multi-element', () => {
 
   it('keeps a comment-labelled slat/main/flap file as three elements', () => {
     // The structure of the real `30p-30n.dat` in public/airfoils: comment labels
-    // are the only element boundary in the file.
+    // are the only element boundary in the file, and each labelled block stands
+    // up as a contour in its own right.
     const text = `# MDA 30P-30N (mini)\n# Slat\n${SLAT}\n# Main Element\n${MAIN}\n# Flap\n${FLAP}\n`;
     const parsed = parseAirfoilDat(text, '30p-30n.dat');
 
@@ -431,7 +432,10 @@ describe('parseAirfoilDat multi-element', () => {
     expect(parsed.coordinates).toHaveLength(POINTS_PER_ELEMENT);
   });
 
-  it('splits on a 999.0 999.0 separator without injecting a (999, 999) point', () => {
+  it('treats a 999.0 999.0 line as an element boundary, not a coordinate', () => {
+    // The coordinate range check would have discarded the sentinel as a
+    // non-coordinate in any case; what matters is that it is recognised as a
+    // boundary the file declared.
     const text = `SEPARATED\n${SLAT}\n 999.0 999.0\n${MAIN}\n 999.0 999.0\n${FLAP}\n`;
     const parsed = parseAirfoilDat(text, 'separated.dat');
 
@@ -452,21 +456,48 @@ describe('parseAirfoilDat multi-element', () => {
 
   it('does not read a genuine two-element file as Lednicer', () => {
     // Both elements are closed loops that start near the leading edge and cover
-    // the same x-range — the exact case the old `groups.length === 2` heuristic
-    // mangled into one reversed, concatenated contour. Only the closure and
-    // monotonicity tests can tell these apart from Lednicer surfaces.
+    // the same x-range, so "both blocks start at the LE" cannot tell them from
+    // Lednicer surfaces; the closure and monotonicity tests carry the decision.
     const first = closedElement(0, 1, { startAt: 'nearLe' });
     const second = closedElement(0, 1, { thickness: 0.05, startAt: 'nearLe' });
     const parsed = parseAirfoilDat(`TWO ELEMENTS\n${first}\n\n${second}\n`, 'twoElement.dat');
 
+    // Lednicer conversion would fuse the blocks into a single contour of
+    // 2 * POINTS_PER_ELEMENT - 1 points; here each block stays its own element.
     expect(parsed.elements).toHaveLength(2);
+    expect(parsed.elements.map((e) => e.length)).toEqual([
+      POINTS_PER_ELEMENT,
+      POINTS_PER_ELEMENT,
+    ]);
     expect(parsed.coordinates).toHaveLength(POINTS_PER_ELEMENT);
-    // Lednicer conversion would have reversed the first block, putting the TE first.
+    // Element 0 is kept in file order rather than reversed: it still starts just
+    // aft of the leading edge on the lower surface and reaches the LE next.
     expect(parsed.coordinates[0].x).toBeCloseTo(0.05);
     expect(parsed.coordinates[0].y).toBeLessThan(0);
-    // Both blocks survive intact instead of being joined.
-    expect(parsed.elements[1]).toHaveLength(POINTS_PER_ELEMENT);
-    expect(parsed.elements[1][0].x).toBeCloseTo(0.05);
+    expect(parsed.coordinates[1].x).toBeCloseTo(0);
+    // Element 1 keeps its own (thinner) section instead of being appended to 0.
+    const thickness = (points: { y: number }[]) => Math.max(...points.map((p) => Math.abs(p.y)));
+    expect(thickness(parsed.elements[1])).toBeLessThan(thickness(parsed.elements[0]));
+  });
+
+  it('treats comments that annotate one contour as decoration, not boundaries', () => {
+    // A hand-annotated single-element file: the comments label the two surfaces
+    // of one contour, so honouring them as element boundaries would report the
+    // file as two elements. Each surface is longer than the minimum block length,
+    // so the decision rests on the chordwise traversal test.
+    const n = 20;
+    const stations = Array.from({ length: n + 1 }, (_, i) => 1 - i / n); // TE -> LE
+    const half = (t: number) => 0.08 * Math.sin(Math.PI * t);
+    const upper = stations.map((t) => fmt(t, half(t)));
+    const lower = [...stations].reverse().slice(1).map((t) => fmt(t, -half(t)));
+    const text = `ANNOTATED\n# upper surface\n${upper.join('\n')}\n# lower surface\n${lower.join('\n')}\n`;
+
+    const parsed = parseAirfoilDat(text, 'annotated.dat');
+
+    expect(parsed.elements).toHaveLength(1);
+    expect(parsed.coordinates).toHaveLength(2 * n + 1);
+    expect(parsed.coordinates[0].x).toBeCloseTo(1);
+    expect(parsed.coordinates.at(-1)?.x).toBeCloseTo(1);
   });
 
   it('still detects Lednicer format when both blocks are open LE->TE surfaces', () => {

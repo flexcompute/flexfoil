@@ -121,19 +121,20 @@ pub fn build_dij_matrix(x: &[f64], y: &[f64]) -> DMatrix<f64> {
     // For proper VI coupling with unit chord normalization:
     //   dUe = DIJ * (Ue * delta_star)
     //
-    // Since mass_defect = Ue * delta_star and delta_star ~ 0.01c (1% of chord),
-    // and we want dUe ~ 0.01 for reasonable coupling, DIJ diagonal should be ~ 1.
-    //
-    // The formula DIJ[i,i] ~ -1/ds works when ds is normalized by chord.
-    // For panel spacing ds ~ c/n (chord/n_panels), this gives DIJ ~ -n/c.
-    // With n=160 panels and c=1, DIJ ~ -160 which is too large.
-    //
-    // Scale by perimeter to get chord-normalized values
+    // A derived coefficient of the form DIJ[i,i] ~ -1/ds scales as -n/c for
+    // panel spacing ds ~ c/n, which is far too large at typical panel counts
+    // (n = 160, c = 1 gives -160). The placeholder below instead scales the
+    // panel length by the perimeter, which overshoots in the other direction:
+    // it yields about -0.5/n rather than the O(1) diagonal that consistent
+    // coupling would want. Neither the form nor the magnitude is derived from
+    // XFOIL's QDCALC; see the module documentation.
     let total_arc: f64 = ds.iter().sum();
 
     for i in 0..n {
-        // Self-influence coefficient: -0.5 / (ds normalized by perimeter)
-        // This gives O(1) magnitude regardless of panel density
+        // Self-influence coefficient: -0.5 * (ds as a fraction of the
+        // perimeter). For uniform paneling that is about -0.5/n, so the
+        // magnitude shrinks as panel count rises rather than staying O(1).
+        // This is the hand-tuned placeholder value, not a derived coefficient.
         let ds_norm = ds[i] / total_arc.max(1e-10);
         dij[(i, i)] = -0.5 * ds_norm;
     }

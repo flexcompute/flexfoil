@@ -107,10 +107,20 @@ impl DebugFlags {
     /// Sample every flag from the current process environment.
     fn from_env() -> Self {
         // Presence test only, matching the original `.is_ok()` semantics.
-        fn set(name: &str) -> bool {
-            std::env::var(name).is_ok()
-        }
+        Self::from_lookup(|name| std::env::var(name).is_ok())
+    }
 
+    /// Build a snapshot from an arbitrary "is this variable set?" lookup.
+    ///
+    /// This holds the single field -> variable-name mapping; `from_env` supplies
+    /// the process environment, and tests supply their own lookup so the mapping
+    /// can be checked without mutating global state.
+    ///
+    /// Every variable name is the field name uppercased and prefixed with
+    /// `RUSTFOIL_`; `tests::debug_flag_env_names_follow_naming_convention`
+    /// enforces that, and `tests::each_debug_flag_reads_only_its_own_env_var`
+    /// enforces that no two fields share a name.
+    fn from_lookup(set: impl Fn(&str) -> bool) -> Self {
         Self {
             bldif_debug: set("RUSTFOIL_BLDIF_DEBUG"),
             bl_debug: set("RUSTFOIL_BL_DEBUG"),
@@ -2640,5 +2650,134 @@ mod tests {
         let json = serde_json::to_string_pretty(&event).unwrap();
         assert!(json.contains("BLVAR"));
         assert!(json.contains("\"H\": 2.58"));
+    }
+
+    /// Expected `DebugFlags` field -> environment-variable mapping.
+    ///
+    /// One row per field of `DebugFlags`: the field name, the variable it reads,
+    /// and an accessor for it. When adding a flag, add a row here too.
+    const FIELD_ENV_MAP: &[(&str, &str, fn(&DebugFlags) -> bool)] = &[
+        ("bldif_debug", "RUSTFOIL_BLDIF_DEBUG", |f| f.bldif_debug),
+        ("bl_debug", "RUSTFOIL_BL_DEBUG", |f| f.bl_debug),
+        ("blsolv_step_debug", "RUSTFOIL_BLSOLV_STEP_DEBUG", |f| {
+            f.blsolv_step_debug
+        }),
+        ("cl_debug", "RUSTFOIL_CL_DEBUG", |f| f.cl_debug),
+        ("disable_stmove", "RUSTFOIL_DISABLE_STMOVE", |f| {
+            f.disable_stmove
+        }),
+        ("drag_debug", "RUSTFOIL_DRAG_DEBUG", |f| f.drag_debug),
+        ("due_debug", "RUSTFOIL_DUE_DEBUG", |f| f.due_debug),
+        ("dui_debug", "RUSTFOIL_DUI_DEBUG", |f| f.dui_debug),
+        ("fc_debug", "RUSTFOIL_FC_DEBUG", |f| f.fc_debug),
+        ("final_delta_debug", "RUSTFOIL_FINAL_DELTA_DEBUG", |f| {
+            f.final_delta_debug
+        }),
+        ("forced_debug", "RUSTFOIL_FORCED_DEBUG", |f| f.forced_debug),
+        ("le_update_debug", "RUSTFOIL_LE_UPDATE_DEBUG", |f| {
+            f.le_update_debug
+        }),
+        ("newton_cmp", "RUSTFOIL_NEWTON_CMP", |f| f.newton_cmp),
+        ("newton_debug", "RUSTFOIL_NEWTON_DEBUG", |f| f.newton_debug),
+        ("raw_res_debug", "RUSTFOIL_RAW_RES_DEBUG", |f| {
+            f.raw_res_debug
+        }),
+        ("rezc_debug", "RUSTFOIL_REZC_DEBUG", |f| f.rezc_debug),
+        ("setbl_debug", "RUSTFOIL_SETBL_DEBUG", |f| f.setbl_debug),
+        ("setbl_full_vm", "RUSTFOIL_SETBL_FULL_VM", |f| {
+            f.setbl_full_vm
+        }),
+        ("setbl_handoff_debug", "RUSTFOIL_SETBL_HANDOFF_DEBUG", |f| {
+            f.setbl_handoff_debug
+        }),
+        ("setbl_vdel_debug", "RUSTFOIL_SETBL_VDEL_DEBUG", |f| {
+            f.setbl_vdel_debug
+        }),
+        ("solve_debug", "RUSTFOIL_SOLVE_DEBUG", |f| f.solve_debug),
+        ("stmove_debug", "RUSTFOIL_STMOVE_DEBUG", |f| f.stmove_debug),
+        ("tail_iter_debug", "RUSTFOIL_TAIL_ITER_DEBUG", |f| {
+            f.tail_iter_debug
+        }),
+        ("tesys_debug", "RUSTFOIL_TESYS_DEBUG", |f| f.tesys_debug),
+        (
+            "transition_block_debug",
+            "RUSTFOIL_TRANSITION_BLOCK_DEBUG",
+            |f| f.transition_block_debug,
+        ),
+        (
+            "transition_branch_debug",
+            "RUSTFOIL_TRANSITION_BRANCH_DEBUG",
+            |f| f.transition_branch_debug,
+        ),
+        ("trans_debug", "RUSTFOIL_TRANS_DEBUG", |f| f.trans_debug),
+        ("trchek_debug", "RUSTFOIL_TRCHEK_DEBUG", |f| f.trchek_debug),
+        ("ueset_detail_debug", "RUSTFOIL_UESET_DETAIL_DEBUG", |f| {
+            f.ueset_detail_debug
+        }),
+        ("ueset_first_debug", "RUSTFOIL_UESET_FIRST_DEBUG", |f| {
+            f.ueset_first_debug
+        }),
+        ("ueset_state_debug", "RUSTFOIL_UESET_STATE_DEBUG", |f| {
+            f.ueset_state_debug
+        }),
+        ("update_debug", "RUSTFOIL_UPDATE_DEBUG", |f| f.update_debug),
+        ("update_newton_debug", "RUSTFOIL_UPDATE_NEWTON_DEBUG", |f| {
+            f.update_newton_debug
+        }),
+        ("vm_focus_debug", "RUSTFOIL_VM_FOCUS_DEBUG", |f| {
+            f.vm_focus_debug
+        }),
+        ("wake_iter_debug", "RUSTFOIL_WAKE_ITER_DEBUG", |f| {
+            f.wake_iter_debug
+        }),
+        ("wake_march_debug", "RUSTFOIL_WAKE_MARCH_DEBUG", |f| {
+            f.wake_march_debug
+        }),
+    ];
+
+    /// Every flag is wired to the variable named after it, and to no other.
+    ///
+    /// `from_lookup` takes the presence test as an argument, so this runs
+    /// without touching the process environment.
+    #[test]
+    fn each_debug_flag_reads_only_its_own_env_var() {
+        for (field, env_name, _) in FIELD_ENV_MAP {
+            let flags = DebugFlags::from_lookup(|name| name == *env_name);
+            let raised: Vec<&str> = FIELD_ENV_MAP
+                .iter()
+                .filter(|(_, _, get)| get(&flags))
+                .map(|(other, _, _)| *other)
+                .collect();
+            assert_eq!(
+                raised,
+                vec![*field],
+                "{env_name} should raise exactly `{field}`"
+            );
+        }
+    }
+
+    #[test]
+    fn debug_flag_env_names_follow_naming_convention() {
+        for (field, env_name, _) in FIELD_ENV_MAP {
+            assert_eq!(
+                *env_name,
+                format!("RUSTFOIL_{}", field.to_ascii_uppercase()),
+                "`{field}` breaks the RUSTFOIL_<FIELD> naming convention"
+            );
+        }
+    }
+
+    #[test]
+    fn debug_flags_default_to_unset_and_can_all_be_raised() {
+        assert_eq!(
+            DebugFlags::from_lookup(|_| false),
+            DebugFlags::default(),
+            "no variables set should leave every flag false"
+        );
+
+        let all = DebugFlags::from_lookup(|_| true);
+        for (field, _, get) in FIELD_ENV_MAP {
+            assert!(get(&all), "`{field}` stayed false with every variable set");
+        }
     }
 }

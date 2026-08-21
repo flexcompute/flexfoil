@@ -1308,7 +1308,7 @@ pub fn solve_viscous_two_surfaces(
             }
             
             // Debug output for iterations 6-7 to trace explosion
-            if iter >= 5 && iter <= 8 {
+            if debug_flags().newton_debug && iter >= 5 && iter <= 8 {
                 eprintln!("[DEBUG Newton] iter {} residual before solve: {:.6e}", iter, residual);
                 // Sample a few stations to check for blow-ups
                 for ibl in [10, 20, 30, 40, 50] {
@@ -1389,7 +1389,7 @@ pub fn solve_viscous_two_surfaces(
             }
             
             // Debug: Check delta magnitudes for iterations 6-7
-            if iter >= 5 && iter <= 8 {
+            if debug_flags().newton_debug && iter >= 5 && iter <= 8 {
                 let max_delta_theta = deltas.iter().map(|d| d[1].abs()).fold(0.0, f64::max);
                 let max_delta_mass = deltas.iter().map(|d| d[2].abs()).fold(0.0, f64::max);
                 let max_delta_ctau = deltas.iter().map(|d| d[0].abs()).fold(0.0, f64::max);
@@ -1445,7 +1445,7 @@ pub fn solve_viscous_two_surfaces(
             residual = update_result.rms_change;
             
             // Debug: Check relaxation used and residual after update for iterations 6-7
-            if iter >= 5 && iter <= 8 {
+            if debug_flags().newton_debug && iter >= 5 && iter <= 8 {
                 eprintln!("[DEBUG Newton] iter {} relaxation used: {:.6e} (requested: {:.6e}), rms_change: {:.6e}", 
                     iter, update_result.relaxation_used, rlx_before, residual);
             }

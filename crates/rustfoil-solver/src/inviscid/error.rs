@@ -13,6 +13,15 @@ pub enum SolverError {
     /// Insufficient panels for a valid solution (need at least 3).
     InsufficientPanels,
 
+    /// The supplied geometry is outside what this solver handles.
+    ///
+    /// Raised for geometry or API misuse rather than flow conditions — for
+    /// example, passing more than one body to a single-body solver.
+    UnsupportedGeometry {
+        /// Description of the unsupported geometry
+        reason: &'static str,
+    },
+
     /// The influence coefficient matrix is singular.
     ///
     /// This typically indicates:
@@ -72,6 +81,9 @@ impl fmt::Display for SolverError {
             }
             SolverError::InsufficientPanels => {
                 write!(f, "Insufficient panels (need at least 3)")
+            }
+            SolverError::UnsupportedGeometry { reason } => {
+                write!(f, "Unsupported geometry: {}", reason)
             }
             SolverError::SingularMatrix => {
                 write!(f, "Influence matrix is singular (check geometry)")
