@@ -13,6 +13,7 @@ use crate::closures::{
     dissipation_wake, hkin, hs_laminar, hs_turbulent,
 };
 use crate::constants::{CTCON, DLCON, DUXCON, GACON, GBCON, GCCON, SCCON};
+use crate::debug::debug_flags;
 use crate::state::BlStation;
 
 /// Flow type for boundary layer calculations
@@ -1264,7 +1265,7 @@ fn bldif_with_terms_internal(
             res.res_third = -rezc;
             
             // Debug: print REZC terms when near transition (ctau difference from equilibrium)
-            if std::env::var("RUSTFOIL_REZC_DEBUG").is_ok() {
+            if debug_flags().rezc_debug {
                 let cq_diff = (cqa - sa).abs();
                 if cq_diff > 0.03 && cq_diff < 0.1 {
                     eprintln!("[REZC DEBUG] x={:.4}, ctau_diff={:.4}", s2.x, cq_diff);

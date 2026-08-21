@@ -11,6 +11,7 @@ import { useDistributionStore } from '../../stores/distributionStore';
 import { useRunStore } from '../../stores/runStore';
 import { useTheme } from '../../contexts/ThemeContext';
 import { colorForKey } from '../../lib/plotStyling';
+import { splitSurfaces } from '../../lib/surfaceSplit';
 import {
   analyzeAirfoil,
   analyzeAirfoilInviscid,
@@ -87,25 +88,21 @@ function extractSurfaceData(
 
       if (!result.success || !result.cp || !result.cp_x) return null;
 
-      // cp_x and cp are at panel midpoints; split into upper/lower by index
-      const n = panels.length;
-      const mid = Math.floor(n / 2);
+      // cp_x and cp are surface samples ordered along the contour. Split them at
+      // the geometric leading edge — never at the array midpoint, which is only
+      // the LE by coincidence.
       const cpX = result.cp_x;
       const cp = result.cp;
 
-      // Upper: indices 0..mid-1 (TE→LE on upper), Lower: mid..end (LE→TE on lower)
-      const upperIdx: number[] = [];
-      const lowerIdx: number[] = [];
-      for (let i = 0; i < cpX.length; i++) {
-        if (i < mid) upperIdx.push(i);
-        else lowerIdx.push(i);
-      }
+      const split = splitSurfaces(panels, { sampleCount: cpX.length });
+      const upperIdx = split.upperIndices;
+      const lowerIdx = split.lowerIndices;
 
-      const upperPanels = panels.slice(0, mid + 1);
-      const lowerPanels = panels.slice(mid);
+      const upperPanels = panels.slice(...split.upperNodeSlice);
+      const lowerPanels = panels.slice(...split.lowerNodeSlice);
       const sUpper = computeArcLength(upperPanels);
       const sLower = computeArcLength(lowerPanels);
-      // midpoints of arc-length
+      // midpoints of arc-length (index j is the j-th sample of that surface)
       const sMidUpper = upperIdx.map((_, j) => (sUpper[j] + sUpper[j + 1]) / 2);
       const sMidLower = lowerIdx.map((_, j) => (sLower[j] + sLower[j + 1]) / 2);
 

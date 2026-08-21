@@ -14,33 +14,33 @@
 //!
 //! # Design Philosophy
 //!
-//! ## Multi-Body First
-//! Unlike XFOIL's single-body assumption, RustFoil is designed from the
-//! ground up to support multi-element airfoil configurations:
+//! ## Multi-Element Geometry (Design Direction)
+//! XFOIL assumes a single body throughout. This crate instead treats a
+//! [`Body`] as a self-contained element — its own contour, panels, and cached
+//! geometry — so that a multi-element configuration can be expressed as a
+//! collection of bodies rather than as a special case. That representation is
+//! the direction the geometry layer is built for; the solver work it implies
+//! (paneling a configuration as a whole, inviscid interaction between
+//! elements, and viscous treatment of the resulting wakes and gaps) is not
+//! implemented, and the current solve path operates on a single body. See the
+//! development phases in `README.md` for status.
 //!
-//! ```rust
-//! use rustfoil_core::body::Body;
-//! use rustfoil_core::point::point;
+//! The intended shape of a configuration:
 //!
-//! // Define coordinates for each element
-//! let slat_coords = vec![
-//!     point(0.0, 0.0), point(0.1, -0.01), point(0.05, 0.02), point(0.0, 0.0)
-//! ];
-//! let main_coords = vec![
-//!     point(1.0, 0.0), point(0.5, -0.05), point(0.0, 0.0), point(0.5, 0.05), point(1.0, 0.0)
-//! ];
-//! let flap_coords = vec![
-//!     point(1.2, -0.05), point(1.1, -0.06), point(1.0, -0.03), point(1.1, -0.02), point(1.2, -0.05)
-//! ];
+//! ```text
+//! // Each element is an independent Body.
+//! let slat = Body::from_points("slat", &slat_coords)?;
+//! let main = Body::from_points("main", &main_coords)?;
+//! let flap = Body::from_points("flap", &flap_coords)?;
 //!
-//! // Multi-element configuration
-//! let slat = Body::from_points("slat", &slat_coords).unwrap();
-//! let main = Body::from_points("main", &main_coords).unwrap();
-//! let flap = Body::from_points("flap", &flap_coords).unwrap();
-//!
+//! // Building the collection is supported today; solving the aerodynamic
+//! // interaction between its members is not yet.
 //! let configuration = vec![slat, main, flap];
-//! assert_eq!(configuration.len(), 3);
 //! ```
+//!
+//! Flap deflection in [`flap`] is XFOIL's plain flap: it rotates a region of
+//! one contour about a hinge point, so the result is still a single body, not
+//! a separate element.
 //!
 //! ## Cached Geometry
 //! Panel normals, tangents, and midpoints are computed once at construction

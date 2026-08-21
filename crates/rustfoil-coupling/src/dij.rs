@@ -1,9 +1,28 @@
-//! Mass defect influence matrix (DIJ)
+//! Mass defect influence matrix (DIJ) — non-physical placeholder.
 //!
-//! The DIJ matrix relates changes in mass defect (Ue*δ*) to changes in edge velocity.
-//! This comes from the inviscid source panel influence.
+//! **The matrices built here are not the production mass-influence matrix.**
+//! They are an analytic stand-in: off-diagonal entries use a bare point-source
+//! `1/r²` kernel scaled by panel length, and the diagonal is a hand-tuned
+//! expression (`-0.5 * ds/perimeter`) selected to land in a plausible order of
+//! magnitude rather than derived from panel integration. There is no wake, no
+//! panel-integrated influence coefficient, and no correspondence to XFOIL's
+//! QDCALC, so output from this module should not be expected to reproduce
+//! XFOIL results.
 //!
-//! XFOIL Reference: xpanel.f QDCALC (line 1149)
+//! The production DIJ is `build_dij_with_wake_state` on
+//! `rustfoil_inviscid::FactorizedSystem`
+//! (`crates/rustfoil-inviscid/src/system.rs`), which assembles the matrix from
+//! the factorized inviscid system plus explicit wake geometry state, following
+//! XFOIL's `XYWAKE`/`QDCALC` ownership model. New work should use that path.
+//!
+//! This module is kept because existing tests reference it and
+//! `ViscousSetup::from_raw` (`crates/rustfoil-solver/src/viscous/setup.rs`)
+//! still calls [`build_dij_matrix`]. Its public functions are marked
+//! `#[deprecated]` so that the remaining call sites are visible at compile
+//! time. The numerics are frozen: migrate call sites to the production path
+//! rather than tuning the coefficients here.
+//!
+//! XFOIL reference for the real routine: xpanel.f QDCALC (line 1149)
 
 use nalgebra::DMatrix;
 
@@ -38,22 +57,26 @@ fn compute_panel_lengths(x: &[f64], y: &[f64]) -> Vec<f64> {
     ds
 }
 
-/// Build the mass defect influence matrix
+/// Build the placeholder mass defect influence matrix
 ///
-/// DIJ[i,j] represents the influence of mass defect change at station j
-/// on edge velocity at station i:
+/// DIJ[i,j] is intended to represent the influence of a mass defect change at
+/// station j on the edge velocity at station i:
 ///
 ///   ΔUe_i = Σ_j DIJ_ij * Δ(Ue*δ*)_j
 ///
+/// The coefficients returned here are the analytic stand-in described in the
+/// [module documentation](self), not panel-integrated influence coefficients.
+///
 /// # Arguments
 /// * `x` - x-coordinates of BL stations
-/// * `y` - y-coordinates of BL stations  
+/// * `y` - y-coordinates of BL stations
 ///
 /// # Returns
 /// An n×n DMatrix where n is the number of stations
-///
-/// # Reference
-/// XFOIL xpanel.f QDCALC (line 1149)
+#[deprecated(
+    since = "0.1.0",
+    note = "non-physical placeholder; use rustfoil_inviscid::FactorizedSystem::build_dij_with_wake_state for the production DIJ"
+)]
 pub fn build_dij_matrix(x: &[f64], y: &[f64]) -> DMatrix<f64> {
     let n = x.len();
     if n == 0 {
@@ -107,30 +130,26 @@ pub fn build_dij_matrix(x: &[f64], y: &[f64]) -> DMatrix<f64> {
     //
     // Scale by perimeter to get chord-normalized values
     let total_arc: f64 = ds.iter().sum();
-    
-    // Debug: print first few diagonal values
-    eprintln!("[DEBUG DIJ build] n={}, total_arc={:.6}, ds[0]={:.6e}", n, total_arc, ds[0]);
-    
+
     for i in 0..n {
         // Self-influence coefficient: -0.5 / (ds normalized by perimeter)
         // This gives O(1) magnitude regardless of panel density
         let ds_norm = ds[i] / total_arc.max(1e-10);
         dij[(i, i)] = -0.5 * ds_norm;
     }
-    
-    // Debug: print sample diagonal values
-    if n > 5 {
-        eprintln!("[DEBUG DIJ build] dij[0,0]={:.6e}, dij[1,1]={:.6e}, dij[1,0]={:.6e}",
-            dij[(0, 0)], dij[(1, 1)], dij[(1, 0)]);
-    }
 
     dij
 }
 
-/// Build the mass defect influence matrix with debug output
+/// Build the placeholder mass defect influence matrix with debug output
 ///
 /// Same as [`build_dij_matrix`] but emits QDCALC debug events when
 /// debug collection is active.
+#[deprecated(
+    since = "0.1.0",
+    note = "non-physical placeholder; use rustfoil_inviscid::FactorizedSystem::build_dij_with_wake_state for the production DIJ"
+)]
+#[allow(deprecated)]
 pub fn build_dij_matrix_debug(x: &[f64], y: &[f64], n_wake: usize) -> DMatrix<f64> {
     let dij = build_dij_matrix(x, y);
 
@@ -187,10 +206,11 @@ fn emit_full_dij_debug(dij: &DMatrix<f64>) {
     rustfoil_bl::add_event(rustfoil_bl::DebugEvent::full_dij(n, flattened, diag_sample, row1_sample));
 }
 
-/// Build DIJ matrix with explicit panel geometry
+/// Build the placeholder DIJ matrix with explicit panel geometry
 ///
-/// This version takes pre-computed panel normals for more accurate
-/// influence computation.
+/// This variant takes pre-computed panel normals so the point-source kernel is
+/// projected onto the local tangent. It is still the placeholder described in
+/// the [module documentation](self), not a panel-integrated influence matrix.
 ///
 /// # Arguments
 /// * `x` - x-coordinates of BL stations
@@ -200,6 +220,10 @@ fn emit_full_dij_debug(dij: &DMatrix<f64>) {
 ///
 /// # Returns
 /// An n×n DMatrix
+#[deprecated(
+    since = "0.1.0",
+    note = "non-physical placeholder; use rustfoil_inviscid::FactorizedSystem::build_dij_with_wake_state for the production DIJ"
+)]
 pub fn build_dij_matrix_with_normals(
     x: &[f64],
     y: &[f64],
@@ -240,10 +264,11 @@ pub fn build_dij_matrix_with_normals(
     dij
 }
 
-/// Build a 1D DIJ matrix for arc-length parameterized BL stations
+/// Build a placeholder 1D DIJ matrix for arc-length parameterized BL stations
 ///
 /// For boundary layer stations along a surface parameterized by arc length,
-/// this builds a simplified DIJ matrix that captures the mass defect influence.
+/// this builds a simplified matrix in the same placeholder family described in
+/// the [module documentation](self).
 ///
 /// # Arguments
 /// * `s` - Arc lengths of BL stations
@@ -251,6 +276,10 @@ pub fn build_dij_matrix_with_normals(
 ///
 /// # Returns
 /// An n×n DMatrix
+#[deprecated(
+    since = "0.1.0",
+    note = "non-physical placeholder; use rustfoil_inviscid::FactorizedSystem::build_dij_with_wake_state for the production DIJ"
+)]
 pub fn build_dij_1d(s: &[f64], ds: &[f64]) -> DMatrix<f64> {
     let n = s.len();
     if n == 0 {
@@ -305,6 +334,7 @@ pub fn build_dij_1d(s: &[f64], ds: &[f64]) -> DMatrix<f64> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // these tests pin the placeholder's current behaviour
 mod tests {
     use super::*;
 

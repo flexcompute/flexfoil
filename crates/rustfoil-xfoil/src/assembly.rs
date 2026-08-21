@@ -1,3 +1,4 @@
+use rustfoil_bl::debug::debug_flags;
 use rustfoil_bl::FlowType;
 use rustfoil_coupling::global_newton::GlobalNewtonSystem;
 
@@ -25,7 +26,7 @@ pub fn setbl(
 ) -> AssemblyState {
     if !state.lblini {
         mrchue(state, reynolds, ncrit, iteration, xstrip_upper, xstrip_lower);
-        if std::env::var("RUSTFOIL_SETBL_HANDOFF_DEBUG").is_ok() {
+        if debug_flags().setbl_handoff_debug {
             let start = state.nbl_upper.saturating_sub(3);
             for ibl in start..state.nbl_upper {
                 if let Some(row) = state.upper_rows.get(ibl) {
@@ -88,7 +89,7 @@ pub fn setbl(
         .iter()
         .map(|row| row.uedg)
         .collect();
-    if std::env::var("RUSTFOIL_SETBL_DEBUG").is_ok() {
+    if debug_flags().setbl_debug {
         for (name, stations) in [("upper", &upper_stations), ("lower", &lower_stations)] {
             for (ibl, station) in stations.iter().enumerate().take(6) {
                 eprintln!(

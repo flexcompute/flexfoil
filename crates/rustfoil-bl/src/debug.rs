@@ -8,9 +8,159 @@ use std::cell::RefCell;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
+use std::sync::LazyLock;
 
 thread_local! {
     static DEBUG_COLLECTOR: RefCell<Option<DebugCollector>> = RefCell::new(None);
+}
+
+/// Process-wide snapshot of the `RUSTFOIL_*` debug environment variables.
+///
+/// The boundary-layer marching and global-Newton loops used to call
+/// `std::env::var` once per station and per iteration. `std::env::var` takes a
+/// process-wide lock and allocates a `String` on every call, so those reads
+/// serialised rayon workers and destroyed parallel scaling. The environment is
+/// instead sampled exactly once, on first access, and every hot-path site reads
+/// a plain `bool` field off this struct.
+///
+/// Each field mirrors the historical `std::env::var(NAME).is_ok()` test:
+/// `true` when the variable is present with valid Unicode, regardless of its
+/// value (an empty string still counts as set). Sites that previously tested
+/// `.is_err()` negate the corresponding field.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DebugFlags {
+    /// `RUSTFOIL_BLDIF_DEBUG`
+    pub bldif_debug: bool,
+    /// `RUSTFOIL_BL_DEBUG`
+    pub bl_debug: bool,
+    /// `RUSTFOIL_BLSOLV_STEP_DEBUG`
+    pub blsolv_step_debug: bool,
+    /// `RUSTFOIL_CL_DEBUG`
+    pub cl_debug: bool,
+    /// `RUSTFOIL_DISABLE_STMOVE`
+    pub disable_stmove: bool,
+    /// `RUSTFOIL_DRAG_DEBUG`
+    pub drag_debug: bool,
+    /// `RUSTFOIL_DUE_DEBUG`
+    pub due_debug: bool,
+    /// `RUSTFOIL_DUI_DEBUG`
+    pub dui_debug: bool,
+    /// `RUSTFOIL_FC_DEBUG`
+    pub fc_debug: bool,
+    /// `RUSTFOIL_FINAL_DELTA_DEBUG`
+    pub final_delta_debug: bool,
+    /// `RUSTFOIL_FORCED_DEBUG`
+    pub forced_debug: bool,
+    /// `RUSTFOIL_LE_UPDATE_DEBUG`
+    pub le_update_debug: bool,
+    /// `RUSTFOIL_NEWTON_CMP`
+    pub newton_cmp: bool,
+    /// `RUSTFOIL_NEWTON_DEBUG`
+    pub newton_debug: bool,
+    /// `RUSTFOIL_RAW_RES_DEBUG`
+    pub raw_res_debug: bool,
+    /// `RUSTFOIL_REZC_DEBUG`
+    pub rezc_debug: bool,
+    /// `RUSTFOIL_SETBL_DEBUG`
+    pub setbl_debug: bool,
+    /// `RUSTFOIL_SETBL_FULL_VM`
+    pub setbl_full_vm: bool,
+    /// `RUSTFOIL_SETBL_HANDOFF_DEBUG`
+    pub setbl_handoff_debug: bool,
+    /// `RUSTFOIL_SETBL_VDEL_DEBUG`
+    pub setbl_vdel_debug: bool,
+    /// `RUSTFOIL_SOLVE_DEBUG`
+    pub solve_debug: bool,
+    /// `RUSTFOIL_STMOVE_DEBUG`
+    pub stmove_debug: bool,
+    /// `RUSTFOIL_TAIL_ITER_DEBUG`
+    pub tail_iter_debug: bool,
+    /// `RUSTFOIL_TESYS_DEBUG`
+    pub tesys_debug: bool,
+    /// `RUSTFOIL_TRANSITION_BLOCK_DEBUG`
+    pub transition_block_debug: bool,
+    /// `RUSTFOIL_TRANSITION_BRANCH_DEBUG`
+    pub transition_branch_debug: bool,
+    /// `RUSTFOIL_TRANS_DEBUG`
+    pub trans_debug: bool,
+    /// `RUSTFOIL_TRCHEK_DEBUG`
+    pub trchek_debug: bool,
+    /// `RUSTFOIL_UESET_DETAIL_DEBUG`
+    pub ueset_detail_debug: bool,
+    /// `RUSTFOIL_UESET_FIRST_DEBUG`
+    pub ueset_first_debug: bool,
+    /// `RUSTFOIL_UESET_STATE_DEBUG`
+    pub ueset_state_debug: bool,
+    /// `RUSTFOIL_UPDATE_DEBUG`
+    pub update_debug: bool,
+    /// `RUSTFOIL_UPDATE_NEWTON_DEBUG`
+    pub update_newton_debug: bool,
+    /// `RUSTFOIL_VM_FOCUS_DEBUG`
+    pub vm_focus_debug: bool,
+    /// `RUSTFOIL_WAKE_ITER_DEBUG`
+    pub wake_iter_debug: bool,
+    /// `RUSTFOIL_WAKE_MARCH_DEBUG`
+    pub wake_march_debug: bool,
+}
+
+impl DebugFlags {
+    /// Sample every flag from the current process environment.
+    fn from_env() -> Self {
+        // Presence test only, matching the original `.is_ok()` semantics.
+        fn set(name: &str) -> bool {
+            std::env::var(name).is_ok()
+        }
+
+        Self {
+            bldif_debug: set("RUSTFOIL_BLDIF_DEBUG"),
+            bl_debug: set("RUSTFOIL_BL_DEBUG"),
+            blsolv_step_debug: set("RUSTFOIL_BLSOLV_STEP_DEBUG"),
+            cl_debug: set("RUSTFOIL_CL_DEBUG"),
+            disable_stmove: set("RUSTFOIL_DISABLE_STMOVE"),
+            drag_debug: set("RUSTFOIL_DRAG_DEBUG"),
+            due_debug: set("RUSTFOIL_DUE_DEBUG"),
+            dui_debug: set("RUSTFOIL_DUI_DEBUG"),
+            fc_debug: set("RUSTFOIL_FC_DEBUG"),
+            final_delta_debug: set("RUSTFOIL_FINAL_DELTA_DEBUG"),
+            forced_debug: set("RUSTFOIL_FORCED_DEBUG"),
+            le_update_debug: set("RUSTFOIL_LE_UPDATE_DEBUG"),
+            newton_cmp: set("RUSTFOIL_NEWTON_CMP"),
+            newton_debug: set("RUSTFOIL_NEWTON_DEBUG"),
+            raw_res_debug: set("RUSTFOIL_RAW_RES_DEBUG"),
+            rezc_debug: set("RUSTFOIL_REZC_DEBUG"),
+            setbl_debug: set("RUSTFOIL_SETBL_DEBUG"),
+            setbl_full_vm: set("RUSTFOIL_SETBL_FULL_VM"),
+            setbl_handoff_debug: set("RUSTFOIL_SETBL_HANDOFF_DEBUG"),
+            setbl_vdel_debug: set("RUSTFOIL_SETBL_VDEL_DEBUG"),
+            solve_debug: set("RUSTFOIL_SOLVE_DEBUG"),
+            stmove_debug: set("RUSTFOIL_STMOVE_DEBUG"),
+            tail_iter_debug: set("RUSTFOIL_TAIL_ITER_DEBUG"),
+            tesys_debug: set("RUSTFOIL_TESYS_DEBUG"),
+            transition_block_debug: set("RUSTFOIL_TRANSITION_BLOCK_DEBUG"),
+            transition_branch_debug: set("RUSTFOIL_TRANSITION_BRANCH_DEBUG"),
+            trans_debug: set("RUSTFOIL_TRANS_DEBUG"),
+            trchek_debug: set("RUSTFOIL_TRCHEK_DEBUG"),
+            ueset_detail_debug: set("RUSTFOIL_UESET_DETAIL_DEBUG"),
+            ueset_first_debug: set("RUSTFOIL_UESET_FIRST_DEBUG"),
+            ueset_state_debug: set("RUSTFOIL_UESET_STATE_DEBUG"),
+            update_debug: set("RUSTFOIL_UPDATE_DEBUG"),
+            update_newton_debug: set("RUSTFOIL_UPDATE_NEWTON_DEBUG"),
+            vm_focus_debug: set("RUSTFOIL_VM_FOCUS_DEBUG"),
+            wake_iter_debug: set("RUSTFOIL_WAKE_ITER_DEBUG"),
+            wake_march_debug: set("RUSTFOIL_WAKE_MARCH_DEBUG"),
+        }
+    }
+}
+
+static DEBUG_FLAGS: LazyLock<DebugFlags> = LazyLock::new(DebugFlags::from_env);
+
+/// Access the process-wide debug flag snapshot.
+///
+/// The environment is read on the first call and cached for the lifetime of the
+/// process, so this is safe to call from inside hot per-station loops.
+#[inline]
+pub fn debug_flags() -> &'static DebugFlags {
+    &DEBUG_FLAGS
 }
 
 /// Initialize debug collection to a file

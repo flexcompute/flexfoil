@@ -79,6 +79,12 @@ enum CliError {
     #[error("Parse error at line {line}: {message}")]
     Parse { line: usize, message: String },
 
+    #[error(
+        "{path}: this file contains {count} elements; multi-element configurations are not yet \
+         supported by this command"
+    )]
+    MultiElement { path: String, count: usize },
+
     #[error("Solver error: {0}")]
     Solver(String),
     
@@ -1173,16 +1179,97 @@ fn run_faithful_polar(cmd: FaithfulPolarCmd) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Load an airfoil from a Selig/XFOIL format .dat file.
+/// Fewest points that can plausibly describe one element contour. Shorter runs
+/// are treated as stray fragments, not elements (see [`fold_blocks`]).
+const MIN_ELEMENT_POINTS: usize = 3;
+
+/// XFOIL / MSES element separator sentinel. A `999.0  999.0` line marks an
+/// element boundary; per XFOIL convention any coordinate pair whose both values
+/// reach the sentinel is a separator, never a real point.
+const ELEMENT_SEPARATOR_SENTINEL: f64 = 999.0;
+
+/// One lexical item of the coordinate section of a `.dat` file.
+enum DatToken {
+    Point(Point),
+    /// Element boundary. `explicit` is true for a `999.0 999.0` line (the file
+    /// states a boundary), false for a blank or comment line.
+    Separator { explicit: bool },
+}
+
+/// Fold a token stream into element blocks.
+///
+/// A run of fewer than [`MIN_ELEMENT_POINTS`] points cannot be an element
+/// contour, and real `.dat` files do contain stray blank lines mid-contour, so
+/// such a fragment is re-joined to its neighbouring block: no coordinate is lost
+/// and no bogus one-point "element" appears. A fragment following an explicit
+/// `999.0` separator is kept as its own block, because the file declared an
+/// element there and a degenerate element should be reported, not absorbed.
+fn fold_blocks(tokens: Vec<DatToken>) -> Vec<Vec<Point>> {
+    // (points, whether the separator that opened this block was explicit)
+    let mut raw: Vec<(Vec<Point>, bool)> = Vec::new();
+    let mut current: Vec<Point> = Vec::new();
+    let mut current_explicit = false;
+
+    for token in tokens {
+        match token {
+            DatToken::Point(p) => current.push(p),
+            DatToken::Separator { explicit } => {
+                if current.is_empty() {
+                    // Consecutive separators: an explicit one still marks the
+                    // block that follows.
+                    current_explicit = current_explicit || explicit;
+                } else {
+                    raw.push((std::mem::take(&mut current), current_explicit));
+                    current_explicit = explicit;
+                }
+            }
+        }
+    }
+    if !current.is_empty() {
+        raw.push((current, current_explicit));
+    }
+
+    let mut blocks: Vec<Vec<Point>> = Vec::new();
+    // Fragment held over because there is no preceding block to join it to.
+    let mut carry: Vec<Point> = Vec::new();
+
+    for (points, explicit) in raw {
+        let mut block = std::mem::take(&mut carry);
+        block.extend(points);
+
+        if block.len() < MIN_ELEMENT_POINTS && !explicit {
+            match blocks.last_mut() {
+                Some(previous) => previous.extend(block),
+                None => carry = block,
+            }
+            continue;
+        }
+
+        blocks.push(block);
+    }
+    if !carry.is_empty() {
+        blocks.push(carry);
+    }
+
+    blocks
+}
+
+/// Load every element of a Selig/XFOIL format .dat file.
+///
+/// Blank lines, comment lines and XFOIL `999.0 999.0` separator lines all split
+/// elements, so a slat/main/flap file yields one block per element instead of
+/// one concatenated multi-loop contour with a (999, 999) point spliced in.
 ///
 /// Format:
 /// ```text
-/// NACA 0012
-///   1.000000  0.000000
-///   0.950000  0.011234
+/// MDA 30P-30N
+///   0.018800  0.005100     <- slat
+///   ...
+///   999.0  999.0
+///   1.000000  0.000000     <- main
 ///   ...
 /// ```
-fn load_airfoil(path: &PathBuf) -> Result<(String, Vec<Point>), CliError> {
+fn load_airfoil_blocks(path: &PathBuf) -> Result<(String, Vec<Vec<Point>>), CliError> {
     let content = fs::read_to_string(path)?;
     let mut lines = content.lines().peekable();
 
@@ -1215,11 +1302,19 @@ fn load_airfoil(path: &PathBuf) -> Result<(String, Vec<Point>), CliError> {
         lines.next().unwrap().trim().to_string()
     };
 
-    let mut points = Vec::new();
+    let mut tokens = Vec::new();
 
     for (i, raw_line) in lines.enumerate() {
         let line = raw_line.trim();
+
+        // A blank line separates elements in multi-element files. So does a
+        // comment line: the one multi-element file in the bundled library
+        // (`30p-30n.dat`) labels its elements with `# Slat` / `# Main Element` /
+        // `# Flap` and uses nothing else as a boundary. A run of fewer than
+        // MIN_ELEMENT_POINTS points is re-joined by `fold_blocks`, so leading
+        // comment banners and stray comments between two points cost nothing.
         if line.is_empty() || line.starts_with('#') {
+            tokens.push(DatToken::Separator { explicit: false });
             continue;
         }
 
@@ -1238,8 +1333,45 @@ fn load_airfoil(path: &PathBuf) -> Result<(String, Vec<Point>), CliError> {
             message: format!("Invalid y coordinate: {}", parts[1]),
         })?;
 
-        points.push(point(x, y));
+        // Checked before the point is kept, so a `999.0 999.0` separator can
+        // never be spliced into the contour as a coordinate.
+        if x >= ELEMENT_SEPARATOR_SENTINEL && y >= ELEMENT_SEPARATOR_SENTINEL {
+            tokens.push(DatToken::Separator { explicit: true });
+            continue;
+        }
+
+        tokens.push(DatToken::Point(point(x, y)));
     }
+
+    let blocks = fold_blocks(tokens);
+
+    if blocks.is_empty() {
+        return Err(CliError::Parse {
+            line: 0,
+            message: "Too few points: 0 (need at least 3)".to_string(),
+        });
+    }
+
+    Ok((name, blocks))
+}
+
+/// Load a single-element airfoil from a Selig/XFOIL format .dat file.
+///
+/// Thin wrapper over [`load_airfoil_blocks`] for the commands that only handle
+/// one element. A multi-element file is reported instead of being silently
+/// concatenated into one bogus multi-loop contour.
+fn load_airfoil(path: &PathBuf) -> Result<(String, Vec<Point>), CliError> {
+    let (name, mut blocks) = load_airfoil_blocks(path)?;
+
+    if blocks.len() > 1 {
+        return Err(CliError::MultiElement {
+            path: path.display().to_string(),
+            count: blocks.len(),
+        });
+    }
+
+    // `load_airfoil_blocks` guarantees at least one block.
+    let points = blocks.remove(0);
 
     if points.len() < 3 {
         return Err(CliError::Parse {
@@ -1249,4 +1381,268 @@ fn load_airfoil(path: &PathBuf) -> Result<(String, Vec<Point>), CliError> {
     }
 
     Ok((name, points))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A `.dat` file written to the temp dir for the duration of one test.
+    struct TempDat {
+        path: PathBuf,
+    }
+
+    impl TempDat {
+        fn new(tag: &str, contents: &str) -> Self {
+            static COUNTER: AtomicUsize = AtomicUsize::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "rustfoil_cli_{}_{}_{}.dat",
+                std::process::id(),
+                tag,
+                COUNTER.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::write(&path, contents).expect("write temp .dat");
+            TempDat { path }
+        }
+    }
+
+    impl Drop for TempDat {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+
+    /// Chordwise stations, TE -> LE.
+    const STATIONS: [f64; 7] = [1.0, 0.8, 0.6, 0.4, 0.2, 0.05, 0.0];
+    const POINTS_PER_ELEMENT: usize = STATIONS.len() * 2 - 1;
+
+    /// A closed element contour (TE -> upper -> LE -> lower -> TE) with leading
+    /// edge at `x_le` and the given chord.
+    fn closed_element(x_le: f64, chord: f64) -> String {
+        let half = |t: f64| chord * 0.08 * (std::f64::consts::PI * t).sin();
+        let place = |t: f64| x_le + chord * t;
+
+        let mut lines: Vec<String> = STATIONS
+            .iter()
+            .map(|&t| format!(" {:.6} {:.6}", place(t), half(t)))
+            .collect();
+        lines.extend(
+            STATIONS
+                .iter()
+                .rev()
+                .skip(1)
+                .map(|&t| format!(" {:.6} {:.6}", place(t), -half(t))),
+        );
+        lines.join("\n")
+    }
+
+    fn x_range(block: &[Point]) -> (f64, f64) {
+        block.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
+            (lo.min(p.x), hi.max(p.x))
+        })
+    }
+
+    #[test]
+    fn blocks_split_on_blank_lines() {
+        let file = TempDat::new(
+            "three_element",
+            &format!(
+                "MDA 30P-30N (mini)\n{}\n\n{}\n\n{}\n",
+                closed_element(-0.1, 0.15),
+                closed_element(0.0, 1.0),
+                closed_element(0.85, 0.45),
+            ),
+        );
+
+        let (name, blocks) = load_airfoil_blocks(&file.path).expect("parse");
+
+        assert_eq!(name, "MDA 30P-30N (mini)");
+        assert_eq!(blocks.len(), 3);
+        for block in &blocks {
+            assert_eq!(block.len(), POINTS_PER_ELEMENT);
+        }
+
+        // Each element keeps its own chordwise station instead of being merged.
+        let (slat_lo, slat_hi) = x_range(&blocks[0]);
+        assert!((slat_lo - -0.1).abs() < 1e-9, "slat lo = {}", slat_lo);
+        assert!((slat_hi - 0.05).abs() < 1e-9, "slat hi = {}", slat_hi);
+        let (flap_lo, flap_hi) = x_range(&blocks[2]);
+        assert!((flap_lo - 0.85).abs() < 1e-9, "flap lo = {}", flap_lo);
+        assert!((flap_hi - 1.3).abs() < 1e-9, "flap hi = {}", flap_hi);
+    }
+
+    #[test]
+    fn blocks_split_on_comment_labelled_elements() {
+        let file = TempDat::new(
+            "comment_labelled",
+            &format!(
+                "# Mini 30P-30N\n# Slat\n{}\n# Main Element\n{}\n# Flap\n{}\n",
+                closed_element(-0.1, 0.15),
+                closed_element(0.0, 1.0),
+                closed_element(0.85, 0.45),
+            ),
+        );
+
+        let (_, blocks) = load_airfoil_blocks(&file.path).expect("parse");
+
+        assert_eq!(blocks.len(), 3);
+        for block in &blocks {
+            assert_eq!(block.len(), POINTS_PER_ELEMENT);
+        }
+    }
+
+    /// The one genuine multi-element file in the bundled airfoil library: three
+    /// elements labelled with comments, previously concatenated into a single
+    /// 664-point three-loop contour with no error at all.
+    #[test]
+    fn real_mda_30p_30n_file_is_three_elements() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../flexfoil-ui/public/airfoils/30p-30n.dat");
+
+        let (_, blocks) = load_airfoil_blocks(&path).expect("parse 30p-30n.dat");
+
+        assert_eq!(
+            blocks.iter().map(|b| b.len()).collect::<Vec<_>>(),
+            vec![201, 221, 242]
+        );
+        assert!(load_airfoil(&path).is_err(), "must not be read as one element");
+    }
+
+    #[test]
+    fn blocks_split_on_999_separator_without_injecting_a_point() {
+        let file = TempDat::new(
+            "sentinel",
+            &format!(
+                "SEPARATED\n{}\n 999.0 999.0\n{}\n 999.0 999.0\n{}\n",
+                closed_element(-0.1, 0.15),
+                closed_element(0.0, 1.0),
+                closed_element(0.85, 0.45),
+            ),
+        );
+
+        let (_, blocks) = load_airfoil_blocks(&file.path).expect("parse");
+
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(
+            blocks.iter().map(|b| b.len()).sum::<usize>(),
+            3 * POINTS_PER_ELEMENT
+        );
+        // The sentinel must never survive as a coordinate.
+        assert!(
+            blocks
+                .iter()
+                .flatten()
+                .all(|p| p.x < ELEMENT_SEPARATOR_SENTINEL && p.y < ELEMENT_SEPARATOR_SENTINEL),
+            "a (999, 999) point was injected"
+        );
+    }
+
+    #[test]
+    fn separator_tolerates_whitespace_and_format_variation() {
+        let file = TempDat::new(
+            "sentinel_fmt",
+            &format!(
+                "SEPARATED\n{}\n   999.   999.  \n{}\n999.000000\t999.000000\n{}\n",
+                closed_element(0.0, 1.0),
+                closed_element(0.85, 0.45),
+                closed_element(-0.1, 0.15),
+            ),
+        );
+
+        let (_, blocks) = load_airfoil_blocks(&file.path).expect("parse");
+
+        assert_eq!(blocks.len(), 3);
+        assert!(blocks
+            .iter()
+            .flatten()
+            .all(|p| p.x < ELEMENT_SEPARATOR_SENTINEL));
+    }
+
+    #[test]
+    fn load_airfoil_reports_multi_element_files() {
+        let file = TempDat::new(
+            "reject_multi",
+            &format!(
+                "MULTI\n{}\n\n{}\n\n{}\n",
+                closed_element(-0.1, 0.15),
+                closed_element(0.0, 1.0),
+                closed_element(0.85, 0.45),
+            ),
+        );
+
+        let err = load_airfoil(&file.path).expect_err("multi-element file must be reported");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("contains 3 elements"),
+            "message did not state the element count: {message}"
+        );
+        assert!(
+            message.contains("not yet supported"),
+            "message was not actionable: {message}"
+        );
+    }
+
+    #[test]
+    fn load_airfoil_still_reads_a_single_element_file() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/naca0012.dat");
+
+        let (name, points) = load_airfoil(&path).expect("parse naca0012.dat");
+
+        assert_eq!(name, "NACA 0012");
+        assert!(points.len() > 100, "only {} points", points.len());
+        // Selig order: starts and ends at the trailing edge.
+        assert!((points[0].x - 1.0).abs() < 1e-6);
+        assert!((points.last().unwrap().x - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stray_blank_line_inside_an_element_is_rejoined() {
+        // `cap21c.dat` in the bundled airfoil library separates its closing
+        // trailing-edge point with two blank lines: that point belongs to the
+        // element and must not become a one-point "element".
+        let file = TempDat::new(
+            "stray_blank",
+            &format!(
+                "CAP 21 (mini)\n{}\n\n\n 0.998900 -0.001006\n",
+                closed_element(0.0, 1.0)
+            ),
+        );
+
+        let (_, points) = load_airfoil(&file.path).expect("single element");
+
+        assert_eq!(points.len(), POINTS_PER_ELEMENT + 1);
+        assert!((points.last().unwrap().x - 0.9989).abs() < 1e-9);
+    }
+
+    #[test]
+    fn explicitly_declared_degenerate_element_is_not_absorbed() {
+        let file = TempDat::new(
+            "degenerate",
+            &format!(
+                "BROKEN\n{}\n 999.0 999.0\n 0.5 0.0\n",
+                closed_element(0.0, 1.0)
+            ),
+        );
+
+        let (_, blocks) = load_airfoil_blocks(&file.path).expect("parse");
+
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].len(), POINTS_PER_ELEMENT);
+        assert_eq!(blocks[1].len(), 1);
+        assert!(load_airfoil(&file.path).is_err());
+    }
+
+    #[test]
+    fn too_few_points_is_still_reported() {
+        let file = TempDat::new("short", "SHORT\n 1.0 0.0\n 0.0 0.0\n");
+
+        let err = load_airfoil(&file.path).expect_err("two points is not an airfoil");
+
+        assert!(
+            err.to_string().contains("Too few points: 2"),
+            "unexpected message: {err}"
+        );
+    }
 }

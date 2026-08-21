@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -89,6 +90,126 @@ class BLResult:
         return f"BLResult({conv}, {n} stations, xtr_u={self.x_tr_upper:.3f}, xtr_l={self.x_tr_lower:.3f})"
 
 
+# ---------------------------------------------------------------------------
+# Geometry hashing (cache keys)
+# ---------------------------------------------------------------------------
+#
+# The geometry hash is the geometry half of the run-cache key (see
+# ``database.py``, ``idx_cache_key``). It must distinguish every geometry that
+# can produce a different flow solution — which, for a multi-element assembly,
+# means *placement* as well as element shape: two configurations built from the
+# same element shapes but with a different gap/overlap/deflection are entirely
+# different aerodynamic problems.
+#
+# Canonical form:
+#
+#     element_0 [# element_1 [# element_2 ...]]
+#     element_i = <coords_i>[@<placement_i>]
+#     coords_i  = "x,y" per node, 8 decimal places, joined with "|"
+#     placement = rot,pivot_x,pivot_y,trans_x,trans_y,scale  (8 decimals each)
+#
+# The placement suffix is emitted only when the placement is present *and*
+# non-identity, and the element separator only appears between elements, so a
+# single element with no (or identity) placement canonicalises to exactly the
+# coordinate string this function has always produced. That keeps every run
+# already cached in a user's ~/.flexfoil/runs.db valid — see
+# ``tests/test_geometry_hash.py::test_legacy_single_element_digest_is_pinned``.
+#
+# NOTE (known divergence, pre-existing): the browser implementation in
+# ``flexfoil-ui/src/lib/airfoilHash.ts`` uses ";" between nodes and does not
+# truncate the digest, so browser-side and Python-side hashes for the *same*
+# coordinates have never matched. The element/placement encoding added here is
+# byte-for-byte identical between the two, and both sides pin the exact shared
+# suffix in their tests; unifying the coordinate half is a cache-invalidating
+# change and belongs with the database migration workstream.
+
+_ELEMENT_SEP = "#"
+_PLACEMENT_PREFIX = "@"
+# Changing this invalidates every run already cached against the old digest;
+# the pinned test in tests/test_geometry_hash.py exists to catch that.
+_PRECISION = 8
+
+
+@dataclass(frozen=True)
+class Placement:
+    """Rigid placement of one element inside a multi-element assembly.
+
+    ``rotation`` is in degrees about ``pivot`` (in the element's own
+    coordinates), applied before ``translation``. ``scale`` is uniform.
+    The default is the identity placement, which hashes as if absent.
+    """
+
+    pivot: tuple[float, float] = (0.0, 0.0)
+    rotation: float = 0.0
+    translation: tuple[float, float] = (0.0, 0.0)
+    scale: float = 1.0
+
+    @property
+    def is_identity(self) -> bool:
+        """True if this placement moves nothing (pivot alone is a no-op)."""
+        return (
+            self.rotation == 0.0
+            and self.translation[0] == 0.0
+            and self.translation[1] == 0.0
+            and self.scale == 1.0
+        )
+
+
+@dataclass(frozen=True)
+class GeometryElement:
+    """One element of an assembly: its own coordinates plus where it sits."""
+
+    coords: Sequence[tuple[float, float]]
+    placement: Placement | None = None
+
+
+def _fmt(value: float) -> str:
+    """Format a placement scalar. -0.0 collapses to 0.0 so that Python and
+    JavaScript (whose ``toFixed`` never emits "-0.00000000") agree."""
+    if value == 0.0:
+        value = 0.0
+    return f"{value:.{_PRECISION}f}"
+
+
+def _canonical_coords(coords: Sequence[tuple[float, float]]) -> str:
+    return "|".join(
+        f"{x:.{_PRECISION}f},{y:.{_PRECISION}f}" for x, y in coords
+    )
+
+
+def _canonical_placement(placement: Placement | None) -> str:
+    if placement is None or placement.is_identity:
+        return ""
+    return _PLACEMENT_PREFIX + ",".join(
+        _fmt(v)
+        for v in (
+            placement.rotation,
+            placement.pivot[0],
+            placement.pivot[1],
+            placement.translation[0],
+            placement.translation[1],
+            placement.scale,
+        )
+    )
+
+
+def canonical_geometry(elements: Sequence[GeometryElement]) -> str:
+    """Canonical string for an assembly (see module notes above)."""
+    return _ELEMENT_SEP.join(
+        _canonical_coords(e.coords) + _canonical_placement(e.placement)
+        for e in elements
+    )
+
+
+def geometry_hash(elements: Sequence[GeometryElement]) -> str:
+    """Placement-aware geometry hash used as the run-cache key.
+
+    Reduces to the historical coordinate-only digest for a single element with
+    no (or identity) placement.
+    """
+    return hashlib.sha256(canonical_geometry(elements).encode()).hexdigest()[:16]
+
+
 class Airfoil:
     """An airfoil with coordinates, paneling, and solver methods."""
 
@@ -97,10 +218,13 @@ class Airfoil:
         name: str,
         raw_coords: list[tuple[float, float]],
         panel_coords: list[tuple[float, float]],
+        *,
+        placement: Placement | None = None,
     ):
         self.name = name
         self.raw_coords = raw_coords
         self.panel_coords = panel_coords
+        self.placement = placement
         self._hash: str | None = None
 
     @classmethod
@@ -183,12 +307,16 @@ class Airfoil:
 
     @property
     def hash(self) -> str:
-        """SHA-256 of canonical panel coordinates (for cache keys)."""
+        """SHA-256 of the canonical geometry — panel coordinates plus
+        placement, if any — used as the geometry half of the cache key.
+
+        Computed once; do not mutate ``panel_coords`` or ``placement`` after
+        construction.
+        """
         if self._hash is None:
-            canonical = "|".join(
-                f"{x:.8f},{y:.8f}" for x, y in self.panel_coords
+            self._hash = geometry_hash(
+                [GeometryElement(self.panel_coords, self.placement)]
             )
-            self._hash = hashlib.sha256(canonical.encode()).hexdigest()[:16]
         return self._hash
 
     def _flat_panels(self) -> list[float]:

@@ -1,6 +1,7 @@
 use rustfoil_bl::{
     add_event, is_debug_active, BlStation, DebugEvent, SurfaceBlState,
 };
+use rustfoil_bl::debug::debug_flags;
 use rustfoil_core::Body;
 use rustfoil_inviscid::{FactorizedSystem, InviscidSolver};
 use serde::{Deserialize, Serialize};
@@ -128,7 +129,7 @@ pub fn solve_operating_point_from_state(
         xywake(state, factorized, options.wake_length_chords);
     }
     qwcalc(state, factorized);
-    if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+    if debug_flags().cl_debug {
         let (cl_inv, cm_inv) = compute_panel_forces_from_gamma(
             &state.panel_x,
             &state.panel_y,
@@ -198,7 +199,7 @@ pub fn solve_operating_point_from_state(
             // Match XFOIL: dump panel gamma after GAMQV, before STMOVE.
             add_event(DebugEvent::full_gamma_iter(iter, state.gam.clone()));
         }
-        if std::env::var("RUSTFOIL_DISABLE_STMOVE").is_err() {
+        if !debug_flags().disable_stmove {
             stmove(state);
         }
         update_force_state(state, options.mach, re_eff);

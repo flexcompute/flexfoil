@@ -20,6 +20,7 @@
 
 use nalgebra::DMatrix;
 use rayon::prelude::*;
+use rustfoil_bl::debug::debug_flags;
 use rustfoil_bl::equations::{blvar, FlowType};
 use rustfoil_bl::state::BlStation;
 use rustfoil_coupling::march::{march_fixed_ue, xstrip_to_xiforc, MarchConfig, MarchResult};
@@ -152,7 +153,7 @@ fn build_panel_gamma_from_stations(
         eprintln!("[WARN construct_gamma] {} panels unfilled (will have gamma=0, Cp=1)", n_unfilled);
     }
     
-    if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+    if debug_flags().cl_debug {
         let gamma_min = gamma.iter().cloned().fold(f64::INFINITY, f64::min);
         let gamma_max = gamma.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
         let gamma_abs_avg: f64 = gamma.iter().map(|g| g.abs()).sum::<f64>() / n_panels as f64;
@@ -1000,7 +1001,7 @@ pub fn solve_viscous_two_surfaces(
     let can_run_newton = config.max_iterations > 0 && n_upper >= 3 && n_lower >= 3;
 
     // Debug: track Newton execution
-    if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+    if debug_flags().cl_debug {
         eprintln!("[DEBUG viscal] Newton check: can_run={}, max_iter={}, n_upper={}, n_lower={}", 
             can_run_newton, config.max_iterations, n_upper, n_lower);
     }
@@ -1028,7 +1029,7 @@ pub fn solve_viscous_two_surfaces(
                 .unwrap_or((0.0, 0.0))
         };
 
-        if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+        if debug_flags().cl_debug {
             eprintln!("[DEBUG viscal] Stagnation derivatives: SST_GO={:.6e}, SST_GP={:.6e}", sst_go, sst_gp);
         }
 
@@ -1106,7 +1107,7 @@ pub fn solve_viscous_two_surfaces(
             // behavior near the stagnation region.
             let canonical_iter_backup = canonical_state.clone();
 
-            if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() && iter < 3 {
+            if debug_flags().cl_debug && iter < 3 {
                 eprintln!("[DEBUG Newton] Starting iter {}", iter);
             }
             
@@ -1271,7 +1272,7 @@ pub fn solve_viscous_two_surfaces(
             residual = global_system.rms_residual();
             
             // Debug: print actual VDEL values at a few stations to understand magnitude
-            if iter < 1 && std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+            if iter < 1 && debug_flags().cl_debug {
                 eprintln!("[DEBUG Newton] iter {} VDEL sample:", iter);
                 // Print station data at problematic indices
                 let n_upper = global_system.n_upper;
@@ -1324,7 +1325,7 @@ pub fn solve_viscous_two_surfaces(
                 }
             }
             
-            if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() && iter < 3 {
+            if debug_flags().cl_debug && iter < 3 {
                 eprintln!("[DEBUG Newton] iter {} residual before solve: {:.6e}", iter, residual);
             }
 
@@ -1399,7 +1400,7 @@ pub fn solve_viscous_two_surfaces(
             // Check if solution is valid
             let deltas_valid = deltas.iter().all(|d| d.iter().all(|v| v.is_finite()));
             if !deltas_valid {
-                if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+                if debug_flags().cl_debug {
                     eprintln!("[DEBUG Newton] Invalid deltas at iter {} (reverting)", iter);
                 }
                 canonical_state = canonical_iter_backup;
@@ -1479,7 +1480,7 @@ pub fn solve_viscous_two_surfaces(
                 old_ist,
             ) {
                 if new_ist != old_ist {
-                    if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+                    if debug_flags().cl_debug {
                         eprintln!(
                             "[DEBUG Newton] STMOVE shifted stagnation panel: {} -> {}",
                             old_ist, new_ist
@@ -1489,13 +1490,13 @@ pub fn solve_viscous_two_surfaces(
                 }
             }
 
-            if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() && (iter < 10 || iter % 5 == 0) {
+            if debug_flags().cl_debug && (iter < 10 || iter % 5 == 0) {
                 eprintln!("[DEBUG Newton] iter {} RMSBL after update: {:.6e} (max_change: {:.6e})", 
                     iter, residual, update_result.max_change);
             }
             
             if residual < config.tolerance {
-                if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+                if debug_flags().cl_debug {
                     eprintln!("[DEBUG Newton] Converged at iter {} with RMSBL={:.6e} < tolerance={:.6e}", 
                         iter, residual, config.tolerance);
                 }
@@ -1505,7 +1506,7 @@ pub fn solve_viscous_two_surfaces(
 
             // Check for divergence or increasing residual
             if !residual.is_finite() || residual > 1e10 {
-                if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+                if debug_flags().cl_debug {
                     eprintln!("[DEBUG Newton] Diverged at iter {}: residual={:.6e} (reverting)", iter, residual);
                 }
                 canonical_state = canonical_iter_backup;
@@ -1519,7 +1520,7 @@ pub fn solve_viscous_two_surfaces(
             // Stop if residual is increasing rapidly (Newton diverging badly)
             // Allow slow increase since our residual may oscillate
             if iter > 5 && residual > prev_residual * 5.0 {
-                if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+                if debug_flags().cl_debug {
                     eprintln!("[DEBUG Newton] Rapid increase at iter {}: residual={:.6e}, prev={:.6e} (reverting)", iter, residual, prev_residual);
                 }
                 canonical_state = canonical_iter_backup;
@@ -1565,7 +1566,7 @@ pub fn solve_viscous_two_surfaces(
     // and must be used to achieve numerical precision matching.
     
     // Debug: Show station edge velocities before constructing gamma
-    if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+    if debug_flags().cl_debug {
         let upper_ue_range: (f64, f64) = upper_stations.iter()
             .filter(|s| !s.is_wake)
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), s| (min.min(s.u.abs()), max.max(s.u.abs())));
@@ -1609,7 +1610,7 @@ pub fn solve_viscous_two_surfaces(
     );
     
     // Debug: Output BL quantities at all stations for comparison with XFOIL
-    if std::env::var("RUSTFOIL_BL_DEBUG").is_ok() {
+    if debug_flags().bl_debug {
         eprintln!("[BL_DEBUG] UPPER_SURFACE ({} stations):", upper_stations.len());
         for s in upper_stations.iter() {
             let flow = if s.is_laminar { "LAM" } else { "TURB" };

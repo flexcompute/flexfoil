@@ -8,6 +8,7 @@ use rustfoil_bl::{
     equations::{bldif_full_simi, trdif_full},
     BlStation, FlowType,
 };
+use rustfoil_bl::debug::debug_flags;
 
 use crate::state::{XfoilBlRow, XfoilState};
 
@@ -710,7 +711,7 @@ fn march_ue_side(
                 re,
             )
         });
-        if std::env::var("RUSTFOIL_WAKE_MARCH_DEBUG").is_ok()
+        if debug_flags().wake_march_debug
             && ((wake && (iblte + 1..=iblte + 3).contains(&ibl)) || ibl == iblte)
         {
             eprintln!(
@@ -929,7 +930,7 @@ fn march_du_side(
                         None,
                     ));
                 }
-                if std::env::var("RUSTFOIL_TRCHEK_DEBUG").is_ok() {
+                if debug_flags().trchek_debug {
                     eprintln!(
                         "[TRCHEK DU] side={} ibl={} itran={} itrold={} x1={:.12e} x2={:.12e} th1={:.12e} th2={:.12e} ds1={:.12e} ds2={:.12e} u1={:.12e} u2={:.12e} hk1={:.12e} hk2={:.12e} rt1={:.12e} rt2={:.12e} ampl1={:.12e} ampl2={:.12e} transition={} xt={:.12e} xforced={:?}",
                         side,
@@ -1107,7 +1108,7 @@ fn march_du_side(
             }
             let rlx = if dmax > 0.3 { 0.3 / dmax } else { 1.0 };
 
-            if std::env::var("RUSTFOIL_WAKE_ITER_DEBUG").is_ok() && wake && ibl == iblte + 2 {
+            if debug_flags().wake_iter_debug && wake && ibl == iblte + 2 {
                 eprintln!(
                     "[WAKE ITER] ibl={} it={} theta={:.8e} dsi_total={:.8e} ctau={:.8e} ue={:.8e} dmax={:.8e} rlx={:.8e} rhs=[{:.8e}, {:.8e}, {:.8e}, {:.8e}]",
                     ibl,
@@ -1124,7 +1125,7 @@ fn march_du_side(
                     rhs[3]
                 );
             }
-            if std::env::var("RUSTFOIL_TAIL_ITER_DEBUG").is_ok()
+            if debug_flags().tail_iter_debug
                 && (iblte.saturating_sub(2)..=iblte).contains(&ibl)
             {
                 eprintln!(
@@ -1272,7 +1273,7 @@ fn march_du_side(
                         None,
                     ));
                 }
-                if std::env::var("RUSTFOIL_TRCHEK_DEBUG").is_ok() {
+                if debug_flags().trchek_debug {
                     eprintln!(
                         "[TRCHEK DU FALLBACK] side={} ibl={} itran={} itrold={} x1={:.12e} x2={:.12e} th1={:.12e} th2={:.12e} ds1={:.12e} ds2={:.12e} u1={:.12e} u2={:.12e} hk1={:.12e} hk2={:.12e} rt1={:.12e} rt2={:.12e} ampl1={:.12e} ampl2={:.12e} transition={} xt={:.12e} xforced={:?}",
                         side,
@@ -1341,7 +1342,7 @@ fn march_du_side(
                 re,
             )
         });
-        if std::env::var("RUSTFOIL_WAKE_MARCH_DEBUG").is_ok()
+        if debug_flags().wake_march_debug
             && ((wake && (iblte + 1..=iblte + 3).contains(&ibl)) || ibl == iblte)
         {
             eprintln!(

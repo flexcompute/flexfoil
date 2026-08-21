@@ -1,5 +1,24 @@
 //! Inviscid flow solver using Mark Drela's Linear Vorticity Panel Method.
 //!
+//! # Status: visualization support, NOT the authoritative inviscid solver
+//!
+//! **This module is not the production inviscid solver.** It is an older,
+//! self-contained implementation that is retained because the [`velocity`] and
+//! [`smoke`] modules are built on top of it: they provide the flowfield,
+//! streamline and smoke visualizations (`compute_psi_grid`, `build_streamlines`,
+//! [`SmokeSystem`], ...) that the UI and WASM bindings draw.
+//!
+//! The XFOIL-faithful production inviscid path is the **`rustfoil-inviscid`**
+//! crate (`rustfoil_inviscid::InviscidSolver` / `rustfoil_inviscid::FactorizedSystem`).
+//! That is what `rustfoil-xfoil`, this crate's [`crate::viscous`] module, and the
+//! WASM/Python bindings use for the aerodynamic numbers they report.
+//!
+//! **New inviscid solver work belongs in `rustfoil-inviscid`, not here.** In
+//! particular, multi-element / multi-body support must be built there: neither
+//! implementation solves more than one body today, and this one now rejects
+//! multi-body input outright rather than silently discarding geometry (see
+//! [`InviscidSolver::factorize`]).
+//!
 //! This implements the exact panel method from XFOIL, using:
 //! - Linear vorticity distribution across each panel (node-based unknowns)
 //! - Stream function formulation (ψ = ψ₀ on surface)
@@ -80,6 +99,11 @@ impl FlowConditions {
 }
 
 /// Solution from the inviscid panel method.
+///
+/// Always describes a **single** body: [`gamma`](Self::gamma) and
+/// [`cp`](Self::cp) are indexed by node over that one contour. There is no
+/// per-body segmentation, because this solver only accepts one body — see the
+/// module docs and [`InviscidSolver::factorize`].
 #[derive(Debug, Clone)]
 pub struct InviscidSolution {
     /// Vorticity values at each node (γᵢ = surface velocity)
@@ -92,8 +116,6 @@ pub struct InviscidSolution {
     pub cm: f64,
     /// Internal stream function value
     pub psi_0: f64,
-    /// Number of nodes per body (for indexing)
-    pub nodes_per_body: Vec<usize>,
 }
 
 /// Cached factorization for efficient alpha sweeps.
@@ -147,7 +169,6 @@ impl FactorizedSolution {
             cl,
             cm,
             psi_0,
-            nodes_per_body: vec![n],
         }
     }
 
@@ -204,6 +225,10 @@ impl FactorizedSolution {
 }
 
 /// Inviscid flow solver using Drela's linear vorticity panel method.
+///
+/// Retained for the flowfield/streamline/smoke visualizations in [`velocity`] and
+/// [`smoke`]. For authoritative aerodynamic results use `rustfoil_inviscid::InviscidSolver`;
+/// see the module docs.
 pub struct InviscidSolver {
     _config: SolverConfig,
 }
@@ -225,9 +250,12 @@ impl InviscidSolver {
         }
     }
 
-    /// Solve for the inviscid flow around the given bodies.
+    /// Solve for the inviscid flow around the given body.
     ///
     /// Uses Drela's linear vorticity stream function panel method (XFOIL).
+    ///
+    /// `bodies` must contain **exactly one** body; see
+    /// [`factorize`](Self::factorize) for the errors returned otherwise.
     pub fn solve(&self, bodies: &[Body], flow: &FlowConditions) -> SolverResult<InviscidSolution> {
         let factorized = self.factorize(bodies)?;
         Ok(factorized.solve_alpha(flow))
@@ -248,12 +276,37 @@ impl InviscidSolver {
     /// 
     /// We use 0-based indexing: nodes 0 to N-1, with panel N-1 going from 
     /// node N-1 back to node 0.
+    ///
+    /// # Single body only
+    ///
+    /// The `&[Body]` parameter is historical: this solver has always handled
+    /// exactly one body. It used to take `bodies[0]` and silently discard the
+    /// rest; it now returns an error instead, so that dropped geometry cannot
+    /// pass unnoticed. Multi-element inviscid capability must be built in the
+    /// `rustfoil-inviscid` crate, not here — see the module docs.
+    ///
+    /// # Errors
+    ///
+    /// - [`SolverError::NoBodies`] if `bodies` is empty.
+    /// - [`SolverError::InvalidFlowConditions`] if `bodies` holds more than one body.
+    /// - [`SolverError::InsufficientPanels`] if the body has fewer than 3 panels.
+    /// - [`SolverError::SingularMatrix`] if the influence matrix cannot be solved.
     pub fn factorize(&self, bodies: &[Body]) -> SolverResult<FactorizedSolution> {
         if bodies.is_empty() {
             return Err(SolverError::NoBodies);
         }
 
-        // For now, handle single body
+        // Single body only. Extra bodies were previously discarded in silence,
+        // which made this look multi-body-ready when it never was.
+        if bodies.len() > 1 {
+            return Err(SolverError::InvalidFlowConditions {
+                reason: "more than one body was supplied, but this solver \
+                         (rustfoil-solver's visualization-only inviscid path) handles \
+                         exactly one body; multi-element inviscid support belongs in the \
+                         rustfoil-inviscid crate, which is the authoritative solver",
+            });
+        }
+
         let body = &bodies[0];
         let panels = body.panels();
         let n_panels = panels.len();
@@ -748,6 +801,30 @@ mod tests {
 
         let result = solver.solve(&[], &flow);
         assert!(matches!(result, Err(SolverError::NoBodies)));
+    }
+
+    #[test]
+    fn test_multiple_bodies_rejected() {
+        // This solver is single-body only. Extra bodies used to be silently
+        // discarded; they must now produce a clear error instead.
+        let solver = InviscidSolver::new();
+        let flow = FlowConditions::default();
+        let main = make_naca0012(20);
+        let flap = make_naca0012(20);
+
+        let result = solver.factorize(&[main.clone(), flap]);
+        match result {
+            Err(SolverError::InvalidFlowConditions { reason }) => {
+                assert!(
+                    reason.contains("rustfoil-inviscid"),
+                    "error should point at the authoritative solver, got: {reason}"
+                );
+            }
+            other => panic!("expected a multi-body rejection, got {other:?}"),
+        }
+
+        // A single body still works exactly as before.
+        assert!(solver.solve(&[main], &flow).is_ok());
     }
 
     #[test]

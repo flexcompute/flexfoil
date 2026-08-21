@@ -4,12 +4,14 @@ A 2D panel code with integral boundary layer based on Mark Drela's tools - moder
 
 ## Overview
 
-FlexFoil (RustFoil core) is a ground-up rewrite of Mark Drela's XFOIL, architected from the start to support:
+FlexFoil (RustFoil core) is a ground-up rewrite of Mark Drela's XFOIL, architected around:
 
-- **Multi-body configurations** (slats, main wing, flaps)
+- **XFOIL numerical fidelity** as the governing constraint on every solver path
 - **Real-time feedback** during geometry manipulation
 - **WebAssembly output** for browser-based UIs
 - **Modern Rust idioms** with strong type safety
+
+Multi-body configurations (slat / main / flap) are the design direction rather than a current capability. The geometry layer represents each element as an independent body, but multi-body interaction and multi-body viscous coupling are not implemented; [Development Phases](#development-phases) below is the source of truth for what works today. Flap deflection is currently XFOIL's plain flap — a region of a single contour rotated about a hinge — which remains one body rather than a separate element.
 
 ## Architecture
 

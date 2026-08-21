@@ -227,6 +227,53 @@ const NACA_2412 = `NACA 2412
  1.000000 -0.001300
 `;
 
+/** Chordwise stations used to synthesise element contours, TE -> LE. */
+const STATIONS = [1, 0.8, 0.6, 0.4, 0.2, 0.05, 0];
+
+function fmt(x: number, y: number): string {
+  return ` ${x.toFixed(6)} ${y.toFixed(6)}`;
+}
+
+/**
+ * A closed element contour placed at `xLe` with chord `chord`.
+ *
+ * `startAt: 'te'` writes the usual Selig order (TE -> upper -> LE -> lower -> TE).
+ * `startAt: 'nearLe'` starts one station aft of the leading edge on the lower
+ * surface and wraps the whole loop, so the block starts at x < 0.1 — the shape
+ * that used to be misread as a Lednicer surface.
+ */
+function closedElement(
+  xLe: number,
+  chord: number,
+  { thickness = 0.08, startAt = 'te' as 'te' | 'nearLe' } = {},
+): string {
+  const place = (t: number) => xLe + chord * t;
+  const half = (t: number) => chord * thickness * Math.sin(Math.PI * t);
+  const leToTe = [...STATIONS].reverse();
+
+  const lines =
+    startAt === 'te'
+      ? [
+          ...STATIONS.map((t) => fmt(place(t), half(t))), // TE -> LE, upper
+          ...leToTe.slice(1).map((t) => fmt(place(t), -half(t))), // LE -> TE, lower
+        ]
+      : [
+          fmt(place(leToTe[1]), -half(leToTe[1])), // just aft of the LE, lower
+          fmt(place(leToTe[0]), half(leToTe[0])), // LE
+          ...leToTe.slice(1).map((t) => fmt(place(t), half(t))), // LE -> TE, upper
+          ...STATIONS.slice(1, -1).map((t) => fmt(place(t), -half(t))), // TE -> back to start, lower
+        ];
+  return lines.join('\n');
+}
+
+/** An open Lednicer-style surface running LE -> TE. */
+function lednicerSurface(sign: number): string {
+  return [...STATIONS]
+    .reverse()
+    .map((t) => fmt(t, sign * 0.08 * Math.sin(Math.PI * t)))
+    .join('\n');
+}
+
 describe('parseAirfoilDat', () => {
   it.each([
     ['Clark Y', CLARK_Y, 'clarky.dat', 'CLARK Y AIRFOIL'],
@@ -318,6 +365,140 @@ describe('parseAirfoilDat', () => {
     expect(parsed.coordinates.length).toBe(9);
     expect(parsed.coordinates[0].x).toBeCloseTo(1.0);
     expect(parsed.coordinates.at(-1)!.x).toBeCloseTo(1.0);
+  });
+});
+
+describe('parseAirfoilDat multi-element', () => {
+  const SLAT = closedElement(-0.1, 0.15);
+  const MAIN = closedElement(0, 1);
+  const FLAP = closedElement(0.85, 0.45);
+  const POINTS_PER_ELEMENT = STATIONS.length * 2 - 1;
+
+  it('reports an ordinary single-element Selig file as one element', () => {
+    const parsed = parseAirfoilDat(CLARK_Y, 'clarky.dat');
+
+    expect(parsed.elements).toHaveLength(1);
+    expect(parsed.coordinates).toBe(parsed.elements[0]);
+  });
+
+  it('keeps a blank-line separated slat/main/flap file as three elements', () => {
+    const text = `MDA 30P-30N (mini)\n${SLAT}\n\n${MAIN}\n\n${FLAP}\n`;
+    const parsed = parseAirfoilDat(text, 'threeElement.dat');
+
+    expect(parsed.name).toBe('MDA 30P-30N (mini)');
+    expect(parsed.elements).toHaveLength(3);
+    expect(parsed.elements.map((e) => e.length)).toEqual([
+      POINTS_PER_ELEMENT,
+      POINTS_PER_ELEMENT,
+      POINTS_PER_ELEMENT,
+    ]);
+
+    // The old parser flattened every block into one 39-point 3-loop contour.
+    expect(parsed.coordinates).toBe(parsed.elements[0]);
+    expect(parsed.coordinates).toHaveLength(POINTS_PER_ELEMENT);
+
+    // Each element keeps its own chordwise station.
+    const ranges = parsed.elements.map((e) => [
+      Math.min(...e.map((p) => p.x)),
+      Math.max(...e.map((p) => p.x)),
+    ]);
+    expect(ranges[0][0]).toBeCloseTo(-0.1);
+    expect(ranges[0][1]).toBeCloseTo(0.05);
+    expect(ranges[1][0]).toBeCloseTo(0);
+    expect(ranges[1][1]).toBeCloseTo(1);
+    expect(ranges[2][0]).toBeCloseTo(0.85);
+    expect(ranges[2][1]).toBeCloseTo(1.3);
+
+    // Surfaces are annotated per element, not across the whole file.
+    for (const element of parsed.elements) {
+      expect(element[0].surface).toBe('upper');
+      expect(element.at(-1)?.surface).toBe('lower');
+    }
+  });
+
+  it('keeps a comment-labelled slat/main/flap file as three elements', () => {
+    // The structure of the real `30p-30n.dat` in public/airfoils: comment labels
+    // are the only element boundary in the file.
+    const text = `# MDA 30P-30N (mini)\n# Slat\n${SLAT}\n# Main Element\n${MAIN}\n# Flap\n${FLAP}\n`;
+    const parsed = parseAirfoilDat(text, '30p-30n.dat');
+
+    expect(parsed.elements).toHaveLength(3);
+    expect(parsed.elements.map((e) => e.length)).toEqual([
+      POINTS_PER_ELEMENT,
+      POINTS_PER_ELEMENT,
+      POINTS_PER_ELEMENT,
+    ]);
+    expect(parsed.coordinates).toHaveLength(POINTS_PER_ELEMENT);
+  });
+
+  it('splits on a 999.0 999.0 separator without injecting a (999, 999) point', () => {
+    const text = `SEPARATED\n${SLAT}\n 999.0 999.0\n${MAIN}\n 999.0 999.0\n${FLAP}\n`;
+    const parsed = parseAirfoilDat(text, 'separated.dat');
+
+    expect(parsed.elements).toHaveLength(3);
+    const all = parsed.elements.flat();
+    expect(all).toHaveLength(3 * POINTS_PER_ELEMENT);
+    expect(all.some((p) => p.x >= 999 || p.y >= 999)).toBe(false);
+    expect(Math.max(...all.map((p) => p.x))).toBeCloseTo(1.3);
+  });
+
+  it('tolerates separator whitespace and format variation', () => {
+    const text = `SEPARATED\n${MAIN}\n   999.   999.  \n${FLAP}\n999.000000   999.000000\n${SLAT}\n`;
+    const parsed = parseAirfoilDat(text, 'separated.dat');
+
+    expect(parsed.elements).toHaveLength(3);
+    expect(parsed.elements.flat().some((p) => p.x >= 999)).toBe(false);
+  });
+
+  it('does not read a genuine two-element file as Lednicer', () => {
+    // Both elements are closed loops that start near the leading edge and cover
+    // the same x-range — the exact case the old `groups.length === 2` heuristic
+    // mangled into one reversed, concatenated contour. Only the closure and
+    // monotonicity tests can tell these apart from Lednicer surfaces.
+    const first = closedElement(0, 1, { startAt: 'nearLe' });
+    const second = closedElement(0, 1, { thickness: 0.05, startAt: 'nearLe' });
+    const parsed = parseAirfoilDat(`TWO ELEMENTS\n${first}\n\n${second}\n`, 'twoElement.dat');
+
+    expect(parsed.elements).toHaveLength(2);
+    expect(parsed.coordinates).toHaveLength(POINTS_PER_ELEMENT);
+    // Lednicer conversion would have reversed the first block, putting the TE first.
+    expect(parsed.coordinates[0].x).toBeCloseTo(0.05);
+    expect(parsed.coordinates[0].y).toBeLessThan(0);
+    // Both blocks survive intact instead of being joined.
+    expect(parsed.elements[1]).toHaveLength(POINTS_PER_ELEMENT);
+    expect(parsed.elements[1][0].x).toBeCloseTo(0.05);
+  });
+
+  it('still detects Lednicer format when both blocks are open LE->TE surfaces', () => {
+    const text = `LEDNICER FOIL\n      7.      7.\n\n${lednicerSurface(1)}\n\n${lednicerSurface(-1)}\n`;
+    const parsed = parseAirfoilDat(text, 'lednicer.dat');
+
+    expect(parsed.name).toBe('LEDNICER FOIL');
+    // Two surfaces of ONE element -> one element, in Selig order.
+    expect(parsed.elements).toHaveLength(1);
+    expect(parsed.coordinates).toHaveLength(STATIONS.length * 2 - 1);
+    expect(parsed.coordinates[0].x).toBeCloseTo(1);
+    expect(parsed.coordinates.at(-1)?.x).toBeCloseTo(1);
+    expect(parsed.coordinates[0].surface).toBe('upper');
+    expect(parsed.coordinates.at(-1)?.surface).toBe('lower');
+  });
+
+  it('rejoins a stray blank line inside a single element (cap21c pattern)', () => {
+    // cap21c.dat in the bundled library separates its closing TE point with two
+    // blank lines; the point belongs to the element and must not be dropped or
+    // promoted to a one-point "element".
+    const text = `CAP 21 (mini)\n${MAIN}\n\n\n 0.998900 -0.001006\n`;
+    const parsed = parseAirfoilDat(text, 'cap21c.dat');
+
+    expect(parsed.elements).toHaveLength(1);
+    expect(parsed.coordinates).toHaveLength(POINTS_PER_ELEMENT + 1);
+    expect(parsed.coordinates.at(-1)?.x).toBeCloseTo(0.9989);
+  });
+
+  it('reports a degenerate element declared by an explicit separator', () => {
+    const text = `BROKEN\n${MAIN}\n 999.0 999.0\n 0.5 0.0\n`;
+
+    expect(() => parseAirfoilDat(text, 'broken.dat')).toThrow(/Element 2/);
   });
 });
 
