@@ -11,44 +11,58 @@
 //! - [`body`] - Aerodynamic body representation (airfoils, flaps, etc.)
 //! - [`spline`] - Cubic spline interpolation for geometry smoothing
 //! - [`error`] - Custom error types for geometry operations
+//! - [`placement`] - Rigid placement of one element within a configuration
+//! - [`configuration`] - Multi-element configurations and reference quantities
+//! - [`layout`] - Node numbering across a configuration's elements
+//! - [`paneling`] - Per-element paneling of a configuration
+//! - [`clearance`] - Clearance, gap and overlap between elements
+//! - [`config_io`] - Configuration import, export and serialisation
 //!
 //! # Design Philosophy
 //!
 //! ## Multi-Element Geometry (Design Direction)
 //! XFOIL assumes a single body throughout. This crate instead treats a
 //! [`Body`] as a self-contained element — its own contour, panels, and cached
-//! geometry — so that a multi-element configuration can be expressed as a
-//! collection of bodies rather than as a special case. That representation is
-//! the direction the geometry layer is built for; the solver work it implies
-//! (paneling a configuration as a whole, inviscid interaction between
-//! elements, and viscous treatment of the resulting wakes and gaps) is not
-//! implemented, and the current solve path operates on a single body. See the
-//! development phases in `README.md` for status.
+//! geometry — and a [`Configuration`] as an ordered set of placed elements.
+//! That representation is the direction the geometry layer is built for. The
+//! geometry side of it exists: elements can be placed, paneled per element,
+//! checked for clearance, and serialised. The *solver* work it implies —
+//! inviscid interaction between elements, and viscous treatment of the
+//! resulting wakes — is not implemented, and the current solve path operates on
+//! a single body. See the development phases in `README.md` for status.
 //!
-//! The intended shape of a configuration:
+//! The shape of a configuration:
 //!
 //! ```rust
-//! use rustfoil_core::body::Body;
+//! use rustfoil_core::{Body, Configuration, Element, Layout, Placement};
 //! use rustfoil_core::point::point;
 //!
-//! // Placeholder contour, translated to stand in for each element.
-//! let coords = |x0: f64| vec![
-//!     point(x0 + 1.0, 0.0),
-//!     point(x0 + 0.5, -0.05),
-//!     point(x0, 0.0),
-//!     point(x0 + 0.5, 0.05),
-//!     point(x0 + 1.0, 0.0),
+//! // Placeholder contour, one per element.
+//! let coords = |chord: f64| vec![
+//!     point(chord, 0.0),
+//!     point(0.5 * chord, -0.05 * chord),
+//!     point(0.0, 0.0),
+//!     point(0.5 * chord, 0.05 * chord),
+//!     point(chord, 0.0),
 //! ];
 //!
-//! // Each element is an independent Body.
-//! let slat = Body::from_points("slat", &coords(-0.9)).expect("closed contour");
-//! let main = Body::from_points("main", &coords(0.0)).expect("closed contour");
-//! let flap = Body::from_points("flap", &coords(0.9)).expect("closed contour");
+//! // Each element is an independent Body, positioned by a Placement rather
+//! // than by baking the position into its coordinates.
+//! let mut slat = Element::from_body(Body::from_points("slat", &coords(0.15)).unwrap());
+//! slat.placement = Placement::from_translation(-0.12, 0.03);
+//! let main = Element::from_body(Body::from_points("main", &coords(1.0)).unwrap());
+//! let mut flap = Element::from_body(Body::from_points("flap", &coords(0.3)).unwrap());
+//! flap.placement = Placement::rotation_about(point(0.0, 0.0), -30.0);
 //!
-//! // Building the collection is supported today; solving the aerodynamic
-//! // interaction between its members is not yet.
-//! let configuration = vec![slat, main, flap];
+//! let configuration = Configuration::new(vec![slat, main, flap]);
 //! assert_eq!(configuration.len(), 3);
+//!
+//! // The node numbering the elements share, with per-element panel closure.
+//! let layout = Layout::from_configuration(&configuration).unwrap();
+//! assert_eq!(layout.n_elements(), 3);
+//!
+//! // Building and numbering a configuration is supported today; solving the
+//! // aerodynamic interaction between its members is not yet.
 //! ```
 //!
 //! Flap deflection in [`flap`] is XFOIL's plain flap: it rotates a region of
@@ -90,10 +104,16 @@
 #![warn(clippy::all)]
 
 pub mod body;
+pub mod clearance;
+pub mod config_io;
+pub mod configuration;
 pub mod error;
 pub mod flap;
+pub mod layout;
 pub mod naca;
 pub mod panel;
+pub mod paneling;
+pub mod placement;
 pub mod point;
 pub mod spline;
 pub mod xfoil_spline;
@@ -102,9 +122,12 @@ pub mod xfoil_spline;
 mod xfoil_spline_test;
 
 // Re-export commonly used types at the crate root
-pub use body::Body;
+pub use body::{contour_is_closed, contour_is_closed_within, Body, CONTOUR_CLOSURE_TOLERANCE};
+pub use configuration::{Configuration, Element};
 pub use error::GeometryError;
+pub use layout::{ElementSpan, Layout};
 pub use panel::Panel;
+pub use placement::Placement;
 pub use point::{point, vec2, Point, Vec2};
 pub use spline::{CubicSpline, PanelingParams};
 pub use xfoil_spline::XfoilSpline;

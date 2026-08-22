@@ -14,9 +14,14 @@
 //! phases in `README.md` for status.
 //!
 //! # Panel Ordering Convention
-//! Panels are ordered **counter-clockwise** starting from the trailing edge:
-//! 1. Lower surface (TE → LE)
-//! 2. Upper surface (LE → TE)
+//! Points run in Selig/XFOIL order, starting from the trailing edge:
+//! 1. Upper surface (TE → LE)
+//! 2. Lower surface (LE → TE)
+//!
+//! This is the order [`crate::naca::naca4`] emits and the order the surface
+//! extraction in rustfoil-solver (`viscous::setup`) expects, so node 0 is the
+//! upper-surface trailing edge and the last node is the lower-surface trailing
+//! edge. [`crate::layout::ElementSpan`] follows the same convention.
 //!
 //! This convention ensures:
 //! - Normal vectors point outward (into the flow)
@@ -25,7 +30,73 @@
 
 use crate::error::GeometryError;
 use crate::panel::Panel;
-use crate::point::{points_coincident, Point};
+use crate::point::Point;
+
+/// Tolerance for deciding whether a contour's first and last points meet.
+///
+/// A gap smaller than this in **either** coordinate counts as closed; see
+/// [`contour_is_closed`] for why the comparison is componentwise.
+///
+/// # Why this value
+/// `1e-10` is the tolerance the solve path already applies when it decides
+/// whether to synthesize a blunt trailing-edge node
+/// (`rustfoil-solver/src/viscous/setup.rs` and
+/// `rustfoil-solver/src/inviscid/mod.rs`). Adopting this helper there therefore
+/// classifies every geometry exactly as it is classified today, which matters
+/// because the classification changes the node count and so the solver result.
+///
+/// It is deliberately looser than [`crate::point::GEOMETRY_TOLERANCE`] (`1e-12`),
+/// which answers a different question: whether two points are the *same point*.
+/// A contour whose ends are 1e-11 apart is closed for paneling purposes without
+/// its endpoints being duplicates.
+pub const CONTOUR_CLOSURE_TOLERANCE: f64 = 1e-10;
+
+/// Whether a contour's first and last points meet, i.e. whether the contour is
+/// closed.
+///
+/// This is the single canonical closure test. It answers the question that
+/// decides how a contour is paneled: a **closed** contour (sharp trailing edge)
+/// has a duplicate endpoint, so its last panel already runs back to its first
+/// node; an **open** contour (blunt trailing edge) has a real gap across the
+/// trailing-edge base.
+///
+/// # Comparison
+/// Componentwise (L∞): closed if `|Δx| < tolerance` *and* `|Δy| < tolerance`,
+/// with `tolerance` = [`CONTOUR_CLOSURE_TOLERANCE`]. Use
+/// [`contour_is_closed_within`] to state a different tolerance explicitly.
+///
+/// Fewer than two points cannot form a contour and report as not closed.
+///
+/// # Example
+/// ```
+/// use rustfoil_core::body::contour_is_closed;
+/// use rustfoil_core::point::point;
+///
+/// let sharp = [point(1.0, 0.0), point(0.0, 0.0), point(1.0, 0.0)];
+/// assert!(contour_is_closed(&sharp));
+///
+/// let blunt = [point(1.0, -0.005), point(0.0, 0.0), point(1.0, 0.005)];
+/// assert!(!contour_is_closed(&blunt));
+/// ```
+#[inline]
+pub fn contour_is_closed(points: &[Point]) -> bool {
+    contour_is_closed_within(points, CONTOUR_CLOSURE_TOLERANCE)
+}
+
+/// [`contour_is_closed`] with an explicit tolerance.
+///
+/// Provided so a caller that has to reproduce an existing classification can
+/// state the tolerance it depends on at the call site instead of inheriting a
+/// default that may be revised.
+#[inline]
+pub fn contour_is_closed_within(points: &[Point], tolerance: f64) -> bool {
+    if points.len() < 2 {
+        return false;
+    }
+    let first = &points[0];
+    let last = &points[points.len() - 1];
+    (last.x - first.x).abs() < tolerance && (last.y - first.y).abs() < tolerance
+}
 
 /// A single aerodynamic body discretized into panels.
 ///
@@ -59,6 +130,10 @@ pub struct Body {
     ///
     /// The LE is identified as the point with minimum x-coordinate.
     le_point_idx: usize,
+
+    /// Whether the input contour's first and last points met — see
+    /// [`Body::is_closed`].
+    is_closed: bool,
 }
 
 impl Body {
@@ -66,9 +141,9 @@ impl Body {
     ///
     /// # Arguments
     /// * `name` - Identifier for the body (e.g., "main", "slat")
-    /// * `points` - Ordered points forming the airfoil contour. Should be
-    ///   ordered CCW from the trailing edge lower surface, around the leading
-    ///   edge, back to the trailing edge upper surface.
+    /// * `points` - Ordered points forming the airfoil contour. Should run in
+    ///   Selig/XFOIL order: from the upper-surface trailing edge, around the
+    ///   leading edge, back to the lower-surface trailing edge.
     ///
     /// # Point Closure
     /// The points should form a closed contour:
@@ -105,12 +180,16 @@ impl Body {
             });
         }
 
-        // Check if the contour is closed (first ≈ last point)
-        let _is_closed = points_coincident(&points[0], &points[points.len() - 1]);
+        // Check if the contour is closed (first ≈ last point). Recorded on the
+        // body and reported by `is_closed()`; it does not affect the panel
+        // count (see below).
+        let is_closed = contour_is_closed(points);
 
-        // Number of panels:
-        // - Closed contour: n_points - 1 (last point is duplicate)
-        // - Open contour: n_points - 1 (no closing panel added)
+        // Number of panels, the same either way:
+        // - Closed contour: n_points - 1, the last point being a duplicate of
+        //   the first, so the last panel already runs back to node 0.
+        // - Open contour: n_points - 1, with no base panel added across the
+        //   trailing-edge gap.
         let n_panels = points.len() - 1;
 
         // Build panels
@@ -120,8 +199,9 @@ impl Body {
             panels.push(panel);
         }
 
-        // If contour is not closed and we want to close it, we'd add a panel here.
-        // For now, we assume input is properly formatted (closed or intentionally open).
+        // No closing panel is added for an open contour: the body is paneled as
+        // given. Callers that need to know which case they have read
+        // `is_closed()`.
 
         // Find trailing edge panels (first and last by convention)
         let te_panel_lower = 0;
@@ -141,7 +221,42 @@ impl Body {
             te_panel_upper,
             te_panel_lower,
             le_point_idx,
+            is_closed,
         })
+    }
+
+    /// Whether the contour this body was built from was closed, i.e. whether
+    /// its first and last points met within [`CONTOUR_CLOSURE_TOLERANCE`].
+    ///
+    /// - `true` — sharp trailing edge. The last panel runs back to node 0, so
+    ///   the body has `n_panels()` distinct nodes.
+    /// - `false` — blunt trailing edge. There is a gap between the last panel's
+    ///   end and node 0, so the body has `n_panels() + 1` distinct nodes.
+    ///
+    /// # This does not change the paneling
+    /// A body is paneled as given either way: `n_panels()` is
+    /// `points.len() - 1` in both cases and no base panel is synthesized across
+    /// a blunt trailing edge. The flag reports which case the caller has; it is
+    /// the caller that decides what to do about it. The solve path, for
+    /// instance, appends the missing lower trailing-edge node itself before
+    /// building the influence matrix.
+    #[inline]
+    pub fn is_closed(&self) -> bool {
+        self.is_closed
+    }
+
+    /// Number of distinct nodes in the body's contour.
+    ///
+    /// `n_panels()` for a closed contour, `n_panels() + 1` for an open one —
+    /// the count the panel method works in, as distinct from the number of
+    /// input points.
+    #[inline]
+    pub fn n_nodes(&self) -> usize {
+        if self.is_closed {
+            self.panels.len()
+        } else {
+            self.panels.len() + 1
+        }
     }
 
     /// Number of panels in the body.
@@ -303,5 +418,144 @@ mod tests {
         // First panel midpoint should be between (1,0) and (0.5,-0.1)
         assert_relative_eq!(cps[0].x, 0.75);
         assert_relative_eq!(cps[0].y, -0.05);
+    }
+
+    // --- Closed-contour test ---------------------------------------------
+
+    #[test]
+    fn contour_closure_needs_two_points() {
+        assert!(!contour_is_closed(&[]));
+        assert!(!contour_is_closed(&[point(1.0, 0.0)]));
+    }
+
+    #[test]
+    fn contour_closure_detects_a_sharp_trailing_edge() {
+        let sharp = [
+            point(1.0, 0.0),
+            point(0.5, -0.05),
+            point(0.0, 0.0),
+            point(0.5, 0.05),
+            point(1.0, 0.0),
+        ];
+        assert!(contour_is_closed(&sharp));
+    }
+
+    #[test]
+    fn contour_closure_detects_a_blunt_trailing_edge() {
+        let blunt = [
+            point(1.0, -0.005),
+            point(0.5, -0.05),
+            point(0.0, 0.0),
+            point(0.5, 0.05),
+            point(1.0, 0.005),
+        ];
+        assert!(!contour_is_closed(&blunt));
+    }
+
+    #[test]
+    fn contour_closure_is_componentwise_at_the_tolerance() {
+        let inside = CONTOUR_CLOSURE_TOLERANCE * 0.5;
+        let outside = CONTOUR_CLOSURE_TOLERANCE * 2.0;
+
+        // Just inside in both components.
+        let closed = [
+            point(1.0, 0.0),
+            point(0.0, 0.0),
+            point(1.0 + inside, inside),
+        ];
+        assert!(contour_is_closed(&closed));
+
+        // Outside in x alone, and in y alone.
+        let open_x = [point(1.0, 0.0), point(0.0, 0.0), point(1.0 + outside, 0.0)];
+        let open_y = [point(1.0, 0.0), point(0.0, 0.0), point(1.0, outside)];
+        assert!(!contour_is_closed(&open_x));
+        assert!(!contour_is_closed(&open_y));
+    }
+
+    #[test]
+    fn contour_closure_honours_an_explicit_tolerance() {
+        // A gap of 1e-11 is closed at the default tolerance (1e-10) and open at
+        // the point-coincidence tolerance (1e-12) — the two answer different
+        // questions, so the caller can state which one it means.
+        let pts = [point(1.0, 0.0), point(0.0, 0.0), point(1.0 + 1e-11, 0.0)];
+        assert!(contour_is_closed_within(&pts, CONTOUR_CLOSURE_TOLERANCE));
+        assert!(!contour_is_closed_within(
+            &pts,
+            crate::point::GEOMETRY_TOLERANCE
+        ));
+    }
+
+    #[test]
+    fn body_reports_its_closure_state() {
+        let sharp = make_diamond_airfoil();
+        assert!(sharp.is_closed());
+
+        let blunt = Body::from_points(
+            "blunt",
+            &[
+                point(1.0, -0.005),
+                point(0.5, -0.05),
+                point(0.0, 0.0),
+                point(0.5, 0.05),
+                point(1.0, 0.005),
+            ],
+        )
+        .unwrap();
+        assert!(!blunt.is_closed());
+    }
+
+    #[test]
+    fn closure_state_does_not_change_the_panel_count() {
+        // Both contours have 5 points and must produce 4 panels: the closure
+        // flag is reported, not acted on. If this ever changes, every solver
+        // number downstream changes with it.
+        let sharp = Body::from_points(
+            "sharp",
+            &[
+                point(1.0, 0.0),
+                point(0.5, -0.05),
+                point(0.0, 0.0),
+                point(0.5, 0.05),
+                point(1.0, 0.0),
+            ],
+        )
+        .unwrap();
+        let blunt = Body::from_points(
+            "blunt",
+            &[
+                point(1.0, -0.005),
+                point(0.5, -0.05),
+                point(0.0, 0.0),
+                point(0.5, 0.05),
+                point(1.0, 0.005),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(sharp.n_panels(), 4);
+        assert_eq!(blunt.n_panels(), 4);
+        assert_eq!(sharp.te_upper_index(), 3);
+        assert_eq!(blunt.te_upper_index(), 3);
+    }
+
+    #[test]
+    fn node_count_follows_the_closure_state() {
+        let sharp = make_diamond_airfoil();
+        // Closed: the last panel ends on node 0, so 4 panels are 4 nodes.
+        assert_eq!(sharp.n_nodes(), 4);
+
+        let blunt = Body::from_points(
+            "blunt",
+            &[
+                point(1.0, -0.005),
+                point(0.5, -0.05),
+                point(0.0, 0.0),
+                point(0.5, 0.05),
+                point(1.0, 0.005),
+            ],
+        )
+        .unwrap();
+        // Open: the last panel's end is a fifth distinct node.
+        assert_eq!(blunt.n_nodes(), 5);
     }
 }

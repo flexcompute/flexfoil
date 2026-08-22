@@ -22,7 +22,7 @@
 //! const solution = foil.solve();
 //! ```
 
-use rustfoil_core::{naca, point, Body, CubicSpline, Point, flap::xfoil_flap};
+use rustfoil_core::{naca, point, Body, CubicSpline, Placement, Point, flap::xfoil_flap};
 use rustfoil_inviscid::{FlowConditions as FaithfulFlowConditions, InviscidSolver as FaithfulInviscidSolver};
 use rustfoil_solver::inviscid::{
     FlowConditions, InviscidSolver,
@@ -2638,19 +2638,30 @@ fn points_to_flat(pts: &[Point]) -> Vec<f64> {
     pts.iter().flat_map(|p| [p.x, p.y]).collect()
 }
 
+/// Apply a rigid-body `Placement` to every point of a contour.
+///
+/// Rotation, uniform scaling and translation of a contour are the same
+/// operation that positions an element inside a multi-element configuration, so
+/// they share one implementation: `rustfoil_core::Placement`. The GDES entry
+/// points below build the placement that describes the requested move and hand
+/// it to this helper rather than repeating the arithmetic.
+///
+/// Every point goes through the full 2x2 linear part, so a coordinate that is
+/// not finite propagates into both output components rather than staying on its
+/// own axis.
+fn place_points(pts: &[Point], placement: &Placement) -> Vec<Point> {
+    pts.iter().map(|p| placement.apply(*p)).collect()
+}
+
 /// Rotate airfoil by the given angle in degrees about (cx, cy).
+///
+/// Positive angles are counter-clockwise, matching `Placement`.
 #[wasm_bindgen]
 pub fn gdes_rotate(coords: &[f64], angle_deg: f64, cx: f64, cy: f64) -> JsValue {
     let result = match parse_coords(coords) {
         Some(pts) => {
-            let rad = angle_deg.to_radians();
-            let cos_a = rad.cos();
-            let sin_a = rad.sin();
-            let rotated: Vec<Point> = pts.iter().map(|p| {
-                let dx = p.x - cx;
-                let dy = p.y - cy;
-                point(cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
-            }).collect();
+            let placement = Placement::rotation_about(point(cx, cy), angle_deg);
+            let rotated = place_points(&pts, &placement);
             GeometryResult { coords: points_to_flat(&rotated), success: true, error: None }
         }
         None => geometry_error("Invalid coordinates"),
@@ -2659,13 +2670,27 @@ pub fn gdes_rotate(coords: &[f64], angle_deg: f64, cx: f64, cy: f64) -> JsValue 
 }
 
 /// Scale airfoil about (cx, cy) by the given factors.
+///
+/// A uniform factor (`sx == sy`) is a rigid placement and goes through
+/// `Placement`. Independent x and y factors change the shape rather than move
+/// it, which a rigid placement cannot express, so that case keeps its own
+/// axis-wise form.
 #[wasm_bindgen]
 pub fn gdes_scale(coords: &[f64], sx: f64, sy: f64, cx: f64, cy: f64) -> JsValue {
     let result = match parse_coords(coords) {
         Some(pts) => {
-            let scaled: Vec<Point> = pts.iter().map(|p| {
-                point(cx + (p.x - cx) * sx, cy + (p.y - cy) * sy)
-            }).collect();
+            let scaled: Vec<Point> = if sx == sy {
+                let placement = Placement {
+                    pivot: point(cx, cy),
+                    scale: sx,
+                    ..Placement::identity()
+                };
+                place_points(&pts, &placement)
+            } else {
+                pts.iter().map(|p| {
+                    point(cx + (p.x - cx) * sx, cy + (p.y - cy) * sy)
+                }).collect()
+            };
             GeometryResult { coords: points_to_flat(&scaled), success: true, error: None }
         }
         None => geometry_error("Invalid coordinates"),
@@ -2678,7 +2703,7 @@ pub fn gdes_scale(coords: &[f64], sx: f64, sy: f64, cx: f64, cy: f64) -> JsValue
 pub fn gdes_translate(coords: &[f64], dx: f64, dy: f64) -> JsValue {
     let result = match parse_coords(coords) {
         Some(pts) => {
-            let translated: Vec<Point> = pts.iter().map(|p| point(p.x + dx, p.y + dy)).collect();
+            let translated = place_points(&pts, &Placement::from_translation(dx, dy));
             GeometryResult { coords: points_to_flat(&translated), success: true, error: None }
         }
         None => geometry_error("Invalid coordinates"),
@@ -3590,6 +3615,181 @@ mod tests {
             assert!((rx - p.x).abs() < 1e-12);
             assert!((ry - p.y).abs() < 1e-12);
         }
+    }
+
+    // ====================================================================
+    // GDES rigid transforms delegate to rustfoil_core::Placement
+    //
+    // gdes_rotate / gdes_scale / gdes_translate are part of the shipped
+    // geometry-design surface, so delegating them to the shared placement
+    // implementation must not move a single coordinate. The helpers below
+    // keep the arithmetic those exports used to carry, and the tests
+    // require the delegated path to agree with it bit for bit.
+    // ====================================================================
+
+    /// The rotate arithmetic as it stood before delegation.
+    fn reference_rotate(pts: &[Point], angle_deg: f64, cx: f64, cy: f64) -> Vec<Point> {
+        let rad = angle_deg.to_radians();
+        let cos_a = rad.cos();
+        let sin_a = rad.sin();
+        pts.iter().map(|p| {
+            let dx = p.x - cx;
+            let dy = p.y - cy;
+            point(cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
+        }).collect()
+    }
+
+    /// The scale arithmetic as it stood before delegation.
+    fn reference_scale(pts: &[Point], sx: f64, sy: f64, cx: f64, cy: f64) -> Vec<Point> {
+        pts.iter().map(|p| {
+            point(cx + (p.x - cx) * sx, cy + (p.y - cy) * sy)
+        }).collect()
+    }
+
+    /// The translate arithmetic as it stood before delegation.
+    fn reference_translate(pts: &[Point], dx: f64, dy: f64) -> Vec<Point> {
+        pts.iter().map(|p| point(p.x + dx, p.y + dy)).collect()
+    }
+
+    /// Compare to the last bit, not to a tolerance.
+    fn assert_bit_identical(label: &str, placed: &[Point], reference: &[Point]) {
+        assert_eq!(placed.len(), reference.len(), "{label}: point count");
+        for (i, (a, b)) in placed.iter().zip(reference.iter()).enumerate() {
+            assert_eq!(
+                a.x.to_bits(), b.x.to_bits(),
+                "{label}: x[{i}] placed {:.17e} vs reference {:.17e}", a.x, b.x
+            );
+            assert_eq!(
+                a.y.to_bits(), b.y.to_bits(),
+                "{label}: y[{i}] placed {:.17e} vs reference {:.17e}", a.y, b.y
+            );
+        }
+    }
+
+    /// A real airfoil plus deliberately awkward off-body points.
+    fn transform_sample_pts() -> Vec<Point> {
+        let mut pts = diamond_pts();
+        pts.extend(generate_naca4_xfoil(4412, Some(80)).chunks(2).map(|c| point(c[0], c[1])));
+        pts.extend([
+            point(-0.3712345678901234, 0.9128456789012345),
+            point(2.5, -1.75),
+            point(1.0e-9, -1.0e-9),
+            point(1234.5678, -1.23456e-4),
+            point(0.0, 0.0),
+        ]);
+        pts
+    }
+
+    #[test]
+    fn gdes_rotate_delegation_is_bit_identical() {
+        let pts = transform_sample_pts();
+        for &(angle_deg, cx, cy) in &[
+            (0.0, 0.0, 0.0),
+            (0.0, 0.25, 0.0),
+            (37.4, 0.3125, -0.0217),
+            (-27.5, 0.7, -0.03),
+            (90.0, 0.25, 0.0),
+            (180.0, 0.5, 0.5),
+            (-450.25, -1.5, 2.25),
+        ] {
+            assert_bit_identical(
+                &format!("rotate {angle_deg} deg about ({cx}, {cy})"),
+                &place_points(&pts, &Placement::rotation_about(point(cx, cy), angle_deg)),
+                &reference_rotate(&pts, angle_deg, cx, cy),
+            );
+        }
+    }
+
+    #[test]
+    fn gdes_uniform_scale_delegation_is_bit_identical() {
+        let pts = transform_sample_pts();
+        for &(s, cx, cy) in &[
+            (1.0, 0.0, 0.0),
+            (0.85, 0.7, -0.03),
+            (2.0, 0.25, 0.0),
+            (0.3333333333333333, -0.4, 1.6),
+            (-1.5, 0.5, 0.5),
+        ] {
+            let placement = Placement { pivot: point(cx, cy), scale: s, ..Placement::identity() };
+            assert_bit_identical(
+                &format!("scale {s} about ({cx}, {cy})"),
+                &place_points(&pts, &placement),
+                &reference_scale(&pts, s, s, cx, cy),
+            );
+        }
+    }
+
+    #[test]
+    fn gdes_translate_delegation_is_bit_identical() {
+        let pts = transform_sample_pts();
+        for &(dx, dy) in &[
+            (0.0, 0.0),
+            (0.031, -0.017),
+            (-2.5, 4.25),
+            (1.0e-12, -1.0e-12),
+        ] {
+            assert_bit_identical(
+                &format!("translate ({dx}, {dy})"),
+                &place_points(&pts, &Placement::from_translation(dx, dy)),
+                &reference_translate(&pts, dx, dy),
+            );
+        }
+    }
+
+    #[test]
+    fn anisotropic_scale_is_not_a_rigid_placement() {
+        // Why gdes_scale keeps an axis-wise branch: with sx != sy the result
+        // is a shape change, and no single uniform Placement reproduces it.
+        let pts = transform_sample_pts();
+        let (sx, sy, cx, cy) = (1.25, 0.75, 0.3, -0.02);
+        let stretched = reference_scale(&pts, sx, sy, cx, cy);
+        for s in [sx, sy] {
+            let placement = Placement { pivot: point(cx, cy), scale: s, ..Placement::identity() };
+            let uniform = place_points(&pts, &placement);
+            assert!(
+                uniform.iter().zip(stretched.iter()).any(|(a, b)| a.x != b.x || a.y != b.y),
+                "uniform scale {s} unexpectedly reproduced the anisotropic result"
+            );
+        }
+    }
+
+    #[test]
+    fn gdes_transform_delegation_reference_values() {
+        // One awkward case printed to full double precision: non-zero centre,
+        // non-right-angle rotation, non-unit scale, non-zero translation.
+        let p = point(0.6234567890123456, -0.0412345678901234);
+        let (cx, cy) = (0.3125, -0.0217);
+
+        let rotated = Placement::rotation_about(point(cx, cy), 37.4).apply(p);
+        let reference_rot = reference_rotate(&[p], 37.4, cx, cy)[0];
+        println!(
+            "rotate 37.4 deg about ({cx}, {cy}): placed ({:.17e}, {:.17e}) bits ({:#018x}, {:#018x})",
+            rotated.x, rotated.y, rotated.x.to_bits(), rotated.y.to_bits()
+        );
+        println!(
+            "                              reference ({:.17e}, {:.17e}) bits ({:#018x}, {:#018x})",
+            reference_rot.x, reference_rot.y,
+            reference_rot.x.to_bits(), reference_rot.y.to_bits()
+        );
+
+        let placement = Placement { pivot: point(cx, cy), scale: 0.85, ..Placement::identity() };
+        let scaled = placement.apply(p);
+        let reference_sc = reference_scale(&[p], 0.85, 0.85, cx, cy)[0];
+        println!(
+            "scale 0.85 about ({cx}, {cy}): placed ({:.17e}, {:.17e}) reference ({:.17e}, {:.17e})",
+            scaled.x, scaled.y, reference_sc.x, reference_sc.y
+        );
+
+        let moved = Placement::from_translation(0.031, -0.017).apply(p);
+        let reference_tr = reference_translate(&[p], 0.031, -0.017)[0];
+        println!(
+            "translate (0.031, -0.017): placed ({:.17e}, {:.17e}) reference ({:.17e}, {:.17e})",
+            moved.x, moved.y, reference_tr.x, reference_tr.y
+        );
+
+        assert_bit_identical("rotate reference case", &[rotated], &[reference_rot]);
+        assert_bit_identical("scale reference case", &[scaled], &[reference_sc]);
+        assert_bit_identical("translate reference case", &[moved], &[reference_tr]);
     }
 
     #[test]
