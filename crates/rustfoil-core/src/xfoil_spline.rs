@@ -454,12 +454,67 @@ impl XfoilSpline {
         (xd * ydd - yd * xdd) / (sd * sd * sd)
     }
 
+    /// Node furthest from the trailing-edge midpoint.
+    ///
+    /// The leading edge is the point of the contour furthest from the
+    /// trailing-edge midpoint, so the node where that distance is largest is
+    /// within one panel of it. One O(n) pass, and it reads the whole contour, so
+    /// a straight or vertical stretch elsewhere on the surface cannot stand in
+    /// for the leading edge. Ties go to the lower index.
+    fn node_furthest_from(&self, x_te: f64, y_te: f64) -> usize {
+        let mut i_far = 0usize;
+        let mut d_far = f64::NEG_INFINITY;
+        for i in 0..self.s.len() {
+            let dx = self.x[i] - x_te;
+            let dy = self.y[i] - y_te;
+            let d = dx * dx + dy * dy;
+            if d > d_far {
+                d_far = d;
+                i_far = i;
+            }
+        }
+        i_far
+    }
+
     /// XFOIL's LEFIND - find leading edge arc-length position.
     ///
     /// The LE is defined as the point where the surface tangent is
     /// perpendicular to the chord line (TE to LE).
     ///
     /// Reference: xgeom.f lines 21-87
+    ///
+    /// # Where the Newton iteration starts, and what it is allowed to return
+    /// XFOIL's initial guess is a forward scan for the first node whose step
+    /// away from the trailing edge turns back towards it. That is a *local*
+    /// test, and it stops at the first place the contour turns back — on a
+    /// conventional airfoil the leading edge, but on an element with a deep cove
+    /// the cove face, which for the main element of a slat/main/flap section is
+    /// most of a chord downstream of the leading edge. The Newton iteration then
+    /// converges to a stationary point of the same residual on that face and
+    /// reports it as the leading edge.
+    ///
+    /// So the scan is paired with [`node_furthest_from`](Self::node_furthest_from),
+    /// which is global:
+    ///
+    /// - where the scan node and the furthest-from-trailing-edge node agree to
+    ///   within one node — every contour whose first turn back *is* the leading
+    ///   edge — the iteration starts from the scan node and nothing else
+    ///   changes, so the result is the same value bit for bit;
+    /// - where they disagree, at most one of them is the leading edge, and
+    ///   neither rule settles it in general: the scan stops at the first turn
+    ///   back, which a cove face aft of the leading edge also satisfies, while
+    ///   the furthest node is not the leading edge on every contour either. So
+    ///   the iteration is run from both and the candidate genuinely furthest
+    ///   from the trailing edge wins. Choosing on the quantity itself means
+    ///   neither heuristic has to be right, and a correct scan result is never
+    ///   discarded in favour of a worse one.
+    ///
+    /// `AirfoilGeometry::find_leading_edge` in `rustfoil-inviscid` seeds the same
+    /// iteration the same way, and agrees with this one bit for bit on the
+    /// sections both pin. `lefind_is_bit_identical_on_conventional_sections`
+    /// pins the unchanged case, and
+    /// `lefind_reports_the_furthest_point_from_the_trailing_edge` holds the
+    /// property over the whole bundled coordinate library.
     pub fn lefind(&self) -> f64 {
         let n = self.s.len();
         if n < 5 {
@@ -471,6 +526,10 @@ impl XfoilSpline {
         // Trailing edge point
         let x_te = 0.5 * (self.x[0] + self.x[n - 1]);
         let y_te = 0.5 * (self.y[0] + self.y[n - 1]);
+
+        // Node furthest from the trailing edge: a global candidate, independent
+        // of where the contour first turns back.
+        let i_far = self.node_furthest_from(x_te, y_te);
 
         // Get first guess: find where dot product with TE changes sign
         let mut i_le = n / 2;
@@ -486,44 +545,80 @@ impl XfoilSpline {
             }
         }
 
-        let mut s_le = self.s[i_le];
+        // Newton iteration for exact SLE, unchanged, run from a given start.
+        let refine = |mut s_le: f64| -> f64 {
+            for _iter in 0..50 {
+                let pt = self.seval(s_le);
+                let (dxds, dyds) = self.deval(s_le);
+                let (dxdd, dydd) = self.d2val(s_le);
 
-        // Check for sharp LE (doubled point)
-        if i_le > 0 && (self.s[i_le] - self.s[i_le - 1]).abs() < 1e-12 {
-            return s_le;
+                let x_chord = pt.x - x_te;
+                let y_chord = pt.y - y_te;
+
+                // Drive dot product between chord line and LE tangent to zero
+                let res = x_chord * dxds + y_chord * dyds;
+                let ress = dxds * dxds + dyds * dyds + x_chord * dxdd + y_chord * dydd;
+
+                if ress.abs() < 1e-20 {
+                    break;
+                }
+
+                let mut ds_le = -res / ress;
+
+                // Limit step size - XFOIL uses ABS(XCHORD+YCHORD), not sum of absolutes
+                // This matches XFOIL xgeom.f lines 79-80 exactly
+                let chord_scale = (x_chord + y_chord).abs();
+                ds_le = ds_le.max(-0.02 * chord_scale).min(0.02 * chord_scale);
+                s_le += ds_le;
+
+                if ds_le.abs() < dseps {
+                    break;
+                }
+            }
+            s_le
+        };
+
+        // Refine from a node, keeping the sharp-LE check: a zero-length segment
+        // ending at the start node is a leading edge written as a doubled point,
+        // and there is nothing there for the iteration to refine.
+        let refine_from_node = |i: usize| -> f64 {
+            if i > 0 && (self.s[i] - self.s[i - 1]).abs() < 1e-12 {
+                return self.s[i];
+            }
+            refine(self.s[i])
+        };
+
+        // Distance from the trailing edge, which is the quantity "leading edge"
+        // actually names.
+        let te_distance = |s_at: f64| -> f64 {
+            let pt = self.seval(s_at);
+            (pt.x - x_te).powi(2) + (pt.y - y_te).powi(2)
+        };
+
+        if i_le.max(i_far) - i_le.min(i_far) <= 1 {
+            // Every contour whose first turn back *is* the leading edge. Same
+            // start, same steps, same result as before, bit for bit.
+            return refine_from_node(i_le);
         }
 
-        // Newton iteration for exact SLE
-        for _iter in 0..50 {
-            let pt = self.seval(s_le);
-            let (dxds, dyds) = self.deval(s_le);
-            let (dxdd, dydd) = self.d2val(s_le);
-
-            let x_chord = pt.x - x_te;
-            let y_chord = pt.y - y_te;
-
-            // Drive dot product between chord line and LE tangent to zero
-            let res = x_chord * dxds + y_chord * dyds;
-            let ress = dxds * dxds + dyds * dyds + x_chord * dxdd + y_chord * dydd;
-
-            if ress.abs() < 1e-20 {
-                break;
-            }
-
-            let mut ds_le = -res / ress;
-
-            // Limit step size - XFOIL uses ABS(XCHORD+YCHORD), not sum of absolutes
-            // This matches XFOIL xgeom.f lines 79-80 exactly
-            let chord_scale = (x_chord + y_chord).abs();
-            ds_le = ds_le.max(-0.02 * chord_scale).min(0.02 * chord_scale);
-            s_le += ds_le;
-
-            if ds_le.abs() < dseps {
-                break;
+        // The scan and the furthest node disagree, so at most one of them is the
+        // leading edge and neither rule decides it in general. Refine from both
+        // and keep whichever is genuinely further from the trailing edge, so the
+        // answer is chosen on the quantity itself rather than on either
+        // heuristic being right. The unrefined nodes stay eligible too, so a
+        // start that the iteration walks away from cannot lose to a worse point.
+        let from_scan = refine_from_node(i_le);
+        let from_far = refine_from_node(i_far);
+        let mut best = from_far;
+        let mut best_d = te_distance(from_far);
+        for candidate in [from_scan, self.s[i_far], self.s[i_le]] {
+            let d = te_distance(candidate);
+            if d > best_d {
+                best = candidate;
+                best_d = d;
             }
         }
-
-        s_le
+        best
     }
 
     /// Find segment index for parameter ss (binary search).
@@ -608,10 +703,228 @@ mod tests {
             .collect();
 
         let spline = XfoilSpline::from_points(&points).unwrap();
-        
+
         // Curvature of circle with radius 1 should be 1
         let mid_s = spline.total_arc_length() / 2.0;
         let k = spline.curvature(mid_s);
         assert!((k.abs() - 1.0).abs() < 0.05, "Expected curvature ~1.0, got {}", k);
+    }
+
+    fn repo_file(relative: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(relative)
+    }
+
+    /// Read a Selig/XFOIL `.dat` file into one coordinate block per element.
+    ///
+    /// Blank and comment lines separate blocks. Deliberately minimal: the
+    /// production import lives in the CLI and the UI, and this only has to open
+    /// the fixtures below.
+    fn dat_blocks(path: &std::path::Path) -> Vec<Vec<Point>> {
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let mut blocks: Vec<Vec<Point>> = Vec::new();
+        let mut current: Vec<Point> = Vec::new();
+        for line in text.lines() {
+            let mut parts = line.trim().split_whitespace();
+            match (
+                parts.next().and_then(|s| s.parse::<f64>().ok()),
+                parts.next().and_then(|s| s.parse::<f64>().ok()),
+            ) {
+                (Some(x), Some(y)) => current.push(point(x, y)),
+                _ if !current.is_empty() => blocks.push(std::mem::take(&mut current)),
+                _ => {}
+            }
+        }
+        if !current.is_empty() {
+            blocks.push(current);
+        }
+        blocks
+    }
+
+    /// Trailing-edge midpoint and the largest node distance from it.
+    fn te_and_reach(pts: &[Point]) -> (f64, f64, f64) {
+        let n = pts.len();
+        let x_te = 0.5 * (pts[0].x + pts[n - 1].x);
+        let y_te = 0.5 * (pts[0].y + pts[n - 1].y);
+        let reach = pts
+            .iter()
+            .map(|p| ((p.x - x_te).powi(2) + (p.y - y_te).powi(2)).sqrt())
+            .fold(0.0_f64, f64::max);
+        (x_te, y_te, reach)
+    }
+
+    /// Pairing the leading-edge scan with the furthest node leaves a
+    /// conventional section's leading edge exactly where it was.
+    ///
+    /// The values below were measured before the pairing was introduced. A
+    /// conventional airfoil's first turn back towards the trailing edge *is* its
+    /// leading edge, so the two candidates agree, the iteration starts in the
+    /// same place and lands in the same place, and these are raw bit patterns
+    /// rather than tolerances because nothing about the arithmetic changed.
+    ///
+    /// The same numbers appear in `rustfoil-inviscid`'s
+    /// `improved_le_seeding_leaves_single_element_landmarks_bit_identical`, which
+    /// measures the same quantity through `AirfoilGeometry`.
+    #[test]
+    fn lefind_is_bit_identical_on_conventional_sections() {
+        // (file, sle, xle, yle)
+        let pinned: [(&str, u64, u64, u64); 5] = [
+            (
+                "naca0012.dat",
+                0x3ff050471ff1e073,
+                0x0000000000000000,
+                0x0000000000000000,
+            ),
+            (
+                "naca2412.dat",
+                0x3ff06c2ef11e1d09,
+                0xbf1444200ec3adf8,
+                0x3f59eb462913dccc,
+            ),
+            (
+                "naca0012_xfoil_paneled.dat",
+                0x3ff0505e655529ac,
+                0xbe6bad1432c56e00,
+                0x0000000000000000,
+            ),
+            (
+                "naca0012_repaneled.dat",
+                0x3ff01c98f7f3191b,
+                0x0000000000000000,
+                0x0000000000000000,
+            ),
+            (
+                "naca0012_buffer_real.dat",
+                0x3ff05061b1e2a4fd,
+                0x0000000000000000,
+                0x0000000000000000,
+            ),
+        ];
+
+        for (file, sle, xle, yle) in pinned {
+            let blocks = dat_blocks(&repo_file(&format!("testdata/{file}")));
+            assert_eq!(blocks.len(), 1, "{file}: expected a single element");
+            let spline = XfoilSpline::from_points(&blocks[0]).unwrap();
+            let s_le = spline.lefind();
+            let le = spline.seval(s_le);
+            for (name, actual, expected) in [
+                ("sle", s_le.to_bits(), sle),
+                ("xle", le.x.to_bits(), xle),
+                ("yle", le.y.to_bits(), yle),
+            ] {
+                assert_eq!(
+                    actual,
+                    expected,
+                    "{file}.{name}: {actual:#018x} vs {expected:#018x} ({})",
+                    f64::from_bits(actual)
+                );
+            }
+        }
+    }
+
+    /// The reported leading edge is the furthest point of the contour from the
+    /// trailing edge, on every contour in the bundled coordinate library.
+    ///
+    /// This is the property the local scan alone does not have: it stops at the
+    /// first place the contour turns back towards the trailing edge, which a
+    /// cove face aft of the leading edge also satisfies. Measured over the
+    /// library, six contours failed this before the furthest node was brought
+    /// into the search — the slat and the main element of the 30P-30N section
+    /// (in both the combined file and the per-element ones), the truncated main
+    /// element `ua79sfm.dat`, and the open cowl curve `naca1.dat` — the worst at
+    /// 21% of the true distance.
+    ///
+    /// The bound is one-sided above: the spline can place the true maximum a
+    /// little beyond the furthest *node*, and does, by up to 0.5%.
+    ///
+    /// Contours carrying a repeated node are left out, because the spline itself
+    /// is undefined on them rather than the leading edge being in the wrong
+    /// place: a zero-length segment divides by zero in
+    /// [`XfoilSpline::from_points`], and XFOIL splits its spline at a doubled
+    /// point (SEGSPL) where this port does not. Three contours in the library are
+    /// like that — `e337.dat`, `e817.dat` and `fxlv152.dat` — and they behave the
+    /// same either side of this search. Only a repeated node earns the skip, so a
+    /// contour that comes out unusable for any other reason still fails here.
+    #[test]
+    fn lefind_reports_the_furthest_point_from_the_trailing_edge() {
+        let mut checked = 0usize;
+        for directory in ["flexfoil-ui/public/airfoils", "testdata"] {
+            // The corpus is not vendored in every checkout; the targeted tests
+            // above still cover the behaviour.
+            let Ok(entries) = std::fs::read_dir(repo_file(directory)) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("dat") {
+                    continue;
+                }
+                for (block, pts) in dat_blocks(&path).iter().enumerate() {
+                    if pts.len() < 5 {
+                        continue;
+                    }
+                    let repeated_node =
+                        pts.windows(2).any(|w| w[0].x == w[1].x && w[0].y == w[1].y);
+                    if repeated_node {
+                        continue;
+                    }
+                    let Some(spline) = XfoilSpline::from_points(pts) else {
+                        continue;
+                    };
+                    let (x_te, y_te, reach) = te_and_reach(pts);
+                    if reach == 0.0 {
+                        continue;
+                    }
+                    let le = spline.seval(spline.lefind());
+                    let distance = ((le.x - x_te).powi(2) + (le.y - y_te).powi(2)).sqrt();
+                    assert!(
+                        distance >= reach * (1.0 - 1e-6),
+                        "{} block {block}: leading edge ({:.6}, {:.6}) is {:.6} from the \
+                         trailing edge, against a node {:.6} away",
+                        path.display(),
+                        le.x,
+                        le.y,
+                        distance,
+                        reach
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 0, "no .dat contours were checked");
+    }
+
+    /// Every element of a real slat/main/flap section resolves to its own
+    /// leading edge.
+    ///
+    /// `30p-30n.dat` is a McDonnell Douglas 30P-30N section in configuration
+    /// coordinates: blocks of 201, 221 and 242 points, the slat and flap
+    /// deflected. The slat and the main element both have a cove, and the cove
+    /// face is where the local scan stops — the main element's a full 0.66
+    /// downstream of its leading edge.
+    #[test]
+    fn lefind_finds_the_leading_edge_of_every_element_of_a_real_section() {
+        let blocks = dat_blocks(&repo_file("flexfoil-ui/public/airfoils/30p-30n.dat"));
+        assert_eq!(blocks.len(), 3, "expected slat, main and flap");
+
+        // (role, leading-edge x, leading-edge y)
+        let expected = [
+            ("slat", -0.0806, -0.1108),
+            ("main", 0.0438, -0.0171),
+            ("flap", 0.8735, 0.0137),
+        ];
+
+        for ((role, xle, yle), pts) in expected.iter().zip(&blocks) {
+            let spline = XfoilSpline::from_points(pts).unwrap();
+            let le = spline.seval(spline.lefind());
+            assert!(
+                (le.x - xle).abs() < 5e-4 && (le.y - yle).abs() < 5e-4,
+                "{role}: leading edge ({:.6}, {:.6}) against ({xle}, {yle})",
+                le.x,
+                le.y
+            );
+        }
     }
 }

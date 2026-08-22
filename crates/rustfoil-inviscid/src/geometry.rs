@@ -78,9 +78,32 @@ pub struct AirfoilGeometry {
     pub yle: f64,
     /// Arc length at leading edge
     pub sle: f64,
-    
+    /// Whether the leading edge is an interior point of the contour.
+    ///
+    /// `true` for a closed body. The forward part of the contour runs most of a
+    /// chord away from the trailing edge, so the point furthest from the
+    /// trailing-edge midpoint lies strictly between the two trailing-edge nodes
+    /// and LEFIND's residual has a stationary point there to converge to. Every
+    /// closed section reaches this: of the 1660 single-element coordinate files
+    /// in `flexfoil-ui/public/airfoils`, 1659 do.
+    ///
+    /// `false` when the coordinates are a single open arc — one surface, both
+    /// ends of the list on the same side of the body — rather than a closed
+    /// section. Nodes `0` and `n-1` are then the furthest points on the contour
+    /// from their own midpoint, so the distance from that midpoint has no
+    /// interior maximum and the contour has no leading edge in XFOIL's sense.
+    /// `dste` is not a trailing-edge gap either: on the one such file shipped
+    /// here, the NACA-1 cowl `naca1.dat`, it comes out at twice the reported
+    /// [`chord`](Self::chord). The reported [`xle`](Self::xle),
+    /// [`yle`](Self::yle), [`sle`](Self::sle) and `chord` are still finite
+    /// on-contour numbers, so nothing downstream divides by zero, but they are
+    /// where LEFIND settled on the forward stretch of an arc rather than a
+    /// leading edge, and coefficients normalised by that `chord` do not mean
+    /// what they usually mean. A caller handed arbitrary coordinates should
+    /// check this before using any of them.
+    pub le_is_interior: bool,
+
     // === Dimensions ===
-    
     /// Number of nodes
     pub n: usize,
     /// Chord length
@@ -152,7 +175,8 @@ impl AirfoilGeometry {
         let (xte, yte, dste, ante, aste) = Self::compute_te_geometry(&x, &y, &apanel);
 
         // Find leading edge (LEFIND)
-        let (xle, yle, sle) = Self::find_leading_edge(&x, &y, &s, &xp, &yp, xte, yte);
+        let (xle, yle, sle, le_is_interior) =
+            Self::find_leading_edge(&x, &y, &s, &xp, &yp, xte, yte);
 
         // XFOIL defines CHORD from the true LE/TE geometry, not the raw
         // coordinate extents. This matters for paneled files whose minimum x
@@ -184,6 +208,7 @@ impl AirfoilGeometry {
             xle,
             yle,
             sle,
+            le_is_interior,
             n,
             chord,
         })
@@ -410,36 +435,63 @@ impl AirfoilGeometry {
         (dx * dx + dy * dy).sqrt()
     }
 
-    /// Node furthest from the trailing-edge midpoint, and the arc-length
-    /// interval that brackets the leading edge.
+    /// Node furthest from the trailing-edge midpoint, the arc-length interval
+    /// that brackets the leading edge, and whether that node is an interior one.
     ///
     /// The leading edge is the point of the contour furthest from the
     /// trailing-edge midpoint, so the node where that distance is largest is
     /// within one panel of it and `(s[i-1], s[i+1])` brackets it. One O(n) pass,
     /// and it reads the whole contour, so a straight or vertical stretch
     /// elsewhere on the surface cannot stand in for the leading edge.
+    ///
+    /// # Only interior nodes are candidates
+    /// Nodes `0` and `n-1` are the two trailing-edge nodes, and both sit exactly
+    /// `dste / 2` from the midpoint between them, so they always tie with each
+    /// other and neither is ever what "furthest from the trailing edge" is
+    /// asking about. Including them would also let the bracket collapse to the
+    /// one-sided `(s[0], s[1])` or `(s[n-2], s[n-1])`. The search therefore runs
+    /// over `1..n-1`, which leaves `(s[i_far-1], s[i_far+1])` two-sided.
+    ///
+    /// The returned flag is whether the interior maximum actually beats those
+    /// two trailing-edge nodes. On a closed body it does, by most of a chord.
+    /// When it does not, the contour is a single open arc and has no interior
+    /// leading edge; see [`AirfoilGeometry::le_is_interior`], which is where the
+    /// flag ends up.
     fn leading_edge_bracket(
         x: &[f64],
         y: &[f64],
         s: &[f64],
         xte: f64,
         yte: f64,
-    ) -> (usize, f64, f64) {
+    ) -> (usize, f64, f64, bool) {
         let n = x.len();
-        let mut i_far = 0usize;
-        let mut d_far = f64::NEG_INFINITY;
-        for i in 0..n {
+        let te_distance = |i: usize| {
             let dx = x[i] - xte;
             let dy = y[i] - yte;
-            let d = dx * dx + dy * dy;
+            dx * dx + dy * dy
+        };
+
+        // Seeded with XFOIL's own fallback index, which the loop replaces for
+        // any contour with an interior node at all.
+        let mut i_far = n / 2;
+        let mut d_far = f64::NEG_INFINITY;
+        for i in 1..n.saturating_sub(1) {
+            let d = te_distance(i);
             if d > d_far {
                 d_far = d;
                 i_far = i;
             }
         }
+
+        // The trailing-edge nodes' own distance from their midpoint, which the
+        // forward contour of a closed body clears by most of a chord. The two are
+        // the same length; taking the larger keeps the comparison from turning on
+        // which of the two subtractions rounds down.
+        let d_te = te_distance(0).max(te_distance(n - 1));
+
         let lo = s[i_far.saturating_sub(1)];
         let hi = s[(i_far + 1).min(n - 1)];
-        (i_far, lo, hi)
+        (i_far, lo, hi, d_far > d_te)
     }
 
     /// Find leading edge location (XFOIL's LEFIND).
@@ -475,6 +527,15 @@ impl AirfoilGeometry {
     ///
     /// `improved_le_seeding_leaves_single_element_landmarks_bit_identical` pins
     /// the unchanged case on the coordinate corpus.
+    ///
+    /// # When there is no leading edge to find
+    /// The fourth return value is
+    /// [`le_is_interior`](AirfoilGeometry::le_is_interior): false when the
+    /// contour is a single open arc, whose furthest point from the
+    /// trailing-edge midpoint is one of its own ends rather than anything
+    /// between them. The residual then has no interior stationary maximum, the
+    /// returned location is wherever the iteration settled on the forward
+    /// stretch of the arc, and the flag is how a caller finds that out.
     fn find_leading_edge(
         x: &[f64],
         y: &[f64],
@@ -483,12 +544,12 @@ impl AirfoilGeometry {
         yp: &[f64],
         xte: f64,
         yte: f64,
-    ) -> (f64, f64, f64) {
+    ) -> (f64, f64, f64, bool) {
         let n = x.len();
 
         // Node furthest from the trailing edge: a global candidate, independent
         // of where the contour first turns back.
-        let (i_far, _s_lo, _s_hi) = Self::leading_edge_bracket(x, y, s, xte, yte);
+        let (i_far, _s_lo, _s_hi, le_is_interior) = Self::leading_edge_bracket(x, y, s, xte, yte);
 
         // XFOIL's initial guess: find where dot product with TE changes sign
         let mut i_le = n / 2;
@@ -580,7 +641,7 @@ impl AirfoilGeometry {
         };
 
         let (xle, yle) = Self::seval_point(s_le, s, x, y, xp, yp);
-        (xle, yle, s_le)
+        (xle, yle, s_le, le_is_interior)
     }
 
     /// Evaluate spline at parameter ss (1D).
@@ -794,6 +855,14 @@ pub struct ElementGeometry {
     pub yle: f64,
     /// Arc length at the leading edge, measured from this element's first node.
     pub sle: f64,
+    /// Whether this element's leading edge is an interior point of its contour.
+    ///
+    /// The per-element form of
+    /// [`AirfoilGeometry::le_is_interior`](AirfoilGeometry::le_is_interior),
+    /// which documents what false means and what the landmarks are worth when it
+    /// is. Each element answers for itself: an open arc imported alongside two
+    /// closed sections flags only its own.
+    pub le_is_interior: bool,
 
     // === Dimensions ===
     /// Chord length, from this element's leading edge to its TE midpoint.
@@ -807,17 +876,22 @@ pub struct ElementGeometry {
     /// spline, and [`xte`](Self::xte)/[`yte`](Self::yte) from TECALC.
     ///
     /// [`Element::chord`](rustfoil_core::Element::chord) is a different length
-    /// and is not a substitute. It measures from the contour's minimum-x node,
-    /// which is a coarser stand-in for the leading edge on a paneled contour and
-    /// not the leading edge at all for an element whose deflection is baked into
-    /// its coordinates rather than carried in its
-    /// [`Placement`](rustfoil_core::Placement). Measured on this repository's
-    /// fixtures the two differ by 7.9e-5 relative on `naca2412.dat` and 2.6e-5
-    /// on `naca0012_xfoil_paneled.dat`, and by 3.3% on the deflected slat and
-    /// 0.8% on the deflected flap of the 30P-30N section.
-    /// `the_two_chord_definitions_disagree_by_a_pinned_amount` measures it, and
-    /// [`Element::chord`](rustfoil_core::Element::chord) documents what it is
-    /// for.
+    /// and is not a substitute. It measures from a *node* of the contour — the
+    /// one furthest from the same trailing-edge midpoint — rather than from the
+    /// spline point LEFIND refines to, so it is that search at node resolution.
+    /// Measured on this repository's fixtures the two differ by 7.9e-5 relative
+    /// on `naca2412.dat`, 2.6e-5 on `naca0012_xfoil_paneled.dat`, and 7.2e-6,
+    /// 1.2e-5 and 4.7e-7 on the slat, main element and flap of the 30P-30N
+    /// section — in every case under one panel of the contour at the leading
+    /// edge, which is what
+    /// `the_two_chord_definitions_differ_only_where_they_are_meant_to` asserts.
+    ///
+    /// The two searches part company on a contour that is a single open arc:
+    /// this one considers interior nodes only and reports
+    /// [`le_is_interior`](Self::le_is_interior), while the node search in
+    /// rustfoil-core considers the trailing-edge nodes as well and can return
+    /// one of them. [`Element::chord`](rustfoil_core::Element::chord) documents
+    /// what it is for.
     pub chord: f64,
 }
 
@@ -1099,6 +1173,7 @@ impl ConfigGeometry {
                 xle: geom.xle,
                 yle: geom.yle,
                 sle: geom.sle,
+                le_is_interior: geom.le_is_interior,
                 chord: geom.chord,
             });
             start += geom.n;
@@ -1498,6 +1573,7 @@ impl ConfigGeometry {
             xle: geom.xle,
             yle: geom.yle,
             sle: geom.sle,
+            le_is_interior: geom.le_is_interior,
             n: geom.n,
             chord: geom.chord,
         })
@@ -1544,6 +1620,52 @@ mod tests {
             points.push((x, y));
         }
 
+        points
+    }
+
+    /// Generate NACA 4412 coordinates with cosine spacing: the same thickness
+    /// distribution on 4% camber, so a strongly cambered section whose leading
+    /// edge is not the coordinate origin.
+    fn make_naca4412(n_panels: usize) -> Vec<(f64, f64)> {
+        let n_half = n_panels / 2;
+        let (m, p, t) = (0.04f64, 0.4f64, 0.12f64);
+
+        let x_coords: Vec<f64> = (0..=n_half)
+            .map(|i| {
+                let beta = PI * (i as f64) / (n_half as f64);
+                0.5 * (1.0 - beta.cos())
+            })
+            .collect();
+
+        // Camber line and its slope, the standard four-digit form.
+        let camber = |x: f64| -> (f64, f64) {
+            let (a, b) = if x < p {
+                (p * p, 2.0 * p * x - x * x)
+            } else {
+                ((1.0 - p) * (1.0 - p), (1.0 - 2.0 * p) + 2.0 * p * x - x * x)
+            };
+            (m / a * b, 2.0 * m / a * (p - x))
+        };
+        let thickness = |x: f64| -> f64 {
+            5.0 * t
+                * (0.2969 * x.sqrt() - 0.126 * x - 0.3516 * x.powi(2) + 0.2843 * x.powi(3)
+                    - 0.1036 * x.powi(4))
+        };
+        // Thickness applied normal to the camber line.
+        let surface = |x: f64, upper: bool| -> (f64, f64) {
+            let (yc, dyc) = camber(x);
+            let theta = dyc.atan();
+            let yt = if upper { thickness(x) } else { -thickness(x) };
+            (x - yt * theta.sin(), yc + yt * theta.cos())
+        };
+
+        let mut points = Vec::with_capacity(2 * n_half);
+        for i in (0..=n_half).rev() {
+            points.push(surface(x_coords[i], true));
+        }
+        for i in 1..=n_half {
+            points.push(surface(x_coords[i], false));
+        }
         points
     }
 
@@ -1648,16 +1770,18 @@ mod tests {
             .join(relative)
     }
 
-    /// Read a Selig/XFOIL `.dat` file into one coordinate block per element.
+    /// The text of a file relative to the repository root.
+    fn read_repo_file(relative: &str) -> String {
+        let path = repo_file(relative);
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    }
+
+    /// Split Selig/XFOIL `.dat` text into one coordinate block per element.
     ///
     /// Blank lines and comment lines separate blocks. Deliberately minimal: the
     /// production import lives in the CLI and the UI, and this only has to open
     /// the fixtures below.
-    fn read_dat_blocks(file: &str) -> Vec<Vec<(f64, f64)>> {
-        let path = testdata(file);
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-
+    fn blocks_of(text: &str) -> Vec<Vec<(f64, f64)>> {
         let mut blocks: Vec<Vec<(f64, f64)>> = Vec::new();
         let mut current: Vec<(f64, f64)> = Vec::new();
         for line in text.lines() {
@@ -1680,6 +1804,22 @@ mod tests {
             blocks.push(current);
         }
         blocks
+    }
+
+    /// Read a Selig/XFOIL `.dat` file from `testdata/` into one block per element.
+    fn read_dat_blocks(file: &str) -> Vec<Vec<(f64, f64)>> {
+        let path = testdata(file);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        blocks_of(&text)
+    }
+
+    /// The one coordinate block of a single-element file, relative to the
+    /// repository root.
+    fn single_block(relative: &str) -> Vec<(f64, f64)> {
+        let mut blocks = blocks_of(&read_repo_file(relative));
+        assert_eq!(blocks.len(), 1, "{relative}: expected a single element");
+        blocks.remove(0)
     }
 
     /// Every element of a real slat/main/flap fixture.
@@ -1756,6 +1896,10 @@ mod tests {
             );
         }
         assert_eq!(element.sharp, single.sharp, "{what}.sharp");
+        assert_eq!(
+            element.le_is_interior, single.le_is_interior,
+            "{what}.le_is_interior"
+        );
 
         // Derived trailing-edge quantities.
         let (scs, sds) = config.te_coefficients(0);
@@ -1800,6 +1944,10 @@ mod tests {
         );
         assert_eq!(bridged.n, single.n, "{what}.bridged.n");
         assert_eq!(bridged.sharp, single.sharp, "{what}.bridged.sharp");
+        assert_eq!(
+            bridged.le_is_interior, single.le_is_interior,
+            "{what}.bridged.le_is_interior"
+        );
         assert_eq!(
             bridged.chord.to_bits(),
             single.chord.to_bits(),
@@ -2108,29 +2256,7 @@ mod tests {
     /// leading-edge resolution the landmark tests below turn on, so those use
     /// this one.
     fn full_mda_blocks() -> Vec<Vec<(f64, f64)>> {
-        let path = repo_file("flexfoil-ui/public/airfoils/30p-30n.dat");
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        let mut blocks: Vec<Vec<(f64, f64)>> = Vec::new();
-        let mut current: Vec<(f64, f64)> = Vec::new();
-        for line in text.lines() {
-            let mut parts = line.trim().split_whitespace();
-            let parsed = match (
-                parts.next().and_then(|s| s.parse::<f64>().ok()),
-                parts.next().and_then(|s| s.parse::<f64>().ok()),
-            ) {
-                (Some(x), Some(y)) => Some((x, y)),
-                _ => None,
-            };
-            match parsed {
-                Some(pair) => current.push(pair),
-                None if !current.is_empty() => blocks.push(std::mem::take(&mut current)),
-                None => {}
-            }
-        }
-        if !current.is_empty() {
-            blocks.push(current);
-        }
+        let blocks = blocks_of(&read_repo_file("flexfoil-ui/public/airfoils/30p-30n.dat"));
         assert_eq!(
             blocks.iter().map(|b| b.len()).collect::<Vec<_>>(),
             vec![201, 221, 242],
@@ -2155,33 +2281,29 @@ mod tests {
         Configuration::new(elements)
     }
 
-    /// The node furthest from an element's trailing-edge midpoint, which brackets
-    /// its leading edge to within one panel.
-    fn furthest_node(x: &[f64], y: &[f64]) -> usize {
-        let n = x.len();
-        let xte = 0.5 * (x[0] + x[n - 1]);
-        let yte = 0.5 * (y[0] + y[n - 1]);
-        (0..n)
-            .max_by(|&i, &j| {
-                let di = (x[i] - xte).powi(2) + (y[i] - yte).powi(2);
-                let dj = (x[j] - xte).powi(2) + (y[j] - yte).powi(2);
-                di.partial_cmp(&dj).unwrap()
-            })
-            .unwrap()
-    }
+    /// The leading edges of the 30P-30N elements, as the section defines them
+    /// rather than as any search would find them.
+    ///
+    /// The McDonnell Douglas 30P-30N slat/main/flap section, deployed, has its
+    /// element leading edges at these `x` in the coordinates the file carries.
+    /// Independent of this crate: not a restatement of the search rule, not a
+    /// value read back off it.
+    const MDA_TRUE_XLE: [(&str, f64); 3] = [("slat", -0.0806), ("main", 0.0438), ("flap", 0.8735)];
 
-    /// A leading edge has to be at the front of the element, not on a cove face
-    /// most of a chord downstream of it.
+    /// Each element's leading edge is where the section puts it, not on a cove
+    /// face most of a chord downstream.
     ///
     /// The main element of this section has a straight vertical stretch where the
     /// flap tucks in — eight nodes sharing `x = 0.69993` — and the slat is
     /// deflected 30°, so on both of them the first place the contour turns back
-    /// towards the trailing edge is not the leading edge. Checked on the raw
-    /// coordinates and on the paneled contour at a spread of panel counts,
-    /// because which element the local scan misses depends on the panel
-    /// distribution.
+    /// towards the trailing edge is not the leading edge. Checked against
+    /// [`MDA_TRUE_XLE`] on the raw coordinates and on the paneled contour across
+    /// a spread of panel counts, because which element the local scan misses
+    /// depends on the panel distribution. The bound is 5e-4 of the retracted
+    /// chord; the worst measured deviation over these cases is 2.1e-4, on the
+    /// slat at `Each(160)`, and the raw contour is inside 1e-4 on all three.
     #[test]
-    fn the_leading_edge_is_at_the_front_of_a_coved_element() {
+    fn the_leading_edge_of_a_coved_element_is_where_the_section_puts_it() {
         use rustfoil_core::paneling::PanelCounts;
 
         let blocks = full_mda_blocks();
@@ -2189,7 +2311,7 @@ mod tests {
         let config = full_mda_configuration();
 
         let mut cases: Vec<(String, ConfigGeometry)> = vec![("raw coordinates".to_string(), raw)];
-        for n in [60usize, 80, 100, 120, 140, 160, 200] {
+        for n in [40usize, 60, 80, 100, 120, 140, 160, 200, 240] {
             cases.push((
                 format!("paneled Each({n})"),
                 ConfigGeometry::from_configuration(&config, &PanelCounts::Each(n)).unwrap(),
@@ -2198,38 +2320,278 @@ mod tests {
 
         for (what, geometry) in &cases {
             assert_eq!(geometry.n_elements(), 3, "{what}");
-            for (element, role) in ["slat", "main", "flap"].iter().enumerate() {
+            for (element, (role, true_xle)) in MDA_TRUE_XLE.iter().enumerate() {
                 let geom = geometry.element(element);
-                let x = geometry.element_x(element);
-                let y = geometry.element_y(element);
-
-                // The bracketing node, and the panels either side of it.
-                let far = furthest_node(x, y);
-                let s = geometry.element_s(element);
-                let span = (s[(far + 1).min(geom.n - 1)] - s[far.saturating_sub(1)]).abs();
-
-                let distance = ((geom.xle - x[far]).powi(2) + (geom.yle - y[far]).powi(2)).sqrt();
                 assert!(
-                    distance <= span,
-                    "{what} {role}: leading edge ({}, {}) is {distance} from the furthest node \
-                     ({}, {}), more than the {span} of arc length either side of it",
+                    (geom.xle - true_xle).abs() < 5e-4,
+                    "{what} {role}: leading edge at x = {} is {:e} from the section's {true_xle}",
                     geom.xle,
-                    geom.yle,
-                    x[far],
-                    y[far]
+                    (geom.xle - true_xle).abs()
                 );
-
-                // And it is at the front of the element, not on its cove.
-                let x_min = x.iter().copied().fold(f64::INFINITY, f64::min);
-                let x_max = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                // All three are closed sections, so all three have one.
                 assert!(
-                    geom.xle < x_min + 0.05 * (x_max - x_min),
-                    "{what} {role}: leading edge at x = {} is not in the forward 5% of \
-                     [{x_min}, {x_max}]",
-                    geom.xle
+                    geom.le_is_interior,
+                    "{what} {role}: leading edge reported as non-interior"
                 );
             }
         }
+
+        // And the slat is the case where neither midpoint is any help. XFOIL's
+        // LEFIND falls back to node `n / 2` when its local scan finds no turn
+        // back; on the raw slat the leading edge is node 130 of 201, thirty
+        // nodes past that, and 55.2% of the way along the arc rather than 50%.
+        // For a closed section the arc-length midpoint is never far from the
+        // leading edge — both surfaces run leading edge to trailing edge — so a
+        // cove on one surface only, as here, is as far off-centre as it gets.
+        let raw = &cases[0].1;
+        let slat = raw.element(0);
+        let s = raw.element_s(0);
+        let nearest = (0..slat.n).fold(0usize, |best, i| {
+            if (s[i] - slat.sle).abs() < (s[best] - slat.sle).abs() {
+                i
+            } else {
+                best
+            }
+        });
+        assert!(
+            nearest.abs_diff(slat.n / 2) >= 25,
+            "the slat's leading-edge node {nearest} of {} is too near the n/2 fallback",
+            slat.n
+        );
+        let fraction = slat.sle / raw.element_arc_length(0);
+        assert!(
+            (fraction - 0.5).abs() > 0.05,
+            "the slat's leading edge is at arc fraction {fraction}, on the midpoint"
+        );
+    }
+
+    /// A section rotated about its trailing edge reports the rotated leading
+    /// edge, exactly, and the same chord.
+    ///
+    /// Ground truth without knowing where the leading edge is: a rigid rotation
+    /// takes the leading edge to the rotation of the leading edge and leaves the
+    /// chord alone, so the reported landmark has to move with the section. This
+    /// is what an element carrying its deflection in its coordinates does, and it
+    /// is the case where the minimum-x node is not the leading edge — 7.0e-3 of
+    /// a chord away on the 30° NACA 0012 below.
+    ///
+    /// Run on a symmetric section, whose leading edge is additionally known
+    /// analytically to be the origin, and on a strongly cambered one, whose
+    /// leading edge is *not* the origin: for the NACA 4412 the point furthest
+    /// from the trailing edge sits 3.0e-4 ahead of and 3.1e-3 above the
+    /// coordinate origin, because the camber tilts the surface there. Coarse
+    /// paneling included, down to 20 panels.
+    #[test]
+    fn a_rotated_section_reports_the_rotated_leading_edge() {
+        let rotate = |points: &[(f64, f64)], angle: f64| -> Vec<(f64, f64)> {
+            // About the trailing-edge midpoint, which for these sharp sections is
+            // (1, 0).
+            let (c, s) = (angle.cos(), angle.sin());
+            points
+                .iter()
+                .map(|&(x, y)| {
+                    let (dx, dy) = (x - 1.0, y);
+                    (1.0 + dx * c - dy * s, dx * s + dy * c)
+                })
+                .collect()
+        };
+
+        for n_panels in [20usize, 40, 80, 200] {
+            for (what, points) in [
+                ("naca0012", make_naca0012(n_panels)),
+                ("naca4412", make_naca4412(n_panels)),
+            ] {
+                let upright = AirfoilGeometry::from_points(&points).unwrap();
+                assert!(upright.le_is_interior, "{what}: upright");
+
+                for degrees in [-30.0f64, 12.5] {
+                    let angle = degrees.to_radians();
+                    let turned = AirfoilGeometry::from_points(&rotate(&points, angle)).unwrap();
+                    let (c, s) = (angle.cos(), angle.sin());
+                    let (dx, dy) = (upright.xle - 1.0, upright.yle);
+                    let expected = (1.0 + dx * c - dy * s, dx * s + dy * c);
+                    let error = ((turned.xle - expected.0).powi(2)
+                        + (turned.yle - expected.1).powi(2))
+                    .sqrt();
+                    assert!(
+                        error < 1e-12,
+                        "{what} {n_panels} panels rotated {degrees}: leading edge ({}, {}) is \
+                         {error:e} from the rotated ({}, {})",
+                        turned.xle,
+                        turned.yle,
+                        expected.0,
+                        expected.1
+                    );
+                    assert!(
+                        (turned.chord - upright.chord).abs() < 1e-12,
+                        "{what} {n_panels} panels rotated {degrees}: chord {} against {}",
+                        turned.chord,
+                        upright.chord
+                    );
+                    assert!(turned.le_is_interior, "{what}: rotated {degrees}");
+                }
+            }
+        }
+
+        // The symmetric section's leading edge is the origin exactly, so the
+        // rotated one is the exact rotation of the origin, independent of the
+        // section above.
+        let angle = (-30.0f64).to_radians();
+        let turned = AirfoilGeometry::from_points(&rotate(&make_naca0012(80), angle)).unwrap();
+        let expected = (1.0 - angle.cos(), -angle.sin());
+        assert!(
+            (turned.xle - expected.0).abs() < 1e-12,
+            "xle {}",
+            turned.xle
+        );
+        assert!(
+            (turned.yle - expected.1).abs() < 1e-12,
+            "yle {}",
+            turned.yle
+        );
+
+        // And the minimum-x node is not the leading edge on the rotated section,
+        // so this is not the easy case.
+        let i_min = (0..turned.n).fold(0usize, |best, i| {
+            if turned.x[i] < turned.x[best] {
+                i
+            } else {
+                best
+            }
+        });
+        let offset = ((turned.x[i_min] - turned.xle).powi(2)
+            + (turned.y[i_min] - turned.yle).powi(2))
+        .sqrt();
+        assert!(
+            offset > 1e-3,
+            "the minimum-x node is only {offset:e} from the leading edge"
+        );
+    }
+
+    /// A single open arc has no interior leading edge, and says so.
+    ///
+    /// `naca1.dat` is a NACA-1 cowl given as one surface — 84 points running from
+    /// `(1, 1)` to `(0, 0)` — not a closed section. Read under the
+    /// two-trailing-edge-node convention, its first and last nodes are 1.414
+    /// apart on a reported chord of 0.672, and they are the two furthest points
+    /// on the contour from their own midpoint, so the distance from that midpoint
+    /// has no interior maximum for LEFIND to converge to.
+    ///
+    /// What is returned: the iteration settles at an interior stationary point of
+    /// the residual near the start of the arc, `(0.94998, 0.99901)` at
+    /// `sle = 0.0500` — on the contour, and not a contour endpoint, but 0.035
+    /// closer to the trailing-edge midpoint than the arc's own ends are. It is
+    /// not a leading edge, and [`AirfoilGeometry::le_is_interior`] is false to say
+    /// so.
+    #[test]
+    fn an_open_arc_reports_that_it_has_no_interior_leading_edge() {
+        let points = single_block("flexfoil-ui/public/airfoils/naca1.dat");
+        assert_eq!(points.len(), 84);
+        assert_eq!(points[0], (1.0, 1.0));
+        assert_eq!(points[83], (0.0, 0.0));
+
+        let geom = AirfoilGeometry::from_points(&points).unwrap();
+        assert!(
+            !geom.le_is_interior,
+            "an open arc should not claim an interior leading edge"
+        );
+
+        // The tell-tale: the two nodes taken for the trailing edge are further
+        // apart than the body is long.
+        assert!(
+            geom.dste > geom.chord,
+            "dste {} against chord {}",
+            geom.dste,
+            geom.chord
+        );
+
+        // Not a contour endpoint, which is what the one-sided bracket used to
+        // return: sle = 0, the leading edge at node 0's (1, 1), chord 0.7071.
+        let to_first = ((geom.xle - points[0].0).powi(2) + (geom.yle - points[0].1).powi(2)).sqrt();
+        let to_last =
+            ((geom.xle - points[83].0).powi(2) + (geom.yle - points[83].1).powi(2)).sqrt();
+        assert!(to_first > 1e-3 && to_last > 1e-3, "{to_first}, {to_last}");
+        assert!(geom.sle > 0.0 && geom.sle < geom.total_arc_length());
+
+        // The documented values.
+        assert!((geom.xle - 0.949_982_743).abs() < 1e-8, "xle {}", geom.xle);
+        assert!((geom.yle - 0.999_005_453).abs() < 1e-8, "yle {}", geom.yle);
+        assert!((geom.sle - 0.050_025_978).abs() < 1e-8, "sle {}", geom.sle);
+        assert!(
+            (geom.chord - 0.671_930_734).abs() < 1e-8,
+            "chord {}",
+            geom.chord
+        );
+
+        // And the flag reaches a multi-element configuration per element: the
+        // cowl arc alongside two closed sections flags only itself.
+        let mut blocks = full_mda_blocks();
+        blocks.insert(1, points);
+        let config = ConfigGeometry::from_element_points(&blocks).unwrap();
+        assert_eq!(
+            config
+                .elements()
+                .iter()
+                .map(|e| e.le_is_interior)
+                .collect::<Vec<_>>(),
+            vec![true, false, true, true]
+        );
+    }
+
+    /// The flag never misfires on a closed section: across every coordinate file
+    /// shipped in `flexfoil-ui/public/airfoils`, a contour whose trailing-edge
+    /// gap is under half its chord has an interior leading edge.
+    ///
+    /// 1664 contours, of which one is flagged — the `naca1.dat` cowl arc, at
+    /// `dste / chord = 2.10`. The largest ratio among the rest is 0.284, so the
+    /// half-chord line is nowhere near either group. Stated as a property of the
+    /// ratio rather than as a list of files, so a coordinate file added to the
+    /// library later is held to the same statement.
+    #[test]
+    fn only_a_contour_that_is_not_a_closed_section_lacks_an_interior_leading_edge() {
+        let dir = repo_file("flexfoil-ui/public/airfoils");
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|e| e == "dat"))
+            .collect();
+        files.sort();
+        assert!(files.len() > 1000, "expected the shipped library");
+
+        let mut checked = 0usize;
+        let mut flagged = 0usize;
+        for path in &files {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            for points in blocks_of(&text) {
+                let Ok(geom) = AirfoilGeometry::from_points(&points) else {
+                    continue;
+                };
+                checked += 1;
+                let name = path.file_name().unwrap().to_string_lossy();
+                let ratio = geom.dste / geom.chord;
+                if ratio < 0.5 {
+                    assert!(
+                        geom.le_is_interior,
+                        "{name}: a closed section (dste/chord = {ratio:e}) has no interior \
+                         leading edge"
+                    );
+                } else {
+                    // The converse: nothing is flagged that could be a closed
+                    // section. Only the cowl arc reaches this branch today.
+                    assert!(
+                        !geom.le_is_interior && ratio > 1.0,
+                        "{name}: dste/chord = {ratio:e}, le_is_interior = {}",
+                        geom.le_is_interior
+                    );
+                    flagged += 1;
+                }
+            }
+        }
+        assert!(checked > 1000, "only {checked} contours read");
+        assert!(flagged >= 1, "the cowl arc's branch was never reached");
     }
 
     /// A sharp trailing edge is sharp on both construction routes.
@@ -2434,13 +2796,40 @@ mod tests {
 
     /// The two chord definitions in the codebase, and how far apart they are.
     ///
-    /// [`ElementGeometry::chord`] measures from the LEFIND leading edge and is
-    /// the authority for anything aerodynamic.
-    /// [`rustfoil_core::Element::chord`] measures from the contour's minimum-x
-    /// node, which is what the geometric bookkeeping in rustfoil-core has
-    /// available. This pins the gap so it cannot widen unnoticed.
+    /// [`ElementGeometry::chord`] measures from the LEFIND leading edge, refined
+    /// onto the spline, and is the authority for anything aerodynamic.
+    /// [`rustfoil_core::Element::chord`] measures from a *node* of the contour,
+    /// which is what the geometric bookkeeping in rustfoil-core has available.
+    ///
+    /// # What is asserted
+    /// The two are not two attempts at one number. They answer different
+    /// questions, and the test says where they may agree and where they must not
+    /// be forced to.
+    ///
+    /// For a section in its own coordinates, with no deflection baked in, the
+    /// most-forward node and the spline leading edge are the same place, so the
+    /// two lengths agree to within the panel spacing at the leading edge — a
+    /// length the contour itself supplies, which is a property rather than a
+    /// pinned magnitude and so survives a change to either definition.
+    ///
+    /// For a *deployed* element they part company, and that is correct.
+    /// `Element::chord` measures from the most-forward node because that is the
+    /// rigging convention: it is what reproduces the overhang published in the
+    /// 30P-30N file header (-2.50% and 0.25% of retracted chord), which
+    /// [`rustfoil_core::clearance`] is validated against. `chord` here measures
+    /// from the spline leading edge because that is the aerodynamic length
+    /// coefficients are normalised by. On a section carrying a 30-degree
+    /// deflection those are different points — the slat's differ by about six
+    /// leading-edge panels — so requiring the two to agree would require one of
+    /// them to be wrong. What the test pins instead is that the spline leading
+    /// edge really is the section's leading edge, and that the most-forward node
+    /// never lies aft of it.
+    ///
+    /// The per-file bounds below are the tighter statement for a conventional
+    /// airfoil: the two definitions agree to a few parts in 1e5 of the chord,
+    /// and those are upper bounds on a measurement rather than a range.
     #[test]
-    fn the_two_chord_definitions_disagree_by_a_pinned_amount() {
+    fn the_two_chord_definitions_differ_only_where_they_are_meant_to() {
         use rustfoil_core::{point, Body, Element};
 
         let element_of = |points: &[(f64, f64)]| -> Element {
@@ -2448,9 +2837,77 @@ mod tests {
             Element::from_body(Body::from_points("element", &pts).unwrap())
         };
 
-        // A conventional airfoil in its own coordinates: the minimum-x node is
-        // within a rounded leading edge of the spline leading edge, so the two
-        // agree to a few parts in 1e5.
+        /// The longer of the two panels meeting at the node nearest the leading
+        /// edge: one panel of the contour, at the leading edge.
+        fn leading_edge_panel(geom: &AirfoilGeometry) -> f64 {
+            let n = geom.n;
+            let nearest = (0..n).fold(0usize, |best, i| {
+                if (geom.s[i] - geom.sle).abs() < (geom.s[best] - geom.sle).abs() {
+                    i
+                } else {
+                    best
+                }
+            });
+            let before = geom.s[nearest] - geom.s[nearest.saturating_sub(1)];
+            let after = geom.s[(nearest + 1).min(n - 1)] - geom.s[nearest];
+            before.max(after)
+        }
+
+        // For a section in its own coordinates, with no deflection baked in, the
+        // most-forward node and the spline leading edge are the same place, so
+        // the two lengths agree to within the leading-edge panel.
+        let mut undeflected: Vec<(String, Vec<(f64, f64)>)> = Vec::new();
+        for file in [
+            "naca0012.dat",
+            "naca2412.dat",
+            "naca0012_xfoil_paneled.dat",
+            "naca0012_repaneled.dat",
+            "naca0012_buffer_real.dat",
+        ] {
+            undeflected.push((file.to_string(), read_dat_blocks(file).remove(0)));
+        }
+        for (what, points) in &undeflected {
+            let geom = AirfoilGeometry::from_points(points).unwrap();
+            let core = element_of(points).chord();
+            let panel = leading_edge_panel(&geom);
+            let difference = (core - geom.chord).abs();
+            assert!(
+                difference <= panel,
+                "{what}: chords differ by {difference:e}, more than the {panel:e} \
+                 leading-edge panel (core {core}, inviscid {})",
+                geom.chord
+            );
+        }
+
+        // A deployed element is the case where the two part company, and they
+        // are meant to. `Element::chord` measures from the most-forward node,
+        // which is the rigging convention: it is what reproduces the overhang
+        // published in the 30P-30N file header (-2.50% and 0.25% of retracted
+        // chord), and `clearance` depends on that. `AirfoilGeometry::chord`
+        // measures from the spline leading edge, which is the aerodynamic
+        // length coefficients are normalised by. On a section carrying a
+        // 30-degree deflection in its coordinates those are different points,
+        // so requiring the two lengths to agree here would be requiring one of
+        // them to be wrong.
+        for ((role, true_xle), block) in MDA_TRUE_XLE.iter().zip(full_mda_blocks()) {
+            let geom = AirfoilGeometry::from_points(&block).unwrap();
+            assert!(
+                (geom.xle - true_xle).abs() < 1e-3,
+                "{role}: spline leading edge {} is not the section's true leading edge {true_xle}",
+                geom.xle
+            );
+            let most_forward = block
+                .iter()
+                .fold(f64::MAX, |lo, &(x, _)| lo.min(x));
+            assert!(
+                most_forward <= geom.xle + 1e-12,
+                "{role}: the most-forward node cannot lie aft of the leading edge"
+            );
+        }
+
+        // And the tighter per-file statement for a conventional airfoil in its
+        // own coordinates: the node the geometric definition picks is inside a
+        // rounded leading edge of the spline one.
         let single: [(&str, f64); 5] = [
             ("naca0012.dat", 0.0),
             ("naca2412.dat", 7.9e-5),
@@ -2467,25 +2924,6 @@ mod tests {
                 relative <= bound.max(1e-15),
                 "{file}: chords differ by {relative:e}, above the pinned {bound:e} \
                  (core {core}, inviscid {inviscid})"
-            );
-        }
-
-        // An element whose deflection is baked into its coordinates is a
-        // different matter: its minimum-x node is not near its leading edge, and
-        // the disagreement is two orders larger.
-        let deflected: [(&str, f64, f64); 3] = [
-            ("slat", 0.02, 0.05),
-            ("main", 0.0, 1e-4),
-            ("flap", 5e-3, 0.02),
-        ];
-        for (block, (role, low, high)) in full_mda_blocks().iter().zip(deflected) {
-            let inviscid = AirfoilGeometry::from_points(block).unwrap().chord;
-            let core = element_of(block).chord();
-            let relative = (core - inviscid).abs() / inviscid;
-            assert!(
-                relative >= low && relative <= high,
-                "{role}: chords differ by {relative:e}, outside the pinned \
-                 [{low:e}, {high:e}] (core {core}, inviscid {inviscid})"
             );
         }
     }
