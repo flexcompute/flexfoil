@@ -86,11 +86,17 @@ impl Element {
     /// definitions have to be the same one. For a closed contour the first and
     /// last nodes coincide and the midpoint is that node exactly.
     ///
-    /// Note that the leading-edge point is still the contour's minimum-x node
-    /// ([`Body::le_index`](crate::body::Body::le_index)), not the spline
-    /// leading edge the solver's LEFIND locates. That is a coarser answer for a
-    /// paneled contour, and closing that gap needs the spline, so it is not
-    /// done here.
+    /// # The leading edge is the minimum-x node
+    /// Not the spline leading edge the solver's LEFIND locates, which is the
+    /// authoritative one — see [`chord`](Self::chord) for how far apart the two
+    /// are and why this one is still the definition here. The minimum-x node is
+    /// taken in the body's **own** coordinates
+    /// ([`Body::le_index`](crate::body::Body::le_index)) and then placed, so a
+    /// flap whose deflection is carried in its [`Placement`] has its leading edge
+    /// located before the rotation. A flap whose deflection is already baked into
+    /// its coordinates — as it is in an imported multi-element coordinate file —
+    /// does not get that, and its minimum-x node can be well away from its
+    /// leading edge.
     pub fn chord_endpoints(&self) -> Option<(Point, Point)> {
         let panels = self.body.panels();
         if panels.is_empty() {
@@ -110,7 +116,8 @@ impl Element {
         Some((self.placement.apply(le), self.placement.apply(te)))
     }
 
-    /// The element's chord length in configuration coordinates.
+    /// The element's chord length in configuration coordinates: a geometric
+    /// length, not the chord reported coefficients are normalised by.
     ///
     /// The distance between the two points
     /// [`chord_endpoints`](Self::chord_endpoints) returns — the minimum-x node
@@ -121,6 +128,40 @@ impl Element {
     /// This is *not* [`Body::chord`](crate::body::Body::chord), which measures
     /// to a trailing-edge corner instead of the midpoint. See
     /// [`chord_endpoints`](Self::chord_endpoints).
+    ///
+    /// # Which chord is authoritative
+    /// `ElementGeometry::chord` in `rustfoil-inviscid` is: leading edge from
+    /// LEFIND on the element's spline, trailing edge from TECALC, both of them
+    /// the landmarks the solver uses for its own geometry. Per-element and
+    /// configuration coefficients (decision D4) normalise by that one.
+    ///
+    /// This length differs from it, because a minimum-x node is not a spline
+    /// leading edge. Measured on this repository's fixtures: 7.9e-5 relative on
+    /// `naca2412.dat`, 2.6e-5 on `naca0012_xfoil_paneled.dat`, zero on the
+    /// symmetric sections whose leading-edge node sits exactly at `x = 0`; and
+    /// 3.3% on the slat and 0.8% on the flap of the full 30P-30N section, whose
+    /// deflections are baked into their coordinates so that the minimum-x node is
+    /// not near the leading edge at all.
+    /// `the_two_chord_definitions_disagree_by_a_pinned_amount` in
+    /// `rustfoil-inviscid`'s geometry module pins both.
+    ///
+    /// It is kept as it is, rather than moved onto the spline definition, for two
+    /// reasons:
+    ///
+    /// - it has to answer for any [`Body`], including a coarse polygon or an
+    ///   un-paneled import. A spline leading edge is not defined on a shape whose
+    ///   own leading edge is a vertex the spline rounds off, and this crate holds
+    ///   no inviscid geometry to ask;
+    /// - it is what the D6 clearance thresholds are scaled by, through
+    ///   [`Configuration::resolved_ref_chord`], so changing it moves published
+    ///   clearance numbers. On the real 30P-30N the two candidate reference
+    ///   chords are 0.831564097 here and 0.831574314 from the spline, a relative
+    ///   difference of 1.2e-5 that moves the 0.5% floor from 4.157820e-3 to
+    ///   4.157871e-3 against a smallest pair margin of 8.5e-3, so no verdict
+    ///   changes — but that is a measurement on one section, not a licence.
+    ///
+    /// So: this for geometric bookkeeping (ranking elements, scaling clearance
+    /// fractions), `ElementGeometry::chord` for anything aerodynamic.
     pub fn chord(&self) -> f64 {
         match self.chord_endpoints() {
             Some((le, te)) => (te - le).norm(),
@@ -144,18 +185,28 @@ impl Element {
 /// Two different reference lengths are in play, and which one applies depends on
 /// what is being reported:
 ///
-/// - **Per-element coefficients** normalise by that element's *own* chord
-///   ([`Element::chord`]). A flap's `Cl` is the flap's load over the flap's
-///   chord, so it is comparable with that flap run on its own.
-/// - **Configuration totals** normalise by the configuration reference chord
-///   ([`Configuration::resolved_ref_chord`]), and take moments about the
-///   configuration reference point ([`Configuration::resolved_ref_point`]).
-///   Totals summed from per-element coefficients therefore have to be rescaled
-///   by each element's chord ratio first.
+/// - **Per-element coefficients** normalise by that element's *own* chord. A
+///   flap's `Cl` is the flap's load over the flap's chord, so it is comparable
+///   with that flap run on its own.
+/// - **Configuration totals** normalise by the configuration reference chord,
+///   and take moments about the configuration reference point
+///   ([`Configuration::resolved_ref_point`]). Totals summed from per-element
+///   coefficients therefore have to be rescaled by each element's chord ratio
+///   first.
 ///
 /// This is the MSES convention. Mixing the two — summing per-element
 /// coefficients directly into a total — gives a number that is not any
 /// recognised coefficient.
+///
+/// An element's own chord there is `ElementGeometry::chord` in
+/// `rustfoil-inviscid`, measured between the leading edge LEFIND locates and the
+/// trailing-edge midpoint, and the configuration reference chord defaults to the
+/// largest of them, `ConfigGeometry::default_ref_chord`. [`Element::chord`] and
+/// [`Configuration::resolved_ref_chord`] are the geometry-time forms of the same
+/// two quantities, from the contour's minimum-x node instead of the spline
+/// leading edge; they rank elements and scale the clearance diagnostics, and
+/// they are not what a reported coefficient divides by. [`Element::chord`]
+/// records how far apart the two are.
 ///
 /// # Default reference quantities (decision D4)
 /// Both are `Option` and both have a documented default when unset:
@@ -303,6 +354,24 @@ impl Configuration {
     /// (D4). Falls back to `1.0` for an empty configuration, or for one whose
     /// main element has no measurable chord, so callers dividing by this never
     /// divide by zero.
+    ///
+    /// # What this length moves
+    /// It carries [`Element::chord`]'s definition — the minimum-x node, not the
+    /// spline leading edge — into everything that reads it, which today is:
+    ///
+    /// - [`main_element_index`](Self::main_element_index) and
+    ///   [`resolved_ref_point`](Self::resolved_ref_point), which pick and measure
+    ///   the same largest element;
+    /// - [`clearance_with`](Self::clearance_with), where it sets the `floor` the
+    ///   D6 hard minimum is taken as a fraction of, and divides every
+    ///   `min_distance_fraction`, `gap_fraction` and `overlap_fraction` in the
+    ///   report;
+    /// - the summary written by [`crate::config_io`].
+    ///
+    /// So it is a threshold input for the clearance diagnostics, not only a
+    /// reporting scale. [`Element::chord`] documents the size of the difference
+    /// against the authoritative spline chord, and its effect on the 30P-30N
+    /// verdicts.
     pub fn resolved_ref_chord(&self) -> f64 {
         if let Some(chord) = self.ref_chord {
             return chord;

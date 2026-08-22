@@ -98,9 +98,25 @@ impl AirfoilGeometry {
     ///
     /// - Node 0 is upper trailing edge
     /// - Node n-1 is lower trailing edge
-    /// - For sharp TE, nodes 0 and n-1 are very close but not identical
     /// - Panel i goes from node i to node i+1
     /// - Panel n-1 (the "TE panel") goes from node n-1 to node 0
+    ///
+    /// ## Both trailing-edge nodes are present
+    /// `dste` is measured between node 0 and node n-1, so those two have to be
+    /// the two trailing-edge nodes for it to be the trailing-edge gap and for
+    /// `sharp` to mean what it says. A **sharp** trailing edge therefore arrives
+    /// as a closed contour: node n-1 is the closing point, coincident with node 0
+    /// (or within rounding of it), `dste` is zero and the TE panel is the
+    /// degenerate one XFOIL gives `APANEL = PI`. A **blunt** trailing edge
+    /// arrives as an open contour whose two ends are the two trailing-edge
+    /// corners.
+    ///
+    /// A contour with the closing point dropped — node n-1 being the last
+    /// lower-surface node *before* the trailing edge — does not satisfy this.
+    /// `dste` would then be the length of the final surface panel, which for a
+    /// sharp element is the wrong quantity and reports it as blunt. Only
+    /// *consecutive* duplicate nodes are rejected, because node 0 and node n-1
+    /// coinciding is the sharp case rather than an error.
     pub fn from_points(points: &[(f64, f64)]) -> Result<Self> {
         let n = points.len();
         
@@ -394,10 +410,71 @@ impl AirfoilGeometry {
         (dx * dx + dy * dy).sqrt()
     }
 
+    /// Node furthest from the trailing-edge midpoint, and the arc-length
+    /// interval that brackets the leading edge.
+    ///
+    /// The leading edge is the point of the contour furthest from the
+    /// trailing-edge midpoint, so the node where that distance is largest is
+    /// within one panel of it and `(s[i-1], s[i+1])` brackets it. One O(n) pass,
+    /// and it reads the whole contour, so a straight or vertical stretch
+    /// elsewhere on the surface cannot stand in for the leading edge.
+    fn leading_edge_bracket(
+        x: &[f64],
+        y: &[f64],
+        s: &[f64],
+        xte: f64,
+        yte: f64,
+    ) -> (usize, f64, f64) {
+        let n = x.len();
+        let mut i_far = 0usize;
+        let mut d_far = f64::NEG_INFINITY;
+        for i in 0..n {
+            let dx = x[i] - xte;
+            let dy = y[i] - yte;
+            let d = dx * dx + dy * dy;
+            if d > d_far {
+                d_far = d;
+                i_far = i;
+            }
+        }
+        let lo = s[i_far.saturating_sub(1)];
+        let hi = s[(i_far + 1).min(n - 1)];
+        (i_far, lo, hi)
+    }
+
     /// Find leading edge location (XFOIL's LEFIND).
     ///
     /// The LE is defined as the point where the surface tangent is
     /// perpendicular to the chord line (TE to LE).
+    ///
+    /// # Where the Newton iteration starts, and what it is allowed to return
+    /// XFOIL's initial guess is a forward scan for the first node whose step
+    /// away from the trailing edge turns back towards it. That is a *local*
+    /// test, and it stops at the first place the contour turns back — on a
+    /// conventional airfoil the leading edge, but on an element with a deep cove
+    /// the cove face, which for the main element of a slat/main/flap section is
+    /// most of a chord downstream of the leading edge. The Newton iteration then
+    /// converges to a stationary point of the same residual on that face and
+    /// reports it as the leading edge.
+    ///
+    /// So the scan is bracketed by [`leading_edge_bracket`](Self::leading_edge_bracket),
+    /// which is global:
+    ///
+    /// - where the scan node and the furthest-from-trailing-edge node agree to
+    ///   within one node — every contour whose first turn back *is* the leading
+    ///   edge — the iteration starts from the scan node and nothing else
+    ///   changes, so the result is the same value bit for bit;
+    /// - where they disagree, at most one of them is the leading edge, and
+    ///   neither rule settles it in general: the scan stops at the first turn
+    ///   back, which a cove face aft of the leading edge also satisfies, while
+    ///   the furthest node is not the leading edge on every contour either. So
+    ///   the iteration is run from both and the candidate genuinely furthest
+    ///   from the trailing edge wins. Choosing on the quantity itself means
+    ///   neither heuristic has to be right, and a correct scan result is never
+    ///   discarded in favour of a worse one.
+    ///
+    /// `improved_le_seeding_leaves_single_element_landmarks_bit_identical` pins
+    /// the unchanged case on the coordinate corpus.
     fn find_leading_edge(
         x: &[f64],
         y: &[f64],
@@ -409,7 +486,11 @@ impl AirfoilGeometry {
     ) -> (f64, f64, f64) {
         let n = x.len();
 
-        // Initial guess: find where dot product with TE changes sign
+        // Node furthest from the trailing edge: a global candidate, independent
+        // of where the contour first turns back.
+        let (i_far, _s_lo, _s_hi) = Self::leading_edge_bracket(x, y, s, xte, yte);
+
+        // XFOIL's initial guess: find where dot product with TE changes sign
         let mut i_le = n / 2;
         for i in 2..n - 2 {
             let dx_te = x[i] - xte;
@@ -423,39 +504,80 @@ impl AirfoilGeometry {
             }
         }
 
-        let mut s_le = s[i_le];
         let dseps = (s[n - 1] - s[0]) * 1e-5;
 
-        // Newton iteration for exact SLE
-        for _iter in 0..50 {
-            // Evaluate spline at s_le
-            let (x_le, y_le) = Self::seval_point(s_le, s, x, y, xp, yp);
-            let (dxds, dyds) = Self::deval_point(s_le, s, x, y, xp, yp);
-            let (dxdd, dydd) = Self::d2val_point(s_le, s, x, xp, y, yp);
+        // XFOIL's Newton iteration for the exact leading-edge arc length,
+        // unchanged, run from a given start.
+        let refine = |mut s_le: f64| -> f64 {
+            for _iter in 0..50 {
+                // Evaluate spline at s_le
+                let (x_le, y_le) = Self::seval_point(s_le, s, x, y, xp, yp);
+                let (dxds, dyds) = Self::deval_point(s_le, s, x, y, xp, yp);
+                let (dxdd, dydd) = Self::d2val_point(s_le, s, x, xp, y, yp);
 
-            let x_chord = x_le - xte;
-            let y_chord = y_le - yte;
+                let x_chord = x_le - xte;
+                let y_chord = y_le - yte;
 
-            // Drive dot product between chord line and LE tangent to zero
-            let res = x_chord * dxds + y_chord * dyds;
-            let ress = dxds * dxds + dyds * dyds + x_chord * dxdd + y_chord * dydd;
+                // Drive dot product between chord line and LE tangent to zero
+                let res = x_chord * dxds + y_chord * dyds;
+                let ress = dxds * dxds + dyds * dyds + x_chord * dxdd + y_chord * dydd;
 
-            if ress.abs() < 1e-20 {
-                break;
+                if ress.abs() < 1e-20 {
+                    break;
+                }
+
+                let mut ds_le = -res / ress;
+
+                // Match XFOIL LEFIND exactly: limit the Newton step using
+                // ABS(XCHORD + YCHORD) without an additional floor term.
+                let chord_scale = (x_chord + y_chord).abs();
+                ds_le = ds_le.max(-0.02 * chord_scale).min(0.02 * chord_scale);
+                s_le += ds_le;
+
+                if ds_le.abs() < dseps {
+                    break;
+                }
             }
+            s_le
+        };
 
-            let mut ds_le = -res / ress;
+        // Distance from the trailing edge, which is the quantity "leading edge"
+        // actually names.
+        let te_distance = |s_at: f64| -> f64 {
+            let (px, py) = Self::seval_point(s_at, s, x, y, xp, yp);
+            (px - xte).powi(2) + (py - yte).powi(2)
+        };
 
-            // Match XFOIL LEFIND exactly: limit the Newton step using
-            // ABS(XCHORD + YCHORD) without an additional floor term.
-            let chord_scale = (x_chord + y_chord).abs();
-            ds_le = ds_le.max(-0.02 * chord_scale).min(0.02 * chord_scale);
-            s_le += ds_le;
+        let scan_agrees_with_bracket = i_le.max(i_far) - i_le.min(i_far) <= 1;
 
-            if ds_le.abs() < dseps {
-                break;
+        let s_le = if scan_agrees_with_bracket {
+            // Every contour whose first turn back *is* the leading edge. Same
+            // start, same steps, same result as before, bit for bit.
+            refine(s[i_le])
+        } else {
+            // The scan and the bracket disagree, so at most one of them is the
+            // leading edge and neither rule decides it in general: the scan
+            // stops at the first turn back, which a cove face aft of the
+            // leading edge satisfies, while the furthest node from the
+            // trailing edge is not the leading edge for every contour either.
+            // Refine from both and keep whichever is genuinely further from the
+            // trailing edge, so the answer is chosen on the quantity itself
+            // rather than on either heuristic being right. Candidates outside
+            // the bracket stay eligible, so a correct scan result is never
+            // discarded in favour of a worse bracketed one.
+            let from_scan = refine(s[i_le]);
+            let from_bracket = refine(s[i_far]);
+            let mut best = from_bracket;
+            let mut best_d = te_distance(from_bracket);
+            for candidate in [from_scan, s[i_far], s[i_le]] {
+                let d = te_distance(candidate);
+                if d > best_d {
+                    best = candidate;
+                    best_d = d;
+                }
             }
-        }
+            best
+        };
 
         let (xle, yle) = Self::seval_point(s_le, s, x, y, xp, yp);
         (xle, yle, s_le)
@@ -676,10 +798,26 @@ pub struct ElementGeometry {
     // === Dimensions ===
     /// Chord length, from this element's leading edge to its TE midpoint.
     ///
-    /// Per decision D4 this element's own coefficients normalise by this; a
+    /// # This is the authoritative chord
+    /// Per decision D4 this element's own coefficients normalise by this, and a
     /// configuration total normalises by
-    /// [`Configuration::resolved_ref_chord`](rustfoil_core::Configuration::resolved_ref_chord)
-    /// instead.
+    /// [`default_ref_chord`](ConfigGeometry::default_ref_chord), which is the
+    /// largest of these. Both ends of the measurement are the solver's own:
+    /// [`xle`](Self::xle)/[`yle`](Self::yle) from LEFIND on this element's
+    /// spline, and [`xte`](Self::xte)/[`yte`](Self::yte) from TECALC.
+    ///
+    /// [`Element::chord`](rustfoil_core::Element::chord) is a different length
+    /// and is not a substitute. It measures from the contour's minimum-x node,
+    /// which is a coarser stand-in for the leading edge on a paneled contour and
+    /// not the leading edge at all for an element whose deflection is baked into
+    /// its coordinates rather than carried in its
+    /// [`Placement`](rustfoil_core::Placement). Measured on this repository's
+    /// fixtures the two differ by 7.9e-5 relative on `naca2412.dat` and 2.6e-5
+    /// on `naca0012_xfoil_paneled.dat`, and by 3.3% on the deflected slat and
+    /// 0.8% on the deflected flap of the 30P-30N section.
+    /// `the_two_chord_definitions_disagree_by_a_pinned_amount` measures it, and
+    /// [`Element::chord`](rustfoil_core::Element::chord) documents what it is
+    /// for.
     pub chord: f64,
 }
 
@@ -746,12 +884,23 @@ impl ElementGeometry {
 ///   airfoil.
 ///
 /// # What counts as a node
-/// The same convention as the single-element path: the panel-method nodes, one
-/// per panel start, with a blunt trailing edge's second node included and a
-/// closed contour's duplicated closing point excluded.
-/// [`Configuration::panel_all`](rustfoil_core::Configuration::panel_all)
-/// already produces exactly that, so [`from_paneled`](Self::from_paneled) needs
-/// no adjustment.
+/// The same convention as the single-element path, node for node: an element's
+/// node 0 is its upper-surface trailing edge and its last node its
+/// lower-surface trailing edge, and **both** trailing-edge nodes are present.
+/// For a blunt trailing edge those are the two trailing-edge corners; for a
+/// sharp one they coincide, the last node being the contour's closing point.
+/// See [`AirfoilGeometry::from_points`] for why: `dste`, and so
+/// [`sharp`](ElementGeometry::sharp) and the trailing-edge treatment that gates
+/// on it, are measured between an element's first and last node.
+///
+/// [`PaneledConfiguration`] keeps only an element's *distinct* nodes and omits a
+/// closed contour's closing point, so it is one node short of this convention
+/// per sharp-trailing-edge element.
+/// [`from_paneled`](Self::from_paneled) restores it. The two numberings are
+/// therefore not interchangeable for a configuration with a sharp trailing edge:
+/// index this geometry with [`layout`](Self::layout) or with its
+/// [`ElementGeometry`] ranges, not with a [`Layout`] built from the same
+/// [`Configuration`] elsewhere.
 ///
 /// # Landmarks live in `ElementGeometry`
 /// The [`Layout`] here carries **connectivity
@@ -824,6 +973,20 @@ impl ConfigGeometry {
     /// Accepts anything that borrows as a coordinate slice, so `&[Vec<_>]` and
     /// `&[&[_]]` both work.
     ///
+    /// # A closed element keeps its closing point
+    /// An element whose first and last coordinates coincide is a sharp
+    /// trailing edge, and that closing point is its last node: it is neither
+    /// stripped nor rejected here. That is the node convention on this type, and
+    /// it is what makes the element's `dste` its trailing-edge gap rather than
+    /// the length of its final surface panel. So the blocks of a multi-element
+    /// coordinate file transfer straight in, closed blocks and open blocks alike,
+    /// and a closed one comes out `sharp` with `dste == 0.0` and a degenerate
+    /// trailing-edge panel at `APANEL = PI`, exactly as the same block would
+    /// through [`AirfoilGeometry::from_points`].
+    ///
+    /// Consecutive duplicates elsewhere on a contour remain an error; only the
+    /// first-to-last coincidence is meaningful.
+    ///
     /// # Errors
     /// Whatever [`AirfoilGeometry::from_points`] reports for the first element
     /// that fails. Indices inside that error are local to the failing element,
@@ -838,19 +1001,41 @@ impl ConfigGeometry {
 
     /// Build from an already-paneled configuration.
     ///
-    /// [`PaneledConfiguration`]
-    /// holds each element's distinct nodes in configuration coordinates, which
-    /// is the node convention described on this type, so the nodes transfer
-    /// unchanged.
+    /// [`PaneledConfiguration`] holds each element's nodes in configuration
+    /// coordinates, which transfer unchanged, with one adjustment: it keeps only
+    /// an element's *distinct* nodes, so a sharp-trailing-edge element's closing
+    /// point — coincident with its first node — is not among them, and this
+    /// type's node convention needs it back. It is restored here, for the
+    /// elements
+    /// [`element_is_closed`](rustfoil_core::paneling::PaneledConfiguration::element_is_closed)
+    /// reports closed, by repeating that element's first node.
+    ///
+    /// Without it an element's `dste` would be the distance from its first node
+    /// to the last lower-surface node before its trailing edge — the length of
+    /// its final surface panel — and a sharp element would come out
+    /// [`sharp`](ElementGeometry::sharp)`== false`, taking the blunt
+    /// trailing-edge treatment. So a closed element here has one more node than
+    /// the same element in the `PaneledConfiguration` it came from, and an open
+    /// one has the same number.
     ///
     /// # Errors
     /// As [`from_element_points`](Self::from_element_points). An element paneled
     /// to fewer than ten nodes is the likely one.
     pub fn from_paneled(paneled: &PaneledConfiguration) -> Result<Self> {
-        let contours: Vec<Vec<(f64, f64)>> = paneled
-            .contours()
-            .map(|nodes| nodes.iter().map(|p| (p.x, p.y)).collect())
-            .collect();
+        let mut contours: Vec<Vec<(f64, f64)>> = Vec::with_capacity(paneled.n_elements());
+        for element in 0..paneled.n_elements() {
+            let mut nodes: Vec<(f64, f64)> = paneled
+                .element_nodes(element)
+                .iter()
+                .map(|p| (p.x, p.y))
+                .collect();
+            if paneled.element_is_closed(element) {
+                if let Some(&first) = nodes.first() {
+                    nodes.push(first);
+                }
+            }
+            contours.push(nodes);
+        }
         Self::from_element_points(&contours)
     }
 
@@ -982,6 +1167,65 @@ impl ConfigGeometry {
     #[inline]
     pub fn try_element(&self, element: usize) -> Option<&ElementGeometry> {
         self.elements.get(element)
+    }
+
+    /// Index of the largest-chord element — the main element, by the D4 rule.
+    ///
+    /// Compared on [`ElementGeometry::chord`], so on the same chords the
+    /// per-element coefficients normalise by. Ties go to the lowest index;
+    /// `None` for an empty geometry.
+    ///
+    /// [`Configuration::main_element_index`](rustfoil_core::Configuration::main_element_index)
+    /// answers the same question before there is any inviscid geometry, from
+    /// [`Element::chord`](rustfoil_core::Element::chord). The two can only
+    /// disagree over elements whose chords are closer together than the
+    /// difference between the two definitions — a few parts in 1e5 for elements
+    /// in their own coordinates, a few percent for one whose deflection is baked
+    /// into its coordinates. See [`ElementGeometry::chord`].
+    pub fn main_element_index(&self) -> Option<usize> {
+        self.elements
+            .iter()
+            .enumerate()
+            .fold(None, |best, (i, element)| match best {
+                // Strictly greater, so the first of equal chords wins.
+                Some((_, best_chord)) if element.chord <= best_chord => best,
+                _ => Some((i, element.chord)),
+            })
+            .map(|(i, _)| i)
+    }
+
+    /// The D4 default reference chord for configuration totals: the chord of the
+    /// largest-chord element.
+    ///
+    /// # Which reference chord a total should use
+    /// This is the authoritative form of the D4 default, because it is measured
+    /// between the landmarks the solver uses for its own geometry — see
+    /// [`ElementGeometry::chord`].
+    /// [`Configuration::resolved_ref_chord`](rustfoil_core::Configuration::resolved_ref_chord)
+    /// resolves the same default at geometry time, from
+    /// [`Element::chord`](rustfoil_core::Element::chord), and is what the
+    /// geometric clearance diagnostics scale by; it differs from this by the
+    /// amount recorded on [`ElementGeometry::chord`].
+    ///
+    /// This is only the *default*. An explicit
+    /// [`Configuration::ref_chord`](rustfoil_core::Configuration::ref_chord)
+    /// overrides it and is not visible from here, so a caller that sets one has
+    /// to carry it through itself. A high-lift rigging table normally quotes
+    /// against the retracted chord of the whole section rather than the main
+    /// element alone, which is exactly that case.
+    ///
+    /// Returns `1.0` for an empty geometry, or one whose main element has no
+    /// measurable chord, so a caller dividing by this never divides by zero.
+    pub fn default_ref_chord(&self) -> f64 {
+        let chord = self
+            .main_element_index()
+            .map(|i| self.elements[i].chord)
+            .unwrap_or(0.0);
+        if chord > 0.0 {
+            chord
+        } else {
+            1.0
+        }
     }
 
     // --- node arrays -----------------------------------------------------
@@ -1397,6 +1641,13 @@ mod tests {
             .join(file)
     }
 
+    /// A path relative to the repository root.
+    fn repo_file(relative: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(relative)
+    }
+
     /// Read a Selig/XFOIL `.dat` file into one coordinate block per element.
     ///
     /// Blank lines and comment lines separate blocks. Deliberately minimal: the
@@ -1758,7 +2009,8 @@ mod tests {
 
     /// The `Configuration` route: paneling a real three-element configuration
     /// and building its geometry gives one element per configuration element,
-    /// with the node counts the paneling produced.
+    /// with the node counts the paneling produced plus the closing node a sharp
+    /// trailing edge needs.
     #[test]
     fn config_geometry_from_a_paneled_configuration() {
         use rustfoil_core::paneling::PanelCounts;
@@ -1779,20 +2031,35 @@ mod tests {
         let geometry = ConfigGeometry::from_paneled(&paneled).unwrap();
 
         assert_eq!(geometry.n_elements(), 3);
-        assert_eq!(geometry.total_nodes(), paneled.total_nodes());
+        // A closed element gains its closing node back; an open one does not.
+        let restored = (0..3)
+            .filter(|&element| paneled.element_is_closed(element))
+            .count();
+        assert!(restored > 0, "the fixture should have a sharp element");
+        assert_eq!(geometry.total_nodes(), paneled.total_nodes() + restored);
         for element in 0..3 {
+            let paneled_nodes = paneled.element_nodes(element);
+            let closing = usize::from(paneled.element_is_closed(element));
             assert_eq!(
                 geometry.element(element).n,
-                paneled.element_nodes(element).len(),
+                paneled_nodes.len() + closing,
                 "element {element}: node count"
             );
             // Nodes transfer unchanged from the paneling.
-            for (node, paneled_node) in geometry
-                .element_x(element)
-                .iter()
-                .zip(paneled.element_nodes(element))
-            {
+            for (node, paneled_node) in geometry.element_x(element).iter().zip(paneled_nodes) {
                 assert_eq!(node.to_bits(), paneled_node.x.to_bits());
+            }
+            // And the restored node is the element's own first node.
+            if closing == 1 {
+                let geom = geometry.element(element);
+                assert_eq!(
+                    geometry.x()[geom.end() - 1].to_bits(),
+                    geometry.x()[geom.start].to_bits()
+                );
+                assert_eq!(
+                    geometry.y()[geom.end() - 1].to_bits(),
+                    geometry.y()[geom.start].to_bits()
+                );
             }
         }
 
@@ -1827,5 +2094,399 @@ mod tests {
         let too_few: Vec<(f64, f64)> = good[..5].to_vec();
         let result = ConfigGeometry::from_element_points(&[good, too_few]);
         assert!(matches!(result, Err(InviscidError::InsufficientPoints(5))));
+    }
+
+    // =====================================================================
+    // Leading and trailing edges of a real slat/main/flap section
+    // =====================================================================
+
+    /// The full 30P-30N section: 201, 221 and 242 coordinates for the slat, main
+    /// element and flap.
+    ///
+    /// The trimmed copy in `testdata/` is the same three elements decimated to
+    /// about a twentieth of the points, which loses the cove faces and the
+    /// leading-edge resolution the landmark tests below turn on, so those use
+    /// this one.
+    fn full_mda_blocks() -> Vec<Vec<(f64, f64)>> {
+        let path = repo_file("flexfoil-ui/public/airfoils/30p-30n.dat");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let mut blocks: Vec<Vec<(f64, f64)>> = Vec::new();
+        let mut current: Vec<(f64, f64)> = Vec::new();
+        for line in text.lines() {
+            let mut parts = line.trim().split_whitespace();
+            let parsed = match (
+                parts.next().and_then(|s| s.parse::<f64>().ok()),
+                parts.next().and_then(|s| s.parse::<f64>().ok()),
+            ) {
+                (Some(x), Some(y)) => Some((x, y)),
+                _ => None,
+            };
+            match parsed {
+                Some(pair) => current.push(pair),
+                None if !current.is_empty() => blocks.push(std::mem::take(&mut current)),
+                None => {}
+            }
+        }
+        if !current.is_empty() {
+            blocks.push(current);
+        }
+        assert_eq!(
+            blocks.iter().map(|b| b.len()).collect::<Vec<_>>(),
+            vec![201, 221, 242],
+            "expected the slat, main and flap blocks of the full 30P-30N"
+        );
+        blocks
+    }
+
+    /// The full 30P-30N as a `Configuration`, each element in the coordinates the
+    /// file gives it.
+    fn full_mda_configuration() -> rustfoil_core::Configuration {
+        use rustfoil_core::{point, Body, Configuration, Element};
+        let roles = ["slat", "main", "flap"];
+        let elements: Vec<Element> = full_mda_blocks()
+            .iter()
+            .enumerate()
+            .map(|(i, block)| {
+                let pts: Vec<_> = block.iter().map(|&(x, y)| point(x, y)).collect();
+                Element::from_body(Body::from_points(roles[i], &pts).unwrap())
+            })
+            .collect();
+        Configuration::new(elements)
+    }
+
+    /// The node furthest from an element's trailing-edge midpoint, which brackets
+    /// its leading edge to within one panel.
+    fn furthest_node(x: &[f64], y: &[f64]) -> usize {
+        let n = x.len();
+        let xte = 0.5 * (x[0] + x[n - 1]);
+        let yte = 0.5 * (y[0] + y[n - 1]);
+        (0..n)
+            .max_by(|&i, &j| {
+                let di = (x[i] - xte).powi(2) + (y[i] - yte).powi(2);
+                let dj = (x[j] - xte).powi(2) + (y[j] - yte).powi(2);
+                di.partial_cmp(&dj).unwrap()
+            })
+            .unwrap()
+    }
+
+    /// A leading edge has to be at the front of the element, not on a cove face
+    /// most of a chord downstream of it.
+    ///
+    /// The main element of this section has a straight vertical stretch where the
+    /// flap tucks in — eight nodes sharing `x = 0.69993` — and the slat is
+    /// deflected 30°, so on both of them the first place the contour turns back
+    /// towards the trailing edge is not the leading edge. Checked on the raw
+    /// coordinates and on the paneled contour at a spread of panel counts,
+    /// because which element the local scan misses depends on the panel
+    /// distribution.
+    #[test]
+    fn the_leading_edge_is_at_the_front_of_a_coved_element() {
+        use rustfoil_core::paneling::PanelCounts;
+
+        let blocks = full_mda_blocks();
+        let raw = ConfigGeometry::from_element_points(&blocks).unwrap();
+        let config = full_mda_configuration();
+
+        let mut cases: Vec<(String, ConfigGeometry)> = vec![("raw coordinates".to_string(), raw)];
+        for n in [60usize, 80, 100, 120, 140, 160, 200] {
+            cases.push((
+                format!("paneled Each({n})"),
+                ConfigGeometry::from_configuration(&config, &PanelCounts::Each(n)).unwrap(),
+            ));
+        }
+
+        for (what, geometry) in &cases {
+            assert_eq!(geometry.n_elements(), 3, "{what}");
+            for (element, role) in ["slat", "main", "flap"].iter().enumerate() {
+                let geom = geometry.element(element);
+                let x = geometry.element_x(element);
+                let y = geometry.element_y(element);
+
+                // The bracketing node, and the panels either side of it.
+                let far = furthest_node(x, y);
+                let s = geometry.element_s(element);
+                let span = (s[(far + 1).min(geom.n - 1)] - s[far.saturating_sub(1)]).abs();
+
+                let distance = ((geom.xle - x[far]).powi(2) + (geom.yle - y[far]).powi(2)).sqrt();
+                assert!(
+                    distance <= span,
+                    "{what} {role}: leading edge ({}, {}) is {distance} from the furthest node \
+                     ({}, {}), more than the {span} of arc length either side of it",
+                    geom.xle,
+                    geom.yle,
+                    x[far],
+                    y[far]
+                );
+
+                // And it is at the front of the element, not on its cove.
+                let x_min = x.iter().copied().fold(f64::INFINITY, f64::min);
+                let x_max = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                assert!(
+                    geom.xle < x_min + 0.05 * (x_max - x_min),
+                    "{what} {role}: leading edge at x = {} is not in the forward 5% of \
+                     [{x_min}, {x_max}]",
+                    geom.xle
+                );
+            }
+        }
+    }
+
+    /// A sharp trailing edge is sharp on both construction routes.
+    ///
+    /// The slat and the main element of this section are closed contours and the
+    /// flap is open, so one fixture covers both trailing-edge branches. The two
+    /// routes differ in whether the closing point arrives with the coordinates:
+    /// it does for the raw blocks of the file, and `from_paneled` restores it for
+    /// the paneled contours, so both reach the convention the sharpness test
+    /// needs.
+    #[test]
+    fn a_sharp_element_is_sharp_on_both_construction_routes() {
+        use rustfoil_core::paneling::PanelCounts;
+
+        let blocks = full_mda_blocks();
+        let config = full_mda_configuration();
+        let counts = PanelCounts::Each(120);
+        let paneled = config.panel_all(&counts).unwrap();
+
+        // The paneling's own verdict, which is the connectivity question.
+        let closed: Vec<bool> = (0..3).map(|k| paneled.element_is_closed(k)).collect();
+        assert_eq!(closed, vec![true, true, false], "slat, main, flap closure");
+
+        for (what, geometry) in [
+            (
+                "raw coordinates",
+                ConfigGeometry::from_element_points(&blocks).unwrap(),
+            ),
+            (
+                "paneled",
+                ConfigGeometry::from_configuration(&config, &counts).unwrap(),
+            ),
+        ] {
+            for (element, role) in ["slat", "main", "flap"].iter().enumerate() {
+                let geom = geometry.element(element);
+                assert_eq!(
+                    geom.sharp,
+                    closed[element],
+                    "{what} {role}: sharp = {}, but the contour is {}",
+                    geom.sharp,
+                    if closed[element] { "closed" } else { "open" }
+                );
+
+                if closed[element] {
+                    // The two trailing-edge nodes are the same point, so there is
+                    // no gap and the trailing-edge panel is the degenerate one.
+                    assert_eq!(geom.dste, 0.0, "{what} {role}: dste");
+                    assert_eq!(
+                        geometry.apanel()[geom.end() - 1].to_bits(),
+                        PI.to_bits(),
+                        "{what} {role}: trailing-edge panel angle"
+                    );
+                    assert_eq!(
+                        geometry.te_coefficients(element),
+                        (1.0, 0.0),
+                        "{what} {role}: te coefficients"
+                    );
+                    assert!(
+                        geometry.sharp_te_bisector_control(element).is_some(),
+                        "{what} {role}: bisector control point"
+                    );
+                } else {
+                    assert!(
+                        geom.dste > 1e-4 * geom.chord,
+                        "{what} {role}: dste {} against chord {}",
+                        geom.dste,
+                        geom.chord
+                    );
+                    assert!(geometry.sharp_te_bisector_control(element).is_none());
+                }
+            }
+        }
+    }
+
+    /// Landmark and chord values for the whole section, both routes, in one
+    /// place: a slat and a main element whose leading edges are found by the
+    /// global bracket, and a flap whose blunt trailing edge is measured across
+    /// its own two corners.
+    #[test]
+    fn the_full_section_reports_a_landmark_per_element() {
+        use rustfoil_core::paneling::PanelCounts;
+
+        let config = full_mda_configuration();
+        let raw = ConfigGeometry::from_element_points(&full_mda_blocks()).unwrap();
+        let paneled = ConfigGeometry::from_configuration(&config, &PanelCounts::Each(120)).unwrap();
+
+        // Element, xle, chord, sharp, tolerance on the two lengths. The
+        // tolerances are the spread between the raw and the paneled contour, not
+        // a claim about either one's precision.
+        let expected = [
+            ("slat", -0.0807, 0.1527, true),
+            ("main", 0.0438, 0.8316, true),
+            ("flap", 0.8735, 0.3003, false),
+        ];
+        for (what, geometry) in [("raw", &raw), ("paneled", &paneled)] {
+            for (element, (role, xle, chord, sharp)) in expected.iter().enumerate() {
+                let geom = geometry.element(element);
+                assert!(
+                    (geom.xle - xle).abs() < 5e-3,
+                    "{what} {role}: xle {} against {xle}",
+                    geom.xle
+                );
+                assert!(
+                    (geom.chord - chord).abs() < 5e-3,
+                    "{what} {role}: chord {} against {chord}",
+                    geom.chord
+                );
+                assert_eq!(geom.sharp, *sharp, "{what} {role}: sharp");
+            }
+            // The main element is the largest, and it sets the D4 default.
+            assert_eq!(
+                geometry.main_element_index(),
+                Some(1),
+                "{what}: main element"
+            );
+            assert_eq!(
+                geometry.default_ref_chord().to_bits(),
+                geometry.element(1).chord.to_bits(),
+                "{what}: reference chord"
+            );
+        }
+    }
+
+    /// Bracketing the leading-edge search leaves every single-element landmark
+    /// exactly where it was.
+    ///
+    /// The values below were measured before the bracket was introduced, on the
+    /// coordinate corpus in `testdata/` and on the analytic section. A
+    /// conventional airfoil's first turn back towards the trailing edge *is* its
+    /// leading edge, so the bracket agrees with the local scan, the iteration
+    /// starts in the same place and lands in the same place, and these are raw
+    /// bit patterns rather than tolerances because nothing about the arithmetic
+    /// changed.
+    #[test]
+    fn improved_le_seeding_leaves_single_element_landmarks_bit_identical() {
+        // (file, xle, yle, sle, chord)
+        let pinned: [(&str, u64, u64, u64, u64); 5] = [
+            (
+                "naca0012.dat",
+                0x0000000000000000,
+                0x0000000000000000,
+                0x3ff050471ff1e073,
+                0x3ff0000000000000,
+            ),
+            (
+                "naca2412.dat",
+                0xbf1444200ec3adf8,
+                0x3f59eb462913dccc,
+                0x3ff06c2ef11e1d09,
+                0x3ff00052605f7e89,
+            ),
+            (
+                "naca0012_xfoil_paneled.dat",
+                0xbe6bad1432c56e00,
+                0x0000000000000000,
+                0x3ff0505e655529ac,
+                0x3ff000000dd68a19,
+            ),
+            (
+                "naca0012_repaneled.dat",
+                0x0000000000000000,
+                0x0000000000000000,
+                0x3ff01c98f7f3191b,
+                0x3ff0000000000000,
+            ),
+            (
+                "naca0012_buffer_real.dat",
+                0x0000000000000000,
+                0x0000000000000000,
+                0x3ff05061b1e2a4fd,
+                0x3ff0000000000000,
+            ),
+        ];
+
+        for (file, xle, yle, sle, chord) in pinned {
+            let blocks = read_dat_blocks(file);
+            assert_eq!(blocks.len(), 1, "{file}: expected a single element");
+            let geom = AirfoilGeometry::from_points(&blocks[0]).unwrap();
+            for (name, actual, expected) in [
+                ("xle", geom.xle.to_bits(), xle),
+                ("yle", geom.yle.to_bits(), yle),
+                ("sle", geom.sle.to_bits(), sle),
+                ("chord", geom.chord.to_bits(), chord),
+            ] {
+                assert_eq!(
+                    actual,
+                    expected,
+                    "{file}.{name}: {:#018x} vs {expected:#018x} ({})",
+                    actual,
+                    f64::from_bits(actual)
+                );
+            }
+        }
+
+        // And the analytic section, whose trailing edge is sharp.
+        let geom = AirfoilGeometry::from_points(&make_naca0012(80)).unwrap();
+        assert_eq!(geom.xle.to_bits(), 0x0000000000000000);
+        assert_eq!(geom.yle.to_bits(), 0x0000000000000000);
+        assert_eq!(geom.sle.to_bits(), 0x3ff0506853e7b5e7);
+        assert_eq!(geom.chord.to_bits(), 0x3ff0000000000000);
+    }
+
+    /// The two chord definitions in the codebase, and how far apart they are.
+    ///
+    /// [`ElementGeometry::chord`] measures from the LEFIND leading edge and is
+    /// the authority for anything aerodynamic.
+    /// [`rustfoil_core::Element::chord`] measures from the contour's minimum-x
+    /// node, which is what the geometric bookkeeping in rustfoil-core has
+    /// available. This pins the gap so it cannot widen unnoticed.
+    #[test]
+    fn the_two_chord_definitions_disagree_by_a_pinned_amount() {
+        use rustfoil_core::{point, Body, Element};
+
+        let element_of = |points: &[(f64, f64)]| -> Element {
+            let pts: Vec<_> = points.iter().map(|&(x, y)| point(x, y)).collect();
+            Element::from_body(Body::from_points("element", &pts).unwrap())
+        };
+
+        // A conventional airfoil in its own coordinates: the minimum-x node is
+        // within a rounded leading edge of the spline leading edge, so the two
+        // agree to a few parts in 1e5.
+        let single: [(&str, f64); 5] = [
+            ("naca0012.dat", 0.0),
+            ("naca2412.dat", 7.9e-5),
+            ("naca0012_xfoil_paneled.dat", 2.6e-5),
+            ("naca0012_repaneled.dat", 0.0),
+            ("naca0012_buffer_real.dat", 0.0),
+        ];
+        for (file, bound) in single {
+            let points = read_dat_blocks(file).remove(0);
+            let inviscid = AirfoilGeometry::from_points(&points).unwrap().chord;
+            let core = element_of(&points).chord();
+            let relative = (core - inviscid).abs() / inviscid;
+            assert!(
+                relative <= bound.max(1e-15),
+                "{file}: chords differ by {relative:e}, above the pinned {bound:e} \
+                 (core {core}, inviscid {inviscid})"
+            );
+        }
+
+        // An element whose deflection is baked into its coordinates is a
+        // different matter: its minimum-x node is not near its leading edge, and
+        // the disagreement is two orders larger.
+        let deflected: [(&str, f64, f64); 3] = [
+            ("slat", 0.02, 0.05),
+            ("main", 0.0, 1e-4),
+            ("flap", 5e-3, 0.02),
+        ];
+        for (block, (role, low, high)) in full_mda_blocks().iter().zip(deflected) {
+            let inviscid = AirfoilGeometry::from_points(block).unwrap().chord;
+            let core = element_of(block).chord();
+            let relative = (core - inviscid).abs() / inviscid;
+            assert!(
+                relative >= low && relative <= high,
+                "{role}: chords differ by {relative:e}, outside the pinned \
+                 [{low:e}, {high:e}] (core {core}, inviscid {inviscid})"
+            );
+        }
     }
 }
