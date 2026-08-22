@@ -13,8 +13,22 @@
 //! - `xpanel.f`: NCALC (lines 51-96), APCALC (lines 22-48)
 //! - `xgeom.f`: LEFIND, TECALC
 //! - `XFOIL.INC`: Common block definitions
+//!
+//! # One body or several
+//! [`AirfoilGeometry`] is one body: one trailing edge, one leading edge, one
+//! chord. [`ConfigGeometry`] is the multi-element form of the same thing — one
+//! flat set of node arrays for the whole configuration plus one
+//! [`ElementGeometry`] per element, indexed through a
+//! [`Layout`]. It is built out of
+//! [`AirfoilGeometry`] rather than beside it, so NCALC, APCALC, TECALC and
+//! LEFIND exist once and a single-element `ConfigGeometry` reproduces
+//! `AirfoilGeometry` exactly.
 
 use crate::{InviscidError, Result};
+use core::ops::Range;
+use rustfoil_core::layout::Layout;
+use rustfoil_core::paneling::{PanelCounts, PaneledConfiguration};
+use rustfoil_core::Configuration;
 use std::f64::consts::PI;
 
 /// Complete airfoil geometry with all derived quantities needed for panel method.
@@ -602,6 +616,650 @@ impl AirfoilGeometry {
     }
 }
 
+// ===========================================================================
+// Multi-element geometry
+// ===========================================================================
+
+/// One element's trailing-edge and leading-edge geometry, and the stretch of a
+/// [`ConfigGeometry`]'s node arrays it owns.
+///
+/// These are exactly the scalars [`AirfoilGeometry`] holds one copy of, plus
+/// `start` and `n`. A configuration has one of these per element; nothing here
+/// is shared between elements, because a slat, a main element and a flap each
+/// have their own trailing edge, leading edge and chord.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ElementGeometry {
+    // === Node range in the global arrays ===
+    /// Global index of this element's first node.
+    pub start: usize,
+    /// Number of nodes belonging to this element.
+    pub n: usize,
+
+    // === Trailing edge geometry ===
+    /// TE midpoint X coordinate
+    pub xte: f64,
+    /// TE midpoint Y coordinate
+    pub yte: f64,
+    /// TE gap length (distance from this element's first node to its last)
+    pub dste: f64,
+    /// TE normal-projected gap (ANTE in XFOIL)
+    pub ante: f64,
+    /// TE tangent-projected gap (ASTE in XFOIL)
+    pub aste: f64,
+    /// True if this element's trailing edge is sharp: `dste < 0.0001 * chord`.
+    ///
+    /// # This is the authoritative sharpness test
+    /// It is the *relative* test the numerics actually gate on — the same
+    /// `dste < 0.0001 * chord` as [`AirfoilGeometry::sharp`], consumed by the
+    /// trailing-edge branches in `influence.rs` and `system.rs`. Anything that
+    /// decides how a trailing edge is treated aerodynamically reads this.
+    ///
+    /// [`ElementSpan::has_blunt_te`](rustfoil_core::layout::ElementSpan::has_blunt_te)
+    /// is not a substitute. That is a *connectivity* question — are this
+    /// element's upper and lower trailing-edge nodes two distinct nodes? —
+    /// answered by an absolute componentwise `1e-10` closure test in
+    /// rustfoil-core. The two disagree in both directions: a contour whose ends
+    /// sit `1e-6` apart on a unit chord has distinct nodes and is sharp here,
+    /// and a contour on a chord below the closure tolerance can be one node and
+    /// blunt here. Substituting one for the other changes which trailing-edge
+    /// treatment the solver applies.
+    pub sharp: bool,
+
+    // === Leading edge geometry ===
+    /// LE X coordinate
+    pub xle: f64,
+    /// LE Y coordinate
+    pub yle: f64,
+    /// Arc length at the leading edge, measured from this element's first node.
+    pub sle: f64,
+
+    // === Dimensions ===
+    /// Chord length, from this element's leading edge to its TE midpoint.
+    ///
+    /// Per decision D4 this element's own coefficients normalise by this; a
+    /// configuration total normalises by
+    /// [`Configuration::resolved_ref_chord`](rustfoil_core::Configuration::resolved_ref_chord)
+    /// instead.
+    pub chord: f64,
+}
+
+impl ElementGeometry {
+    /// Global index one past this element's last node.
+    #[inline]
+    pub fn end(&self) -> usize {
+        self.start + self.n
+    }
+
+    /// This element's node range in the global arrays.
+    #[inline]
+    pub fn range(&self) -> Range<usize> {
+        self.start..self.end()
+    }
+
+    /// Whether `global` is one of this element's nodes.
+    #[inline]
+    pub fn contains(&self, global: usize) -> bool {
+        global >= self.start && global < self.end()
+    }
+
+    /// This element's TE panel source/vortex coefficients (SCS, SDS).
+    ///
+    /// The single-element [`AirfoilGeometry::te_coefficients`] for this
+    /// element's own trailing edge: `(1.0, 0.0)` when [`sharp`](Self::sharp),
+    /// otherwise `(ante / dste, aste / dste)`.
+    pub fn te_coefficients(&self) -> (f64, f64) {
+        if self.sharp {
+            (1.0, 0.0)
+        } else {
+            (self.ante / self.dste, self.aste / self.dste)
+        }
+    }
+}
+
+/// A configuration's inviscid geometry: one flat set of node arrays for every
+/// element, plus one [`ElementGeometry`] per element.
+///
+/// # Layout of the node arrays
+/// `x`, `y`, `s`, `xp`, `yp`, `nx`, `ny` and `apanel` are each
+/// [`total_nodes`](Self::total_nodes) long and hold every element's nodes
+/// concatenated in configuration order — one contiguous array plus a segment
+/// table, not a per-element fragmentation, because that is what the influence
+/// kernels want. Element `k` owns `elements()[k].range()`, and
+/// [`layout`](Self::layout) is the same table in
+/// [`Layout`] form.
+///
+/// # Per element, not across elements
+/// Everything derived is derived per element and never across a boundary:
+///
+/// - `s` **restarts at 0.0 at each element's first node**. It is that element's
+///   own arc length, not a running total over the configuration. A cumulative
+///   `s` would put a spurious segment between one element's last node and the
+///   next element's first.
+/// - `xp`, `yp` come from one SEGSPL over that element's nodes alone, so an
+///   element's spline end conditions are its own trailing edge and not its
+///   neighbour's leading edge.
+/// - `nx`, `ny` corner-average only within an element.
+/// - `apanel[i]` is the angle of the panel from node `i` to
+///   [`next_node(i)`](Self::next_node), which wraps inside the owning element.
+///   At an element's last node that is the element's TE panel, closing onto the
+///   element's own first node — the same slot `apanel[n-1]` holds for a single
+///   airfoil.
+///
+/// # What counts as a node
+/// The same convention as the single-element path: the panel-method nodes, one
+/// per panel start, with a blunt trailing edge's second node included and a
+/// closed contour's duplicated closing point excluded.
+/// [`Configuration::panel_all`](rustfoil_core::Configuration::panel_all)
+/// already produces exactly that, so [`from_paneled`](Self::from_paneled) needs
+/// no adjustment.
+///
+/// # Landmarks live in `ElementGeometry`
+/// The [`Layout`] here carries **connectivity
+/// only** — node counts and the closure rule. Its spans deliberately make no
+/// landmark claim, so `layout().span(k).has_le()` is `false` and
+/// `has_blunt_te()` is `false` for every element however the geometry was
+/// built. Ask [`ElementGeometry`] for a leading edge (`xle`, `yle`, `sle`), a
+/// trailing edge (`xte`, `yte`, `dste`) or a sharpness verdict (`sharp`); those
+/// are computed from the geometry and are the only answers.
+///
+/// # Fields are private
+/// The arrays and the element table have to agree with each other — each array
+/// is `layout.total_nodes()` long, and `elements[k]` matches `layout.span(k)`.
+/// Construction is what establishes that, so it is also the only way in. Slices
+/// read out through the accessors are as cheap as a field read.
+///
+/// # Example
+/// ```
+/// use rustfoil_core::naca::naca4;
+/// use rustfoil_inviscid::geometry::{AirfoilGeometry, ConfigGeometry};
+///
+/// let points: Vec<(f64, f64)> = naca4(2412, Some(80)).iter().map(|p| (p.x, p.y)).collect();
+///
+/// let single = AirfoilGeometry::from_points(&points).unwrap();
+/// let config = ConfigGeometry::from_points(&points).unwrap();
+///
+/// // One element, and the same derived geometry.
+/// assert_eq!(config.n_elements(), 1);
+/// assert_eq!(config.total_nodes(), single.n);
+/// assert_eq!(config.element(0).chord.to_bits(), single.chord.to_bits());
+/// assert_eq!(config.element(0).sharp, single.sharp);
+///
+/// // A single element still closes onto itself.
+/// assert_eq!(config.next_node(config.total_nodes() - 1), 0);
+/// ```
+#[derive(Debug, Clone)]
+pub struct ConfigGeometry {
+    x: Vec<f64>,
+    y: Vec<f64>,
+    s: Vec<f64>,
+    xp: Vec<f64>,
+    yp: Vec<f64>,
+    nx: Vec<f64>,
+    ny: Vec<f64>,
+    apanel: Vec<f64>,
+    elements: Vec<ElementGeometry>,
+    layout: Layout,
+}
+
+impl ConfigGeometry {
+    /// Build a one-element configuration geometry from one body's coordinates.
+    ///
+    /// Equivalent to [`AirfoilGeometry::from_points`] on the same points: the
+    /// node arrays and the element's scalars are produced by that call and are
+    /// bit-for-bit the same values.
+    ///
+    /// # Errors
+    /// Whatever [`AirfoilGeometry::from_points`] reports.
+    pub fn from_points(points: &[(f64, f64)]) -> Result<Self> {
+        Self::from_element_points(&[points])
+    }
+
+    /// Build from one coordinate list per element, in configuration order.
+    ///
+    /// The coordinates are taken as given, in configuration coordinates — any
+    /// [`Placement`](rustfoil_core::Placement) has to be applied before this
+    /// point. Each element must satisfy [`AirfoilGeometry::from_points`] on its
+    /// own, so at least ten nodes each and no duplicate consecutive nodes.
+    ///
+    /// Accepts anything that borrows as a coordinate slice, so `&[Vec<_>]` and
+    /// `&[&[_]]` both work.
+    ///
+    /// # Errors
+    /// Whatever [`AirfoilGeometry::from_points`] reports for the first element
+    /// that fails. Indices inside that error are local to the failing element,
+    /// and construction stops there.
+    pub fn from_element_points<P: AsRef<[(f64, f64)]>>(elements: &[P]) -> Result<Self> {
+        let mut per_element = Vec::with_capacity(elements.len());
+        for points in elements {
+            per_element.push(AirfoilGeometry::from_points(points.as_ref())?);
+        }
+        Ok(Self::from_element_geometries(&per_element))
+    }
+
+    /// Build from an already-paneled configuration.
+    ///
+    /// [`PaneledConfiguration`]
+    /// holds each element's distinct nodes in configuration coordinates, which
+    /// is the node convention described on this type, so the nodes transfer
+    /// unchanged.
+    ///
+    /// # Errors
+    /// As [`from_element_points`](Self::from_element_points). An element paneled
+    /// to fewer than ten nodes is the likely one.
+    pub fn from_paneled(paneled: &PaneledConfiguration) -> Result<Self> {
+        let contours: Vec<Vec<(f64, f64)>> = paneled
+            .contours()
+            .map(|nodes| nodes.iter().map(|p| (p.x, p.y)).collect())
+            .collect();
+        Self::from_element_points(&contours)
+    }
+
+    /// Panel a configuration and build its geometry in one step.
+    ///
+    /// [`Configuration::panel_all`](rustfoil_core::Configuration::panel_all)
+    /// followed by [`from_paneled`](Self::from_paneled).
+    ///
+    /// # Errors
+    /// - `SplineError` wrapping the paneling failure if the configuration
+    ///   cannot be paneled at the requested counts.
+    /// - Otherwise as [`from_element_points`](Self::from_element_points).
+    pub fn from_configuration(config: &Configuration, counts: &PanelCounts) -> Result<Self> {
+        let paneled = config.panel_all(counts).map_err(|error| {
+            InviscidError::SplineError(format!("paneling the configuration: {error}"))
+        })?;
+        Self::from_paneled(&paneled)
+    }
+
+    /// Concatenate per-element geometries into the flat form.
+    fn from_element_geometries(per_element: &[AirfoilGeometry]) -> Self {
+        let counts: Vec<usize> = per_element.iter().map(|geom| geom.n).collect();
+        // Connectivity only, so no landmark claim is made; see the type's
+        // documentation. `from_node_counts` rejects only a zero-node element,
+        // and `AirfoilGeometry::from_points` has already refused anything under
+        // ten nodes, so this cannot fail.
+        let layout = Layout::from_node_counts(&counts)
+            .expect("every element geometry has at least ten nodes");
+        let total = layout.total_nodes();
+
+        let mut x = Vec::with_capacity(total);
+        let mut y = Vec::with_capacity(total);
+        let mut s = Vec::with_capacity(total);
+        let mut xp = Vec::with_capacity(total);
+        let mut yp = Vec::with_capacity(total);
+        let mut nx = Vec::with_capacity(total);
+        let mut ny = Vec::with_capacity(total);
+        let mut apanel = Vec::with_capacity(total);
+        let mut elements = Vec::with_capacity(per_element.len());
+
+        let mut start = 0usize;
+        for geom in per_element {
+            x.extend_from_slice(&geom.x);
+            y.extend_from_slice(&geom.y);
+            s.extend_from_slice(&geom.s);
+            xp.extend_from_slice(&geom.xp);
+            yp.extend_from_slice(&geom.yp);
+            nx.extend_from_slice(&geom.nx);
+            ny.extend_from_slice(&geom.ny);
+            apanel.extend_from_slice(&geom.apanel);
+
+            elements.push(ElementGeometry {
+                start,
+                n: geom.n,
+                xte: geom.xte,
+                yte: geom.yte,
+                dste: geom.dste,
+                ante: geom.ante,
+                aste: geom.aste,
+                sharp: geom.sharp,
+                xle: geom.xle,
+                yle: geom.yle,
+                sle: geom.sle,
+                chord: geom.chord,
+            });
+            start += geom.n;
+        }
+
+        Self {
+            x,
+            y,
+            s,
+            xp,
+            yp,
+            nx,
+            ny,
+            apanel,
+            elements,
+            layout,
+        }
+    }
+
+    // --- dimensions and tables -------------------------------------------
+
+    /// Number of elements.
+    #[inline]
+    pub fn n_elements(&self) -> usize {
+        self.elements.len()
+    }
+
+    /// Total number of nodes across all elements — the length of every node
+    /// array.
+    #[inline]
+    pub fn total_nodes(&self) -> usize {
+        self.layout.total_nodes()
+    }
+
+    /// True if there are no elements, and therefore no nodes.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.elements.is_empty()
+    }
+
+    /// The node numbering, one span per element.
+    ///
+    /// Connectivity only — see the type's documentation before reading a
+    /// landmark off a span.
+    #[inline]
+    pub fn layout(&self) -> &Layout {
+        &self.layout
+    }
+
+    /// Every element's geometry, in configuration order.
+    #[inline]
+    pub fn elements(&self) -> &[ElementGeometry] {
+        &self.elements
+    }
+
+    /// One element's geometry.
+    ///
+    /// # Panics
+    /// If `element >= self.n_elements()`.
+    #[inline]
+    pub fn element(&self, element: usize) -> &ElementGeometry {
+        &self.elements[element]
+    }
+
+    /// One element's geometry, or `None` if out of range.
+    #[inline]
+    pub fn try_element(&self, element: usize) -> Option<&ElementGeometry> {
+        self.elements.get(element)
+    }
+
+    // --- node arrays -----------------------------------------------------
+
+    /// X coordinates at every node.
+    #[inline]
+    pub fn x(&self) -> &[f64] {
+        &self.x
+    }
+
+    /// Y coordinates at every node.
+    #[inline]
+    pub fn y(&self) -> &[f64] {
+        &self.y
+    }
+
+    /// Arc length at every node, restarting at 0.0 at each element.
+    #[inline]
+    pub fn s(&self) -> &[f64] {
+        &self.s
+    }
+
+    /// dX/dS at every node, from that element's own spline.
+    #[inline]
+    pub fn xp(&self) -> &[f64] {
+        &self.xp
+    }
+
+    /// dY/dS at every node, from that element's own spline.
+    #[inline]
+    pub fn yp(&self) -> &[f64] {
+        &self.yp
+    }
+
+    /// Outward unit normal X component at every node.
+    #[inline]
+    pub fn nx(&self) -> &[f64] {
+        &self.nx
+    }
+
+    /// Outward unit normal Y component at every node.
+    #[inline]
+    pub fn ny(&self) -> &[f64] {
+        &self.ny
+    }
+
+    /// Panel angle for the panel starting at every node — see the type's
+    /// documentation for what the panel at an element's last node is.
+    #[inline]
+    pub fn apanel(&self) -> &[f64] {
+        &self.apanel
+    }
+
+    // --- per-element views -----------------------------------------------
+
+    /// One element's node range in the global arrays.
+    ///
+    /// # Panics
+    /// If `element >= self.n_elements()`.
+    #[inline]
+    pub fn element_range(&self, element: usize) -> Range<usize> {
+        self.elements[element].range()
+    }
+
+    /// One element's X coordinates.
+    ///
+    /// # Panics
+    /// If `element >= self.n_elements()`.
+    #[inline]
+    pub fn element_x(&self, element: usize) -> &[f64] {
+        &self.x[self.element_range(element)]
+    }
+
+    /// One element's Y coordinates.
+    ///
+    /// # Panics
+    /// If `element >= self.n_elements()`.
+    #[inline]
+    pub fn element_y(&self, element: usize) -> &[f64] {
+        &self.y[self.element_range(element)]
+    }
+
+    /// One element's arc lengths, starting at 0.0.
+    ///
+    /// # Panics
+    /// If `element >= self.n_elements()`.
+    #[inline]
+    pub fn element_s(&self, element: usize) -> &[f64] {
+        &self.s[self.element_range(element)]
+    }
+
+    /// One element's dX/dS.
+    ///
+    /// # Panics
+    /// If `element >= self.n_elements()`.
+    #[inline]
+    pub fn element_xp(&self, element: usize) -> &[f64] {
+        &self.xp[self.element_range(element)]
+    }
+
+    /// One element's dY/dS.
+    ///
+    /// # Panics
+    /// If `element >= self.n_elements()`.
+    #[inline]
+    pub fn element_yp(&self, element: usize) -> &[f64] {
+        &self.yp[self.element_range(element)]
+    }
+
+    /// One element's outward normal X components.
+    ///
+    /// # Panics
+    /// If `element >= self.n_elements()`.
+    #[inline]
+    pub fn element_nx(&self, element: usize) -> &[f64] {
+        &self.nx[self.element_range(element)]
+    }
+
+    /// One element's outward normal Y components.
+    ///
+    /// # Panics
+    /// If `element >= self.n_elements()`.
+    #[inline]
+    pub fn element_ny(&self, element: usize) -> &[f64] {
+        &self.ny[self.element_range(element)]
+    }
+
+    /// One element's panel angles, its TE panel last.
+    ///
+    /// # Panics
+    /// If `element >= self.n_elements()`.
+    #[inline]
+    pub fn element_apanel(&self, element: usize) -> &[f64] {
+        &self.apanel[self.element_range(element)]
+    }
+
+    /// One element's total arc length.
+    ///
+    /// # Panics
+    /// If `element >= self.n_elements()`.
+    pub fn element_arc_length(&self, element: usize) -> f64 {
+        self.element_s(element).last().copied().unwrap_or(0.0)
+    }
+
+    // --- connectivity ----------------------------------------------------
+
+    /// Which element owns a global node index.
+    ///
+    /// # Panics
+    /// If `global >= self.total_nodes()`.
+    #[inline]
+    pub fn element_of(&self, global: usize) -> usize {
+        self.layout.element_of(global)
+    }
+
+    /// The node that closes the panel starting at `global` — the next node
+    /// within the same element.
+    ///
+    /// The sanctioned replacement for `(global + 1) % n`. For a single-element
+    /// geometry the two are the same value.
+    ///
+    /// # Panics
+    /// If `global >= self.total_nodes()`.
+    #[inline]
+    pub fn next_node(&self, global: usize) -> usize {
+        self.layout.next_node(global)
+    }
+
+    /// The node before `global` within the same element.
+    ///
+    /// # Panics
+    /// If `global >= self.total_nodes()`.
+    #[inline]
+    pub fn prev_node(&self, global: usize) -> usize {
+        self.layout.prev_node(global)
+    }
+
+    // --- trailing-edge quantities ----------------------------------------
+
+    /// One element's TE panel source/vortex coefficients (SCS, SDS).
+    ///
+    /// # Panics
+    /// If `element >= self.n_elements()`.
+    pub fn te_coefficients(&self, element: usize) -> (f64, f64) {
+        self.elements[element].te_coefficients()
+    }
+
+    /// Every element's TE panel coefficients, in configuration order.
+    pub fn te_coefficients_all(&self) -> Vec<(f64, f64)> {
+        self.elements
+            .iter()
+            .map(ElementGeometry::te_coefficients)
+            .collect()
+    }
+
+    /// One element's sharp trailing-edge bisector control point and normal.
+    ///
+    /// The per-element form of [`AirfoilGeometry::sharp_te_bisector_control`],
+    /// using this element's own first and last nodes and its own TE midpoint.
+    /// `None` when the element's trailing edge is not
+    /// [`sharp`](ElementGeometry::sharp), when it has fewer than three nodes, or
+    /// when `element` is out of range.
+    pub fn sharp_te_bisector_control(&self, element: usize) -> Option<(f64, f64, f64, f64)> {
+        let geom = self.try_element(element)?;
+        if !geom.sharp || geom.n < 3 {
+            return None;
+        }
+        // The element's own first and last node, standing in for node 0 and
+        // node n-1 of a single airfoil.
+        let first = geom.start;
+        let last = geom.end() - 1;
+
+        let upper_tx = -self.xp[first];
+        let upper_ty = -self.yp[first];
+        let lower_tx = self.xp[last];
+        let lower_ty = self.yp[last];
+
+        let bis_x = upper_tx + lower_tx;
+        let bis_y = upper_ty + lower_ty;
+        let bis_norm = (bis_x * bis_x + bis_y * bis_y).sqrt().max(1.0e-12);
+        let cbis = bis_x / bis_norm;
+        let sbis = bis_y / bis_norm;
+
+        let ds1 = ((self.x[first] - self.x[first + 1]).powi(2)
+            + (self.y[first] - self.y[first + 1]).powi(2))
+        .sqrt();
+        let ds2 = ((self.x[last] - self.x[last - 1]).powi(2)
+            + (self.y[last] - self.y[last - 1]).powi(2))
+        .sqrt();
+        let dsmin = ds1.min(ds2);
+        let bwt = 0.1;
+
+        let xbis = geom.xte - bwt * dsmin * cbis;
+        let ybis = geom.yte - bwt * dsmin * sbis;
+
+        Some((xbis, ybis, -sbis, cbis))
+    }
+
+    // --- compatibility bridge --------------------------------------------
+
+    /// One element as a standalone [`AirfoilGeometry`].
+    ///
+    /// A bridge for reusing the single-element kernels one element at a time:
+    /// the returned value is exactly what
+    /// [`AirfoilGeometry::from_points`] would have produced from that element's
+    /// coordinates alone. Its node indices are element-local, so a global index
+    /// from this configuration does not index it — subtract
+    /// `element(k).start`, or use [`Layout::from_global`].
+    ///
+    /// Copies the element's arrays, so this is a setup-time convenience rather
+    /// than something to call from a loop. `None` if `element` is out of range.
+    pub fn element_as_airfoil_geometry(&self, element: usize) -> Option<AirfoilGeometry> {
+        let geom = self.try_element(element)?;
+        let range = geom.range();
+        Some(AirfoilGeometry {
+            x: self.x[range.clone()].to_vec(),
+            y: self.y[range.clone()].to_vec(),
+            s: self.s[range.clone()].to_vec(),
+            xp: self.xp[range.clone()].to_vec(),
+            yp: self.yp[range.clone()].to_vec(),
+            nx: self.nx[range.clone()].to_vec(),
+            ny: self.ny[range.clone()].to_vec(),
+            apanel: self.apanel[range].to_vec(),
+            xte: geom.xte,
+            yte: geom.yte,
+            dste: geom.dste,
+            ante: geom.ante,
+            aste: geom.aste,
+            sharp: geom.sharp,
+            xle: geom.xle,
+            yle: geom.yle,
+            sle: geom.sle,
+            n: geom.n,
+            chord: geom.chord,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -705,7 +1363,7 @@ mod tests {
         let geom = AirfoilGeometry::from_points(&points).unwrap();
 
         let (scs, sds) = geom.te_coefficients();
-        
+
         // For closed airfoil with sharp TE
         if geom.sharp {
             assert!((scs - 1.0).abs() < 1e-10);
@@ -715,5 +1373,459 @@ mod tests {
             assert!(scs.is_finite());
             assert!(sds.is_finite());
         }
+    }
+
+    // =====================================================================
+    // ConfigGeometry
+    // =====================================================================
+
+    use std::path::PathBuf;
+
+    /// A NACA 0012 whose trailing edge has been opened to `gap`, split evenly
+    /// about `y = 0`.
+    fn make_naca0012_with_te_gap(n_panels: usize, gap: f64) -> Vec<(f64, f64)> {
+        let mut points = make_naca0012(n_panels);
+        let last = points.len() - 1;
+        points[0].1 += 0.5 * gap;
+        points[last].1 -= 0.5 * gap;
+        points
+    }
+
+    fn testdata(file: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata")
+            .join(file)
+    }
+
+    /// Read a Selig/XFOIL `.dat` file into one coordinate block per element.
+    ///
+    /// Blank lines and comment lines separate blocks. Deliberately minimal: the
+    /// production import lives in the CLI and the UI, and this only has to open
+    /// the fixtures below.
+    fn read_dat_blocks(file: &str) -> Vec<Vec<(f64, f64)>> {
+        let path = testdata(file);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+
+        let mut blocks: Vec<Vec<(f64, f64)>> = Vec::new();
+        let mut current: Vec<(f64, f64)> = Vec::new();
+        for line in text.lines() {
+            let trimmed = line.trim();
+            let mut parts = trimmed.split_whitespace();
+            let parsed = match (
+                parts.next().and_then(|s| s.parse::<f64>().ok()),
+                parts.next().and_then(|s| s.parse::<f64>().ok()),
+            ) {
+                (Some(x), Some(y)) => Some((x, y)),
+                _ => None,
+            };
+            match parsed {
+                Some(pair) => current.push(pair),
+                None if !current.is_empty() => blocks.push(std::mem::take(&mut current)),
+                None => {}
+            }
+        }
+        if !current.is_empty() {
+            blocks.push(current);
+        }
+        blocks
+    }
+
+    /// Every element of a real slat/main/flap fixture.
+    fn mda_blocks() -> Vec<Vec<(f64, f64)>> {
+        let blocks = read_dat_blocks("mda_30p_30n_trimmed.dat");
+        assert_eq!(blocks.len(), 3, "expected slat, main and flap");
+        blocks
+    }
+
+    /// Compare two f64 arrays bit for bit.
+    fn assert_bits_eq(actual: &[f64], expected: &[f64], what: &str) {
+        assert_eq!(actual.len(), expected.len(), "{what}: length");
+        for (i, (&a, &b)) in actual.iter().zip(expected).enumerate() {
+            assert_eq!(
+                a.to_bits(),
+                b.to_bits(),
+                "{what}[{i}]: {a:?} ({:#x}) vs {b:?} ({:#x})",
+                a.to_bits(),
+                b.to_bits()
+            );
+        }
+    }
+
+    /// Every derived quantity of a one-element `ConfigGeometry` against the
+    /// `AirfoilGeometry` for the same points, compared on the raw bits.
+    fn assert_single_element_bits_identical(
+        config: &ConfigGeometry,
+        single: &AirfoilGeometry,
+        what: &str,
+    ) {
+        assert_eq!(config.n_elements(), 1, "{what}: element count");
+        assert_eq!(config.total_nodes(), single.n, "{what}: total nodes");
+
+        let element = config.element(0);
+        assert_eq!(element.start, 0, "{what}: start");
+        assert_eq!(element.n, single.n, "{what}: n");
+        assert_eq!(element.range(), 0..single.n, "{what}: range");
+
+        // Node arrays.
+        assert_bits_eq(config.x(), &single.x, &format!("{what}.x"));
+        assert_bits_eq(config.y(), &single.y, &format!("{what}.y"));
+        assert_bits_eq(config.s(), &single.s, &format!("{what}.s"));
+        assert_bits_eq(config.xp(), &single.xp, &format!("{what}.xp"));
+        assert_bits_eq(config.yp(), &single.yp, &format!("{what}.yp"));
+        assert_bits_eq(config.nx(), &single.nx, &format!("{what}.nx"));
+        assert_bits_eq(config.ny(), &single.ny, &format!("{what}.ny"));
+        assert_bits_eq(config.apanel(), &single.apanel, &format!("{what}.apanel"));
+
+        // The per-element slices are the same arrays for one element.
+        assert_bits_eq(config.element_x(0), &single.x, &format!("{what}.element_x"));
+        assert_bits_eq(config.element_s(0), &single.s, &format!("{what}.element_s"));
+        assert_eq!(
+            config.element_arc_length(0).to_bits(),
+            single.total_arc_length().to_bits(),
+            "{what}: arc length"
+        );
+
+        // Trailing-edge, leading-edge and chord scalars.
+        for (name, actual, expected) in [
+            ("xte", element.xte, single.xte),
+            ("yte", element.yte, single.yte),
+            ("dste", element.dste, single.dste),
+            ("ante", element.ante, single.ante),
+            ("aste", element.aste, single.aste),
+            ("xle", element.xle, single.xle),
+            ("yle", element.yle, single.yle),
+            ("sle", element.sle, single.sle),
+            ("chord", element.chord, single.chord),
+        ] {
+            assert_eq!(
+                actual.to_bits(),
+                expected.to_bits(),
+                "{what}.{name}: {actual:?} vs {expected:?}"
+            );
+        }
+        assert_eq!(element.sharp, single.sharp, "{what}.sharp");
+
+        // Derived trailing-edge quantities.
+        let (scs, sds) = config.te_coefficients(0);
+        let (scs_single, sds_single) = single.te_coefficients();
+        assert_eq!(scs.to_bits(), scs_single.to_bits(), "{what}: scs");
+        assert_eq!(sds.to_bits(), sds_single.to_bits(), "{what}: sds");
+        assert_eq!(
+            config.te_coefficients_all(),
+            vec![(scs_single, sds_single)],
+            "{what}: te_coefficients_all"
+        );
+
+        match (
+            config.sharp_te_bisector_control(0),
+            single.sharp_te_bisector_control(),
+        ) {
+            (None, None) => {}
+            (Some(a), Some(b)) => {
+                assert_eq!(a.0.to_bits(), b.0.to_bits(), "{what}: bisector x");
+                assert_eq!(a.1.to_bits(), b.1.to_bits(), "{what}: bisector y");
+                assert_eq!(a.2.to_bits(), b.2.to_bits(), "{what}: bisector nx");
+                assert_eq!(a.3.to_bits(), b.3.to_bits(), "{what}: bisector ny");
+            }
+            (a, b) => panic!("{what}: bisector control disagrees: {a:?} vs {b:?}"),
+        }
+
+        // And the bridge back to the single-element type.
+        let bridged = config
+            .element_as_airfoil_geometry(0)
+            .expect("element 0 exists");
+        assert_bits_eq(&bridged.x, &single.x, &format!("{what}.bridged.x"));
+        assert_bits_eq(&bridged.y, &single.y, &format!("{what}.bridged.y"));
+        assert_bits_eq(&bridged.s, &single.s, &format!("{what}.bridged.s"));
+        assert_bits_eq(&bridged.xp, &single.xp, &format!("{what}.bridged.xp"));
+        assert_bits_eq(&bridged.yp, &single.yp, &format!("{what}.bridged.yp"));
+        assert_bits_eq(&bridged.nx, &single.nx, &format!("{what}.bridged.nx"));
+        assert_bits_eq(&bridged.ny, &single.ny, &format!("{what}.bridged.ny"));
+        assert_bits_eq(
+            &bridged.apanel,
+            &single.apanel,
+            &format!("{what}.bridged.apanel"),
+        );
+        assert_eq!(bridged.n, single.n, "{what}.bridged.n");
+        assert_eq!(bridged.sharp, single.sharp, "{what}.bridged.sharp");
+        assert_eq!(
+            bridged.chord.to_bits(),
+            single.chord.to_bits(),
+            "{what}.bridged.chord"
+        );
+        assert_eq!(
+            bridged.sle.to_bits(),
+            single.sle.to_bits(),
+            "{what}.bridged.sle"
+        );
+    }
+
+    /// The constraint the whole refactor rests on: with one element, every
+    /// number a `ConfigGeometry` derives is the number `AirfoilGeometry` derives
+    /// today, to the last bit. Checked on two real coordinate files and on the
+    /// analytic section, so it covers real paneling, a blunt trailing edge and a
+    /// sharp one.
+    #[test]
+    fn one_element_config_geometry_is_bit_identical_to_airfoil_geometry() {
+        let mut cases: Vec<(String, Vec<(f64, f64)>)> = vec![
+            ("analytic naca0012".to_string(), make_naca0012(80)),
+            (
+                "analytic naca0012, 1e-6 te gap".to_string(),
+                make_naca0012_with_te_gap(80, 1e-6),
+            ),
+        ];
+        for file in ["naca0012.dat", "naca2412.dat", "naca0012_xfoil_paneled.dat"] {
+            let blocks = read_dat_blocks(file);
+            assert_eq!(blocks.len(), 1, "{file}: expected a single element");
+            cases.push((file.to_string(), blocks.into_iter().next().unwrap()));
+        }
+
+        for (what, points) in &cases {
+            let single = AirfoilGeometry::from_points(points)
+                .unwrap_or_else(|e| panic!("{what}: AirfoilGeometry::from_points: {e}"));
+            let config = ConfigGeometry::from_points(points)
+                .unwrap_or_else(|e| panic!("{what}: ConfigGeometry::from_points: {e}"));
+            assert_single_element_bits_identical(&config, &single, what);
+
+            // The one-element form of the list constructor has to agree too.
+            let from_list = ConfigGeometry::from_element_points(&[points.clone()]).unwrap();
+            assert_single_element_bits_identical(&from_list, &single, what);
+        }
+
+        // Both trailing-edge branches were actually exercised.
+        let sharp = ConfigGeometry::from_points(&make_naca0012(80)).unwrap();
+        let blunt = ConfigGeometry::from_points(&read_dat_blocks("naca0012.dat")[0]).unwrap();
+        assert!(sharp.element(0).sharp, "analytic section should be sharp");
+        assert!(!blunt.element(0).sharp, "naca0012.dat should be blunt");
+        assert!(sharp.sharp_te_bisector_control(0).is_some());
+        assert!(blunt.sharp_te_bisector_control(0).is_none());
+    }
+
+    /// Sharpness is the solver's relative test, and it can disagree with the
+    /// node-identity question rustfoil-core's closure test answers.
+    #[test]
+    fn sharpness_is_the_relative_test_not_node_identity() {
+        // A unit chord with a 1e-6 trailing-edge gap. The gap is 10^4 times the
+        // 1e-10 closure tolerance, so the two trailing-edge nodes are distinct
+        // and `ElementSpan::has_blunt_te` would report a blunt trailing edge.
+        // The relative test is what the numerics use, and 1e-6 < 1e-4 * chord.
+        let gap = 1e-6;
+        let points = make_naca0012_with_te_gap(80, gap);
+        let config = ConfigGeometry::from_points(&points).unwrap();
+        let element = config.element(0);
+
+        assert!(element.dste > rustfoil_core::CONTOUR_CLOSURE_TOLERANCE);
+        assert!(element.dste < 1e-4 * element.chord);
+        assert!(
+            element.sharp,
+            "dste = {} on chord {} is sharp by the relative test",
+            element.dste, element.chord
+        );
+
+        // rustfoil-core's connectivity test disagrees, which is the point.
+        let contour: Vec<rustfoil_core::Point> = points
+            .iter()
+            .map(|&(x, y)| rustfoil_core::point(x, y))
+            .collect();
+        assert!(
+            !rustfoil_core::contour_is_closed(&contour),
+            "the contour's ends are further apart than the closure tolerance"
+        );
+
+        // And the sharp branch is the one taken.
+        assert_eq!(config.te_coefficients(0), (1.0, 0.0));
+        assert!(config.sharp_te_bisector_control(0).is_some());
+    }
+
+    /// A `ConfigGeometry`'s layout answers connectivity questions only. Nobody
+    /// should be reading a leading edge or a sharpness verdict off it.
+    #[test]
+    fn config_geometry_layout_claims_no_landmarks() {
+        let config = ConfigGeometry::from_element_points(&mda_blocks()).unwrap();
+        assert_eq!(config.n_elements(), 3);
+
+        for element in 0..config.n_elements() {
+            let span = config.layout().span(element);
+            // Read from another crate, through the accessors and through the
+            // fields, so both forms stay usable outside rustfoil-core.
+            assert_eq!(span.start(), config.element(element).start);
+            assert_eq!(span.len(), config.element(element).n);
+            assert_eq!(span.len, span.len());
+            assert!(!span.has_le(), "element {element} claims a leading edge");
+            assert!(
+                !span.has_blunt_te(),
+                "element {element} claims a trailing-edge node count"
+            );
+            // The geometry does carry a leading edge, and it is here.
+            let geom = config.element(element);
+            assert!(geom.sle > 0.0 && geom.sle < config.element_arc_length(element));
+        }
+    }
+
+    /// Three real elements: each one's arrays are exactly what that element
+    /// alone produces, so nothing is splined, normalised or arc-lengthed across
+    /// an element boundary.
+    #[test]
+    fn each_element_is_derived_from_its_own_nodes_alone() {
+        let blocks = mda_blocks();
+        let config = ConfigGeometry::from_element_points(&blocks).unwrap();
+
+        assert_eq!(config.n_elements(), 3);
+        let expected_total: usize = blocks.iter().map(|b| b.len()).sum();
+        assert_eq!(config.total_nodes(), expected_total);
+        assert_eq!(config.x().len(), expected_total);
+
+        let mut start = 0usize;
+        for (element, block) in blocks.iter().enumerate() {
+            let alone = AirfoilGeometry::from_points(block).unwrap();
+            let what = format!("element {element}");
+
+            assert_eq!(config.element(element).start, start, "{what}: start");
+            assert_eq!(config.element(element).n, block.len(), "{what}: n");
+
+            assert_bits_eq(config.element_x(element), &alone.x, &format!("{what}.x"));
+            assert_bits_eq(config.element_y(element), &alone.y, &format!("{what}.y"));
+            assert_bits_eq(config.element_s(element), &alone.s, &format!("{what}.s"));
+            assert_bits_eq(config.element_xp(element), &alone.xp, &format!("{what}.xp"));
+            assert_bits_eq(config.element_yp(element), &alone.yp, &format!("{what}.yp"));
+            assert_bits_eq(config.element_nx(element), &alone.nx, &format!("{what}.nx"));
+            assert_bits_eq(config.element_ny(element), &alone.ny, &format!("{what}.ny"));
+            assert_bits_eq(
+                config.element_apanel(element),
+                &alone.apanel,
+                &format!("{what}.apanel"),
+            );
+
+            let geom = config.element(element);
+            assert_eq!(geom.xte.to_bits(), alone.xte.to_bits(), "{what}: xte");
+            assert_eq!(geom.yte.to_bits(), alone.yte.to_bits(), "{what}: yte");
+            assert_eq!(geom.dste.to_bits(), alone.dste.to_bits(), "{what}: dste");
+            assert_eq!(geom.ante.to_bits(), alone.ante.to_bits(), "{what}: ante");
+            assert_eq!(geom.aste.to_bits(), alone.aste.to_bits(), "{what}: aste");
+            assert_eq!(geom.xle.to_bits(), alone.xle.to_bits(), "{what}: xle");
+            assert_eq!(geom.yle.to_bits(), alone.yle.to_bits(), "{what}: yle");
+            assert_eq!(geom.sle.to_bits(), alone.sle.to_bits(), "{what}: sle");
+            assert_eq!(geom.chord.to_bits(), alone.chord.to_bits(), "{what}: chord");
+            assert_eq!(geom.sharp, alone.sharp, "{what}: sharp");
+
+            // Arc length restarts at zero, so it is this element's own.
+            assert_eq!(config.s()[start], 0.0, "{what}: s restarts");
+            start += block.len();
+        }
+        assert_eq!(start, expected_total);
+
+        // The three elements have genuinely different chords, so the per-element
+        // normalisation is not a single shared number.
+        let chords: Vec<f64> = config.elements().iter().map(|e| e.chord).collect();
+        assert!(chords[0] < chords[1], "slat chord below main chord");
+        assert!(chords[2] < chords[1], "flap chord below main chord");
+    }
+
+    /// Panel closure stays inside each element, and the last slot of an
+    /// element's `apanel` is that element's own TE panel.
+    #[test]
+    fn panel_closure_stays_within_each_element() {
+        let config = ConfigGeometry::from_element_points(&mda_blocks()).unwrap();
+
+        for global in 0..config.total_nodes() {
+            assert_eq!(
+                config.element_of(config.next_node(global)),
+                config.element_of(global),
+                "next_node({global}) left its element"
+            );
+            assert_eq!(config.prev_node(config.next_node(global)), global);
+        }
+
+        for element in 0..config.n_elements() {
+            let geom = config.element(element);
+            assert_eq!(config.next_node(geom.end() - 1), geom.start);
+
+            // The last panel angle of the element is XFOIL's TE-panel formula
+            // applied to that element's own first and last nodes.
+            let first = geom.start;
+            let last = geom.end() - 1;
+            let sx = config.x()[first] - config.x()[last];
+            let sy = config.y()[first] - config.y()[last];
+            let expected = (-sx).atan2(sy) + PI;
+            assert_eq!(
+                config.apanel()[last].to_bits(),
+                expected.to_bits(),
+                "element {element}: TE panel angle"
+            );
+        }
+    }
+
+    /// The `Configuration` route: paneling a real three-element configuration
+    /// and building its geometry gives one element per configuration element,
+    /// with the node counts the paneling produced.
+    #[test]
+    fn config_geometry_from_a_paneled_configuration() {
+        use rustfoil_core::paneling::PanelCounts;
+        use rustfoil_core::{point, Body, Configuration, Element};
+
+        let elements: Vec<Element> = mda_blocks()
+            .iter()
+            .enumerate()
+            .map(|(i, block)| {
+                let pts: Vec<_> = block.iter().map(|&(x, y)| point(x, y)).collect();
+                Element::from_body(Body::from_points(&format!("element{i}"), &pts).unwrap())
+            })
+            .collect();
+        let config = Configuration::new(elements);
+
+        let counts = PanelCounts::Each(80);
+        let paneled = config.panel_all(&counts).unwrap();
+        let geometry = ConfigGeometry::from_paneled(&paneled).unwrap();
+
+        assert_eq!(geometry.n_elements(), 3);
+        assert_eq!(geometry.total_nodes(), paneled.total_nodes());
+        for element in 0..3 {
+            assert_eq!(
+                geometry.element(element).n,
+                paneled.element_nodes(element).len(),
+                "element {element}: node count"
+            );
+            // Nodes transfer unchanged from the paneling.
+            for (node, paneled_node) in geometry
+                .element_x(element)
+                .iter()
+                .zip(paneled.element_nodes(element))
+            {
+                assert_eq!(node.to_bits(), paneled_node.x.to_bits());
+            }
+        }
+
+        // The one-step constructor is the same thing.
+        let direct = ConfigGeometry::from_configuration(&config, &counts).unwrap();
+        assert_eq!(direct.total_nodes(), geometry.total_nodes());
+        assert_bits_eq(direct.x(), geometry.x(), "from_configuration.x");
+        assert_bits_eq(direct.y(), geometry.y(), "from_configuration.y");
+        assert_bits_eq(
+            direct.apanel(),
+            geometry.apanel(),
+            "from_configuration.apanel",
+        );
+    }
+
+    #[test]
+    fn an_empty_config_geometry_has_no_nodes() {
+        let empty: [&[(f64, f64)]; 0] = [];
+        let config = ConfigGeometry::from_element_points(&empty).unwrap();
+        assert!(config.is_empty());
+        assert_eq!(config.n_elements(), 0);
+        assert_eq!(config.total_nodes(), 0);
+        assert!(config.x().is_empty());
+        assert!(config.try_element(0).is_none());
+        assert!(config.sharp_te_bisector_control(0).is_none());
+        assert!(config.te_coefficients_all().is_empty());
+    }
+
+    #[test]
+    fn an_unusable_element_is_reported_rather_than_skipped() {
+        let good = make_naca0012(80);
+        let too_few: Vec<(f64, f64)> = good[..5].to_vec();
+        let result = ConfigGeometry::from_element_points(&[good, too_few]);
+        assert!(matches!(result, Err(InviscidError::InsufficientPoints(5))));
     }
 }

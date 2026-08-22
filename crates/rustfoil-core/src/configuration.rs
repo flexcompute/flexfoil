@@ -71,9 +71,26 @@ impl Element {
     /// The element's leading- and trailing-edge points, **in configuration
     /// coordinates** (that is, with the placement applied).
     ///
-    /// `None` for a body with no panels. The two points are the same pair
-    /// [`Body::chord`] measures between: the minimum-x node and the
-    /// lower-surface trailing-edge node.
+    /// `None` for a body with no panels.
+    ///
+    /// # The trailing edge is the trailing-edge midpoint
+    /// The trailing-edge point is `0.5 * (first node + last node)` of the
+    /// element's contour, which is the definition the solver uses:
+    /// `xte = 0.5 * (x[0] + x[n-1])` in
+    /// `rustfoil-inviscid`'s `AirfoilGeometry` (its `compute_te_geometry`,
+    /// XFOIL's TECALC). A trailing-edge *corner* — either of the two nodes on
+    /// its own — differs from the midpoint by half the trailing-edge gap
+    /// whenever the trailing edge is blunt, and this length is the per-element
+    /// coefficient normalisation and the input to
+    /// [`main_element_index`](Configuration::main_element_index), so the two
+    /// definitions have to be the same one. For a closed contour the first and
+    /// last nodes coincide and the midpoint is that node exactly.
+    ///
+    /// Note that the leading-edge point is still the contour's minimum-x node
+    /// ([`Body::le_index`](crate::body::Body::le_index)), not the spline
+    /// leading edge the solver's LEFIND locates. That is a coarser answer for a
+    /// paneled contour, and closing that gap needs the spline, so it is not
+    /// done here.
     pub fn chord_endpoints(&self) -> Option<(Point, Point)> {
         let panels = self.body.panels();
         if panels.is_empty() {
@@ -81,14 +98,29 @@ impl Element {
         }
         let last = panels.len() - 1;
         let le = panels[self.body.le_index().min(last)].p1;
-        let te = panels[self.body.te_lower_index().min(last)].p1;
+        // The two trailing-edge nodes are the ends of the contour: the first
+        // panel's start and the last panel's end. Written in the solver's form
+        // so the two agree bit for bit.
+        let te_first = panels[0].p1;
+        let te_last = panels[last].p2;
+        let te = point(
+            0.5 * (te_first.x + te_last.x),
+            0.5 * (te_first.y + te_last.y),
+        );
         Some((self.placement.apply(le), self.placement.apply(te)))
     }
 
     /// The element's chord length in configuration coordinates.
     ///
-    /// This is `body.chord()` scaled by the placement's `scale`; rotation and
-    /// translation do not change a length. `0.0` for a body with no panels.
+    /// The distance between the two points
+    /// [`chord_endpoints`](Self::chord_endpoints) returns — the minimum-x node
+    /// and the trailing-edge midpoint — so it is scaled by the placement's
+    /// `scale` and unaffected by its rotation and translation. `0.0` for a body
+    /// with no panels.
+    ///
+    /// This is *not* [`Body::chord`](crate::body::Body::chord), which measures
+    /// to a trailing-edge corner instead of the midpoint. See
+    /// [`chord_endpoints`](Self::chord_endpoints).
     pub fn chord(&self) -> f64 {
         match self.chord_endpoints() {
             Some((le, te)) => (te - le).norm(),
@@ -387,6 +419,69 @@ mod tests {
         // Scale does.
         element.placement.scale = 0.5;
         assert_relative_eq!(element.chord(), 0.2, epsilon = 1e-12);
+    }
+
+    /// An open contour of the given chord whose trailing edge is `gap` thick,
+    /// split evenly about `y = 0`. Nodes run TE(upper) → LE → TE(lower).
+    fn blunt(name: &str, chord: f64, gap: f64) -> Body {
+        let pts = vec![
+            point(chord, 0.5 * gap),
+            point(0.5 * chord, 0.05 * chord),
+            point(0.0, 0.0),
+            point(0.5 * chord, -0.05 * chord),
+            point(chord, -0.5 * gap),
+        ];
+        Body::from_points(name, &pts).unwrap()
+    }
+
+    #[test]
+    fn element_chord_measures_to_the_trailing_edge_midpoint() {
+        // The two trailing-edge nodes sit at y = ±0.05 on a unit chord, so a
+        // corner is 0.05 off the chord line and the midpoint is on it. Measuring
+        // to a corner would report sqrt(1 + 0.05^2), which is the error this
+        // definition removes from every per-element coefficient.
+        let element = Element::from_body(blunt("blunt", 1.0, 0.1));
+        assert_relative_eq!(element.chord(), 1.0, epsilon = 1e-15);
+
+        let (le, te) = element.chord_endpoints().unwrap();
+        assert_relative_eq!(le.x, 0.0, epsilon = 1e-15);
+        assert_relative_eq!(le.y, 0.0, epsilon = 1e-15);
+        assert_relative_eq!(te.x, 1.0, epsilon = 1e-15);
+        assert_relative_eq!(te.y, 0.0, epsilon = 1e-15);
+
+        // Body::chord is the corner measurement and is deliberately left alone;
+        // the two are different quantities.
+        assert_relative_eq!(
+            element.body.chord(),
+            (1.0f64 + 0.05 * 0.05).sqrt(),
+            epsilon = 1e-15
+        );
+    }
+
+    #[test]
+    fn element_chord_is_unchanged_for_a_closed_contour() {
+        // A closed contour's two trailing-edge nodes are the same point, so the
+        // midpoint is that point and the corrected definition agrees with the
+        // old one exactly — which is why no single-element number moves.
+        let element = Element::from_body(diamond("sharp", 1.0));
+        let (_, te) = element.chord_endpoints().unwrap();
+        let corner = element.body.panels()[0].p1;
+        assert_eq!(te.x.to_bits(), corner.x.to_bits());
+        assert_eq!(te.y.to_bits(), corner.y.to_bits());
+        assert_eq!(element.chord().to_bits(), element.body.chord().to_bits());
+    }
+
+    #[test]
+    fn trailing_edge_definition_can_decide_the_main_element() {
+        // Two elements whose corner-measured chords rank one way and whose
+        // midpoint-measured chords rank the other. The reference chord follows
+        // the midpoint definition, so it is the flatter element that wins.
+        let a = Element::from_body(blunt("a", 1.0, 0.6)); // corner: sqrt(1+0.09)
+        let b = Element::from_body(blunt("b", 1.02, 0.0)); // corner: 1.02
+        let config = Configuration::new(vec![a, b]);
+
+        assert_eq!(config.main_element_index(), Some(1));
+        assert_relative_eq!(config.resolved_ref_chord(), 1.02, epsilon = 1e-15);
     }
 
     #[test]

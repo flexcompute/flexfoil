@@ -3,11 +3,28 @@
 //! Provides functions to evaluate the velocity field and stream function from a panel solution
 //! and integrate streamlines using RK4.
 
-use rustfoil_core::Point;
+use rustfoil_core::{Layout, Point};
 use std::f64::consts::PI;
 
 /// 1/(4π) - used for stream function influence coefficients (matches XFOIL's QOPI)
 const QOPI: f64 = 0.25 / PI;
+
+/// Connectivity for a node array that holds one closed contour.
+///
+/// Every panel loop in this module closes the panel starting at node `i` onto
+/// [`Layout::next_node(i)`](Layout::next_node), which wraps inside the owning
+/// element: an element's last node connects back to its own first node and
+/// never to the next element's. With a single element that is exactly
+/// `(i + 1) % n`, the closure the single-airfoil entry points have always used,
+/// so those results are unchanged.
+fn single_element_layout(n: usize) -> Layout {
+    if n == 0 {
+        // No nodes, so no element to describe.
+        return Layout::from_node_counts(&[]).expect("an empty layout has no element to reject");
+    }
+    // `from_node_counts` rejects only an element with no nodes.
+    Layout::from_node_counts(&[n]).expect("one element of at least one node")
+}
 
 /// Wake panel geometry and source strengths for viscous streamline computation.
 ///
@@ -25,6 +42,9 @@ pub struct WakePanels {
 ///
 /// Uses K&P VOR2DL linear vorticity panel method (Eq 11.99-11.100).
 /// Gamma values are at nodes, varying linearly across each panel.
+///
+/// `nodes` is one closed contour. Use [`velocity_at_multi`] for a node array
+/// that concatenates several elements.
 pub fn velocity_at(
     x: f64,
     y: f64,
@@ -33,8 +53,30 @@ pub fn velocity_at(
     alpha: f64,
     v_inf: f64,
 ) -> (f64, f64) {
+    let layout = single_element_layout(nodes.len());
+    velocity_at_multi(x, y, nodes, gamma, alpha, v_inf, &layout)
+}
+
+/// Evaluate velocity at a point (x, y) for a node array of several elements.
+///
+/// As [`velocity_at`], but `layout` supplies the element connectivity, so each
+/// element's trailing-edge panel closes onto that element's own first node
+/// instead of onto the next element's — no panel is created across the gap
+/// between two elements.
+///
+/// `layout` must describe `nodes`: if [`Layout::total_nodes`] disagrees with
+/// `nodes.len()`, only the freestream is returned.
+pub fn velocity_at_multi(
+    x: f64,
+    y: f64,
+    nodes: &[Point],
+    gamma: &[f64],
+    alpha: f64,
+    v_inf: f64,
+    layout: &Layout,
+) -> (f64, f64) {
     let n = nodes.len();
-    if n < 2 || gamma.len() != n {
+    if n < 2 || gamma.len() != n || layout.total_nodes() != n {
         return (v_inf * alpha.cos(), v_inf * alpha.sin());
     }
 
@@ -45,9 +87,9 @@ pub fn velocity_at(
     let two_pi = 2.0 * PI;
 
     // Add contribution from each panel
-    // Panel j goes from node j to node (j+1) % n
+    // Panel j goes from node j to the next node in the same element
     for j in 0..n {
-        let jp = (j + 1) % n;
+        let jp = layout.next_node(j);
 
         let x1 = nodes[j].x;
         let y1 = nodes[j].y;
@@ -122,6 +164,9 @@ pub fn velocity_at(
 ///   The source velocity influence is the 90° rotation of the vortex influence.
 /// - `wake_panels`: optional wake geometry with source strengths. Wake panels
 ///   are an open polyline (not closed), so panel j goes from node j to j+1.
+///
+/// `nodes` is one closed contour. Use [`velocity_at_with_sources_multi`] for a
+/// node array that concatenates several elements.
 pub fn velocity_at_with_sources(
     x: f64,
     y: f64,
@@ -132,8 +177,42 @@ pub fn velocity_at_with_sources(
     v_inf: f64,
     wake_panels: Option<&WakePanels>,
 ) -> (f64, f64) {
+    let layout = single_element_layout(nodes.len());
+    velocity_at_with_sources_multi(
+        x,
+        y,
+        nodes,
+        gamma,
+        sigma,
+        alpha,
+        v_inf,
+        wake_panels,
+        &layout,
+    )
+}
+
+/// Evaluate velocity including source panels, for a node array of several
+/// elements.
+///
+/// As [`velocity_at_with_sources`], but `layout` supplies the element
+/// connectivity, so no panel is created across the gap between two elements.
+///
+/// `layout` must describe `nodes`: if [`Layout::total_nodes`] disagrees with
+/// `nodes.len()`, only the freestream is returned.
+#[allow(clippy::too_many_arguments)]
+pub fn velocity_at_with_sources_multi(
+    x: f64,
+    y: f64,
+    nodes: &[Point],
+    gamma: &[f64],
+    sigma: &[f64],
+    alpha: f64,
+    v_inf: f64,
+    wake_panels: Option<&WakePanels>,
+    layout: &Layout,
+) -> (f64, f64) {
     let n = nodes.len();
-    if n < 2 || gamma.len() != n || sigma.len() != n {
+    if n < 2 || gamma.len() != n || sigma.len() != n || layout.total_nodes() != n {
         return (v_inf * alpha.cos(), v_inf * alpha.sin());
     }
 
@@ -143,7 +222,7 @@ pub fn velocity_at_with_sources(
     let two_pi = 2.0 * PI;
 
     for j in 0..n {
-        let jp = (j + 1) % n;
+        let jp = layout.next_node(j);
 
         let x1 = nodes[j].x;
         let y1 = nodes[j].y;
@@ -287,6 +366,9 @@ pub fn velocity_at_with_sources(
 ///
 /// # Returns
 /// Stream function value at (x, y). Returns NaN if inside the airfoil.
+///
+/// `nodes` is one closed contour. Use [`psi_at_multi`] for a node array that
+/// concatenates several elements.
 pub fn psi_at(
     x: f64,
     y: f64,
@@ -295,23 +377,44 @@ pub fn psi_at(
     alpha: f64,
     v_inf: f64,
 ) -> f64 {
+    let layout = single_element_layout(nodes.len());
+    psi_at_multi(x, y, nodes, gamma, alpha, v_inf, &layout)
+}
+
+/// Evaluate the stream function for a node array of several elements.
+///
+/// As [`psi_at`], but `layout` supplies the element connectivity, so no panel
+/// is created across the gap between two elements, and the interior test is
+/// [`is_inside_any_element`] rather than a single-contour one.
+///
+/// `layout` must describe `nodes`: if [`Layout::total_nodes`] disagrees with
+/// `nodes.len()`, only the freestream stream function is returned.
+pub fn psi_at_multi(
+    x: f64,
+    y: f64,
+    nodes: &[Point],
+    gamma: &[f64],
+    alpha: f64,
+    v_inf: f64,
+    layout: &Layout,
+) -> f64 {
     let n = nodes.len();
-    if n < 2 || gamma.len() != n {
+    if n < 2 || gamma.len() != n || layout.total_nodes() != n {
         // Just freestream
         return v_inf * (alpha.cos() * y - alpha.sin() * x);
     }
 
-    // Return NaN for points inside the airfoil
-    if is_inside_airfoil(x, y, nodes) {
+    // Return NaN for points inside any element
+    if is_inside_any_element(x, y, nodes, layout) {
         return f64::NAN;
     }
 
     let mut psi = 0.0;
 
     // Add contribution from each vortex panel
-    // Panel j goes from node j to node (j+1) % n
+    // Panel jo goes from node jo to the next node in the same element
     for jo in 0..n {
-        let jp = (jo + 1) % n;
+        let jp = layout.next_node(jo);
 
         // Panel endpoints
         let x_jo = nodes[jo].x;
@@ -386,6 +489,9 @@ pub fn psi_at(
 /// For each panel, the source stream function for constant strength sigma is:
 ///   psi_source = sigma/(2*pi) * [x1*atan2(yy,x1) - x2*atan2(yy,x2) + 0.5*yy*(g1-g2)]
 /// where (x1, x2, yy) are panel-local coordinates and g1, g2 are ln(r^2) terms.
+///
+/// `nodes` is one closed contour. Use [`psi_at_with_sources_multi`] for a node
+/// array that concatenates several elements.
 pub fn psi_at_with_sources(
     x: f64,
     y: f64,
@@ -396,12 +502,47 @@ pub fn psi_at_with_sources(
     v_inf: f64,
     wake_panels: Option<&WakePanels>,
 ) -> f64 {
+    let layout = single_element_layout(nodes.len());
+    psi_at_with_sources_multi(
+        x,
+        y,
+        nodes,
+        gamma,
+        sigma,
+        alpha,
+        v_inf,
+        wake_panels,
+        &layout,
+    )
+}
+
+/// Evaluate the stream function including source panels, for a node array of
+/// several elements.
+///
+/// As [`psi_at_with_sources`], but `layout` supplies the element connectivity,
+/// so no panel is created across the gap between two elements, and the interior
+/// test is [`is_inside_any_element`].
+///
+/// `layout` must describe `nodes`: if [`Layout::total_nodes`] disagrees with
+/// `nodes.len()`, only the freestream stream function is returned.
+#[allow(clippy::too_many_arguments)]
+pub fn psi_at_with_sources_multi(
+    x: f64,
+    y: f64,
+    nodes: &[Point],
+    gamma: &[f64],
+    sigma: &[f64],
+    alpha: f64,
+    v_inf: f64,
+    wake_panels: Option<&WakePanels>,
+    layout: &Layout,
+) -> f64 {
     let n = nodes.len();
-    if n < 2 || gamma.len() != n || sigma.len() != n {
+    if n < 2 || gamma.len() != n || sigma.len() != n || layout.total_nodes() != n {
         return v_inf * (alpha.cos() * y - alpha.sin() * x);
     }
 
-    if is_inside_airfoil(x, y, nodes) {
+    if is_inside_any_element(x, y, nodes, layout) {
         return f64::NAN;
     }
 
@@ -409,7 +550,7 @@ pub fn psi_at_with_sources(
     let two_pi = 2.0 * PI;
 
     for jo in 0..n {
-        let jp = (jo + 1) % n;
+        let jp = layout.next_node(jo);
 
         let x_jo = nodes[jo].x;
         let y_jo = nodes[jo].y;
@@ -578,11 +719,14 @@ pub fn compute_psi_grid_with_interior(
         0.0
     };
 
+    // One contour, so the connectivity is the same at every grid point.
+    let layout = single_element_layout(nodes.len());
+
     for iy in 0..ny {
         let y = y_min + iy as f64 * dy;
         for ix in 0..nx {
             let x = x_min + ix as f64 * dx;
-            let psi = psi_at(x, y, nodes, gamma, alpha, v_inf);
+            let psi = psi_at_multi(x, y, nodes, gamma, alpha, v_inf, &layout);
             // If inside airfoil (NaN) and we have an interior value, use it
             grid[iy * nx + ix] = if psi.is_nan() {
                 interior_value.unwrap_or(f64::NAN)
@@ -624,11 +768,16 @@ pub fn compute_psi_grid_with_sources(
         0.0
     };
 
+    // One contour, so the connectivity is the same at every grid point.
+    let layout = single_element_layout(nodes.len());
+
     for iy in 0..ny {
         let y = y_min + iy as f64 * dy;
         for ix in 0..nx {
             let x = x_min + ix as f64 * dx;
-            let psi = psi_at_with_sources(x, y, nodes, gamma, sigma, alpha, v_inf, wake_panels);
+            let psi = psi_at_with_sources_multi(
+                x, y, nodes, gamma, sigma, alpha, v_inf, wake_panels, &layout,
+            );
             grid[iy * nx + ix] = if psi.is_nan() {
                 interior_value.unwrap_or(f64::NAN)
             } else {
@@ -641,6 +790,9 @@ pub fn compute_psi_grid_with_sources(
 }
 
 /// Check if a point lies inside a polygon using ray casting.
+///
+/// The polygon is closed implicitly: the edge from the last vertex back to the
+/// first is included.
 pub fn is_inside_polygon(x: f64, y: f64, polygon: &[Point]) -> bool {
     let n = polygon.len();
     if n < 3 {
@@ -666,28 +818,32 @@ pub fn is_inside_polygon(x: f64, y: f64, polygon: &[Point]) -> bool {
 
 /// Check if a point is inside the airfoil.
 /// Uses ray casting algorithm.
+///
+/// `nodes` is one closed contour. Use [`is_inside_any_element`] for a node array
+/// that concatenates several elements: casting one ray over all of them would
+/// treat the whole configuration as a single polygon, whose implied edges bridge
+/// the gaps between elements.
 pub fn is_inside_airfoil(x: f64, y: f64, nodes: &[Point]) -> bool {
-    let n = nodes.len();
-    if n < 3 {
-        return false;
-    }
-    
-    let mut inside = false;
-    let mut j = n - 1;
-    
-    for i in 0..n {
-        let xi = nodes[i].x;
-        let yi = nodes[i].y;
-        let xj = nodes[j].x;
-        let yj = nodes[j].y;
-        
-        if ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
-            inside = !inside;
-        }
-        j = i;
-    }
-    
-    inside
+    is_inside_polygon(x, y, nodes)
+}
+
+/// Check if a point is inside **any** element of a configuration.
+///
+/// Each element's nodes are ray cast as their own closed contour, so a point in
+/// the slot between two elements is outside both, and a point inside a slat or a
+/// flap is reported as inside even though it is well clear of the main element.
+///
+/// The elements are tested in configuration order and the first hit wins, so the
+/// cost is at worst one ray cast over `nodes` — the same work the single-contour
+/// test does.
+///
+/// `layout` must describe `nodes`; nodes beyond `nodes.len()` are ignored.
+pub fn is_inside_any_element(x: f64, y: f64, nodes: &[Point], layout: &Layout) -> bool {
+    layout.spans().iter().any(|span| {
+        let start = span.start().min(nodes.len());
+        let end = span.end().min(nodes.len());
+        is_inside_polygon(x, y, &nodes[start..end])
+    })
 }
 
 /// RK4 integration step for streamline tracing.
@@ -737,6 +893,10 @@ where
 }
 
 /// Integrate a single streamline from a seed point.
+///
+/// `layout` must describe `nodes`; a streamline terminates on entering **any**
+/// element, so it cannot be drawn through a slat or a flap.
+#[allow(clippy::too_many_arguments)]
 fn integrate_streamline<F>(
     field: &F,
     x0: f64,
@@ -744,6 +904,7 @@ fn integrate_streamline<F>(
     step_size: f64,
     max_steps: usize,
     nodes: &[Point],
+    layout: &Layout,
     bounds: (f64, f64, f64, f64),
     effective_body: Option<&[Point]>,
 ) -> Vec<(f64, f64)>
@@ -754,10 +915,10 @@ where
     let mut points = vec![(x0, y0)];
     let mut x = x0;
     let mut y = y0;
-    
+
     for _ in 0..max_steps {
-        // Check if inside airfoil
-        if is_inside_airfoil(x, y, nodes) {
+        // Check if inside any element
+        if is_inside_any_element(x, y, nodes, layout) {
             break;
         }
         if effective_body.is_some_and(|poly| is_inside_polygon(x, y, poly)) {
@@ -826,26 +987,28 @@ pub fn build_streamlines(
     v_inf: f64,
     options: &StreamlineOptions,
 ) -> Vec<Vec<(f64, f64)>> {
+    let layout = single_element_layout(nodes.len());
+
     // Create velocity field closure
-    let field = |x: f64, y: f64| velocity_at(x, y, nodes, gamma, alpha, v_inf);
-    
+    let field = |x: f64, y: f64| velocity_at_multi(x, y, nodes, gamma, alpha, v_inf, &layout);
+
     let bounds = (options.x_min, options.x_max, options.y_min, options.y_max);
-    
+
     // Calculate how many seeds to allocate to each boundary based on alpha
     // At alpha=0, all seeds go to left boundary
     // As |alpha| increases, more seeds go to top/bottom boundaries
     let alpha_factor = alpha.abs().sin().min(0.8); // Cap at 80% to keep some left-edge seeds
     let left_count = ((1.0 - alpha_factor) * options.seed_count as f64).round() as usize;
     let edge_count = options.seed_count.saturating_sub(left_count);
-    
+
     let mut streamlines = Vec::with_capacity(options.seed_count + edge_count);
-    
+
     // Helper to add a streamline from a seed point
     let mut add_streamline = |x: f64, y: f64| {
-        if is_inside_airfoil(x, y, nodes) {
+        if is_inside_any_element(x, y, nodes, &layout) {
             return;
         }
-        
+
         let streamline = integrate_streamline(
             &field,
             x,
@@ -853,10 +1016,11 @@ pub fn build_streamlines(
             options.step_size,
             options.max_steps,
             nodes,
+            &layout,
             bounds,
             None,
         );
-        
+
         if streamline.len() >= 2 {
             streamlines.push(streamline);
         }
@@ -904,9 +1068,13 @@ pub fn build_streamlines(
     streamlines
 }
 
+/// `layout` must describe `nodes`; the body the streamline is classified against
+/// is the whole configuration, and the closest-approach walk closes each
+/// element's contour on itself.
 fn build_dividing_streamline_internal<F>(
     field: &F,
     nodes: &[Point],
+    layout: &Layout,
     effective_body: Option<&[Point]>,
     options: &StreamlineOptions,
 ) -> Option<Vec<(f64, f64)>>
@@ -947,8 +1115,9 @@ where
     fn classify_streamline(
         streamline: &[(f64, f64)],
         nodes: &[Point],
+        layout: &Layout,
     ) -> Option<(Option<StreamlineSide>, f64)> {
-        if streamline.len() < 2 || nodes.len() < 2 {
+        if streamline.len() < 2 || nodes.len() < 2 || layout.total_nodes() != nodes.len() {
             return None;
         }
 
@@ -964,7 +1133,9 @@ where
             let mut min_dist_sq = f64::INFINITY;
             for i in 0..nodes.len() {
                 let a = nodes[i];
-                let b = nodes[(i + 1) % nodes.len()];
+                // Closes on this element's own first node, so no segment spans
+                // the gap between two elements.
+                let b = nodes[layout.next_node(i)];
                 min_dist_sq = min_dist_sq.min(point_segment_distance_sq(x, y, a, b));
             }
             let signed_offset = y - body_y_center;
@@ -1026,7 +1197,7 @@ where
     let mut previous: Option<TraceResult> = None;
 
     let trace_seed = |seed_y: f64| -> Option<TraceResult> {
-        if is_inside_airfoil(options.seed_x, seed_y, nodes)
+        if is_inside_any_element(options.seed_x, seed_y, nodes, layout)
             || effective_body.is_some_and(|poly| is_inside_polygon(options.seed_x, seed_y, poly))
         {
             return None;
@@ -1039,6 +1210,7 @@ where
             options.step_size,
             options.max_steps,
             nodes,
+            layout,
             bounds,
             effective_body,
         );
@@ -1046,7 +1218,7 @@ where
             return None;
         }
 
-        let (side, closest_distance) = classify_streamline(&streamline, nodes)?;
+        let (side, closest_distance) = classify_streamline(&streamline, nodes, layout)?;
         Some(TraceResult {
             seed_y,
             side,
@@ -1124,8 +1296,9 @@ pub fn build_dividing_streamline(
     _psi_0: f64,
     options: &StreamlineOptions,
 ) -> Option<Vec<(f64, f64)>> {
-    let field = |x: f64, y: f64| velocity_at(x, y, nodes, gamma, alpha, v_inf);
-    build_dividing_streamline_internal(&field, nodes, None, options)
+    let layout = single_element_layout(nodes.len());
+    let field = |x: f64, y: f64| velocity_at_multi(x, y, nodes, gamma, alpha, v_inf, &layout);
+    build_dividing_streamline_internal(&field, nodes, &layout, None, options)
 }
 
 /// Build streamlines using the viscous velocity field (vortex + source panels).
@@ -1139,8 +1312,11 @@ pub fn build_streamlines_viscous(
     effective_body: Option<&[Point]>,
     options: &StreamlineOptions,
 ) -> Vec<Vec<(f64, f64)>> {
+    let layout = single_element_layout(nodes.len());
     let field = |x: f64, y: f64| {
-        velocity_at_with_sources(x, y, nodes, gamma, sigma, alpha, v_inf, wake_panels)
+        velocity_at_with_sources_multi(
+            x, y, nodes, gamma, sigma, alpha, v_inf, wake_panels, &layout,
+        )
     };
 
     let bounds = (options.x_min, options.x_max, options.y_min, options.y_max);
@@ -1152,11 +1328,19 @@ pub fn build_streamlines_viscous(
     let mut streamlines = Vec::with_capacity(options.seed_count + edge_count);
 
     let mut add_streamline = |x: f64, y: f64| {
-        if is_inside_airfoil(x, y, nodes) {
+        if is_inside_any_element(x, y, nodes, &layout) {
             return;
         }
         let streamline = integrate_streamline(
-            &field, x, y, options.step_size, options.max_steps, nodes, bounds, effective_body,
+            &field,
+            x,
+            y,
+            options.step_size,
+            options.max_steps,
+            nodes,
+            &layout,
+            bounds,
+            effective_body,
         );
         if streamline.len() >= 2 {
             streamlines.push(streamline);
@@ -1203,17 +1387,20 @@ pub fn build_dividing_streamline_viscous(
     effective_body: Option<&[Point]>,
     options: &StreamlineOptions,
 ) -> Option<Vec<(f64, f64)>> {
+    let layout = single_element_layout(nodes.len());
     let field = |x: f64, y: f64| {
-        velocity_at_with_sources(x, y, nodes, gamma, sigma, alpha, v_inf, wake_panels)
+        velocity_at_with_sources_multi(
+            x, y, nodes, gamma, sigma, alpha, v_inf, wake_panels, &layout,
+        )
     };
-    build_dividing_streamline_internal(&field, nodes, effective_body, options)
+    build_dividing_streamline_internal(&field, nodes, &layout, effective_body, options)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use rustfoil_core::point;
-    
+
     fn make_circle(n: usize, radius: f64) -> Vec<Point> {
         (0..n)
             .map(|i| {
@@ -1361,5 +1548,201 @@ mod tests {
 
         let seed = streamline.first().copied().expect("seed point");
         assert!(seed.1.abs() < 1e-3, "seed should converge to y=0, got {}", seed.1);
+    }
+
+    // --- element-aware connectivity --------------------------------------
+
+    /// A circle of `n` nodes centred on `(cx, cy)`.
+    fn make_circle_at(n: usize, radius: f64, cx: f64, cy: f64) -> Vec<Point> {
+        (0..n)
+            .map(|i| {
+                let theta = 2.0 * PI * i as f64 / n as f64;
+                point(cx + radius * theta.cos(), cy + radius * theta.sin())
+            })
+            .collect()
+    }
+
+    /// Two well-separated circles, concatenated as one node array, with the
+    /// layout that describes them.
+    fn two_bodies() -> (Vec<Point>, Layout) {
+        let mut nodes = make_circle_at(48, 0.3, 0.0, 0.0);
+        nodes.extend(make_circle_at(32, 0.2, 1.5, 0.4));
+        let layout = Layout::from_node_counts(&[48, 32]).unwrap();
+        assert_eq!(layout.total_nodes(), nodes.len());
+        (nodes, layout)
+    }
+
+    #[test]
+    fn single_element_layout_reproduces_the_modulo_closure() {
+        // The backward-compatibility guarantee the single-airfoil entry points
+        // rest on: with one element the successor is the closed-contour wrap.
+        for n in [2usize, 3, 61, 160] {
+            let layout = single_element_layout(n);
+            assert_eq!(layout.n_elements(), 1);
+            assert_eq!(layout.total_nodes(), n);
+            for i in 0..n {
+                assert_eq!(layout.next_node(i), (i + 1) % n, "n = {n}, i = {i}");
+            }
+        }
+        // An empty node array has no element at all, rather than an empty one.
+        assert_eq!(single_element_layout(0).n_elements(), 0);
+        assert_eq!(single_element_layout(0).total_nodes(), 0);
+    }
+
+    #[test]
+    fn multi_element_velocity_is_the_sum_of_the_separate_bodies() {
+        // The property a modulo-n closure breaks: with two elements in one node
+        // array, the induced velocity must be what the two bodies induce
+        // separately. A panel spanning the gap between them would add a
+        // contribution that neither body has.
+        let first = make_circle_at(48, 0.3, 0.0, 0.0);
+        let second = make_circle_at(32, 0.2, 1.5, 0.4);
+        let (nodes, layout) = two_bodies();
+
+        let gamma_first: Vec<f64> = (0..first.len()).map(|i| 0.1 + 0.01 * i as f64).collect();
+        let gamma_second: Vec<f64> = (0..second.len()).map(|i| -0.2 + 0.02 * i as f64).collect();
+        let mut gamma = gamma_first.clone();
+        gamma.extend_from_slice(&gamma_second);
+
+        let alpha = 4.0_f64.to_radians();
+        let v_inf = 1.0;
+        let (u_free, v_free) = (v_inf * alpha.cos(), v_inf * alpha.sin());
+
+        for &(x, y) in &[(-0.8, 0.0), (0.7, 0.2), (1.5, -0.6), (2.4, 0.9)] {
+            let (u, v) = velocity_at_multi(x, y, &nodes, &gamma, alpha, v_inf, &layout);
+
+            let (u1, v1) = velocity_at(x, y, &first, &gamma_first, alpha, v_inf);
+            let (u2, v2) = velocity_at(x, y, &second, &gamma_second, alpha, v_inf);
+            // Each single-body call carries the freestream, so remove one copy.
+            let u_expected = u1 + u2 - u_free;
+            let v_expected = v1 + v2 - v_free;
+
+            assert!(
+                (u - u_expected).abs() < 1e-12 && (v - v_expected).abs() < 1e-12,
+                "at ({x}, {y}): got ({u}, {v}), expected ({u_expected}, {v_expected})"
+            );
+        }
+    }
+
+    #[test]
+    fn multi_element_velocity_differs_from_treating_the_array_as_one_contour() {
+        // And the two really are different, so the closure rule is doing work:
+        // one contour over the same nodes adds two panels across the gap.
+        let (nodes, layout) = two_bodies();
+        let gamma: Vec<f64> = (0..nodes.len()).map(|i| 0.1 + 0.01 * i as f64).collect();
+
+        let (u_multi, _) = velocity_at_multi(0.7, 0.2, &nodes, &gamma, 0.0, 1.0, &layout);
+        let (u_single, _) = velocity_at(0.7, 0.2, &nodes, &gamma, 0.0, 1.0);
+        assert!(
+            (u_multi - u_single).abs() > 1e-6,
+            "expected the gap-spanning panels to change the answer"
+        );
+    }
+
+    #[test]
+    fn inside_test_covers_every_element_and_not_the_gap() {
+        let (nodes, layout) = two_bodies();
+
+        // Inside the first element, inside the second, and in the gap between.
+        assert!(is_inside_any_element(0.0, 0.0, &nodes, &layout));
+        assert!(is_inside_any_element(1.5, 0.4, &nodes, &layout));
+        assert!(!is_inside_any_element(0.75, 0.2, &nodes, &layout));
+        assert!(!is_inside_any_element(-2.0, 0.0, &nodes, &layout));
+
+        // The single-contour test cannot answer this geometry: sweeping a grid,
+        // the two disagree somewhere, which is why the element-aware form
+        // exists.
+        let mut disagreements = 0usize;
+        for iy in 0..41 {
+            let y = -1.0 + 0.05 * iy as f64;
+            for ix in 0..61 {
+                let x = -1.0 + 0.05 * ix as f64;
+                if is_inside_airfoil(x, y, &nodes) != is_inside_any_element(x, y, &nodes, &layout) {
+                    disagreements += 1;
+                }
+            }
+        }
+        assert!(
+            disagreements > 0,
+            "the single-contour and per-element tests should not agree everywhere"
+        );
+    }
+
+    #[test]
+    fn inside_test_matches_the_single_contour_test_for_one_element() {
+        // One element: the two must agree at every point, which is what keeps
+        // single-airfoil ψ grids and streamline termination unchanged.
+        let circle = make_circle(64, 0.4);
+        let layout = single_element_layout(circle.len());
+        for iy in 0..21 {
+            let y = -0.6 + 0.06 * iy as f64;
+            for ix in 0..21 {
+                let x = -0.6 + 0.06 * ix as f64;
+                assert_eq!(
+                    is_inside_any_element(x, y, &circle, &layout),
+                    is_inside_airfoil(x, y, &circle),
+                    "at ({x}, {y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn psi_is_nan_inside_either_element() {
+        let (nodes, layout) = two_bodies();
+        let gamma = vec![0.0; nodes.len()];
+
+        assert!(psi_at_multi(0.0, 0.0, &nodes, &gamma, 0.0, 1.0, &layout).is_nan());
+        assert!(psi_at_multi(1.5, 0.4, &nodes, &gamma, 0.0, 1.0, &layout).is_nan());
+        assert!(psi_at_multi(0.75, 0.2, &nodes, &gamma, 0.0, 1.0, &layout).is_finite());
+    }
+
+    #[test]
+    fn a_streamline_stops_at_the_second_element() {
+        // Streamline termination is the visible half of the inside test: a line
+        // aimed at the downstream element must stop on it rather than being
+        // drawn straight through.
+        let (nodes, layout) = two_bodies();
+        let field = |_x: f64, _y: f64| (1.0, 0.0);
+
+        let streamline = integrate_streamline(
+            &field,
+            0.6,
+            0.4,
+            0.01,
+            2000,
+            &nodes,
+            &layout,
+            (-2.0, 3.0, -2.0, 2.0),
+            None,
+        );
+
+        let last = *streamline.last().expect("at least the seed point");
+        assert!(
+            last.0 < 1.5,
+            "should stop on the second element's upstream side, got x = {}",
+            last.0
+        );
+        // Integration stops on the step after entering a body, so the final
+        // point may sit just inside it; every earlier point is outside.
+        for &(x, y) in &streamline[..streamline.len() - 1] {
+            assert!(
+                !is_inside_any_element(x, y, &nodes, &layout),
+                "streamline passed through an element at ({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mismatched_layout_falls_back_to_the_freestream() {
+        // The layout has to describe the nodes; a disagreement is reported as
+        // no panels rather than by indexing into the wrong element.
+        let circle = make_circle(32, 0.4);
+        let gamma = vec![0.5; circle.len()];
+        let wrong = Layout::from_node_counts(&[10, 10]).unwrap();
+
+        let (u, v) = velocity_at_multi(2.0, 0.0, &circle, &gamma, 0.0, 1.0, &wrong);
+        assert_eq!((u, v), (1.0, 0.0));
+        assert_eq!(psi_at_multi(2.0, 0.5, &circle, &gamma, 0.0, 1.0, &wrong), 0.5);
     }
 }

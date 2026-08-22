@@ -29,6 +29,13 @@
 //! reports multi-body input as unsupported rather than solving only the first
 //! body and dropping the rest (see [`InviscidSolver::factorize`]).
 //!
+//! The visualization kernels in [`velocity`] are ahead of that: they take an
+//! element layout ([`rustfoil_core::Layout`]) so that each element's panels
+//! close on that element and a streamline stops on whichever element it reaches
+//! ([`velocity_at_multi`], [`is_inside_any_element`] and friends). Nothing feeds
+//! them more than one element yet, because the γ they draw comes from the
+//! single-body solver here.
+//!
 //! This implements the exact panel method from XFOIL, using:
 //! - Linear vorticity distribution across each panel (node-based unknowns)
 //! - Stream function formulation (ψ = ψ₀ on surface)
@@ -62,13 +69,14 @@ pub use error::SolverError;
 pub use velocity::{
     build_dividing_streamline, build_dividing_streamline_viscous, build_streamlines,
     build_streamlines_viscous, compute_psi_grid, compute_psi_grid_with_interior,
-    compute_psi_grid_with_sources, is_inside_airfoil, psi_at, psi_at_with_sources,
-    velocity_at, velocity_at_with_sources, StreamlineOptions, WakePanels,
+    compute_psi_grid_with_sources, is_inside_airfoil, is_inside_any_element, psi_at, psi_at_multi,
+    psi_at_with_sources, psi_at_with_sources_multi, velocity_at, velocity_at_multi,
+    velocity_at_with_sources, velocity_at_with_sources_multi, StreamlineOptions, WakePanels,
 };
 pub use smoke::SmokeSystem;
 
 use nalgebra::{DMatrix, DVector};
-use rustfoil_core::{Body, Point};
+use rustfoil_core::{Body, Layout, Point};
 use std::f64::consts::PI;
 
 /// 1/(4π) - used for stream function influence coefficients
@@ -154,6 +162,12 @@ pub struct FactorizedSolution {
     nodes: Vec<Point>,
     /// Number of nodes (= number of gammas)
     n_nodes: usize,
+    /// Element connectivity of `nodes` — which node closes each panel.
+    ///
+    /// One element today, since [`InviscidSolver::factorize`] accepts a single
+    /// body. Carrying the table rather than assuming one contour is what keeps
+    /// the pressure integration from closing a panel across two elements.
+    layout: Layout,
     /// Chord length
     chord: f64,
 }
@@ -199,15 +213,17 @@ impl FactorizedSolution {
         let n = self.n_nodes;
         let cosa = flow.alpha.cos();
         let sina = flow.alpha.sin();
-        
+
         let mut cl = 0.0;
         let mut cm = 0.0;
 
         // XFOIL's CLCALC: loop from 1 to N, with IP = I+1 and IP=1 when I=N
-        // This integrates around the CLOSED contour including the TE panel
+        // This integrates around the CLOSED contour including the TE panel.
+        // The successor comes from the layout, so each element's contour closes
+        // on itself; with one element that is XFOIL's wrap from N back to 1.
         for i in 0..n {
-            let ip = (i + 1) % n;  // Wrap around: when i=n-1, ip=0
-            
+            let ip = self.layout.next_node(i);
+
             // Panel geometry
             let dx = self.nodes[ip].x - self.nodes[i].x;
             let dy = self.nodes[ip].y - self.nodes[i].y;
@@ -349,6 +365,18 @@ impl InviscidSolver {
             nodes.push(last_p2);
         }
         let n = nodes.len();
+
+        // Which node closes each panel. One body, so one element: `next_node`
+        // is then XFOIL's `JP = JO + 1`, wrapping from N back to 1. Reading the
+        // successor from the table rather than computing `(jo + 1) % n` is what
+        // stops a panel from being formed across the gap between two elements
+        // once this path is given more than one.
+        //
+        // `from_node_counts` rejects only an element with no nodes, and the
+        // panel-count check above has already refused anything under three.
+        let layout =
+            Layout::from_node_counts(&[n]).expect("one element of at least three nodes");
+
         let chord = body.chord();
         
         // Compute distance tolerance for TE panel skip (like XFOIL's SEPS)
@@ -421,8 +449,10 @@ impl InviscidSolver {
 
             // Loop over all panels (XFOIL loops JO=1 to N)
             for jo in 0..n {
-                let jp = (jo + 1) % n;  // XFOIL: JP = JO+1, but JP=1 when JO=N
-                
+                // XFOIL: JP = JO+1, but JP=1 when JO=N — read from the layout,
+                // so the wrap stays inside the owning element.
+                let jp = layout.next_node(jo);
+
                 // Panel endpoints
                 let x_jo = nodes[jo].x;
                 let y_jo = nodes[jo].y;
@@ -434,7 +464,11 @@ impl InviscidSolver {
                 let dy = y_jp - y_jo;
                 let ds_sq = dx * dx + dy * dy;
                 
-                // For TE panel (jo = n-1), check if it should be skipped
+                // For TE panel (jo = n-1), check if it should be skipped.
+                // `n - 1` is the last node of the one element this path
+                // accepts. Recognising a trailing-edge panel per element, along
+                // with the per-element Kutta row and stream-function constant
+                // below, is system-assembly work rather than connectivity.
                 if jo == n - 1 && ds_sq < seps * seps {
                     continue;
                 }
@@ -602,6 +636,7 @@ impl InviscidSolver {
             psi0_90,
             nodes,
             n_nodes: n,
+            layout,
             chord,
         })
     }
@@ -851,6 +886,37 @@ mod tests {
 
         // A single body still works exactly as before.
         assert!(solver.solve(&[main], &flow).is_ok());
+    }
+
+    #[test]
+    fn force_integration_walks_one_closed_contour() {
+        // The pressure integration takes each panel's far node from the layout.
+        // For the single body this path accepts that has to be a permutation of
+        // the nodes forming one cycle, so every node is visited exactly once and
+        // the panel vectors sum to zero — the closed-contour walk XFOIL's CLCALC
+        // performs.
+        let factorized = InviscidSolver::new()
+            .factorize(&[make_naca0012(60)])
+            .unwrap();
+        let n = factorized.n_nodes;
+        assert_eq!(factorized.layout.n_elements(), 1);
+        assert_eq!(factorized.layout.total_nodes(), n);
+
+        let mut visited = vec![false; n];
+        let mut sum_dx = 0.0;
+        let mut sum_dy = 0.0;
+        let mut node = 0usize;
+        for _ in 0..n {
+            assert!(!visited[node], "node {node} visited twice");
+            visited[node] = true;
+            let next = factorized.layout.next_node(node);
+            sum_dx += factorized.nodes[next].x - factorized.nodes[node].x;
+            sum_dy += factorized.nodes[next].y - factorized.nodes[node].y;
+            node = next;
+        }
+        assert_eq!(node, 0, "the walk must return to its starting node");
+        assert!(visited.iter().all(|&seen| seen), "every node is on the walk");
+        assert!(sum_dx.abs() < 1e-12 && sum_dy.abs() < 1e-12);
     }
 
     #[test]

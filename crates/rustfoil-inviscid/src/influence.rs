@@ -20,12 +20,23 @@
 //!
 //! This allows influence coefficients to be computed incrementally.
 //!
+//! # One contour per element
+//!
+//! Panel JP is not `JO + 1` modulo the node count. It is the next node **within
+//! one element**, so the panel starting at an element's last node ends at that
+//! element's own first node. With several elements concatenated into one node
+//! array, modulo-n closure would instead join one element's last node to the
+//! next element's first, putting a panel across the physical gap between them.
+//! Every trailing-edge quantity here — SCS, SDS, SEPS, the sharpness test — is
+//! likewise the owning element's own.
+//!
 //! # XFOIL Reference
 //!
 //! - `xpanel.f`: PSILIN subroutine (lines 99-800)
 
-use crate::geometry::AirfoilGeometry;
+use crate::geometry::{AirfoilGeometry, ConfigGeometry};
 use crate::{QOPI, HOPI};
+use core::ops::Range;
 use nalgebra::DMatrix;
 use std::f64::consts::PI;
 
@@ -71,6 +82,156 @@ pub struct PanelContribution {
     pub x2: f64,
     /// Local y-coordinate (perpendicular distance to panel line)
     pub yy: f64,
+}
+
+// ===========================================================================
+// Panel connectivity
+// ===========================================================================
+
+/// The node arrays the influence kernels read.
+///
+/// Borrowed rather than owned, so one kernel serves a single
+/// [`AirfoilGeometry`] and a multi-element [`ConfigGeometry`] without copying
+/// either.
+#[derive(Debug, Clone, Copy)]
+struct Nodes<'a> {
+    x: &'a [f64],
+    y: &'a [f64],
+    apanel: &'a [f64],
+}
+
+impl Nodes<'_> {
+    /// Total number of nodes across every element.
+    #[inline]
+    fn len(&self) -> usize {
+        self.x.len()
+    }
+}
+
+/// One element's panel connectivity and trailing-edge data.
+///
+/// # Closure is per element
+/// Panels close through [`next_node`](Self::next_node), which wraps **within
+/// this element**: the panel starting at element k's last node ends at element
+/// k's own first node, never at element k+1's. That is the rule
+/// [`Layout::next_node`](rustfoil_core::layout::Layout::next_node) implements,
+/// and `element_panels_match_the_layout_closure_rule` holds the two against each
+/// other node by node on a real three-element geometry. For a single element it
+/// reduces to `(jo + 1) % n`.
+///
+/// # Trailing edge
+/// By the node ordering convention an element's first node is its
+/// upper-surface trailing edge and its last node its lower-surface trailing
+/// edge, so `first` and `last` are that element's own TE node pair and the panel
+/// between them is that element's own TE panel. `sharp`, `scs`, `sds` and `seps`
+/// all describe that trailing edge and no other.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ElementPanels {
+    /// Global index of this element's first node (its upper-surface TE).
+    first: usize,
+    /// Global index of this element's last node (its lower-surface TE).
+    last: usize,
+    /// Whether this element's own trailing edge is sharp.
+    sharp: bool,
+    /// This element's TE panel source coefficient (SCS in XFOIL).
+    scs: f64,
+    /// This element's TE panel vortex coefficient (SDS in XFOIL).
+    sds: f64,
+    /// TE gap below which this element's TE panel is skipped as closed
+    /// (SEPS in XFOIL), from this element's own arc length.
+    seps: f64,
+}
+
+impl ElementPanels {
+    /// The one element of a single-body geometry.
+    fn single(geom: &AirfoilGeometry) -> Self {
+        let (scs, sds) = geom.te_coefficients();
+        Self {
+            first: 0,
+            last: geom.n - 1,
+            sharp: geom.sharp,
+            scs,
+            sds,
+            seps: geom.total_arc_length() * 1e-5,
+        }
+    }
+
+    /// One element of a configuration, with its own trailing edge and its own
+    /// arc length.
+    fn of_configuration(config: &ConfigGeometry, element: usize) -> Self {
+        let geom = config.element(element);
+        let (scs, sds) = geom.te_coefficients();
+        Self {
+            first: geom.start,
+            last: geom.end() - 1,
+            sharp: geom.sharp,
+            scs,
+            sds,
+            seps: config.element_arc_length(element) * 1e-5,
+        }
+    }
+
+    /// Every element of a configuration, in configuration order.
+    fn all_of(config: &ConfigGeometry) -> Vec<Self> {
+        (0..config.n_elements())
+            .map(|element| Self::of_configuration(config, element))
+            .collect()
+    }
+
+    /// The node that closes the panel starting at `global`.
+    ///
+    /// The replacement for `(jo + 1) % n`.
+    #[inline]
+    fn next_node(&self, global: usize) -> usize {
+        if global == self.last {
+            self.first
+        } else {
+            global + 1
+        }
+    }
+
+    /// The nodes starting an ordinary surface panel: every node of this element
+    /// except its last, whose panel is the TE panel and is treated separately.
+    #[inline]
+    fn surface_panels(&self) -> Range<usize> {
+        self.first..self.last
+    }
+
+    /// The node before `global`, held at this element's first node so the
+    /// source-gradient stencil never reaches into another element.
+    #[inline]
+    fn stencil_back(&self, global: usize) -> usize {
+        if global == self.first {
+            global
+        } else {
+            global - 1
+        }
+    }
+
+    /// The node after `global`, held at this element's last node so the
+    /// source-gradient stencil never reaches into another element.
+    #[inline]
+    fn stencil_forward(&self, global: usize) -> usize {
+        if global == self.last {
+            global
+        } else {
+            global + 1
+        }
+    }
+}
+
+/// Every element paired with each of its surface-panel start nodes, in
+/// configuration order.
+///
+/// The panel loops iterate over this rather than `0..n` so that the element a
+/// panel belongs to — and therefore which node closes it — travels with the
+/// panel index.
+fn surface_panels(
+    elements: &[ElementPanels],
+) -> impl Iterator<Item = (&ElementPanels, usize)> + '_ {
+    elements
+        .iter()
+        .flat_map(|element| element.surface_panels().map(move |jo| (element, jo)))
 }
 
 /// Compute influence coefficients at a field point (i, xi, yi).
@@ -129,7 +290,52 @@ pub fn psilin_with_dqdm(
     nxi: f64,
     nyi: f64,
 ) -> PsilinResult {
-    let n = geom.n;
+    psilin_dqdm_kernel(
+        Nodes { x: &geom.x, y: &geom.y, apanel: &geom.apanel },
+        &[ElementPanels::single(geom)],
+        i,
+        xi,
+        yi,
+        nxi,
+        nyi,
+    )
+}
+
+/// [`psilin_with_dqdm`] over a whole configuration.
+///
+/// `i` and the returned arrays are indexed globally, spanning every element in
+/// configuration order. Each element contributes its own panels closed onto its
+/// own nodes and its own trailing edge, so no panel crosses the gap between two
+/// elements.
+pub fn psilin_config_with_dqdm(
+    config: &ConfigGeometry,
+    i: usize,
+    xi: f64,
+    yi: f64,
+    nxi: f64,
+    nyi: f64,
+) -> PsilinResult {
+    psilin_dqdm_kernel(
+        Nodes { x: config.x(), y: config.y(), apanel: config.apanel() },
+        &ElementPanels::all_of(config),
+        i,
+        xi,
+        yi,
+        nxi,
+        nyi,
+    )
+}
+
+fn psilin_dqdm_kernel(
+    nodes: Nodes<'_>,
+    elements: &[ElementPanels],
+    i: usize,
+    xi: f64,
+    yi: f64,
+    nxi: f64,
+    nyi: f64,
+) -> PsilinResult {
+    let n = nodes.len();
 
     // Initialize influence coefficient arrays
     let mut dzdg = vec![0.0; n];
@@ -142,34 +348,24 @@ pub fn psilin_with_dqdm(
     let qtan1 = 0.0;
     let qtan2 = 0.0;
 
-    // Distance tolerance for TE panel skip
-    let seps = geom.total_arc_length() * 1e-5;
-
-    // TE panel coefficients
-    let (scs, sds) = geom.te_coefficients();
-
-    // Determine if field point is on airfoil (affects SGN)
+    // Determine if field point is on a surface (affects SGN)
     let sgn_surface = if i < n { 1.0 } else { 0.0 };
 
-    // Loop over all panels (JO = 0 to N-1 in 0-based indexing)
-    for jo in 0..n {
-        let jp = (jo + 1) % n; // JP = JO+1, wrapping for TE panel
+    // Loop over every element's surface panels. An element's last node starts
+    // that element's TE panel, handled separately after this loop.
+    for (element, jo) in surface_panels(elements) {
+        let jp = element.next_node(jo); // closes within this element
 
         // Panel endpoints
-        let x_jo = geom.x[jo];
-        let y_jo = geom.y[jo];
-        let x_jp = geom.x[jp];
-        let y_jp = geom.y[jp];
+        let x_jo = nodes.x[jo];
+        let y_jo = nodes.y[jo];
+        let x_jp = nodes.x[jp];
+        let y_jp = nodes.y[jp];
 
         // Panel vector and length
         let dx = x_jp - x_jo;
         let dy = y_jp - y_jo;
         let ds_sq = dx * dx + dy * dy;
-
-        // TE panel (jo = n-1) uses special handling after the main loop
-        if jo == n - 1 {
-            continue;
-        }
 
         // Skip zero-length panels
         if ds_sq < 1e-24 {
@@ -221,7 +417,7 @@ pub fn psilin_with_dqdm(
         };
 
         // Panel angle
-        let apan = geom.apanel[jo];
+        let apan = nodes.apanel[jo];
 
         // Midpoint quantities for half-panel decomposition
         let x0 = 0.5 * (x1 + x2);
@@ -234,9 +430,10 @@ pub fn psilin_with_dqdm(
         let x2i = x1i; // Same for both endpoints
         let yyi = sx * nyi - sy * nxi;
 
-        // Neighboring panel indices for source gradient stencil
-        let jm = if jo == 0 { jo } else { jo - 1 };
-        let jq = if jo == n - 2 { jp } else { jp + 1 };
+        // Neighbouring nodes for the source gradient stencil, held inside this
+        // element at its first and last node
+        let jm = element.stencil_back(jo);
+        let jq = element.stencil_forward(jp);
 
         // ============ First half-panel (1-0) ============
         {
@@ -251,7 +448,8 @@ pub fn psilin_with_dqdm(
                 * dxinv;
 
             // Source strength derivatives
-            let dsm = ((geom.x[jp] - geom.x[jm]).powi(2) + (geom.y[jp] - geom.y[jm]).powi(2)).sqrt();
+            let dsm =
+                ((nodes.x[jp] - nodes.x[jm]).powi(2) + (nodes.y[jp] - nodes.y[jm]).powi(2)).sqrt();
             let dsim = safe_inv(dsm);
 
             // Accumulate dPsi/dm (DZDM)
@@ -288,7 +486,8 @@ pub fn psilin_with_dqdm(
                 + (x2 - x0) * yy)
                 * dxinv;
 
-            let dsp = ((geom.x[jq] - geom.x[jo]).powi(2) + (geom.y[jq] - geom.y[jo]).powi(2)).sqrt();
+            let dsp =
+                ((nodes.x[jq] - nodes.x[jo]).powi(2) + (nodes.y[jq] - nodes.y[jo]).powi(2)).sqrt();
             let dsip = safe_inv(dsp);
 
             // Accumulate dPsi/dm (DZDM)
@@ -344,15 +543,22 @@ pub fn psilin_with_dqdm(
         }
     }
 
-    // TE panel special treatment (XFOIL lines 407-438)
-    if !geom.sharp {
-        let jo = n - 1;
-        let jp = 0;
+    // TE panel special treatment (XFOIL lines 407-438), once per element on
+    // that element's own TE node pair: its last node closing onto its first.
+    for element in elements {
+        if element.sharp {
+            continue;
+        }
 
-        let x_jo = geom.x[jo];
-        let y_jo = geom.y[jo];
-        let x_jp = geom.x[jp];
-        let y_jp = geom.y[jp];
+        let jo = element.last;
+        let jp = element.first;
+        let (scs, sds) = (element.scs, element.sds);
+        let seps = element.seps;
+
+        let x_jo = nodes.x[jo];
+        let y_jo = nodes.y[jo];
+        let x_jp = nodes.x[jp];
+        let y_jp = nodes.y[jp];
 
         let dx = x_jp - x_jo;
         let dy = y_jp - y_jo;
@@ -377,7 +583,7 @@ pub fn psilin_with_dqdm(
             let rs1 = rx1 * rx1 + ry1 * ry1;
             let rs2 = rx2 * rx2 + ry2 * ry2;
 
-            let apan = geom.apanel[jo];
+            let apan = nodes.apanel[jo];
 
             let sgn = if sgn_surface != 0.0 {
                 1.0
@@ -452,7 +658,64 @@ fn psilin_internal(
     yi: f64,
     compute_sources: bool,
 ) -> PsilinResult {
-    let n = geom.n;
+    psilin_kernel(
+        Nodes { x: &geom.x, y: &geom.y, apanel: &geom.apanel },
+        &[ElementPanels::single(geom)],
+        i,
+        xi,
+        yi,
+        compute_sources,
+    )
+}
+
+/// [`psilin`] over a whole configuration.
+///
+/// `i` and the returned arrays are indexed globally, spanning every element in
+/// configuration order. Each element contributes its own panels closed onto its
+/// own nodes and its own trailing edge, so no panel crosses the gap between two
+/// elements.
+pub fn psilin_config(config: &ConfigGeometry, i: usize, xi: f64, yi: f64) -> PsilinResult {
+    psilin_config_internal(config, i, xi, yi, false)
+}
+
+/// [`psilin_with_sources`] over a whole configuration.
+///
+/// Indexed as [`psilin_config`].
+pub fn psilin_config_with_sources(
+    config: &ConfigGeometry,
+    i: usize,
+    xi: f64,
+    yi: f64,
+) -> PsilinResult {
+    psilin_config_internal(config, i, xi, yi, true)
+}
+
+fn psilin_config_internal(
+    config: &ConfigGeometry,
+    i: usize,
+    xi: f64,
+    yi: f64,
+    compute_sources: bool,
+) -> PsilinResult {
+    psilin_kernel(
+        Nodes { x: config.x(), y: config.y(), apanel: config.apanel() },
+        &ElementPanels::all_of(config),
+        i,
+        xi,
+        yi,
+        compute_sources,
+    )
+}
+
+fn psilin_kernel(
+    nodes: Nodes<'_>,
+    elements: &[ElementPanels],
+    i: usize,
+    xi: f64,
+    yi: f64,
+    compute_sources: bool,
+) -> PsilinResult {
+    let n = nodes.len();
 
     // Initialize influence coefficient arrays
     let mut dzdg = vec![0.0; n];
@@ -463,37 +726,24 @@ fn psilin_internal(
     let qtan1 = 0.0;
     let qtan2 = 0.0;
 
-    // Distance tolerance for TE panel skip
-    let seps = geom.total_arc_length() * 1e-5;
-
-    // TE panel coefficients
-    let (scs, sds) = geom.te_coefficients();
-
-    // Saved values for TE panel treatment
-    let mut te_contrib: Option<PanelContribution> = None;
-
     let sgn_surface = if i < n { 1.0 } else { 0.0 };
 
-    // Loop over all panels (JO = 0 to N-1 in 0-based indexing)
-    for jo in 0..n {
-        let jp = (jo + 1) % n; // JP = JO+1, wrapping for TE panel
+    // Loop over every element's surface panels. An element's last node starts
+    // that element's TE panel, handled separately after this loop.
+    // XFOIL line 245: IF(JO.EQ.N) GO TO 11 - skips regular vortex calculation for TE
+    for (element, jo) in surface_panels(elements) {
+        let jp = element.next_node(jo); // closes within this element
 
         // Panel endpoints
-        let x_jo = geom.x[jo];
-        let y_jo = geom.y[jo];
-        let x_jp = geom.x[jp];
-        let y_jp = geom.y[jp];
+        let x_jo = nodes.x[jo];
+        let y_jo = nodes.y[jo];
+        let x_jp = nodes.x[jp];
+        let y_jp = nodes.y[jp];
 
         // Panel vector and length
         let dx = x_jp - x_jo;
         let dy = y_jp - y_jo;
         let ds_sq = dx * dx + dy * dy;
-
-        // TE panel (jo = n-1) uses special handling after the main loop, so skip here
-        // XFOIL line 245: IF(JO.EQ.N) GO TO 11 - skips regular vortex calculation for TE
-        if jo == n - 1 {
-            continue;
-        }
 
         // Skip zero-length panels
         if ds_sq < 1e-24 {
@@ -548,7 +798,7 @@ fn psilin_internal(
         };
 
         if compute_sources {
-            let apan = geom.apanel[jo];
+            let apan = nodes.apanel[jo];
 
             let x0 = 0.5 * (x1 + x2);
             let rs0 = x0 * x0 + yy * yy;
@@ -563,10 +813,12 @@ fn psilin_internal(
                 + (x0 - x1) * yy)
                 * dxinv;
 
-            let jm = if jo == 0 { jo } else { jo - 1 };
-            let jq = if jo == n - 2 { jp } else { jp + 1 };
+            // Held inside this element at its first and last node
+            let jm = element.stencil_back(jo);
+            let jq = element.stencil_forward(jp);
 
-            let dsm = ((geom.x[jp] - geom.x[jm]).powi(2) + (geom.y[jp] - geom.y[jm]).powi(2)).sqrt();
+            let dsm =
+                ((nodes.x[jp] - nodes.x[jm]).powi(2) + (nodes.y[jp] - nodes.y[jm]).powi(2)).sqrt();
             let dsim = safe_inv(dsm);
 
             dzdm[jm] += QOPI * (-psum * dsim + pdif * dsim);
@@ -581,7 +833,8 @@ fn psilin_internal(
                 + (x2 - x0) * yy)
                 * dxinv;
 
-            let dsp = ((geom.x[jq] - geom.x[jo]).powi(2) + (geom.y[jq] - geom.y[jo]).powi(2)).sqrt();
+            let dsp =
+                ((nodes.x[jq] - nodes.x[jo]).powi(2) + (nodes.y[jq] - nodes.y[jo]).powi(2)).sqrt();
             let dsip = safe_inv(dsp);
 
             dzdm[jo] += QOPI * (-psum * (dsip + dsio) - pdif * (dsip - dsio));
@@ -599,18 +852,23 @@ fn psilin_internal(
         dzdg[jp] += QOPI * (contrib.psis + contrib.psid);
     }
 
-    // TE panel special treatment (XFOIL lines 407-438)
-    // This handles the trailing edge "wake" panel (from node N-1 to node 0)
-    // using a different formula with HOPI, SCS, SDS
-    if !geom.sharp {
-        // TE panel: jo = n-1, jp = 0
-        let jo = n - 1;
-        let jp = 0;
+    // TE panel special treatment (XFOIL lines 407-438), once per element.
+    // This handles each element's trailing edge "wake" panel, running from that
+    // element's last node to its own first node, with the HOPI/SCS/SDS formula.
+    for element in elements {
+        if element.sharp {
+            continue;
+        }
 
-        let x_jo = geom.x[jo];
-        let y_jo = geom.y[jo];
-        let x_jp = geom.x[jp];
-        let y_jp = geom.y[jp];
+        let jo = element.last;
+        let jp = element.first;
+        let (scs, sds) = (element.scs, element.sds);
+        let seps = element.seps;
+
+        let x_jo = nodes.x[jo];
+        let y_jo = nodes.y[jo];
+        let x_jp = nodes.x[jp];
+        let y_jp = nodes.y[jp];
 
         let dx = x_jp - x_jo;
         let dy = y_jp - y_jo;
@@ -637,7 +895,7 @@ fn psilin_internal(
 
             // TE panel angle (APAN in XFOIL)
             // XFOIL xpanel.f line 184: APAN = APANEL(JO)
-            let apan = geom.apanel[jo];
+            let apan = nodes.apanel[jo];
 
             // SGN reflection for TE panel
             let sgn = if sgn_surface != 0.0 {
@@ -675,8 +933,6 @@ fn psilin_internal(
         }
     }
 
-    let _ = te_contrib; // Suppress unused warning
-
     PsilinResult {
         psi,
         qtan1,
@@ -697,6 +953,12 @@ fn safe_inv(value: f64) -> f64 {
 }
 
 /// Build the source influence matrix BIJ (dPsi/dSig) for airfoil nodes.
+///
+/// One body: the row layout is `n` surface rows plus a single Kutta row, and the
+/// sharp-TE substitution replaces row `n - 1`. A configuration needs one Kutta
+/// row per element, which is a system-assembly change rather than an influence
+/// kernel one, so this stays single-element for now. The kernels it calls are
+/// already element-aware.
 pub fn build_source_influence_matrix(geom: &AirfoilGeometry) -> DMatrix<f64> {
     let n = geom.n;
     let mut bij = DMatrix::zeros(n + 1, n);
@@ -768,24 +1030,27 @@ pub fn compute_psis_psid(
 /// Compute influence coefficients for a single panel.
 ///
 /// This is a helper for testing that returns intermediate values.
+///
+/// The panel starting at `jo` closes onto the next node in `jo`'s own element,
+/// which for a single body is `(jo + 1) % n`.
 pub fn psilin_single_panel(
     geom: &AirfoilGeometry,
     i: usize,
     jo: usize,
 ) -> PanelContribution {
     let n = geom.n;
-    let jp = (jo + 1) % n;
-    
+    let jp = ElementPanels::single(geom).next_node(jo);
+
     // Field point
     let xi = geom.x[i];
     let yi = geom.y[i];
-    
+
     // Panel endpoints
     let x_jo = geom.x[jo];
     let y_jo = geom.y[jo];
     let x_jp = geom.x[jp];
     let y_jp = geom.y[jp];
-    
+
     // Panel vector
     let dx = x_jp - x_jo;
     let dy = y_jp - y_jo;
@@ -847,7 +1112,7 @@ pub fn psilin_single_panel(
 pub struct PsilinDebugPanel {
     /// Panel index (jo)
     pub jo: usize,
-    /// Next panel index (jp = jo+1 mod n)
+    /// Closing node of the panel: the next node in jo's own element
     pub jp: usize,
     /// Panel start point
     pub x_jo: f64,
@@ -892,41 +1157,69 @@ pub fn psilin_debug(
     xi: f64,
     yi: f64,
 ) -> PsilinDebug {
-    let n = geom.n;
-    
+    psilin_debug_kernel(
+        Nodes { x: &geom.x, y: &geom.y, apanel: &geom.apanel },
+        &[ElementPanels::single(geom)],
+        i,
+        xi,
+        yi,
+    )
+}
+
+/// [`psilin_debug`] over a whole configuration.
+///
+/// The reported `jo`/`jp` pairs are global node indices, and each pair lies
+/// inside one element.
+pub fn psilin_config_debug(
+    config: &ConfigGeometry,
+    i: usize,
+    xi: f64,
+    yi: f64,
+) -> PsilinDebug {
+    psilin_debug_kernel(
+        Nodes { x: config.x(), y: config.y(), apanel: config.apanel() },
+        &ElementPanels::all_of(config),
+        i,
+        xi,
+        yi,
+    )
+}
+
+fn psilin_debug_kernel(
+    nodes: Nodes<'_>,
+    elements: &[ElementPanels],
+    i: usize,
+    xi: f64,
+    yi: f64,
+) -> PsilinDebug {
+    let n = nodes.len();
+
     // Initialize
     let mut dzdg = vec![0.0; n];
     let mut panels = Vec::new();
-    
-    // Distance tolerance for TE panel skip
-    let seps = geom.total_arc_length() * 1e-5;
-    
-    // Loop over all panels
-    for jo in 0..n {
-        let jp = (jo + 1) % n;
-        
+
+    // Loop over every element's surface panels.
+    // CRITICAL: an element's TE panel is excluded from the vortex calculation
+    // XFOIL line 245: IF(JO.EQ.N) GO TO 11
+    for (element, jo) in surface_panels(elements) {
+        let jp = element.next_node(jo); // closes within this element
+
         // Panel endpoints
-        let x_jo = geom.x[jo];
-        let y_jo = geom.y[jo];
-        let x_jp = geom.x[jp];
-        let y_jp = geom.y[jp];
-        
+        let x_jo = nodes.x[jo];
+        let y_jo = nodes.y[jo];
+        let x_jp = nodes.x[jp];
+        let y_jp = nodes.y[jp];
+
         // Panel vector and length
         let dx = x_jp - x_jo;
         let dy = y_jp - y_jo;
         let ds_sq = dx * dx + dy * dy;
-        
-        // CRITICAL: Skip TE panel for vortex calculation
-        // XFOIL line 245: IF(JO.EQ.N) GO TO 11
-        if jo == n - 1 {
-            continue;
-        }
-        
+
         // Skip zero-length panels
         if ds_sq < 1e-24 {
             continue;
         }
-        
+
         let dso = ds_sq.sqrt();
         let dsio = 1.0 / dso;
         
@@ -1012,14 +1305,7 @@ mod tests {
     use super::*;
 
     fn make_simple_geometry() -> AirfoilGeometry {
-        // Simple 4-point diamond shape for testing
-        let points = vec![
-            (1.0, 0.0),   // Upper TE
-            (0.0, 0.1),   // Upper LE
-            (0.0, -0.1),  // Lower LE (same x as upper)
-            (1.0, 0.0),   // Lower TE (closed)
-        ];
-        // Need more points for a valid geometry
+        // Simple lens shape for testing
         let n = 20;
         let mut pts = Vec::with_capacity(n);
         for i in 0..n/2 {
@@ -1035,6 +1321,335 @@ mod tests {
             pts.push((x, y));
         }
         AirfoilGeometry::from_points(&pts).unwrap()
+    }
+
+    // --- multi-element fixtures ------------------------------------------
+
+    /// A NACA 0012 contour with a sharp trailing edge, `n_panels` nodes, scaled
+    /// by `scale` and placed with its leading edge at `(dx, dy)`.
+    fn naca0012_at(n_panels: usize, scale: f64, dx: f64, dy: f64) -> Vec<(f64, f64)> {
+        let n_half = n_panels / 2;
+        let thickness = |x: f64| -> f64 {
+            0.6 * (0.2969 * x.sqrt() - 0.126 * x - 0.3516 * x.powi(2) + 0.2843 * x.powi(3)
+                - 0.1036 * x.powi(4))
+        };
+        let station = |i: usize| -> f64 {
+            let beta = PI * (i as f64) / (n_half as f64);
+            0.5 * (1.0 - beta.cos())
+        };
+        let place = |x: f64, y: f64| (dx + scale * x, dy + scale * y);
+
+        let mut points = Vec::with_capacity(2 * n_half);
+        for i in (0..=n_half).rev() {
+            let x = station(i);
+            points.push(place(x, thickness(x)));
+        }
+        for i in 1..=n_half {
+            let x = station(i);
+            points.push(place(x, -thickness(x)));
+        }
+        points
+    }
+
+    /// The same contour opened out to a blunt trailing edge of `gap` chords.
+    fn naca0012_blunt_at(
+        n_panels: usize,
+        gap: f64,
+        scale: f64,
+        dx: f64,
+        dy: f64,
+    ) -> Vec<(f64, f64)> {
+        let mut points = naca0012_at(n_panels, scale, dx, dy);
+        let last = points.len() - 1;
+        points[0].1 += 0.5 * gap * scale;
+        points[last].1 -= 0.5 * gap * scale;
+        points
+    }
+
+    /// Every element of the real McDonnell Douglas 30P-30N slat/main/flap
+    /// fixture, in configuration coordinates. Blank and comment lines separate
+    /// the blocks.
+    fn mda_elements() -> Vec<Vec<(f64, f64)>> {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/mda_30p_30n_trimmed.dat");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+
+        let mut blocks: Vec<Vec<(f64, f64)>> = Vec::new();
+        let mut current: Vec<(f64, f64)> = Vec::new();
+        for line in text.lines() {
+            let mut parts = line.split_whitespace();
+            match (
+                parts.next().and_then(|s| s.parse::<f64>().ok()),
+                parts.next().and_then(|s| s.parse::<f64>().ok()),
+            ) {
+                (Some(x), Some(y)) => current.push((x, y)),
+                _ if !current.is_empty() => blocks.push(std::mem::take(&mut current)),
+                _ => {}
+            }
+        }
+        if !current.is_empty() {
+            blocks.push(current);
+        }
+        assert_eq!(blocks.len(), 3, "expected slat, main and flap");
+        blocks
+    }
+
+    /// Compare two f64 arrays bit for bit.
+    fn assert_bits_eq(actual: &[f64], expected: &[f64], what: &str) {
+        assert_eq!(actual.len(), expected.len(), "{what}: length");
+        for (i, (&a, &b)) in actual.iter().zip(expected).enumerate() {
+            assert_eq!(
+                a.to_bits(),
+                b.to_bits(),
+                "{what}[{i}]: {a:?} ({:#018x}) vs {b:?} ({:#018x})",
+                a.to_bits(),
+                b.to_bits()
+            );
+        }
+    }
+
+    // --- connectivity ----------------------------------------------------
+
+    /// The reduction the whole refactor rests on: with one element `next_node`
+    /// is exactly the modulo-n closure it replaced, so no single-element
+    /// influence coefficient moves.
+    #[test]
+    fn single_element_next_node_reduces_to_modulo_n() {
+        for points in [
+            naca0012_at(80, 1.0, 0.0, 0.0),
+            naca0012_blunt_at(80, 0.004, 1.0, 0.0, 0.0),
+            naca0012_at(160, 0.3, 1.2, -0.1),
+        ] {
+            let geom = AirfoilGeometry::from_points(&points).unwrap();
+            let element = ElementPanels::single(&geom);
+
+            assert_eq!(element.first, 0);
+            assert_eq!(element.last, geom.n - 1);
+            for jo in 0..geom.n {
+                assert_eq!(element.next_node(jo), (jo + 1) % geom.n, "node {jo}");
+            }
+
+            // And the panel loop still walks every panel but the TE panel.
+            let walked: Vec<usize> = element.surface_panels().collect();
+            assert_eq!(walked, (0..geom.n - 1).collect::<Vec<_>>());
+        }
+    }
+
+    /// `ElementPanels` closes contours by the same rule as
+    /// `Layout::next_node`, which `ConfigGeometry::next_node` forwards to.
+    #[test]
+    fn element_panels_match_the_layout_closure_rule() {
+        let fixtures: Vec<Vec<Vec<(f64, f64)>>> = vec![
+            mda_elements(),
+            vec![
+                naca0012_at(80, 1.0, 0.0, 0.0),
+                naca0012_blunt_at(60, 0.004, 0.3, 1.05, -0.08),
+            ],
+            vec![naca0012_at(120, 1.0, 0.0, 0.0)],
+        ];
+
+        for elements in fixtures {
+            let config = ConfigGeometry::from_element_points(&elements).unwrap();
+            let panels = ElementPanels::all_of(&config);
+            assert_eq!(panels.len(), config.n_elements());
+
+            for global in 0..config.total_nodes() {
+                let element = &panels[config.element_of(global)];
+                assert!(
+                    element.first <= global && global <= element.last,
+                    "node {global} is outside its own element"
+                );
+                assert_eq!(
+                    element.next_node(global),
+                    config.next_node(global),
+                    "node {global} of a {}-element configuration",
+                    config.n_elements()
+                );
+            }
+        }
+    }
+
+    /// The failure mode this refactor exists to remove. With several elements
+    /// concatenated into one node array, `(jo + 1) % n` closes element 0's last
+    /// panel onto element 1's *first* node, laying a panel across the physical
+    /// gap between them. Nothing crashes when that happens — the Cp
+    /// distribution is simply wrong — so it has to be asserted.
+    #[test]
+    fn no_panel_endpoint_pair_straddles_an_element_boundary() {
+        let elements = vec![
+            naca0012_at(80, 1.0, 0.0, 0.0),
+            naca0012_blunt_at(60, 0.004, 0.3, 1.05, -0.08),
+        ];
+        let config = ConfigGeometry::from_element_points(&elements).unwrap();
+        assert_eq!(config.n_elements(), 2);
+
+        let total = config.total_nodes();
+        let first = *config.element(0);
+        let second = *config.element(1);
+        let boundary = first.end() - 1; // element 0's last node
+
+        // Every surface panel the kernel walks stays inside one element.
+        let debug = psilin_config_debug(&config, total, 2.0, 0.4);
+        for panel in &debug.panels {
+            assert_eq!(
+                config.element_of(panel.jo),
+                config.element_of(panel.jp),
+                "panel {} -> {} crosses an element boundary",
+                panel.jo,
+                panel.jp
+            );
+        }
+        // One TE panel is held back per element, not one for the whole array.
+        assert_eq!(debug.panels.len(), total - config.n_elements());
+
+        // So does each element's TE panel, which is where modulo-n closure
+        // reached into the neighbouring element.
+        let panels = ElementPanels::all_of(&config);
+        assert_eq!(panels[0].next_node(boundary), first.start);
+        assert_eq!(panels[1].next_node(total - 1), second.start);
+
+        // Stated against the arithmetic it replaces: at a boundary the two
+        // answers differ, and the modulo-n one names the wrong element.
+        let modulo_n = |global: usize| (global + 1) % total;
+        assert_eq!(modulo_n(boundary), second.start);
+        assert_ne!(panels[0].next_node(boundary), modulo_n(boundary));
+        assert_ne!(panels[1].next_node(total - 1), modulo_n(total - 1));
+
+        // The source-gradient stencil is held inside the element too.
+        assert_eq!(panels[0].stencil_forward(boundary), boundary);
+        assert_eq!(panels[1].stencil_back(second.start), second.start);
+    }
+
+    /// Each element's trailing edge is treated with its own coefficients,
+    /// tolerance and sharpness verdict rather than the first element's.
+    #[test]
+    fn each_element_carries_its_own_trailing_edge_data() {
+        let elements = vec![
+            naca0012_blunt_at(80, 0.01, 1.0, 0.0, 0.0),
+            naca0012_at(60, 0.3, 1.05, -0.08),
+        ];
+        let config = ConfigGeometry::from_element_points(&elements).unwrap();
+        let panels = ElementPanels::all_of(&config);
+
+        assert!(!panels[0].sharp, "the opened trailing edge is blunt");
+        assert!(panels[1].sharp, "the closed trailing edge is sharp");
+
+        assert_eq!((panels[0].scs, panels[0].sds), config.te_coefficients(0));
+        assert_eq!((panels[1].scs, panels[1].sds), (1.0, 0.0));
+
+        // SEPS comes from each element's own arc length, so the smaller element
+        // gets the smaller tolerance.
+        assert_eq!(panels[0].seps, config.element_arc_length(0) * 1e-5);
+        assert_eq!(panels[1].seps, config.element_arc_length(1) * 1e-5);
+        assert!(panels[1].seps < panels[0].seps);
+    }
+
+    // --- influence coefficients ------------------------------------------
+
+    /// No element influences another through the panel loop: a configuration's
+    /// coefficients are its elements' own, concatenated. Under modulo-n closure
+    /// the two spurious gap-spanning panels show up here as differences at the
+    /// nodes either side of each boundary.
+    #[test]
+    fn configuration_influence_is_the_sum_of_its_independent_elements() {
+        let fixtures: Vec<Vec<Vec<(f64, f64)>>> = vec![
+            vec![
+                naca0012_blunt_at(80, 0.004, 1.0, 0.0, 0.0),
+                naca0012_at(60, 0.3, 1.05, -0.08),
+            ],
+            mda_elements(),
+        ];
+
+        for elements in fixtures {
+            let config = ConfigGeometry::from_element_points(&elements).unwrap();
+            let total = config.total_nodes();
+
+            // A field point off every surface, indexed past the last node, so
+            // each element meets the same conditions alone as it does in the
+            // configuration.
+            let (xi, yi) = (0.42, 0.63);
+            let joint = psilin_config_with_sources(&config, total, xi, yi);
+            let joint_dqdm = psilin_config_with_dqdm(&config, total, xi, yi, 0.6, 0.8);
+
+            for (k, points) in elements.iter().enumerate() {
+                let alone = ConfigGeometry::from_points(points).unwrap();
+                let n = alone.total_nodes();
+                let range = config.element_range(k);
+                let what = format!("element {k} of {}", config.n_elements());
+
+                let solo = psilin_config_with_sources(&alone, n, xi, yi);
+                assert_bits_eq(&joint.dzdg[range.clone()], &solo.dzdg, &format!("{what} dzdg"));
+                assert_bits_eq(&joint.dzdm[range.clone()], &solo.dzdm, &format!("{what} dzdm"));
+
+                let solo = psilin_config_with_dqdm(&alone, n, xi, yi, 0.6, 0.8);
+                assert_bits_eq(
+                    &joint_dqdm.dzdg[range.clone()],
+                    &solo.dzdg,
+                    &format!("{what} dqdm dzdg"),
+                );
+                assert_bits_eq(
+                    &joint_dqdm.dzdm[range.clone()],
+                    &solo.dzdm,
+                    &format!("{what} dqdm dzdm"),
+                );
+                assert_bits_eq(
+                    &joint_dqdm.dqdm[range.clone()],
+                    &solo.dqdm,
+                    &format!("{what} dqdm"),
+                );
+                assert_bits_eq(&joint_dqdm.dqdg[range], &solo.dqdg, &format!("{what} dqdg"));
+            }
+        }
+    }
+
+    /// The single-element path through the element-aware kernel is the
+    /// single-body path: same nodes, same closure, same bits. This is the
+    /// in-repo statement of the parity requirement — a single element must
+    /// reproduce the existing numbers exactly, not closely.
+    #[test]
+    fn single_element_configuration_matches_the_single_body_kernel_bit_for_bit() {
+        for points in [
+            naca0012_blunt_at(80, 0.004, 1.0, 0.0, 0.0),
+            naca0012_at(80, 1.0, 0.0, 0.0),
+        ] {
+            let geom = AirfoilGeometry::from_points(&points).unwrap();
+            let config = ConfigGeometry::from_points(&points).unwrap();
+            let n = geom.n;
+
+            let probes: Vec<(usize, f64, f64)> = (0..n)
+                .map(|i| (i, geom.x[i], geom.y[i]))
+                .chain([(n, 1.4, 0.02), (n + 1, 0.5, 0.25)])
+                .collect();
+
+            for (i, xi, yi) in probes {
+                let expected = psilin(&geom, i, xi, yi);
+                let actual = psilin_config(&config, i, xi, yi);
+                assert_bits_eq(&actual.dzdg, &expected.dzdg, "psilin dzdg");
+
+                let expected = psilin_with_sources(&geom, i, xi, yi);
+                let actual = psilin_config_with_sources(&config, i, xi, yi);
+                assert_bits_eq(&actual.dzdg, &expected.dzdg, "sources dzdg");
+                assert_bits_eq(&actual.dzdm, &expected.dzdm, "sources dzdm");
+
+                let expected = psilin_with_dqdm(&geom, i, xi, yi, 0.6, 0.8);
+                let actual = psilin_config_with_dqdm(&config, i, xi, yi, 0.6, 0.8);
+                assert_bits_eq(&actual.dzdg, &expected.dzdg, "dqdm dzdg");
+                assert_bits_eq(&actual.dzdm, &expected.dzdm, "dqdm dzdm");
+                assert_bits_eq(&actual.dqdm, &expected.dqdm, "dqdm");
+                assert_bits_eq(&actual.dqdg, &expected.dqdg, "dqdg");
+
+                let expected = psilin_debug(&geom, i, xi, yi);
+                let actual = psilin_config_debug(&config, i, xi, yi);
+                assert_bits_eq(&actual.dzdg, &expected.dzdg, "debug dzdg");
+                assert_eq!(actual.panels.len(), expected.panels.len());
+                for (a, b) in actual.panels.iter().zip(&expected.panels) {
+                    assert_eq!((a.jo, a.jp), (b.jo, b.jp));
+                    assert_eq!(a.dzdg_jo.to_bits(), b.dzdg_jo.to_bits());
+                    assert_eq!(a.dzdg_jp.to_bits(), b.dzdg_jp.to_bits());
+                }
+            }
+        }
     }
 
     #[test]

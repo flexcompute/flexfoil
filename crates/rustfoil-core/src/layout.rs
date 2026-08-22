@@ -72,7 +72,17 @@ use crate::error::GeometryError;
 /// indices. The two do not coincide: for a sharp trailing edge, `Body`'s upper
 /// trailing-edge panel is the last panel of the contour, whose *end* node is
 /// node 0. [`Layout::from_configuration`] does that conversion.
+///
+/// # Construction is the only way in
+/// The type is `#[non_exhaustive]`, so an external crate cannot assemble a span
+/// with a struct literal and has to go through [`ElementSpan::new`] or
+/// [`ElementSpan::with_indices`], each of which checks the invariants above.
+/// The fields stay readable, and [`start`](Self::start), [`len`](Self::len),
+/// [`le`](Self::le), [`te_upper`](Self::te_upper) and
+/// [`te_lower`](Self::te_lower) are the accessor form of the same values for
+/// callers that prefer one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ElementSpan {
     /// Global index of this element's first node.
     pub start: usize,
@@ -227,14 +237,65 @@ impl ElementSpan {
         self.le != 0
     }
 
-    /// Whether this element's trailing edge is blunt, i.e. whether its upper
-    /// and lower trailing-edge nodes are distinct.
+    /// Whether this element's upper and lower trailing-edge **nodes are
+    /// distinct**.
     ///
     /// `false` for a sharp trailing edge, and also for a connectivity-only span
     /// built from a node count alone.
+    ///
+    /// # This is connectivity, not the aerodynamic sharpness test
+    /// It answers a question about *node identity*, decided upstream by the
+    /// absolute componentwise closure test
+    /// ([`crate::body::contour_is_closed`], tolerance `1e-10`): does this
+    /// element have a second, separate trailing-edge node to close a base panel
+    /// onto?
+    ///
+    /// The trailing-edge treatment in the solver gates on a different,
+    /// *relative* test — `dste < 1e-4 * chord`, carried as
+    /// `ElementGeometry::sharp` in `rustfoil-inviscid`'s geometry module — and
+    /// the two can disagree. A contour whose ends sit `1e-6` apart on a
+    /// unit chord has distinct nodes (blunt by this method) and is sharp by the
+    /// relative test; a contour on a chord smaller than the closure tolerance
+    /// can be the other way round. The relative test is the authority for
+    /// anything aerodynamic, because it is what the numerics consume. Use this
+    /// method only to ask how many trailing-edge nodes an element has.
     #[inline]
     pub fn has_blunt_te(&self) -> bool {
         self.te_upper != self.te_lower
+    }
+
+    /// Global index of this element's first node.
+    #[inline]
+    pub fn start(&self) -> usize {
+        self.start
+    }
+
+    /// Number of nodes belonging to this element. Never zero.
+    // No `is_empty`: a span of zero nodes is rejected at construction, so the
+    // question the lint wants answered cannot arise.
+    #[allow(clippy::len_without_is_empty)]
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Local index of the leading-edge node — see the `le` field for what `0`
+    /// means.
+    #[inline]
+    pub fn le(&self) -> usize {
+        self.le
+    }
+
+    /// Local index of the upper-surface trailing-edge node.
+    #[inline]
+    pub fn te_upper(&self) -> usize {
+        self.te_upper
+    }
+
+    /// Local index of the lower-surface trailing-edge node.
+    #[inline]
+    pub fn te_lower(&self) -> usize {
+        self.te_lower
     }
 
     /// Global index of the leading-edge node.
@@ -269,13 +330,25 @@ impl ElementSpan {
 /// Those invariants are what let [`element_of`](Layout::element_of) locate a
 /// node by binary search, and what make [`next_node`](Layout::next_node) total
 /// on `0 .. total_nodes`.
+///
+/// # The fields are private on purpose
+/// Every constructor checks the invariants, so the only way to hold a `Layout`
+/// is to hold a checked one. Public fields would let a caller outside this
+/// crate assemble or edit a layout whose spans overlap, leave a gap, or
+/// disagree with `total_nodes`, and [`next_node`](Layout::next_node) — the
+/// method that exists to keep a panel from closing across two separate bodies
+/// — would then read from that table and return a node in the wrong element.
+/// Read the contents through [`spans`](Layout::spans),
+/// [`span`](Layout::span) and [`total_nodes`](Layout::total_nodes); those are
+/// the same values the fields used to expose, so this also removes the
+/// field-and-accessor pairing that made it ambiguous which to use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layout {
     /// One span per element, in configuration order, tiling `0 .. total_nodes`.
-    pub spans: Vec<ElementSpan>,
+    spans: Vec<ElementSpan>,
 
     /// Total number of nodes across all elements.
-    pub total_nodes: usize,
+    total_nodes: usize,
 }
 
 impl Layout {
@@ -330,7 +403,7 @@ impl Layout {
     /// use rustfoil_core::layout::Layout;
     ///
     /// let layout = Layout::from_node_counts(&[4, 6, 5]).unwrap();
-    /// assert_eq!(layout.total_nodes, 15);
+    /// assert_eq!(layout.total_nodes(), 15);
     ///
     /// // Element 0 closes onto itself, not onto element 1's first node.
     /// assert_eq!(layout.next_node(3), 0);
@@ -362,11 +435,13 @@ impl Layout {
     /// *points*, while a span numbers everything in nodes, so the conversion is
     /// explicit here rather than left to each caller:
     ///
-    /// - `te_lower` is `0`. The body's lower trailing-edge panel is panel 0,
-    ///   whose first node is node 0.
-    /// - `te_upper` is the *end* node of the body's upper trailing-edge panel
-    ///   (its last panel): node 0 for a closed contour, where that panel runs
-    ///   back to the start, and `len - 1` for an open one.
+    /// - `te_upper` is `0`. The contour starts at the upper trailing edge, so
+    ///   the body's first node is its upper trailing-edge node. (Note that
+    ///   [`Body::te_upper_index`](crate::body::Body::te_upper_index) is the
+    ///   *panel* on that side — the contour's last panel — not this node.)
+    /// - `te_lower` is the *end* node of that last panel: node 0 for a closed
+    ///   contour, where the panel runs back to the start and one node serves
+    ///   both surfaces, and `len - 1` for an open one.
     /// - `le` is [`crate::body::Body::le_index`] unchanged. It is a point index,
     ///   and point `i` is node `i` for every node of the contour.
     ///
@@ -763,6 +838,18 @@ mod tests {
         assert_eq!(span.te_lower_global(), 11);
         assert_eq!(span.global(3), 14);
         assert_eq!(span.local(14), 3);
+    }
+
+    #[test]
+    fn span_accessors_report_the_same_values_as_the_fields() {
+        // The accessor form exists so callers do not have to reach for a field;
+        // the two must not be able to drift apart.
+        let span = ElementSpan::with_indices(11, 5, 2, 0, 4).unwrap();
+        assert_eq!(span.start(), span.start);
+        assert_eq!(span.len(), span.len);
+        assert_eq!(span.le(), span.le);
+        assert_eq!(span.te_upper(), span.te_upper);
+        assert_eq!(span.te_lower(), span.te_lower);
     }
 
     #[test]
