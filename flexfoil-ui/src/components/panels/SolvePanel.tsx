@@ -17,7 +17,7 @@ import { runSweep, type SweepConfig, type SweepRunData } from '../../lib/sweepEn
 import type { PolarPoint, SweepAxis, SweepParam, ReType } from '../../types';
 import type { RunInsert } from '../../lib/storageBackend';
 import { parseSweepValues, formatSweepValues } from '../../lib/parseSweepValues';
-import { trackEvent } from '../../lib/analytics';
+import { SOLVE_RUN_ANALYTICS_ENABLED, trackEvent } from '../../lib/analytics';
 
 type SolveOrCacheResult = {
   result: AnalysisResult | null;
@@ -339,11 +339,13 @@ export function SolvePanel() {
       return;
     }
 
-    trackEvent('solve_run', {
-      solve_mode: runMode === 'alpha' ? 'single_alpha' : 'single_cl',
-      solver_mode: isViscous ? 'viscous' : 'inviscid',
-      n_panels: panels.length - 1,
-    });
+    if (SOLVE_RUN_ANALYTICS_ENABLED) {
+      trackEvent('solve_run', {
+        solve_mode: runMode === 'alpha' ? 'single_alpha' : 'single_cl',
+        solver_mode: isViscous ? 'viscous' : 'inviscid',
+        n_panels: panels.length - 1,
+      });
+    }
 
     const jobLabel = runMode === 'alpha'
       ? `${isViscous ? 'Viscous' : 'Inviscid'} @ alpha=${targetAlpha.toFixed(1)}`
@@ -586,11 +588,13 @@ export function SolvePanel() {
 
     clearPolarSuppression();
 
-    trackEvent('solve_run', {
-      solve_mode: 'polar',
-      solver_mode: isViscous ? 'viscous' : 'inviscid',
-      n_panels: panels.length - 1,
-    });
+    if (SOLVE_RUN_ANALYTICS_ENABLED) {
+      trackEvent('solve_run', {
+        solve_mode: 'polar',
+        solver_mode: isViscous ? 'viscous' : 'inviscid',
+        n_panels: panels.length - 1,
+      });
+    }
 
     const { id: jobId, signal } = jobDispatch(
       `Polar ${alphaStart.toFixed(0)} to ${alphaEnd.toFixed(0)} (${isViscous ? 'viscous' : 'inviscid'})`
@@ -737,11 +741,13 @@ export function SolvePanel() {
     const controller = new AbortController();
     sweepAbortRef.current = controller;
 
-    trackEvent('solve_run', {
-      solve_mode: sweepSecondary ? 'sweep_2d' : 'sweep_1d',
-      solver_mode: isViscous ? 'viscous' : 'inviscid',
-      n_panels: panels.length - 1,
-    });
+    if (SOLVE_RUN_ANALYTICS_ENABLED) {
+      trackEvent('solve_run', {
+        solve_mode: sweepSecondary ? 'sweep_2d' : 'sweep_1d',
+        solver_mode: isViscous ? 'viscous' : 'inviscid',
+        n_panels: panels.length - 1,
+      });
+    }
 
     const sweepLabel = sweepSecondary
       ? `Sweep ${sweepPrimary.param} × ${sweepSecondary.param} (${isViscous ? 'viscous' : 'inviscid'})`

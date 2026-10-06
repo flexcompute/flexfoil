@@ -10,6 +10,8 @@ beforeEach(() => {
 
 afterEach(() => {
   delete globals.window;
+  vi.unstubAllEnvs();
+  vi.resetModules();
 });
 
 describe('trackEvent', () => {
@@ -28,5 +30,18 @@ describe('trackEvent', () => {
 
   it('does not throw when the tag is blocked', () => {
     expect(() => trackEvent('solve_run')).not.toThrow();
+  });
+});
+
+describe('solve analytics opt-in', () => {
+  it.each([undefined, 'false', '1'])('is off without the exact explicit true value (%s)', async value => {
+    vi.stubEnv('VITE_SOLVE_RUN_ANALYTICS', value);
+    vi.resetModules();
+    expect((await import('./analytics')).SOLVE_RUN_ANALYTICS_ENABLED).toBe(false);
+  });
+  it('is enabled by the explicit build setting', async () => {
+    vi.stubEnv('VITE_SOLVE_RUN_ANALYTICS', 'true');
+    vi.resetModules();
+    expect((await import('./analytics')).SOLVE_RUN_ANALYTICS_ENABLED).toBe(true);
   });
 });

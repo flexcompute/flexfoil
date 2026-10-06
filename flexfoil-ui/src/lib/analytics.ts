@@ -1,3 +1,6 @@
+// Explicit build-time opt-in; ordinary solve paths do not construct event parameters.
+export const SOLVE_RUN_ANALYTICS_ENABLED = import.meta.env.VITE_SOLVE_RUN_ANALYTICS === 'true';
+
 const CONSENT_KEY = 'ff_cookie_consent';
 const GA_ID = 'G-065GK6XBSR';
 

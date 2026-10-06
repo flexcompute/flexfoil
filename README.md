@@ -169,3 +169,22 @@ Copyright (c) 2026 Flexcompute, Inc. and Harry Smith.
 This repository includes third-party components and references commercial
 dependencies. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for details
 on AG Grid Enterprise, the TWK Everett typeface, and other attributions.
+
+### Optional solve analytics
+
+Solve dispatches emit no `solve_run` events by default. To explicitly enable that feature,
+set `VITE_SOLVE_RUN_ANALYTICS=true` when starting or building `flexfoil-ui`. The three solve
+paths then report only solve mode, solver mode and panel count through the existing GA4
+helper and consent policy. Solver execution and results are unchanged by this flag.
+
+The opt-in regression checks run locally without GA or a built WASM solver:
+
+```sh
+(cd flexfoil-ui && npx vitest run --maxWorkers=1 && npx tsc -b)
+npx playwright test --config e2e/analytics/playwright.config.mts
+```
+
+The browser fixture mounts the real SolvePanel with an offline solver and in-memory
+run persistence. It checks all five modes with the flag off and on, including solver
+dispatch/results and the exact event payload. It does not validate solver numerics.
+Chrome must be installed for this isolated fixture.
