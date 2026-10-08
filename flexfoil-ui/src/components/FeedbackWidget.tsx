@@ -13,6 +13,14 @@ const TYPE_LABELS: Record<FeedbackType, { label: string; icon: string }> = {
   general: { label: 'General', icon: '💬' },
 };
 
+// A template query is required. With files in .github/ISSUE_TEMPLATE, GitHub
+// redirects /issues/new to the chooser and drops title, body, and labels.
+const GITHUB_DRAFTS: Record<FeedbackType, { template: string; label: string }> = {
+  bug: { template: 'bug-report.md', label: 'bug' },
+  feature: { template: 'feature-request.md', label: 'enhancement' },
+  general: { template: 'question.md', label: 'question' },
+};
+
 type SubmitState = 'idle' | 'sending' | 'success' | 'github' | 'error';
 
 export function FeedbackWidget() {
@@ -42,10 +50,12 @@ export function FeedbackWidget() {
       if (!message.trim()) return;
 
       if (!GOOGLE_SHEET_URL) {
+        const draft = GITHUB_DRAFTS[type];
         const params = new URLSearchParams({
           title: message.trim().split('\n')[0].slice(0, 80),
           body: message.trim(),
-          labels: type === 'feature' ? 'enhancement' : type === 'bug' ? 'bug' : 'question',
+          labels: draft.label,
+          template: draft.template,
         });
         window.open(`https://github.com/flexcompute/flexfoil/issues/new?${params}`, '_blank', 'noopener,noreferrer');
         trackEvent('feedback_handoff', { feedback_type: type });

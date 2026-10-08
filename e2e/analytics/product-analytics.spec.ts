@@ -25,6 +25,7 @@ test('feature request handoff is public, correctly categorized and never claims 
   const url = new URL(await page.evaluate(() => (window as any).__draftUrl));
   expect(url.origin).toBe('https://github.com');
   expect(url.pathname).toBe('/flexcompute/flexfoil/issues/new');
+  expect(url.searchParams.get('template')).toBe('feature-request.md');
   expect(url.searchParams.get('labels')).toBe('enhancement');
   expect(url.searchParams.get('body')).toContain('Please add a comparison plot');
   await expect(page.getByText('Opening a draft does not submit it.', { exact: false })).toBeVisible();
