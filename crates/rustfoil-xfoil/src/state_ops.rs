@@ -1,3 +1,13 @@
+use std::sync::LazyLock;
+
+// Read diagnostic switches once per module to avoid getenv contention in solver loops.
+static STMOVE_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_STMOVE_DEBUG").is_ok());
+static UESET_DETAIL_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_UESET_DETAIL_DEBUG").is_ok());
+static UESET_STATE_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_UESET_STATE_DEBUG").is_ok());
+
 use nalgebra::DMatrix;
 use rustfoil_bl::state::BlStation;
 
@@ -715,7 +725,7 @@ fn coupled_uedg(
         panel_idx,
         0 | 69 | 70 | 98 | 102 | 103 | 104 | 146 | 147 | 148
     );
-    let debug_first = std::env::var("RUSTFOIL_UESET_STATE_DEBUG").is_ok()
+    let debug_first = *UESET_STATE_DEBUG
         && panel_idx != usize::MAX
         && (vti > 0.0 || (vti < 0.0 && debug_panels));
     let mut debug_upper = 0.0;
@@ -741,7 +751,7 @@ fn coupled_uedg(
             "[STATE UESET] panel={} vti={:.0} uinv={:.8e} upper={:.8e} lower_airfoil={:.8e} lower_wake={:.8e} uedg={:.8e}",
             panel_idx, vti, uinv, debug_upper, debug_lower_airfoil, debug_lower_wake, ue
         );
-        if std::env::var("RUSTFOIL_UESET_DETAIL_DEBUG").is_ok() {
+        if *UESET_DETAIL_DEBUG {
             for (other_vti, other_panel, mass) in coupling {
                 if *other_vti > 0.0
                     && panel_idx < dij.nrows()
@@ -929,7 +939,7 @@ fn refresh_surface_row_views(rows: &mut [XfoilBlRow], nbl: usize, iblte: usize, 
 }
 
 fn maybe_debug_stmove_rows(state: &XfoilState, phase: &str, old_ist: usize, new_ist: usize) {
-    if std::env::var("RUSTFOIL_STMOVE_DEBUG").is_err() {
+    if !*STMOVE_DEBUG {
         return;
     }
     eprintln!(

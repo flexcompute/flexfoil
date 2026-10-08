@@ -10,6 +10,12 @@
 //! # XFOIL Reference
 //! - CDCALC: xfoil.f line 1172
 
+use std::sync::LazyLock;
+
+// Read diagnostic switches once per module to avoid getenv contention in solver loops.
+static DRAG_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_DRAG_DEBUG").is_ok());
+
 use rustfoil_bl::state::BlStation;
 use rustfoil_bl::{add_event, is_debug_active, CdBreakdownEvent, ClDetailEvent, DebugEvent};
 
@@ -407,7 +413,7 @@ pub fn compute_forces_two_surfaces(
     let cd = cd_total;
     
     // Debug drag computation
-    if std::env::var("RUSTFOIL_DRAG_DEBUG").is_ok() {
+    if *DRAG_DEBUG {
         if let (Some(u), Some(l)) = (upper_te, lower_te) {
             let theta_te = u.theta + l.theta;
             let ue_te = 0.5 * (u.u.abs() + l.u.abs());
@@ -753,7 +759,7 @@ pub fn compute_cd_from_wake(wake_stations: &[BlStation], cd_friction: f64) -> f6
     let mut cd_total = squire_young_drag(theta_wake, ue_wake, h_wake);
     cd_total = cd_total.max(cd_friction);
     
-    if std::env::var("RUSTFOIL_DRAG_DEBUG").is_ok() {
+    if *DRAG_DEBUG {
         eprintln!("[WAKE_CD_DEBUG] Far wake: x={:.4} θ={:.4e} H={:.3} Ue={:.4}", 
             far_wake.x, theta_wake, h_wake, ue_wake);
         eprintln!("[WAKE_CD_DEBUG] CD_total={:.5} (from S-Y at far wake, clamped to >= cd_friction={:.5})", cd_total, cd_friction);

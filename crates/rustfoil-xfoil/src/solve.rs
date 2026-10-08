@@ -1,3 +1,9 @@
+use std::sync::LazyLock;
+
+// Read diagnostic switches once per module to avoid getenv contention in solver loops.
+static SOLVE_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_SOLVE_DEBUG").is_ok());
+
 use rustfoil_coupling::global_newton::{emit_blsolv_solution_debug, solve_global_system};
 
 use crate::{assembly::AssemblyState, state::XfoilState};
@@ -15,7 +21,7 @@ pub fn blsolv(state: &mut XfoilState, assembly: &mut AssemblyState, iteration: u
     let max = assembly.system.max_residual();
     let result = solve_global_system(&mut assembly.system);
     emit_blsolv_solution_debug(iteration, &result.state_deltas);
-    if std::env::var("RUSTFOIL_SOLVE_DEBUG").is_ok() {
+    if *SOLVE_DEBUG {
         for iv in 1..=5.min(result.state_deltas.len().saturating_sub(1)) {
             eprintln!(
                 "[SOLVE DEBUG] iv={iv} state={:?} operating={:?}",

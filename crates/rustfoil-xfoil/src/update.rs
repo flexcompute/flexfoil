@@ -1,3 +1,9 @@
+use std::sync::LazyLock;
+
+// Read diagnostic switches once per module to avoid getenv contention in solver loops.
+static UPDATE_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_UPDATE_DEBUG").is_ok());
+
 use rustfoil_bl::{blvar, BlStation, FlowType};
 use rustfoil_coupling::global_newton::{apply_global_updates, preview_global_update_ue, GlobalNewtonSystem};
 
@@ -117,7 +123,7 @@ pub fn update(
     sync_rows_from_stations(&mut state.upper_rows[..upper_len], &upper_stations);
     sync_rows_from_stations(&mut state.lower_rows[..lower_len], &lower_stations);
     sync_state_views_from_rows(state);
-    if std::env::var("RUSTFOIL_UPDATE_DEBUG").is_ok() {
+    if *UPDATE_DEBUG {
         eprintln!(
             "[UPDATE DEBUG] cl_new={:.6e} cl_a={:.6e} cl_ac={:.6e} dac={:.6e} rlx={:.6e}",
             cl_new, cl_a, cl_ac, dac, update_result.relaxation_used

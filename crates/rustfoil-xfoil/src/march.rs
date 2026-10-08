@@ -2,6 +2,18 @@
 //!
 //! Implements BLPINI, MRCHUE (xbl.f:584-986), and MRCHDU (xbl.f:990-1312).
 
+use std::sync::LazyLock;
+
+// Read diagnostic switches once per module to avoid getenv contention in solver loops.
+static TAIL_ITER_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_TAIL_ITER_DEBUG").is_ok());
+static TRCHEK_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_TRCHEK_DEBUG").is_ok());
+static WAKE_ITER_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_WAKE_ITER_DEBUG").is_ok());
+static WAKE_MARCH_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_WAKE_MARCH_DEBUG").is_ok());
+
 use rustfoil_bl::{
     bldif, blvar,
     closures::{hkin, trchek2_full, Trchek2FullResult},
@@ -710,7 +722,7 @@ fn march_ue_side(
                 re,
             )
         });
-        if std::env::var("RUSTFOIL_WAKE_MARCH_DEBUG").is_ok()
+        if *WAKE_MARCH_DEBUG
             && ((wake && (iblte + 1..=iblte + 3).contains(&ibl)) || ibl == iblte)
         {
             eprintln!(
@@ -929,7 +941,7 @@ fn march_du_side(
                         None,
                     ));
                 }
-                if std::env::var("RUSTFOIL_TRCHEK_DEBUG").is_ok() {
+                if *TRCHEK_DEBUG {
                     eprintln!(
                         "[TRCHEK DU] side={} ibl={} itran={} itrold={} x1={:.12e} x2={:.12e} th1={:.12e} th2={:.12e} ds1={:.12e} ds2={:.12e} u1={:.12e} u2={:.12e} hk1={:.12e} hk2={:.12e} rt1={:.12e} rt2={:.12e} ampl1={:.12e} ampl2={:.12e} transition={} xt={:.12e} xforced={:?}",
                         side,
@@ -1107,7 +1119,7 @@ fn march_du_side(
             }
             let rlx = if dmax > 0.3 { 0.3 / dmax } else { 1.0 };
 
-            if std::env::var("RUSTFOIL_WAKE_ITER_DEBUG").is_ok() && wake && ibl == iblte + 2 {
+            if *WAKE_ITER_DEBUG && wake && ibl == iblte + 2 {
                 eprintln!(
                     "[WAKE ITER] ibl={} it={} theta={:.8e} dsi_total={:.8e} ctau={:.8e} ue={:.8e} dmax={:.8e} rlx={:.8e} rhs=[{:.8e}, {:.8e}, {:.8e}, {:.8e}]",
                     ibl,
@@ -1124,7 +1136,7 @@ fn march_du_side(
                     rhs[3]
                 );
             }
-            if std::env::var("RUSTFOIL_TAIL_ITER_DEBUG").is_ok()
+            if *TAIL_ITER_DEBUG
                 && (iblte.saturating_sub(2)..=iblte).contains(&ibl)
             {
                 eprintln!(
@@ -1272,7 +1284,7 @@ fn march_du_side(
                         None,
                     ));
                 }
-                if std::env::var("RUSTFOIL_TRCHEK_DEBUG").is_ok() {
+                if *TRCHEK_DEBUG {
                     eprintln!(
                         "[TRCHEK DU FALLBACK] side={} ibl={} itran={} itrold={} x1={:.12e} x2={:.12e} th1={:.12e} th2={:.12e} ds1={:.12e} ds2={:.12e} u1={:.12e} u2={:.12e} hk1={:.12e} hk2={:.12e} rt1={:.12e} rt2={:.12e} ampl1={:.12e} ampl2={:.12e} transition={} xt={:.12e} xforced={:?}",
                         side,
@@ -1341,7 +1353,7 @@ fn march_du_side(
                 re,
             )
         });
-        if std::env::var("RUSTFOIL_WAKE_MARCH_DEBUG").is_ok()
+        if *WAKE_MARCH_DEBUG
             && ((wake && (iblte + 1..=iblte + 3).contains(&ibl)) || ibl == iblte)
         {
             eprintln!(
