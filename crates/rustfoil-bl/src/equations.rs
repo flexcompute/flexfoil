@@ -8,6 +8,12 @@
 //! - BLVAR: xblsys.f line 784
 //! - BLDIF: xblsys.f line 1552
 
+use std::sync::LazyLock;
+
+// Read diagnostic switches once per module to avoid getenv contention in solver loops.
+static REZC_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_REZC_DEBUG").is_ok());
+
 use crate::closures::{
     amplification_rate, axset_full, cf_laminar, cf_turbulent, density_shape, dissipation_laminar,
     dissipation_wake, hkin, hs_laminar, hs_turbulent,
@@ -1264,7 +1270,7 @@ fn bldif_with_terms_internal(
             res.res_third = -rezc;
             
             // Debug: print REZC terms when near transition (ctau difference from equilibrium)
-            if std::env::var("RUSTFOIL_REZC_DEBUG").is_ok() {
+            if *REZC_DEBUG {
                 let cq_diff = (cqa - sa).abs();
                 if cq_diff > 0.03 && cq_diff < 0.1 {
                     eprintln!("[REZC DEBUG] x={:.4}, ctau_diff={:.4}", s2.x, cq_diff);

@@ -36,6 +36,50 @@
 //! - SETBL: xbl.f line 21 (builds global system)
 //! - BLSOLV: xsolve.f line 283 (solves the system)
 
+use std::sync::LazyLock;
+
+// Read diagnostic switches once per module to avoid getenv contention in solver loops.
+static BLDIF_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_BLDIF_DEBUG").is_ok());
+static BLSOLV_STEP_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_BLSOLV_STEP_DEBUG").is_ok());
+static DUE_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_DUE_DEBUG").is_ok());
+static DUI_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_DUI_DEBUG").is_ok());
+static FC_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_FC_DEBUG").is_ok());
+static FINAL_DELTA_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_FINAL_DELTA_DEBUG").is_ok());
+static FORCED_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_FORCED_DEBUG").is_ok());
+static LE_UPDATE_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_LE_UPDATE_DEBUG").is_ok());
+static NEWTON_CMP: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_NEWTON_CMP").is_ok());
+static NEWTON_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_NEWTON_DEBUG").is_ok());
+static RAW_RES_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_RAW_RES_DEBUG").is_ok());
+static SETBL_FULL_VM: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_SETBL_FULL_VM").is_ok());
+static SETBL_VDEL_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_SETBL_VDEL_DEBUG").is_ok());
+static TESYS_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_TESYS_DEBUG").is_ok());
+static TRANSITION_BLOCK_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_TRANSITION_BLOCK_DEBUG").is_ok());
+static TRANSITION_BRANCH_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_TRANSITION_BRANCH_DEBUG").is_ok());
+static TRANS_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_TRANS_DEBUG").is_ok());
+static UESET_FIRST_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_UESET_FIRST_DEBUG").is_ok());
+static UPDATE_NEWTON_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_UPDATE_NEWTON_DEBUG").is_ok());
+static VM_FOCUS_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_VM_FOCUS_DEBUG").is_ok());
+
 use nalgebra::DMatrix;
 use rustfoil_bl::closures::hkin::hkin;
 use rustfoil_bl::closures::trchek2_full;
@@ -428,7 +472,7 @@ impl GlobalNewtonSystem {
         );
         
         // Debug: print final VDEL after forced changes
-        if std::env::var("RUSTFOIL_NEWTON_DEBUG").is_ok() {
+        if *NEWTON_DEBUG {
             eprintln!("\n[NEWTON DEBUG] After forced changes (FINAL VDEL):");
             for ibl in 1..=5.min(upper_stations.len().saturating_sub(1)) {
                 let iv = self.to_global(0, ibl);
@@ -511,7 +555,7 @@ impl GlobalNewtonSystem {
             vdel_rhs.push(self.vdel[iv]);
         }
 
-        if std::env::var("RUSTFOIL_SETBL_VDEL_DEBUG").is_ok() {
+        if *SETBL_VDEL_DEBUG {
             for iv in [27usize, 28, 29, 30, 159, 160, 161, 162, 163] {
                 if iv <= self.nsys {
                     let vals = self.vdel[iv];
@@ -549,7 +593,7 @@ impl GlobalNewtonSystem {
         let vm_row24 = focused_vm_row(24);
         let vm_row25 = focused_vm_row(25);
         let vm_row26 = focused_vm_row(26);
-        let vm_full = if std::env::var("RUSTFOIL_SETBL_FULL_VM").is_ok() {
+        let vm_full = if *SETBL_FULL_VM {
             Some(
                 (1..=nout)
                     .map(|iv| (1..=nout).map(|jv| self.vm[iv][jv]).collect())
@@ -559,7 +603,7 @@ impl GlobalNewtonSystem {
             None
         };
 
-        if std::env::var("RUSTFOIL_VM_FOCUS_DEBUG").is_ok() {
+        if *VM_FOCUS_DEBUG {
             for focus_iv in [24usize, 25, 26] {
                 if focus_iv <= self.nsys {
                     let end = nout.min(self.nsys);
@@ -666,7 +710,7 @@ impl GlobalNewtonSystem {
             }
 
             // Debug: print DUI breakdown at first few stations
-            if std::env::var("RUSTFOIL_DUI_DEBUG").is_ok() && i <= 3 {
+            if *DUI_DEBUG && i <= 3 {
                 let surface_name = if surface == 0 { "upper" } else { "lower" };
                 let ue_inv_i = ue_inviscid.get(i).copied().unwrap_or(0.0);
                 
@@ -718,7 +762,7 @@ impl GlobalNewtonSystem {
                 }
             }
 
-            if std::env::var("RUSTFOIL_UESET_FIRST_DEBUG").is_ok() && surface == 0 && i == 1 {
+            if *UESET_FIRST_DEBUG && surface == 0 && i == 1 {
                 let ue_inv_i = ue_inviscid.get(i).copied().unwrap_or(0.0);
                 eprintln!(
                     "[UESET FIRST] panel_i={} ue_inv={:.8e} dui_upper={:.8e} dui_lower={:.8e} ue_after={:.8e} mass={:.8e}",
@@ -824,7 +868,7 @@ impl GlobalNewtonSystem {
             } else {
                 None
             };
-            if std::env::var("RUSTFOIL_TRANSITION_BRANCH_DEBUG").is_ok()
+            if *TRANSITION_BRANCH_DEBUG
                 && ((surface == 0 && (30..=31).contains(&i))
                     || (surface == 1 && (61..=62).contains(&i)))
             {
@@ -856,7 +900,7 @@ impl GlobalNewtonSystem {
             } else {
                 bldif_ncrit(s1, s2, flow_type, msq, re, ncrit)
             };
-            if std::env::var("RUSTFOIL_TRANSITION_BLOCK_DEBUG").is_ok()
+            if *TRANSITION_BLOCK_DEBUG
                 && ((surface == 0 && (i == 30 || i == 31))
                     || (surface == 1 && (i == 61 || i == 62)))
             {
@@ -875,7 +919,7 @@ impl GlobalNewtonSystem {
                 );
             }
 
-        if std::env::var("RUSTFOIL_BLDIF_DEBUG").is_ok()
+        if *BLDIF_DEBUG
             && ((surface == 0 && (i <= 2 || (20..=35).contains(&i) || (99..=105).contains(&i)))
                 || (surface == 1 && (56..=63).contains(&i)))
         {
@@ -928,14 +972,14 @@ impl GlobalNewtonSystem {
             // Debug print moved AFTER VA/VB assignment to show stored values
             
             // Debug: print raw bldif residuals at first few stations (before forced changes)
-            if std::env::var("RUSTFOIL_RAW_RES_DEBUG").is_ok() && i <= 3 {
+            if *RAW_RES_DEBUG && i <= 3 {
                 let surface_name = if surface == 0 { "upper" } else { "lower" };
                 eprintln!("[RAW RES] {}[{}] IV={}: raw=[{:.6e}, {:.6e}, {:.6e}]", 
                     surface_name, i, iv, residuals.res_third, residuals.res_mom, residuals.res_shape);
             }
             
             // Debug: print Newton system at i=2 (XFOIL IBL=3) for comparison
-            if std::env::var("RUSTFOIL_NEWTON_CMP").is_ok() && i == 2 && surface == 0 {
+            if *NEWTON_CMP && i == 2 && surface == 0 {
                 eprintln!("\n=== RustFoil Newton System at i=2 (XFOIL IBL=3) ===");
                 eprintln!("VS1 (upstream Jacobian, 3x5):");
                 for eq in 0..3 {
@@ -955,7 +999,7 @@ impl GlobalNewtonSystem {
             }
             
             // Debug: log residuals at transition stations
-            if std::env::var("RUSTFOIL_TRANS_DEBUG").is_ok() {
+            if *TRANS_DEBUG {
                 // Check if this is near the transition station
                 let surface_name = if surface == 0 { "upper" } else { "lower" };
                 let trans_idx = stations.iter().position(|s| !s.is_laminar);
@@ -1064,7 +1108,7 @@ impl GlobalNewtonSystem {
             
             // Debug: print Newton matrix comparison data for first few stations
             // Placed AFTER VA/VB assignment to show actual stored values
-            if std::env::var("RUSTFOIL_NEWTON_DEBUG").is_ok() && i <= 5 {
+            if *NEWTON_DEBUG && i <= 5 {
                 let surface_name = if surface == 0 { "upper" } else { "lower" };
                 eprintln!("\n[NEWTON DEBUG] {} IBL={} IV={}", surface_name, i, iv);
                 eprintln!("  VA (stored in system):");
@@ -1400,7 +1444,7 @@ impl GlobalNewtonSystem {
         self.dule2 = due_lower.get(1).copied().unwrap_or(0.0);
         
         // Debug: print DUE for first few stations to understand the mismatch
-        if std::env::var("RUSTFOIL_DUE_DEBUG").is_ok() {
+        if *DUE_DEBUG {
             eprintln!("[DUE DEBUG] Upper surface DUE at first stations:");
             for i in 0..5.min(due_upper.len()) {
                 let curr = ue_current_upper.get(i).copied().unwrap_or(0.0);
@@ -1418,7 +1462,7 @@ impl GlobalNewtonSystem {
         }
 
         // Debug: print VDEL before forced changes for first few stations
-        if std::env::var("RUSTFOIL_NEWTON_DEBUG").is_ok() {
+        if *NEWTON_DEBUG {
             eprintln!("\n[NEWTON DEBUG] Before forced changes:");
             for ibl in 1..=5.min(upper_stations.len().saturating_sub(1)) {
                 let iv = self.to_global(0, ibl);
@@ -1465,7 +1509,7 @@ impl GlobalNewtonSystem {
                 )
             };
 
-            if std::env::var("RUSTFOIL_FORCED_DEBUG").is_ok()
+            if *FORCED_DEBUG
                 && ((20..=35).contains(&ibl) || (99..=105).contains(&ibl))
             {
                 let fc0 = self.vs1_delta[iv][0] * dds1
@@ -1535,7 +1579,7 @@ impl GlobalNewtonSystem {
             }
 
             // Debug: print forced change contributions at station 2 (first iteration only)
-            if std::env::var("RUSTFOIL_FC_DEBUG").is_ok() && ibl <= 2 {
+            if *FC_DEBUG && ibl <= 2 {
                 eprintln!("[FC DEBUG] upper[{ibl}]: due1={:.6e}, due2={:.6e}, dds1={:.6e}, dds2={:.6e}",
                     due1, due2, dds1, dds2);
                 eprintln!("[FC DEBUG]   vs1_ue=[{:.6e}, {:.6e}, {:.6e}]",
@@ -1641,7 +1685,7 @@ impl GlobalNewtonSystem {
                 ));
             }
 
-            if std::env::var("RUSTFOIL_FORCED_DEBUG").is_ok() && (56..=63).contains(&ibl) {
+            if *FORCED_DEBUG && (56..=63).contains(&ibl) {
                 let fc0 = self.vs1_delta[iv][0] * dds1
                     + self.vs2_delta[iv][0] * dds2
                     + self.vs1_ue[iv][0] * due1
@@ -1842,7 +1886,7 @@ impl GlobalNewtonSystem {
             te.dte - (wake_station.delta_star + wake_station.dw),
         ];
 
-        if std::env::var("RUSTFOIL_TESYS_DEBUG").is_ok() {
+        if *TESYS_DEBUG {
             eprintln!(
                 "[TESYS DEBUG] iv={} wake_ibl={} upper_te(ctau={:.12e}, theta={:.12e}, dstar={:.12e}, u={:.12e}) lower_te(ctau={:.12e}, theta={:.12e}, dstar={:.12e}, u={:.12e}) wake(ctau={:.12e}, theta={:.12e}, dstar={:.12e}, dw={:.12e}, u={:.12e}) cte={:.12e} tte={:.12e} dte={:.12e} base_vdel=[{:.12e}, {:.12e}, {:.12e}]",
                 iv,
@@ -2107,7 +2151,7 @@ pub fn solve_global_system(system: &mut GlobalNewtonSystem) -> GlobalSolveResult
             }
         }
 
-        if std::env::var("RUSTFOIL_BLSOLV_STEP_DEBUG").is_ok()
+        if *BLSOLV_STEP_DEBUG
             && ((20..=26).contains(&iv) || (94..=100).contains(&iv) || (156..=160).contains(&iv))
         {
             eprintln!("[RUST BLSOLV STEP] iv={iv}");
@@ -2127,7 +2171,7 @@ pub fn solve_global_system(system: &mut GlobalNewtonSystem) -> GlobalSolveResult
     for iv in (2..=nsys).rev() {
         let vtmp = vdel[iv][2];
 
-        if std::env::var("RUSTFOIL_BLSOLV_STEP_DEBUG").is_ok() && iv > 26 {
+        if *BLSOLV_STEP_DEBUG && iv > 26 {
             eprintln!(
                 "[RUST BLSOLV BACK MASS] iv={} coef={:.8e} mass={:.8e} contrib={:.8e}",
                 iv,
@@ -2144,7 +2188,7 @@ pub fn solve_global_system(system: &mut GlobalNewtonSystem) -> GlobalSolveResult
             );
         }
 
-        if std::env::var("RUSTFOIL_BLSOLV_STEP_DEBUG").is_ok() && iv == 26 {
+        if *BLSOLV_STEP_DEBUG && iv == 26 {
             eprintln!(
                 "[RUST BLSOLV BACK COEF] row=24 col=26 vals=[{:.8e}, {:.8e}, {:.8e}] mass={:.8e}",
                 vm_mod[24][26][0],
@@ -2170,7 +2214,7 @@ pub fn solve_global_system(system: &mut GlobalNewtonSystem) -> GlobalSolveResult
             vdel_operating[kv][2] -= vm_mod[kv][iv][2] * vdel_operating[iv][2];
         }
 
-        if std::env::var("RUSTFOIL_BLSOLV_STEP_DEBUG").is_ok()
+        if *BLSOLV_STEP_DEBUG
             && ((20..=26).contains(&iv) || (94..=100).contains(&iv) || (156..=160).contains(&iv))
         {
             eprintln!("[RUST BLSOLV BACK] iv={iv}");
@@ -2185,7 +2229,7 @@ pub fn solve_global_system(system: &mut GlobalNewtonSystem) -> GlobalSolveResult
         }
     }
 
-    if std::env::var("RUSTFOIL_FINAL_DELTA_DEBUG").is_ok() {
+    if *FINAL_DELTA_DEBUG {
         let start = 156.min(nsys);
         for iv in start..=nsys {
             eprintln!(
@@ -2364,7 +2408,7 @@ pub fn apply_global_updates(
     };
 
     let should_log_update_newton = |surface: usize, ibl: usize| -> bool {
-        if std::env::var("RUSTFOIL_UPDATE_NEWTON_DEBUG").is_err() {
+        if !*UPDATE_NEWTON_DEBUG {
             return false;
         }
 
@@ -3357,7 +3401,7 @@ fn compute_new_ue_via_dij(
         let ue_new = uinv_i + dui;
         
         // Debug: trace dui computation at sample stations
-        if std::env::var("RUSTFOIL_LE_UPDATE_DEBUG").is_ok()
+        if *LE_UPDATE_DEBUG
             && (i <= 3 || i == 20 || i == 40)
         {
             eprintln!("[DEBUG compute_new_ue] upper i={}: uinv={:.6}, dui={:.6e}, ue_new={:.6}, current_u={:.6}",
@@ -3418,7 +3462,7 @@ fn compute_new_ue_via_dij(
         
         let ue_new = uinv_i + dui;
 
-        if std::env::var("RUSTFOIL_LE_UPDATE_DEBUG").is_ok() && i <= 3 {
+        if *LE_UPDATE_DEBUG && i <= 3 {
             eprintln!(
                 "[DEBUG compute_new_ue] lower i={}: uinv={:.6}, dui={:.6e}, ue_new={:.6}, current_u={:.6}",
                 i, uinv_i, dui, ue_new, lower_stations[i].u

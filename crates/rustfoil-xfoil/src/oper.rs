@@ -1,3 +1,11 @@
+use std::sync::LazyLock;
+
+// Read diagnostic switches once per module to avoid getenv contention in solver loops.
+static CL_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_CL_DEBUG").is_ok());
+static DISABLE_STMOVE: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_DISABLE_STMOVE").is_ok());
+
 use rustfoil_bl::{
     add_event, is_debug_active, BlStation, DebugEvent, SurfaceBlState,
 };
@@ -128,7 +136,7 @@ pub fn solve_operating_point_from_state(
         xywake(state, factorized, options.wake_length_chords);
     }
     qwcalc(state, factorized);
-    if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
+    if *CL_DEBUG {
         let (cl_inv, cm_inv) = compute_panel_forces_from_gamma(
             &state.panel_x,
             &state.panel_y,
@@ -198,7 +206,7 @@ pub fn solve_operating_point_from_state(
             // Match XFOIL: dump panel gamma after GAMQV, before STMOVE.
             add_event(DebugEvent::full_gamma_iter(iter, state.gam.clone()));
         }
-        if std::env::var("RUSTFOIL_DISABLE_STMOVE").is_err() {
+        if !*DISABLE_STMOVE {
             stmove(state);
         }
         update_force_state(state, options.mach, re_eff);
@@ -357,4 +365,58 @@ fn separation_x(
         .into_iter()
         .find(|station| !station.is_wake && station.cf <= 0.0)
         .map(|station| station.x_coord)
+}
+
+#[cfg(test)]
+mod diagnostic_switch_tests {
+    use super::{CL_DEBUG, DISABLE_STMOVE};
+    use std::process::Command;
+
+    #[test]
+    fn switches_cache_first_use_across_threads() {
+        // Each case needs a fresh process: caches and environment are process-global.
+        if let Ok(expected) = std::env::var("FLEXFOIL_FLAG_TEST_EXPECTED") {
+            let enabled = expected == "true";
+            let workers: Vec<_> = (0..8)
+                .map(|_| std::thread::spawn(|| (*CL_DEBUG, *DISABLE_STMOVE)))
+                .collect();
+            for worker in workers {
+                assert_eq!(worker.join().unwrap(), (enabled, enabled));
+            }
+            if enabled {
+                std::env::remove_var("RUSTFOIL_CL_DEBUG");
+                std::env::remove_var("RUSTFOIL_DISABLE_STMOVE");
+            } else {
+                std::env::set_var("RUSTFOIL_CL_DEBUG", "1");
+                std::env::set_var("RUSTFOIL_DISABLE_STMOVE", "1");
+            }
+            assert_eq!((*CL_DEBUG, *DISABLE_STMOVE), (enabled, enabled));
+            return;
+        }
+
+        let mut cases = vec![
+            (None, false),
+            (Some(std::ffi::OsString::from("")), true),
+            (Some(std::ffi::OsString::from("0")), true),
+            (Some(std::ffi::OsString::from("1")), true),
+        ];
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            cases.push((Some(std::ffi::OsString::from_vec(vec![0xff])), false));
+        }
+        for (value, enabled) in cases {
+            let mut child = Command::new(std::env::current_exe().unwrap());
+            child
+                .args(["--exact", "oper::diagnostic_switch_tests::switches_cache_first_use_across_threads"])
+                .env("FLEXFOIL_FLAG_TEST_EXPECTED", enabled.to_string())
+                .env_remove("RUSTFOIL_CL_DEBUG")
+                .env_remove("RUSTFOIL_DISABLE_STMOVE");
+            if let Some(value) = value {
+                child.env("RUSTFOIL_CL_DEBUG", &value);
+                child.env("RUSTFOIL_DISABLE_STMOVE", value);
+            }
+            assert!(child.status().unwrap().success());
+        }
+    }
 }

@@ -169,3 +169,11 @@ Copyright (c) 2026 Flexcompute, Inc. and Harry Smith.
 This repository includes third-party components and references commercial
 dependencies. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for details
 on AG Grid Enterprise, the TWK Everett typeface, and other attributions.
+
+### Solver diagnostic environment switches
+
+Set `RUSTFOIL_*_DEBUG`, `RUSTFOIL_NEWTON_CMP`, `RUSTFOIL_SETBL_FULL_VM`,
+and `RUSTFOIL_DISABLE_STMOVE` before starting a solve. Each solver module caches
+its switches on first use for the lifetime of the process, avoiding environment
+lookup contention during parallel sweeps. Any Unicode value (including an empty
+string or `0`) enables a switch, as before. Restart the process to change them.

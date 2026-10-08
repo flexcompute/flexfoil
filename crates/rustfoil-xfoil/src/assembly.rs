@@ -1,3 +1,11 @@
+use std::sync::LazyLock;
+
+// Read diagnostic switches once per module to avoid getenv contention in solver loops.
+static SETBL_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_SETBL_DEBUG").is_ok());
+static SETBL_HANDOFF_DEBUG: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("RUSTFOIL_SETBL_HANDOFF_DEBUG").is_ok());
+
 use rustfoil_bl::FlowType;
 use rustfoil_coupling::global_newton::GlobalNewtonSystem;
 
@@ -25,7 +33,7 @@ pub fn setbl(
 ) -> AssemblyState {
     if !state.lblini {
         mrchue(state, reynolds, ncrit, iteration, xstrip_upper, xstrip_lower);
-        if std::env::var("RUSTFOIL_SETBL_HANDOFF_DEBUG").is_ok() {
+        if *SETBL_HANDOFF_DEBUG {
             let start = state.nbl_upper.saturating_sub(3);
             for ibl in start..state.nbl_upper {
                 if let Some(row) = state.upper_rows.get(ibl) {
@@ -88,7 +96,7 @@ pub fn setbl(
         .iter()
         .map(|row| row.uedg)
         .collect();
-    if std::env::var("RUSTFOIL_SETBL_DEBUG").is_ok() {
+    if *SETBL_DEBUG {
         for (name, stations) in [("upper", &upper_stations), ("lower", &lower_stations)] {
             for (ibl, station) in stations.iter().enumerate().take(6) {
                 eprintln!(
