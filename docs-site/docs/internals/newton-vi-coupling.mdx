@@ -129,3 +129,19 @@ for each station:
 - `TRCHEK2`: xblsys.f line 235 - Transition detection with XT derivatives
 - `TRDIF`: xblsys.f line 1224 - Hybrid laminar-turbulent transition interval
 - `MRCHUE`: xbl.f line 549 - Direct mode marching with transition handling
+
+## Diagnostic Environment Switches
+
+Set solver diagnostic switches before starting a solve. Each solver module reads
+its switches once on first use and caches them for the lifetime of the process.
+This avoids repeated environment lookups in boundary-layer and Newton loops,
+which can contend across workers during parallel polar sweeps.
+
+This applies to `RUSTFOIL_*_DEBUG`, `RUSTFOIL_NEWTON_CMP`,
+`RUSTFOIL_SETBL_FULL_VM`, and `RUSTFOIL_DISABLE_STMOVE`. Any Unicode value,
+including an empty string or `0`, enables a switch; an unset or non-Unicode value
+disables it. Restart the process to change a switch after its first use.
+
+`RUSTFOIL_DISABLE_STMOVE` remains a diagnostic switch that suppresses stagnation
+point movement. Leave it unset for normal analysis. The structured debug recorder
+(`init_debug` / `finalize_debug`) and CLI debug output paths are unchanged.

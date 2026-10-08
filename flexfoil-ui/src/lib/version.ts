@@ -29,6 +29,14 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.1.7',
+    date: '2026-10-08',
+    items: [
+      { category: 'fixed', text: 'Cache solver diagnostic switches to avoid repeated environment lookups during parallel polar sweeps' },
+      { category: 'changed', text: 'Set solver diagnostic environment switches before solving and restart the process to change them after first use' },
+    ],
+  },
+  {
     version: '1.1.4',
     date: '2026-04-08',
     items: [
