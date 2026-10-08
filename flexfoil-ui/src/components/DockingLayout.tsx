@@ -3,7 +3,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Layout, Model, Actions, DockLocation, type IJsonModel } from 'flexlayout-react';
+import { Layout, Model, Actions, DockLocation, TabNode, type IJsonModel } from 'flexlayout-react';
 
 // Panel components
 import { AirfoilCanvas } from './AirfoilCanvas';
@@ -24,9 +24,10 @@ import { FeedbackWidget } from './FeedbackWidget';
 import { SolverStatusIndicator } from './SolverStatusBar';
 import { MobileLayout } from './MobileLayout';
 import { LayoutProvider } from '../contexts/LayoutContext';
-import { defaultLayoutJson, PANELS } from '../layoutConfig';
+import { defaultLayoutJson, PANELS, isPanelId } from '../layoutConfig';
 import { useRouteUiStore } from '../stores/routeUiStore';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { trackEvent } from '../lib/analytics';
 
 // Storage keys
 const LAYOUT_STORAGE_KEY = 'flexfoil-layout-v4';
@@ -444,7 +445,14 @@ function DesktopLayout({ wasmStatus }: DockingLayoutProps) {
             ref={layoutRef}
             model={model}
             factory={factory}
-            onModelChange={handleModelChange}
+            onModelChange={(nextModel, action) => {
+              handleModelChange(nextModel);
+              if (action.type === Actions.SELECT_TAB) {
+                const node = nextModel.getNodeById(action.data.tabNode);
+                const panel = node instanceof TabNode ? node.getComponent() : undefined;
+                if (isPanelId(panel)) trackEvent('feature_use', { feature: 'panel_select', panel_id: panel });
+              }
+            }}
             onRenderTabSet={onRenderTabSet}
           />
         </div>

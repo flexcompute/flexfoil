@@ -36,7 +36,12 @@ export function updateGtagConsent(status: 'granted' | 'denied') {
   });
 
   if (status === 'granted') {
-    window.gtag?.('config', GA_ID);
+    window.gtag?.('config', GA_ID, {
+      page_location: new URL(import.meta.env.BASE_URL, window.location.origin).href,
+      page_referrer: document.referrer ? new URL(document.referrer).origin : '',
+      allow_google_signals: false,
+      allow_ad_personalization_signals: false,
+    });
   }
 }
 
@@ -53,11 +58,16 @@ export function initAnalyticsConsent() {
 }
 
 /**
- * Send a custom GA4 event. Consent Mode gates delivery, so callers do not need
- * to check consent first. gtag is absent when the tag is blocked, hence optional.
+ * Send coarse feature metadata only for opted-in builds and consenting visitors.
+ * Override page URLs so shared airfoil state in queries/fragments is not sent.
  */
 export function trackEvent(name: string, params?: Record<string, string | number | boolean>) {
-  window.gtag?.('event', name, params);
+  if (!SOLVE_RUN_ANALYTICS_ENABLED || getStoredConsent() !== 'granted') return;
+  window.gtag?.('event', name, {
+    ...params,
+    page_location: new URL(import.meta.env.BASE_URL, window.location.origin).href,
+    page_referrer: document.referrer ? new URL(document.referrer).origin : '',
+  });
 }
 
 declare global {

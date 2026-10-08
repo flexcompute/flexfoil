@@ -170,21 +170,56 @@ This repository includes third-party components and references commercial
 dependencies. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for details
 on AG Grid Enterprise, the TWK Everett typeface, and other attributions.
 
-### Optional solve analytics
+### Feature requests and usage analytics
 
-Solve dispatches emit no `solve_run` events by default. To explicitly enable that feature,
-set `VITE_SOLVE_RUN_ANALYTICS=true` when starting or building `flexfoil-ui`. The three solve
-paths then report only solve mode, solver mode and panel count through the existing GA4
-helper and consent policy. Solver execution and results are unchanged by this flag.
+The desktop and mobile **Feedback & requests** widget links to the public
+[feature request tracker](https://github.com/flexcompute/flexfoil/issues?q=is%3Aissue+label%3Aenhancement).
+Without `VITE_FEEDBACK_SHEET_URL`, the form opens a GitHub issue draft with the
+chosen category and message. Users must sign in and submit on GitHub; a draft is
+not a saved request. Feature requests use the existing `enhancement` label and
+GitHub's open/closed status and discussion. A configured feedback service retains
+the existing POST flow; its opaque response cannot confirm that a request was saved.
 
-The opt-in regression checks run locally without GA or a built WASM solver:
+Local development emits no custom usage events by default. Set
+`VITE_SOLVE_RUN_ANALYTICS=true` to enable them. The tracked `.env.production`
+enables this flag for production builds, including deployed and packaged UIs;
+set `VITE_SOLVE_RUN_ANALYTICS=false` to override it. Each visitor must also accept analytics. **Analytics preferences**
+in Help (desktop) or the mobile footer can reopen the consent choice. Rejection
+or unavailable consent storage suppresses custom events. The initial Google tag
+configuration is deferred until acceptance, with advertising signals disabled.
+
+| Event | Meaning | Coarse parameters |
+| --- | --- | --- |
+| `solve_run` | Solve requested, regardless of convergence | `solve_mode`, `solver_mode`, `n_panels` |
+| `feature_use` | Panel selected, DAT imported/exported, SVG exported, documentation or feedback/tracker opened | `feature`, optional `panel_id` |
+| `feedback_handoff` | GitHub draft opened; not a submitted issue | `feedback_type` |
+| `feedback_sent` | Configured feedback POST completed; persistence unconfirmed | `feedback_type` |
+
+Event page metadata uses the application base URL and referrer origin only.
+Custom payloads do not include geometry, filenames, feedback text, contacts or
+precise location. Solving, importing and exporting still work with analytics off.
+Google Analytics provides approximate country/city dimensions from network
+location; no browser geolocation permission is requested. City availability and
+accuracy depend on property settings, network routing and privacy thresholds.
+
+For reports, open the GA4 property containing measurement ID `G-065GK6XBSR`.
+Register event-scoped custom dimensions `feature`, `panel_id`, `solve_mode`,
+`solver_mode`, and `feedback_type`; register `n_panels` as a custom metric if needed.
+Use an Exploration with event count and total users, broken down by feature/panel
+or solve mode and Country/City. Filter for the events above and the Flexfoil
+application base URL. Reports describe consenting visitors, not every user.
+Property access and dimension registration are account-side setup; this code does
+not configure the property or expose admin reports to public app users. Check
+Enhanced Measurement settings so automatic events do not collect shared route
+state or download names separately from these sanitized custom events.
+
+The regression checks run locally without contacting GA:
 
 ```sh
-(cd flexfoil-ui && npx vitest run --maxWorkers=1 && npx tsc -b)
+(cd flexfoil-ui && npx vitest run --maxWorkers=1 && npm run build)
 npx playwright test --config e2e/analytics/playwright.config.mts
 ```
 
-The browser fixture mounts the real SolvePanel with an offline solver and in-memory
-run persistence. It checks all five modes with the flag off and on, including solver
-dispatch/results and the exact event payload. It does not validate solver numerics.
-Chrome must be installed for this isolated fixture.
+The browser fixture mounts the real SolvePanel, feedback widget and consent UI
+with an offline solver and in-memory run persistence. It verifies UI/event
+contracts, not solver numerics or delivery to GA. Chrome must be installed.

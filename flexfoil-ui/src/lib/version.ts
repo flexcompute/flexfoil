@@ -29,6 +29,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.1.8',
+    date: '2026-10-08',
+    items: [
+      { category: 'added', text: 'Submit public feature requests on GitHub and follow their progress from Feedback & requests on desktop and mobile' },
+      { category: 'added', text: 'Optional usage analytics measure panel selections, file actions and feedback activity alongside solve requests, with approximate country/city reporting' },
+      { category: 'fixed', text: 'Feedback without a configured service opens a GitHub draft instead of claiming it was saved' },
+      { category: 'changed', text: 'Usage events require analytics consent, omit shared airfoil URLs, and can be disabled from Analytics preferences' },
+    ],
+  },
+  {
     version: '1.1.4',
     date: '2026-04-08',
     items: [
