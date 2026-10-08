@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getStoredConsent, updateGtagConsent, type ConsentStatus } from '../lib/analytics';
+import { getStoredConsent, updateGtagConsent } from '../lib/analytics';
 
 export function CookieConsent() {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
+    const show = () => setVisible(true);
+    window.addEventListener('flexfoil:analytics-preferences', show);
     const stored = getStoredConsent();
-    if (stored === null) {
-      const timer = setTimeout(() => setVisible(true), 1200);
-      return () => clearTimeout(timer);
-    }
+    const timer = stored === null ? setTimeout(() => setVisible(true), 1200) : undefined;
+    return () => {
+      window.removeEventListener('flexfoil:analytics-preferences', show);
+      clearTimeout(timer);
+    };
   }, []);
 
   const handleAccept = useCallback(() => {
@@ -28,8 +31,9 @@ export function CookieConsent() {
     <div className="cookie-banner" role="dialog" aria-label="Cookie consent">
       <div className="cookie-banner__body">
         <p className="cookie-banner__text">
-          We use cookies for anonymous usage analytics to improve this tool.
-          No personal data is collected or shared with advertisers.{' '}
+          With your permission, Google Analytics measures feature use and approximate
+          location to help us improve Flexfoil. We do not send airfoil geometry,
+          feedback text, or contact details as analytics events.{' '}
           <a
             href="https://policies.google.com/technologies/partner-sites"
             target="_blank"
@@ -50,24 +54,4 @@ export function CookieConsent() {
       </div>
     </div>
   );
-}
-
-/**
- * Manage consent after initial choice -- call from a settings menu to let
- * users change their mind (GDPR right to withdraw).
- */
-export function useCookieConsent() {
-  const [consent, setConsent] = useState<ConsentStatus>(getStoredConsent);
-
-  const grant = useCallback(() => {
-    updateGtagConsent('granted');
-    setConsent('granted');
-  }, []);
-
-  const revoke = useCallback(() => {
-    updateGtagConsent('denied');
-    setConsent('denied');
-  }, []);
-
-  return { consent, grant, revoke };
 }

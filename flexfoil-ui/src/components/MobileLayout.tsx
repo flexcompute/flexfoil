@@ -16,6 +16,8 @@ import { LayoutContext } from '../contexts/LayoutContext';
 import { useOnboarding } from '../onboarding';
 import type { PanelId } from '../layoutConfig';
 import { FlexcomputeLogo } from './FlexcomputeLogo';
+import { FeedbackWidget } from './FeedbackWidget';
+import { trackEvent } from '../lib/analytics';
 
 const TABS: { id: PanelId; label: string }[] = [
   { id: 'canvas', label: 'Canvas' },
@@ -58,7 +60,10 @@ export function MobileLayout({ wasmStatus }: MobileLayoutProps) {
 
   const openPanel = useCallback((panelId: string) => {
     const match = TABS.find((t) => t.id === panelId);
-    if (match) setActiveTab(match.id);
+    if (match) {
+      setActiveTab(match.id);
+      trackEvent('feature_use', { feature: 'panel_select', panel_id: match.id });
+    }
   }, []);
 
   const layoutCtx = useMemo(() => ({ openPanel }), [openPanel]);
@@ -120,7 +125,7 @@ export function MobileLayout({ wasmStatus }: MobileLayoutProps) {
             <button
               key={tab.id}
               className={`mobile-tabs__btn${activeTab === tab.id ? ' mobile-tabs__btn--active' : ''}`}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => openPanel(tab.id)}
             >
               {tab.label}
             </button>
@@ -140,6 +145,8 @@ export function MobileLayout({ wasmStatus }: MobileLayoutProps) {
         {/* Compact footer */}
         <footer className="mobile-footer">
           <span>Powered by Flexcompute Thread</span>
+          <FeedbackWidget />
+          <button className="brand-footer__link" onClick={() => window.dispatchEvent(new Event('flexfoil:analytics-preferences'))}>Analytics preferences</button>
         </footer>
       </div>
     </LayoutContext.Provider>

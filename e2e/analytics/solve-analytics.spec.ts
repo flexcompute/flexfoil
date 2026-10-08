@@ -9,9 +9,9 @@ for (const mode of ['single_alpha', 'single_cl', 'polar', 'sweep_1d', 'sweep_2d'
     await expect.poll(() => page.evaluate(() => (window as any).__solves.length)).toBeGreaterThan(0);
     await expect(button).toBeEnabled();
     const events = await page.evaluate(() => (window as any).__events);
-    const on = info.project.name === 'explicit-on';
+    const on = info.project.name !== 'default-off';
     if (on) {
-      expect(events).toEqual([['event', 'solve_run', {solve_mode: mode, solver_mode: 'inviscid', n_panels: 24}]]);
+      expect(events).toEqual([['event', 'solve_run', {solve_mode: mode, solver_mode: 'inviscid', n_panels: 24, page_location: new URL('/', info.project.use.baseURL).href, page_referrer: ''}]]);
     } else expect(events).toEqual([]);
     const solves = await page.evaluate(() => (window as any).__solves);
     if (mode === 'single_cl') expect(solves.at(-1).cl).toBeCloseTo(0.5, 2);

@@ -12,6 +12,7 @@ import { ChangelogDialog, getLastSeenChangelogVersion } from './ChangelogDialog'
 import { CHANGELOG } from '../lib/version';
 import { useAirfoilStore } from '../stores/airfoilStore';
 import { parseAirfoilDat } from '../lib/airfoilImport';
+import { trackEvent } from '../lib/analytics';
 
 const DOCUMENTATION_URL = 'https://foil.flexcompute.com/docs/';
 const FLEXCOMPUTE_URL = 'https://www.flexcompute.com/';
@@ -107,6 +108,7 @@ export function MenuBar({
 
   const openDocumentation = () => {
     window.open(DOCUMENTATION_URL, '_blank', 'noopener,noreferrer');
+    trackEvent('feature_use', { feature: 'documentation' });
     setActiveMenu(null);
   };
 
@@ -130,6 +132,7 @@ export function MenuBar({
           const text = String(event.target?.result ?? '');
           const parsed = parseAirfoilDat(text, file.name);
           importAirfoil(parsed.name, parsed.coordinates);
+          trackEvent('feature_use', { feature: 'import_dat' });
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unknown import error.';
           window.alert(`Could not import ${file.name}: ${message}`);
@@ -157,6 +160,7 @@ export function MenuBar({
     a.download = `${airfoilName.replace(/\s+/g, '_')}.dat`;
     a.click();
     URL.revokeObjectURL(url);
+    trackEvent('feature_use', { feature: 'export_dat' });
     setActiveMenu(null);
   };
 
@@ -197,6 +201,7 @@ export function MenuBar({
     a.download = `${airfoilName.replace(/\s+/g, '_')}.svg`;
     a.click();
     URL.revokeObjectURL(url);
+    trackEvent('feature_use', { feature: 'export_svg' });
     setActiveMenu(null);
   };
 
@@ -363,6 +368,10 @@ export function MenuBar({
               Tutorials
             </div>
             <MenuItem label="Documentation" onClick={openDocumentation} />
+            <MenuItem label="Analytics preferences" onClick={() => {
+              window.dispatchEvent(new Event('flexfoil:analytics-preferences'));
+              setActiveMenu(null);
+            }} />
             <MenuDivider />
             <MenuItem
               label="Welcome Tour"
