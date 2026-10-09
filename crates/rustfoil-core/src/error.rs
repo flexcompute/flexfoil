@@ -34,6 +34,12 @@ pub enum GeometryError {
         index: usize,
     },
 
+    /// A panel contains non-finite coordinates or overflows during construction.
+    NonFinitePanel {
+        /// Index of the invalid panel
+        index: usize,
+    },
+
     /// Spline interpolation failed.
     ///
     /// This typically occurs when input points are collinear, coincident,
@@ -80,6 +86,9 @@ impl fmt::Display for GeometryError {
             }
             GeometryError::DegeneratePanel { index } => {
                 write!(f, "Degenerate panel at index {} (zero length)", index)
+            }
+            GeometryError::NonFinitePanel { index } => {
+                write!(f, "Non-finite coordinates or panel geometry at index {}", index)
             }
             GeometryError::SplineInterpolationFailed { reason } => {
                 write!(f, "Spline interpolation failed: {}", reason)
