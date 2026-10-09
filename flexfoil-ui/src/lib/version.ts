@@ -29,6 +29,13 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.3.0',
+    date: '2026-10-09',
+    items: [
+      { category: 'added', text: 'Import exact upper and lower Cp or velocity target distributions from CSV or text into experimental QDES' },
+    ],
+  },
+  {
     version: '1.2.2',
     date: '2026-10-09',
     items: [
