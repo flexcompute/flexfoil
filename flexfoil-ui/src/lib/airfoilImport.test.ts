@@ -345,3 +345,22 @@ describe('prepareImportedAirfoil', () => {
     expect(imported.panels).toEqual(parsed.coordinates);
   });
 });
+
+describe('invalid geometry diagnostics', () => {
+  it.each(['NaN 0', '0 Infinity', '0 broken', '2.0 0.1'])('reports the source line for %s', (bad) => {
+    expect(() => parseAirfoilDat(`test\n1 0.1\n${bad}\n0 0\n1 -0.1`, 'test.dat'))
+      .toThrow(/line 3/i);
+  });
+
+  it('locates adjacent duplicate coordinates', () => {
+    expect(() => parseAirfoilDat('test\n1 .1\n0 0\n0 0\n1 -.1', 'test.dat'))
+      .toThrow(/points 2 and 3/i);
+  });
+
+  it('does not substitute raw geometry after failed repaneling', () => {
+    const parsed = parseAirfoilDat(NACA_2412, 'test.dat');
+    expect(() => prepareImportedAirfoil(parsed, 160, () => []))
+      .toThrow(/repanel/i);
+    expect(parsed.coordinates.length).toBeGreaterThan(20);
+  });
+});

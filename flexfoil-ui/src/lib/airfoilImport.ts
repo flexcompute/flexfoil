@@ -27,7 +27,7 @@ function isLikelyCountLine(line: string): boolean {
   return a > 2 && b > 2;
 }
 
-function parseCoordinateLine(line: string): AirfoilPoint | null {
+function parseCoordinateLine(line: string, lineNumber: number): AirfoilPoint | null {
   const trimmed = line.trim();
   if (!trimmed || isLikelyCountLine(trimmed)) {
     return null;
@@ -41,11 +41,14 @@ function parseCoordinateLine(line: string): AirfoilPoint | null {
   const x = Number(parts[0]);
   const y = Number(parts[1]);
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    if (/^[+-]?(?:\d|\.\d|NaN\b|Inf(?:inity)?\b)/i.test(parts[0])) {
+      throw new Error(`Invalid or non-finite coordinate at line ${lineNumber}.`);
+    }
     return null;
   }
 
   if (x > 1.5 || x < -0.5 || y > 1.5 || y < -1.5) {
-    return null;
+    throw new Error(`Coordinate outside supported chord scale at line ${lineNumber}; normalize the airfoil before importing.`);
   }
 
   return { x, y };
@@ -80,8 +83,8 @@ function parseGroups(text: string): { header: string | null; groups: AirfoilPoin
   const groups: AirfoilPoint[][] = [];
   let current: AirfoilPoint[] = [];
 
-  for (const line of lines) {
-    const coord = parseCoordinateLine(line);
+  for (const [index, line] of lines.entries()) {
+    const coord = parseCoordinateLine(line, index + 1);
     if (coord) {
       current.push(coord);
       continue;
@@ -95,6 +98,10 @@ function parseGroups(text: string): { header: string | null; groups: AirfoilPoin
 
     const trimmed = line.trim();
     if (!trimmed || isLikelyCountLine(trimmed)) continue;
+
+    if (groups.length > 0) {
+      throw new Error(`Invalid coordinate at line ${index + 1}.`);
+    }
 
     // First non-blank, non-count, non-coordinate line is the header
     if (header === null && groups.length === 0) {
@@ -144,6 +151,13 @@ export function parseAirfoilDat(text: string, fileName: string): ParsedAirfoilFi
     throw new Error('Expected at least 3 airfoil coordinates.');
   }
 
+  for (let i = 1; i < coordinates.length; i += 1) {
+    const previous = coordinates[i - 1];
+    if (coordinates[i].x === previous.x && coordinates[i].y === previous.y) {
+      throw new Error(`Duplicate adjacent coordinates at points ${i} and ${i + 1}; remove one point before importing.`);
+    }
+  }
+
   const leIndex = findLeadingEdgeIndex(coordinates);
   if (leIndex === 0 || leIndex === coordinates.length - 1) {
     throw new Error('Expected a full airfoil loop ordered TE -> upper -> LE -> lower -> TE.');
@@ -164,9 +178,10 @@ export function prepareImportedAirfoil(
 
   if (repanelAirfoil) {
     const repaneled = repanelAirfoil(parsed.coordinates, nPanels);
-    if (repaneled.length > 0) {
-      panels = annotateSurfaces(repaneled);
+    if (repaneled.length < 3 || repaneled.some((p) => !Number.isFinite(p.x) || !Number.isFinite(p.y))) {
+      throw new Error('Repaneling failed; original airfoil has been kept. Check the input coordinates and panel spacing.');
     }
+    panels = annotateSurfaces(repaneled);
   }
 
   return {
