@@ -29,6 +29,13 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.2.2',
+    date: '2026-10-09',
+    items: [
+      { category: 'fixed', text: 'Airfoil imports report invalid coordinate locations and failed repaneling instead of silently dropping data' },
+    ],
+  },
+  {
     version: '1.2.1',
     date: '2026-10-09',
     items: [
