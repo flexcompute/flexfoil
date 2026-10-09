@@ -34,15 +34,19 @@ function parseCoordinateLine(line: string, lineNumber: number, allowHeader: bool
   }
 
   const parts = trimmed.replace(/,/g, ' ').split(/\s+/);
-  if (parts.length < 2) {
+  const numericLike = /^[+-]?(?:\d|\.\d|NaN\b|Inf(?:inity)?\b)/i.test(parts[0]);
+  const nonFiniteToken = /^[+-]?(?:NaN|Inf(?:inity)?)$/i.test(parts[0]);
+  if (parts.length < 2 || parts[1] === '') {
+    if (nonFiniteToken || (!allowHeader && numericLike)) {
+      throw new Error(`Missing coordinate at line ${lineNumber}.`);
+    }
     return null;
   }
 
   const x = Number(parts[0]);
   const y = Number(parts[1]);
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
-    const nonFiniteToken = /^[+-]?(?:NaN|Inf(?:inity)?)$/i.test(parts[0]);
-    if (nonFiniteToken || (!allowHeader && Number.isFinite(x))) {
+    if (nonFiniteToken || (!allowHeader && numericLike)) {
       throw new Error(`Invalid or non-finite coordinate at line ${lineNumber}.`);
     }
     return null;
