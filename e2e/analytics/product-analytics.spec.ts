@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 
 for (const consent of ['missing', 'denied']) {
   test(`solving works without ${consent} analytics consent`, async ({ page }) => {
@@ -10,37 +11,46 @@ for (const consent of ['missing', 'denied']) {
   });
 }
 
-test('feature request handoff is public, correctly categorized and never claims submission', async ({ page }, info) => {
-  test.skip(info.project.name === 'feedback-service');
-  await page.route('https://**', route => route.abort());
-  await page.goto('/e2e/analytics/fixture.html?geometry=private#private-foil');
-  await page.evaluate(() => { window.open = url => { (window as any).__draftUrl = String(url); return null; }; });
-  await page.getByRole('button', { name: 'Send feedback' }).click();
-  await page.getByRole('button', { name: 'Feature', exact: true }).click();
-  await page.getByRole('textbox', { name: 'Feedback message' }).fill('Please add a comparison plot\nPrivate example for the request only');
-  const tracker = page.getByRole('link', { name: 'View feature request tracker' });
-  expect(new URL(await tracker.getAttribute('href') as string).searchParams.get('q')).toBe('is:issue label:enhancement');
-  await expect(page.getByText('A GitHub account is required', { exact: false })).toBeVisible();
-  await page.getByRole('button', { name: 'Continue on GitHub' }).click();
-  const url = new URL(await page.evaluate(() => (window as any).__draftUrl));
-  expect(url.origin).toBe('https://github.com');
-  expect(url.pathname).toBe('/flexcompute/flexfoil/issues/new');
-  expect(url.searchParams.get('labels')).toBe('enhancement');
-  expect(url.searchParams.get('body')).toContain('Please add a comparison plot');
-  await expect(page.getByText('Opening a draft does not submit it.', { exact: false })).toBeVisible();
-  const events = await page.evaluate(() => (window as any).__events);
-  if (info.project.name === 'explicit-on') {
-    expect(events.map((event: any[]) => event[1])).toEqual(['feature_use', 'feedback_handoff']);
-    expect(events[1][2].feedback_type).toBe('feature');
-    expect(events[1][2].page_location).toBe(new URL('/', info.project.use.baseURL).href);
-  } else expect(events).toEqual([]);
-  expect(JSON.stringify(events)).not.toContain('private');
-  expect(JSON.stringify(events)).not.toContain('comparison plot');
-  await info.attach('request-handoff', { body: await page.screenshot(), contentType: 'image/png' });
-  await page.getByRole('button', { name: 'Close', exact: true }).click();
-  await page.getByRole('button', { name: 'Send feedback' }).click();
-  await expect(page.getByRole('textbox', { name: 'Feedback message' })).toHaveValue('Please add a comparison plot\nPrivate example for the request only');
-});
+for (const [category, feedbackType, template, label] of [
+  ['Feature', 'feature', 'feature-request.md', 'enhancement'],
+  ['Bug', 'bug', 'bug-report.md', 'bug'],
+  ['General', 'general', 'question.md', 'question'],
+]) {
+  test(`${category} handoff is public, correctly categorized and never claims submission`, async ({ page }, info) => {
+    test.skip(info.project.name === 'feedback-service');
+    await page.route('https://**', route => route.abort());
+    await page.goto('/e2e/analytics/fixture.html?geometry=private#private-foil');
+    await page.evaluate(() => { window.open = url => { (window as any).__draftUrl = String(url); return null; }; });
+    await page.getByRole('button', { name: 'Send feedback' }).click();
+    await page.getByRole('button', { name: category, exact: true }).click();
+    await page.getByRole('textbox', { name: 'Feedback message' }).fill('Please add a comparison plot\nPrivate example for the request only');
+    const tracker = page.getByRole('link', { name: 'View feature request tracker' });
+    expect(new URL(await tracker.getAttribute('href') as string).searchParams.get('q')).toBe('is:issue label:enhancement');
+    await expect(page.getByText('A GitHub account is required', { exact: false })).toBeVisible();
+    await page.getByRole('button', { name: 'Continue on GitHub' }).click();
+    const url = new URL(await page.evaluate(() => (window as any).__draftUrl));
+    expect(url.origin).toBe('https://github.com');
+    expect(url.pathname).toBe('/flexcompute/flexfoil/issues/new');
+    expect(url.searchParams.get('template')).toBe(template);
+    // Template metadata assigns labels without requiring the visitor to have label permissions.
+    expect(url.searchParams.has('labels')).toBe(false);
+    expect(readFileSync(`.github/ISSUE_TEMPLATE/${template}`, 'utf8')).toContain(`labels: ${label}`);
+    expect(url.searchParams.get('body')).toContain('Please add a comparison plot');
+    await expect(page.getByText('Opening a draft does not submit it.', { exact: false })).toBeVisible();
+    const events = await page.evaluate(() => (window as any).__events);
+    if (info.project.name === 'explicit-on') {
+      expect(events.map((event: any[]) => event[1])).toEqual(['feature_use', 'feedback_handoff']);
+      expect(events[1][2].feedback_type).toBe(feedbackType);
+      expect(events[1][2].page_location).toBe(new URL('/', info.project.use.baseURL).href);
+    } else expect(events).toEqual([]);
+    expect(JSON.stringify(events)).not.toContain('private');
+    expect(JSON.stringify(events)).not.toContain('comparison plot');
+    await info.attach('request-handoff', { body: await page.screenshot(), contentType: 'image/png' });
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
+    await page.getByRole('button', { name: 'Send feedback' }).click();
+    await expect(page.getByRole('textbox', { name: 'Feedback message' })).toHaveValue('Please add a comparison plot\nPrivate example for the request only');
+  });
+}
 
 test('acceptance and revocation control subsequent custom events', async ({ page }, info) => {
   await page.route('https://**', route => route.abort());

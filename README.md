@@ -175,7 +175,8 @@ on AG Grid Enterprise, the TWK Everett typeface, and other attributions.
 The desktop and mobile **Feedback & requests** widget links to the public
 [feature request tracker](https://github.com/flexcompute/flexfoil/issues?q=is%3Aissue+label%3Aenhancement).
 Without `VITE_FEEDBACK_SHEET_URL`, the form opens a GitHub issue draft with the
-chosen category and message. Users must sign in and submit on GitHub; a draft is
+chosen category and message using an explicit issue template. Labels come from
+template metadata, so visitors do not need permission to assign labels. Users must sign in and submit on GitHub; a draft is
 not a saved request. Feature requests use the existing `enhancement` label and
 GitHub's open/closed status and discussion. A configured feedback service retains
 the existing POST flow; its opaque response cannot confirm that a request was saved.

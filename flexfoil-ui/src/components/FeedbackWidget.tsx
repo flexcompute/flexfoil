@@ -7,10 +7,10 @@ const GOOGLE_SHEET_URL: string | undefined = import.meta.env.VITE_FEEDBACK_SHEET
 
 type FeedbackType = 'bug' | 'feature' | 'general';
 
-const TYPE_LABELS: Record<FeedbackType, { label: string; icon: string }> = {
-  bug: { label: 'Bug', icon: '🐛' },
-  feature: { label: 'Feature', icon: '💡' },
-  general: { label: 'General', icon: '💬' },
+const TYPE_LABELS: Record<FeedbackType, { label: string; icon: string; template: string }> = {
+  bug: { label: 'Bug', icon: '🐛', template: 'bug-report.md' },
+  feature: { label: 'Feature', icon: '💡', template: 'feature-request.md' },
+  general: { label: 'General', icon: '💬', template: 'question.md' },
 };
 
 type SubmitState = 'idle' | 'sending' | 'success' | 'github' | 'error';
@@ -45,7 +45,7 @@ export function FeedbackWidget() {
         const params = new URLSearchParams({
           title: message.trim().split('\n')[0].slice(0, 80),
           body: message.trim(),
-          labels: type === 'feature' ? 'enhancement' : type === 'bug' ? 'bug' : 'question',
+          template: TYPE_LABELS[type].template,
         });
         window.open(`https://github.com/flexcompute/flexfoil/issues/new?${params}`, '_blank', 'noopener,noreferrer');
         trackEvent('feedback_handoff', { feedback_type: type });
