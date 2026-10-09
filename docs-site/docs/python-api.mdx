@@ -306,6 +306,8 @@ are byte-identical.
 | `.success` | `bool` | Overall success flag |
 | `.error` | `str \| None` | Error message if failed |
 
+Failed inviscid solves have `success=False` and `converged=False`. Polar columns, plots, exports and aggregate statistics include only successful, converged points; inspect `.results` to retain failures and their errors. Convergence is a numerical status, not evidence of physical validity.
+
 ### PolarResult
 
 | Property / Method | Description |
@@ -315,7 +317,7 @@ are byte-identical.
 | `.cd` | `list[float]` — drag coefficients |
 | `.cm` | `list[float]` — moment coefficients |
 | `.ld` | `list[float]` — lift-to-drag ratios |
-| `.converged` | `list[SolveResult]` — converged results only |
+| `.converged` | `list[SolveResult]` — successful, converged results only |
 | `.results` | `list[SolveResult]` — all results |
 | `.cl_max` | `float \| None` — maximum CL |
 | `.cl_min` | `float \| None` — minimum CL |
