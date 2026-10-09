@@ -347,7 +347,7 @@ describe('prepareImportedAirfoil', () => {
 });
 
 describe('invalid geometry diagnostics', () => {
-  it.each(['NaN 0', '0 Infinity', '0 broken', '2.0 0.1'])('reports the source line for %s', (bad) => {
+  it.each(['NaN 0', '0 Infinity', '0 broken', '2.0 0.1', '1e999 0', '0.2.3 0', '0', '0,', '2e+ 0'])('reports the source line for %s', (bad) => {
     expect(() => parseAirfoilDat(`test\n1 0.1\n${bad}\n0 0\n1 -0.1`, 'test.dat'))
       .toThrow(/line 3/i);
   });
