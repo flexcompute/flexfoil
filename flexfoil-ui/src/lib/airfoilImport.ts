@@ -34,15 +34,15 @@ function parseCoordinateLine(line: string, lineNumber: number, allowHeader: bool
   }
 
   const parts = trimmed.replace(/,/g, ' ').split(/\s+/);
-  if (parts.length < 2) {
-    return null;
-  }
-
   const x = Number(parts[0]);
   const y = Number(parts[1]);
-  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+  if (parts.length < 2 || !Number.isFinite(x) || !Number.isFinite(y)) {
+    // Names like "2412 AIRFOIL" may occupy the header slot. A numeric-looking
+    // token paired with a value, or any numeric data row, must be reported.
+    const numericToken = /^[+-]?(?:\d|\.\d|NaN\b|Inf(?:inity)?\b)/i;
     const nonFiniteToken = /^[+-]?(?:NaN|Inf(?:inity)?)$/i.test(parts[0]);
-    if (nonFiniteToken || (!allowHeader && Number.isFinite(x))) {
+    const headerName = allowHeader && !nonFiniteToken && (parts.length < 2 || !numericToken.test(parts[1]));
+    if (numericToken.test(parts[0]) && !headerName) {
       throw new Error(`Invalid or non-finite coordinate at line ${lineNumber}.`);
     }
     return null;

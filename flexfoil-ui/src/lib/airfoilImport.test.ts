@@ -347,9 +347,14 @@ describe('prepareImportedAirfoil', () => {
 });
 
 describe('invalid geometry diagnostics', () => {
-  it.each(['NaN 0', '0 Infinity', '0 broken', '2.0 0.1'])('reports the source line for %s', (bad) => {
+  it.each(['NaN 0', '0 Infinity', '0 broken', '2.0 0.1', '1.2.3 0', '1foo 0.1', '1e999 0', '0.5'])('reports the source line for %s', (bad) => {
     expect(() => parseAirfoilDat(`test\n1 0.1\n${bad}\n0 0\n1 -0.1`, 'test.dat'))
       .toThrow(/line 3/i);
+  });
+
+  it.each(['1.2.3 0', '1foo 0.1', '1e999 0'])('reports a malformed numeric pair in the header slot for %s', (bad) => {
+    expect(() => parseAirfoilDat(`${bad}\n1 0.1\n0 0\n1 -0.1`, 'test.dat'))
+      .toThrow(/line 1/i);
   });
 
   it('locates adjacent duplicate coordinates', () => {
