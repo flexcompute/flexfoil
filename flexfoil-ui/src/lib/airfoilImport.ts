@@ -27,7 +27,7 @@ function isLikelyCountLine(line: string): boolean {
   return a > 2 && b > 2;
 }
 
-function parseCoordinateLine(line: string, lineNumber: number): AirfoilPoint | null {
+function parseCoordinateLine(line: string, lineNumber: number, allowHeader: boolean): AirfoilPoint | null {
   const trimmed = line.trim();
   if (!trimmed || isLikelyCountLine(trimmed)) {
     return null;
@@ -41,7 +41,8 @@ function parseCoordinateLine(line: string, lineNumber: number): AirfoilPoint | n
   const x = Number(parts[0]);
   const y = Number(parts[1]);
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
-    if (/^[+-]?(?:\d|\.\d|NaN\b|Inf(?:inity)?\b)/i.test(parts[0])) {
+    const nonFiniteToken = /^[+-]?(?:NaN|Inf(?:inity)?)$/i.test(parts[0]);
+    if (nonFiniteToken || (!allowHeader && Number.isFinite(x))) {
       throw new Error(`Invalid or non-finite coordinate at line ${lineNumber}.`);
     }
     return null;
@@ -84,7 +85,8 @@ function parseGroups(text: string): { header: string | null; groups: AirfoilPoin
   let current: AirfoilPoint[] = [];
 
   for (const [index, line] of lines.entries()) {
-    const coord = parseCoordinateLine(line, index + 1);
+    if (/^(#|!|\/\/)/.test(line.trim())) continue;
+    const coord = parseCoordinateLine(line, index + 1, header === null && groups.length === 0 && current.length === 0);
     if (coord) {
       current.push(coord);
       continue;
@@ -98,10 +100,6 @@ function parseGroups(text: string): { header: string | null; groups: AirfoilPoin
 
     const trimmed = line.trim();
     if (!trimmed || isLikelyCountLine(trimmed)) continue;
-
-    if (groups.length > 0) {
-      throw new Error(`Invalid coordinate at line ${index + 1}.`);
-    }
 
     // First non-blank, non-count, non-coordinate line is the header
     if (header === null && groups.length === 0) {

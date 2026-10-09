@@ -364,3 +364,16 @@ describe('invalid geometry diagnostics', () => {
     expect(parsed.coordinates.length).toBeGreaterThan(20);
   });
 });
+
+
+describe('DAT header and comment compatibility', () => {
+  it.each(['20-32C AIRFOIL', '12% JOUKOWSKI AIRFOIL', '2412 AIRFOIL'])('accepts numeric airfoil name %s', (name) => {
+    const parsed = parseAirfoilDat(`${name}\n1 .1\n0 0\n1 -.1`, 'test.dat');
+    expect(parsed.name).toBe(name);
+    expect(parsed.coordinates).toHaveLength(3);
+  });
+  it('retains all points around section comments and trailing notes', () => {
+    const parsed = parseAirfoilDat('test\n1 .1\n# upper surface\n0 0\n1 -.1\nTrailing notes from source', 'test.dat');
+    expect(parsed.coordinates).toHaveLength(3);
+  });
+});

@@ -184,8 +184,9 @@ click the **Search...** button in the menu bar.
 
 ### Import diagnostics
 
-DAT import reports the source line for malformed/non-finite coordinates and coordinates outside the supported normalized chord scale. Adjacent duplicate coordinates report their point numbers. Correct the source file and import again; coordinates are not silently removed. If repaneling fails, import stops and the current airfoil is retained. When the WASM repaneler is unavailable, raw coordinates remain the existing fallback. These checks do not certify that a contour is free of intersections or suitable for viscous analysis.
+DAT import preserves numeric airfoil names and ignores text comments/notes. Rows beginning with numeric/non-finite coordinate tokens report the source line for malformed/non-finite coordinates and coordinates outside the supported normalized chord scale. Adjacent duplicate coordinates report their point numbers. Correct the source file and import again; coordinates are not silently removed. If repaneling fails, import stops and the current airfoil is retained. When the WASM repaneler is unavailable, raw coordinates remain the existing fallback. These checks do not certify that a contour is free of intersections or suitable for viscous analysis.
 
 ### Convergence and model validity
 
 The Solve panel distinguishes numerical convergence from physical accuracy. A known nonzero-Mach viscous limitation ([#21](https://github.com/flexcompute/flexfoil/issues/21)) is shown when the selected Mach or a Mach sweep contains positive values, including when Advanced Settings are closed. This notice does not block analysis; those results remain unvalidated. See [Differences from XFOIL](./internals/differences-from-xfoil) for the station comparison and model limitations.
+
