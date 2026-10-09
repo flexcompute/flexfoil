@@ -29,6 +29,13 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.4.0',
+    date: '2026-10-09',
+    items: [
+      { category: 'added', text: 'Python boundary-layer summaries report maximum H, minimum Cf and negative wall-shear locations for converged station data' },
+    ],
+  },
+  {
     version: '1.3.0',
     date: '2026-10-09',
     items: [
