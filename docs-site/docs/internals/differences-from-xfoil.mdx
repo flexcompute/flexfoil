@@ -7,27 +7,41 @@ description: Known behavioural differences between RustFoil and XFOIL
 
 # Differences from XFOIL
 
-RustFoil is a faithful, function-by-function port of XFOIL. The goal is
-bit-level reproducibility of XFOIL's behaviour, including its known limitations
-and failure modes.
+RustFoil aims to reproduce XFOIL's analysis behavior. Agreement must be assessed for the geometry, operating conditions, paneling and initialization being used; the port is not a guarantee of bit-level or universal physical equivalence.
 
 ## Analysis (OPER)
 
-The core analysis pipeline — inviscid panel method, boundary layer solver,
-viscous-inviscid coupling, and transition prediction — has no known behavioural
-differences from XFOIL. Validation results:
+The analysis pipeline includes inviscid panels, boundary-layer closures, viscous-inviscid coupling and transition prediction. Existing reported validation results apply to the cases tested, not every operating condition:
 
 | Component | Agreement |
 |-----------|-----------|
 | Paneling (PANGEN) | ~4e-7 RMS position error |
 | Inviscid CL, Cp, γ | 5–6 significant figures |
-| Closure relations (Hk, Hs, Cf, DI) | Formula-identical |
-| Viscous-inviscid coupling | Same Newton system |
+| Closure relations (Hk, Hs, Cf, DI) | Correlations ported; compressible station inputs remain incomplete |
+| Viscous-inviscid coupling | Newton coupling implemented; nonzero-Mach mismatch remains open |
 | Transition (e^N) | Same DAMPL correlation |
 | Polar types 1/2/3 | Same Re-scaling formulas |
 
 See [Inviscid Validation](./inviscid-validation), [Paneling Validation](./paneling-validation),
 and [Formula Comparison](./xfoil-formula-comparison) for detailed evidence.
+
+### Known nonzero-Mach limitation
+
+[Issue #21](https://github.com/flexcompute/flexfoil/issues/21) tracks a viscous compressibility mismatch. Marching currently uses zero Mach squared, while other boundary-layer assembly paths use freestream Mach squared. XFOIL additionally corrects edge velocity and computes local edge Mach, density and viscosity before evaluating station quantities; passing freestream Mach to the march alone would not complete the port.
+
+An isolated station comparison against XFOIL 6.99's unmodified `BLPRV`, `BLKIN` and `HKIN` routines illustrates the gap. Inputs: freestream Mach 0.25, normalized inviscid edge speed 1.2, theta 0.001, displacement thickness 0.0026, Reynolds 1e6, gamma 1.4 and Sutherland ratio 0.35. The Rust column calls `blvar` directly with freestream Mach squared; the march's zero-Mach path is a further discrepancy.
+
+| Intermediate | XFOIL 6.99 | Rust direct `blvar` |
+| --- | --- | --- |
+| Edge speed used | 1.20872095 | 1.2 |
+| Kinematic shape factor Hk | 2.54693329 | 2.56376839 |
+| Momentum-thickness Reynolds number | 1196.64238 | 1200 |
+
+The same probe at Mach zero agrees (speed 1.2, Hk 2.6, Rtheta 1200). This is scalar station evidence, not a full coupled polar validation or a derivative check. Reference source: [official XFOIL distribution](https://web.mit.edu/drela/Public/web/xfoil/), `src/xbl.f` SETBL, `src/xblsys.f` BLPRV/BLKIN and `src/xfoil.f` COMSET. Nonzero-Mach viscous results remain unvalidated until the full correction and reference suite pass.
+
+### Numerical status and physical applicability
+
+A successful call means the solver returned a result; convergence means its numerical stopping criterion was met. Neither certifies physical accuracy. XFOIL's integral boundary-layer and compressibility models have limitations in strongly separated flow and transonic/shocked flow. Assess convergence, model applicability and comparison with experiment/validated CFD separately; there is no universal angle-of-attack cutoff or confidence score.
 
 ## Design Modes
 
