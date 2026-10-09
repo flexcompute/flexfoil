@@ -156,6 +156,9 @@ Direct geometry manipulation tools:
 QDES and MDES are works in progress and may produce unexpected results.
 :::
 
+In QDES, select **Target Cp** or **Target Ue**, then use **Import upper/lower** to load that surface's target from CSV or whitespace-separated text. Supply two columns (`x/c`, target value), at least two finite points, and strictly increasing `x/c` within 0–1. Optional headers are `x,cp` or `x,ue` and must match the selected type; `#` comment lines are ignored. Values and segment endpoints are preserved without sorting, resampling or clipping. A failed import reports its line and leaves the existing target intact. Imported targets remain editable and use the current operating conditions shown in the app. Import does not validate the target's aerodynamic feasibility or establish XFOIL inverse-design equivalence.
+
+
 Mixed-inverse design mode (QDES): prescribe a target pressure distribution (Cp or
 velocity) on part of the airfoil surface, and the solver computes the geometry
 that produces it. Full-inverse mode (MDES) designs an entire airfoil from a

@@ -9,6 +9,7 @@ import React, { useRef, useCallback, useMemo, useState, useEffect } from 'react'
 import { useAirfoilStore } from '../../stores/airfoilStore';
 import { analyzeAirfoil, analyzeAirfoilInviscid, runInverseDesign, runFullInverseDesign } from '../../lib/wasm';
 import { useSolverJobStore } from '../../stores/solverJobStore';
+import { parseInverseTarget } from '../../lib/inverseTargetImport';
 import type { InverseDesignSurfaceTarget } from '../../types';
 
 type InverseMethod = 'qdes' | 'mdes';
@@ -131,6 +132,7 @@ const TargetCurveEditor: React.FC<TargetCurveEditorProps> = ({
 };
 
 export function InverseDesignPanel() {
+  const [importError, setImportError] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const [dragging, setDragging] = useState<{ surface: 'upper' | 'lower'; index: number } | null>(null);
   const [method, setMethod] = useState<InverseMethod>('qdes');
@@ -145,6 +147,25 @@ export function InverseDesignPanel() {
     setInverseDesignSolving, setInverseDesignResult, setInverseDesignMaxIterations,
     setInverseDesignDamping, applyInverseDesignResult,
   } = useAirfoilStore();
+
+  const importTarget = async (surface: 'upper' | 'lower', event: React.ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+    const kind = inverseDesign.targetKind;
+    try {
+      const target = parseInverseTarget(await file.text(), kind);
+      if (useAirfoilStore.getState().inverseDesign.targetKind !== kind) {
+        throw new Error('Target type changed during import. Select the file again.');
+      }
+      setInverseDesignTarget(surface, target);
+      setImportError(null);
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : 'Could not read target file.');
+    } finally {
+      input.value = '';
+    }
+  };
 
   const inverseDesignRef = useRef(inverseDesign);
   inverseDesignRef.current = inverseDesign;
@@ -459,6 +480,15 @@ export function InverseDesignPanel() {
           + Lower
         </button>
         
+        {method === 'qdes' && (['upper', 'lower'] as const).map((surface) => (
+          <label key={surface} style={{ fontSize: '11px' }} title="Two columns: x/c and Cp or Ue; select the matching target type first">
+            Import {surface}
+            <input type="file" accept=".csv,.txt,.dat" style={{ display: 'block', width: '145px', fontSize: '11px' }}
+              aria-label={`Import ${surface} target`}
+              onChange={(event) => void importTarget(surface, event)} />
+          </label>
+        ))}
+        {importError && <span role="alert" style={{ color: 'var(--accent-danger)', fontSize: '11px' }}>{importError}</span>}
         {inverseDesign.upperTarget && (
           <button className="btn btn-xs" onClick={() => setInverseDesignTarget('upper', null)} title="Clear upper target">
             × Upper
