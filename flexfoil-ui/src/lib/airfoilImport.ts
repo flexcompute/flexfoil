@@ -27,6 +27,11 @@ function isLikelyCountLine(line: string): boolean {
   return a > 2 && b > 2;
 }
 
+/** Whole token is numeric, including NaN, Infinity, and overflow such as 1e999. */
+function isNumericLiteral(token: string): boolean {
+  return /^[+-]?(?:(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|NaN|Inf(?:inity)?)$/i.test(token);
+}
+
 function parseCoordinateLine(line: string, lineNumber: number): AirfoilPoint | null {
   const trimmed = line.trim();
   if (!trimmed || isLikelyCountLine(trimmed)) {
@@ -41,7 +46,8 @@ function parseCoordinateLine(line: string, lineNumber: number): AirfoilPoint | n
   const x = Number(parts[0]);
   const y = Number(parts[1]);
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
-    if (/^[+-]?(?:\d|\.\d|NaN\b|Inf(?:inity)?\b)/i.test(parts[0])) {
+    // Titles such as "20-32C" and "12%" start with a digit but are not coordinates.
+    if (isNumericLiteral(parts[0])) {
       throw new Error(`Invalid or non-finite coordinate at line ${lineNumber}.`);
     }
     return null;
@@ -98,10 +104,6 @@ function parseGroups(text: string): { header: string | null; groups: AirfoilPoin
 
     const trimmed = line.trim();
     if (!trimmed || isLikelyCountLine(trimmed)) continue;
-
-    if (groups.length > 0) {
-      throw new Error(`Invalid coordinate at line ${index + 1}.`);
-    }
 
     // First non-blank, non-count, non-coordinate line is the header
     if (header === null && groups.length === 0) {

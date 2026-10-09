@@ -357,6 +357,31 @@ describe('invalid geometry diagnostics', () => {
       .toThrow(/points 2 and 3/i);
   });
 
+  it.each([
+    ['20-32C AIRFOIL', '2032c.dat'],
+    ['12% JOUKOWSKI AIRFOIL', 'joukowsk.dat'],
+    ['74-130 WP2', 'fx74130wp2.dat'],
+    ['30P-30N Main Element (MDA)', '30p-30n-main.dat'],
+  ])('keeps a numeric title as the header: %s', (header, fileName) => {
+    const parsed = parseAirfoilDat(`${header}\n1 0.01\n0 0\n1 -0.01\n`, fileName);
+    expect(parsed.name).toBe(header);
+    expect(parsed.coordinates).toHaveLength(3);
+  });
+
+  it('reports overflow and non-finite numeric tokens', () => {
+    expect(() => parseAirfoilDat('test\n1 0.1\n1e999 0\n0 0\n1 -0.1', 'test.dat'))
+      .toThrow(/line 3/i);
+  });
+
+  it('ignores section comments and trailing notes after coordinates', () => {
+    const parsed = parseAirfoilDat(
+      'MDA 30P-30N\n1 0.01\n0 0\n1 -0.01\n# Main Element\nTrailing note\n',
+      '30p-30n.dat',
+    );
+    expect(parsed.name).toBe('MDA 30P-30N');
+    expect(parsed.coordinates).toHaveLength(3);
+  });
+
   it('does not substitute raw geometry after failed repaneling', () => {
     const parsed = parseAirfoilDat(NACA_2412, 'test.dat');
     expect(() => prepareImportedAirfoil(parsed, 160, () => []))
