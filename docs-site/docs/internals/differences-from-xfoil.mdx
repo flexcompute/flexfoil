@@ -57,6 +57,10 @@ Geometry operations (flap deflection, TE gap, LE radius, thickness/camber
 scaling) match XFOIL's approach. Flap deflection uses a high-resolution
 intermediate representation for sub-0.001c precision at the hinge.
 
+## Invalid geometry
+
+Panel construction rejects NaN, infinite coordinates and arithmetic overflow with a `NonFinitePanel` error and a zero-based panel index. Adjacent duplicate points still return `DegeneratePanel`. These checks prevent invalid panels from reaching body construction and the solvers; they do not certify ordering, absence of intersections or suitability for viscous analysis. Python, WASM and CLI entry points that construct a body share this validation.
+
 ## Reporting Differences
 
 If you find a case where RustFoil's analysis output differs from XFOIL's for

@@ -29,6 +29,13 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.2.1',
+    date: '2026-10-09',
+    items: [
+      { category: 'fixed', text: 'Invalid non-finite panel geometry returns a located error instead of entering the solver or panicking' },
+    ],
+  },
+  {
     version: '1.2.0',
     date: '2026-10-09',
     items: [
