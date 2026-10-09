@@ -1,3 +1,6 @@
+// Explicit build-time opt-in; ordinary solve paths do not construct event parameters.
+export const SOLVE_RUN_ANALYTICS_ENABLED = import.meta.env.VITE_SOLVE_RUN_ANALYTICS === 'true';
+
 const CONSENT_KEY = 'ff_cookie_consent';
 const GA_ID = 'G-065GK6XBSR';
 
@@ -33,7 +36,12 @@ export function updateGtagConsent(status: 'granted' | 'denied') {
   });
 
   if (status === 'granted') {
-    window.gtag?.('config', GA_ID);
+    window.gtag?.('config', GA_ID, {
+      page_location: new URL(import.meta.env.BASE_URL, window.location.origin).href,
+      page_referrer: document.referrer ? new URL(document.referrer).origin : '',
+      allow_google_signals: false,
+      allow_ad_personalization_signals: false,
+    });
   }
 }
 
@@ -47,6 +55,19 @@ export function initAnalyticsConsent() {
   if (stored) {
     updateGtagConsent(stored);
   }
+}
+
+/**
+ * Send coarse feature metadata only for opted-in builds and consenting visitors.
+ * Override page URLs so shared airfoil state in queries/fragments is not sent.
+ */
+export function trackEvent(name: string, params?: Record<string, string | number | boolean>) {
+  if (!SOLVE_RUN_ANALYTICS_ENABLED || getStoredConsent() !== 'granted') return;
+  window.gtag?.('event', name, {
+    ...params,
+    page_location: new URL(import.meta.env.BASE_URL, window.location.origin).href,
+    page_referrer: document.referrer ? new URL(document.referrer).origin : '',
+  });
 }
 
 declare global {

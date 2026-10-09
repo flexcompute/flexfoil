@@ -178,3 +178,30 @@ click the **Search...** button in the menu bar.
   database for backup or sharing.
 - **Mobile layout** — the app adapts to smaller screens with a stacked panel
   layout.
+
+## Feature Requests and Usage Analytics
+
+Open **Feedback & requests** in the desktop or mobile footer to submit a bug,
+feature request or question. The feature request tracker opens public GitHub
+issues tagged `enhancement`; open/closed status and discussion show progress.
+When no private feedback service is configured, the form opens a GitHub draft.
+Sign in and submit it there to save the request. Do not include private data in
+public issues. A configured private feedback service uses its existing POST flow;
+Flexfoil cannot confirm persistence from the service's opaque response.
+
+With analytics consent, the production app measures solve requests, panel
+selections, DAT imports/exports, SVG exports, documentation and feedback activity.
+It sends coarse feature metadata, not geometry, filenames, feedback text or contact
+details. Shared URL query/fragment data is omitted from custom event page metadata.
+Google Analytics supplies approximate country/city reporting; Flexfoil does not
+request precise browser location. Reports cover consenting visitors and are viewed
+in the private GA4 property, not in the public application.
+
+Reopen **Help → Analytics preferences** on desktop, or **Analytics preferences**
+in the mobile footer, to accept or reject analytics. Rejection stops custom usage
+events. For build settings, event definitions and reporting setup, see the
+repository README's “Feature requests and usage analytics” section.
+
+GitHub feedback drafts select an explicit template for bugs, feature requests or
+questions, preserving the typed title and message through the handoff. Template
+metadata supplies the category label without requiring label-management permissions.
