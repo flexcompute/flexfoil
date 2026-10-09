@@ -83,7 +83,16 @@ polar = foil.polar(alpha=(-5, 15, 0.5), Re=1e6, parallel=False)
 # Export to pandas (with summary statistics in df.attrs)
 df = polar.to_dataframe(summary=True)
 df.to_csv("polar.csv", index=False)
+
+# Preserve every attempted point, including failures, for coverage/retry analysis
+complete = polar.to_dataframe(include_failed=True)
+complete.to_csv("polar-complete.csv", index=False)
+retry_alphas = complete.loc[~(complete.success & complete.converged), "alpha"].tolist()
 ```
+
+The default export remains converged-only. `include_failed=True` retains requested order, status, errors, iteration/residual diagnostics, effective Reynolds and actual transition locations. Failed coefficients are empty (`None`/NaN); coefficients from successful but unconverged attempts are provisional. Additional columns record the panel-geometry hash, installed solver version, iteration limit, solver mode, Reynolds mode and requested upper/lower trips. Manually constructed `PolarResult` objects have unknown provenance (`None`) unless supplied explicitly. The geometry hash identifies the panel coordinates to eight decimal places; save the geometry separately to reproduce it.
+
+Serial and parallel Python sweeps both start each point independently. `parallel=False` does not enable warm-start continuation. Selecting `retry_alphas` does not itself retry or change solver settings.
 
 ### Compare multiple airfoils
 
@@ -334,8 +343,8 @@ Failed inviscid solves have `success=False` and `converged=False`. Polar columns
 | `.argmax(target, return_col, filter_outliers=False)` | Value of *return_col* at max of *target* |
 | `.argmin(target, return_col, filter_outliers=False)` | Value of *return_col* at min of *target* |
 | `.summary()` | Dict of all aggregate statistics |
-| `.to_dict(summary=False)` | Export as `dict` (optionally include summary) |
-| `.to_dataframe(summary=False)` | Export as `pandas.DataFrame` (summary in `.attrs`) |
+| `.to_dict(summary=False, include_failed=False)` | Export as `dict` (optionally include summary) |
+| `.to_dataframe(summary=False, include_failed=False)` | Export as `pandas.DataFrame` (summary in `.attrs`) |
 | `.plot(show=True, backend="plotly")` | 4-panel figure (plotly default, or `"matplotlib"`) |
 
 ### BLResult

@@ -29,6 +29,13 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.2.0',
+    date: '2026-10-09',
+    items: [
+      { category: 'added', text: 'Python complete polar exports retain failed attempts, diagnostics and solver/transition provenance with include_failed=True' },
+    ],
+  },
+  {
     version: '1.1.9',
     date: '2026-10-09',
     items: [

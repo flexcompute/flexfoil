@@ -312,6 +312,7 @@ class Airfoil:
         list[PolarResult] if any are lists (one per outer-product combination).
         """
         from flexfoil.polar import PolarResult
+        from importlib.metadata import version
 
         import numpy as np
 
@@ -356,6 +357,13 @@ class Airfoil:
                         mach=mach_val,
                         ncrit=ncrit_val,
                         results=results,
+                        geometry_hash=self.hash,
+                        solver_version=version("flexfoil"),
+                        max_iter=max_iter,
+                        viscous=viscous,
+                        re_type=re_type if viscous else None,
+                        xstrip_upper=xstrip_upper if viscous else None,
+                        xstrip_lower=xstrip_lower if viscous else None,
                     ))
 
         return all_polars if is_matrix else all_polars[0]
