@@ -29,6 +29,13 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.1.9',
+    date: '2026-10-09',
+    items: [
+      { category: 'fixed', text: 'Python failed inviscid solves no longer count as converged points in polar plots, exports or statistics' },
+    ],
+  },
+  {
     version: '1.1.4',
     date: '2026-04-08',
     items: [

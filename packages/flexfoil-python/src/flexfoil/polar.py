@@ -39,7 +39,7 @@ class PolarResult:
 
     @property
     def converged(self) -> list[SolveResult]:
-        return [r for r in self.results if r.converged]
+        return [r for r in self.results if r.success and r.converged]
 
     @property
     def alpha(self) -> list[float]:
