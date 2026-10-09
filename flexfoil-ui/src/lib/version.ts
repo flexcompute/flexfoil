@@ -35,6 +35,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       { category: 'added', text: 'Submit public feature requests on GitHub and follow their progress from Feedback & requests on desktop and mobile' },
       { category: 'added', text: 'Optional usage analytics measure panel selections, file actions and feedback activity alongside solve requests, with approximate country/city reporting' },
       { category: 'fixed', text: 'Feedback without a configured service opens a GitHub draft instead of claiming it was saved' },
+      { category: 'fixed', text: 'GitHub feedback drafts open a prefilled issue template instead of the template chooser' },
       { category: 'changed', text: 'Usage events require analytics consent, omit shared airfoil URLs, and can be disabled from Analytics preferences' },
     ],
   },
