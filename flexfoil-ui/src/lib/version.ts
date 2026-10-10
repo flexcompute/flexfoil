@@ -29,6 +29,13 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.1.9',
+    date: '2026-10-10',
+    items: [
+      { category: 'fixed', text: 'Update the Plotly image parser and documentation development dependencies to patched security versions' },
+    ],
+  },
+  {
     version: '1.1.4',
     date: '2026-04-08',
     items: [
