@@ -852,12 +852,24 @@ export function SolvePanel() {
     return (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
   }, [polar]);
 
+  const hasNonzeroMach = mach > 0 || [sweepPrimary, sweepSecondary].some((axis) =>
+    axis?.param === 'mach' && (axis.values?.length
+      ? axis.values.some((value) => value > 0)
+      : axis.start > 0 || axis.end > 0));
+
   // --------------- render ---------------
 
   return (
     <div className="panel">
       <div className="panel-header">Solve</div>
       <div className="panel-content">
+                  {isViscous && hasNonzeroMach && (
+                    <p role="note" style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      Nonzero-Mach viscous analysis has a known boundary-layer mismatch and may fail to converge or give unreliable results.{' '}
+                      <a href="https://github.com/flexcompute/flexfoil/issues/21" target="_blank" rel="noopener noreferrer">Track the validation fix (#21)</a>
+                    </p>
+                  )}
+
         <div className="form-group" data-tour="solve-mode">
           <div className="form-label">Solver</div>
           <div style={{ display: 'flex', gap: '4px', marginBottom: '4px' }}>
@@ -957,6 +969,7 @@ export function SolvePanel() {
                     min={0}
                     max={0.8}
                   />
+
                 </div>
                 <div>
                   <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
@@ -1083,6 +1096,9 @@ export function SolvePanel() {
                     : `Not converged after ${result.iterations} iterations (residual ${result.residual.toExponential(2)})`)
                 : 'Direct panel solve'}
             </div>
+            <p style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+              Convergence is a numerical status. It does not establish physical accuracy, particularly for strongly separated or transonic flow.
+            </p>
           </div>
         )}
 

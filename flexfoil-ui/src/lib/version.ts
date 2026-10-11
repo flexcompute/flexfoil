@@ -29,6 +29,27 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.4.1',
+    date: '2026-10-09',
+    items: [
+      { category: 'fixed', text: 'Explain the known nonzero-Mach viscous limitation and distinguish numerical convergence from physical validity' },
+    ],
+  },
+  {
+    version: '1.4.0',
+    date: '2026-10-09',
+    items: [
+      { category: 'added', text: 'Python boundary-layer summaries report maximum H, minimum Cf and negative wall-shear locations for converged station data' },
+    ],
+  },
+  {
+    version: '1.3.0',
+    date: '2026-10-09',
+    items: [
+      { category: 'added', text: 'Import exact upper and lower Cp or velocity target distributions from CSV or text into experimental QDES' },
+    ],
+  },
+  {
     version: '1.2.2',
     date: '2026-10-09',
     items: [

@@ -81,6 +81,24 @@ class BLResult:
     ue_upper: list[float] = field(default_factory=list)
     ue_lower: list[float] = field(default_factory=list)
 
+    def summary(self) -> dict:
+        """Summarize converged BL stations; negative Cf is a wall-shear indicator."""
+        import math
+
+        summary = {"success": self.success, "converged": self.converged, "error": self.error}
+        for surface in ("upper", "lower"):
+            x = getattr(self, f"x_{surface}")
+            h = getattr(self, f"h_{surface}")
+            cf = getattr(self, f"cf_{surface}")
+            usable = (self.success and self.converged and len(x) > 0
+                      and len(x) == len(h) == len(cf)
+                      and all(math.isfinite(v) for values in (x, h, cf) for v in values))
+            summary[f"max_h_{surface}"] = max(h) if usable else None
+            summary[f"min_cf_{surface}"] = min(cf) if usable else None
+            summary[f"negative_cf_x_{surface}"] = [position for position, shear in zip(x, cf) if shear < 0] if usable else None
+            summary[f"x_tr_{surface}"] = getattr(self, f"x_tr_{surface}") if usable else None
+        return summary
+
     def __repr__(self) -> str:
         if not self.success:
             return f"BLResult(success=False, error={self.error!r})"
