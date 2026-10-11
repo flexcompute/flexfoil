@@ -66,6 +66,9 @@ impl Panel {
         let delta = p2 - p1;
         let length = delta.norm();
 
+        if !length.is_finite() {
+            return Err(GeometryError::NonFinitePanel { index: 0 });
+        }
         if length < GEOMETRY_TOLERANCE {
             return Err(GeometryError::DegeneratePanel { index: 0 });
         }
@@ -78,6 +81,9 @@ impl Panel {
 
         // Midpoint: control point for boundary condition
         let midpoint = Point::from((p1.coords + p2.coords) * 0.5);
+        if !midpoint.x.is_finite() || !midpoint.y.is_finite() {
+            return Err(GeometryError::NonFinitePanel { index: 0 });
+        }
 
         Ok(Self {
             p1,
@@ -94,7 +100,11 @@ impl Panel {
     /// This is used when constructing panels from a point array, where the
     /// panel index is meaningful for debugging.
     pub fn new_with_index(p1: Point, p2: Point, index: usize) -> Result<Self, GeometryError> {
-        Self::new(p1, p2).map_err(|_| GeometryError::DegeneratePanel { index })
+        Self::new(p1, p2).map_err(|err| match err {
+            GeometryError::DegeneratePanel { .. } => GeometryError::DegeneratePanel { index },
+            GeometryError::NonFinitePanel { .. } => GeometryError::NonFinitePanel { index },
+            other => other,
+        })
     }
 
     /// Panel midpoint (control point for panel method).
@@ -206,6 +216,15 @@ mod tests {
     use crate::point::point;
     use approx::assert_relative_eq;
     use std::f64::consts::PI;
+
+    #[test]
+    fn rejects_non_finite_panels_with_location() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MAX] {
+            let err = Panel::new_with_index(point(0.0, 0.0), point(value, 1.0), 7);
+            assert!(err.is_err(), "accepted non-finite panel for {value}");
+            assert!(err.unwrap_err().to_string().contains("7"));
+        }
+    }
 
     #[test]
     fn test_horizontal_panel() {

@@ -237,6 +237,12 @@ mod tests {
     }
 
     #[test]
+    fn non_finite_geometry_returns_error_without_panicking() {
+        let points = [point(1.0, 0.0), point(f64::NAN, 0.1), point(0.0, 0.0)];
+        assert!(Body::from_points("invalid", &points).is_err());
+    }
+
+    #[test]
     fn test_body_construction() {
         let body = make_diamond_airfoil();
 

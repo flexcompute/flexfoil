@@ -156,6 +156,9 @@ Direct geometry manipulation tools:
 QDES and MDES are works in progress and may produce unexpected results.
 :::
 
+In QDES, select **Target Cp** or **Target Ue**, then use **Import upper/lower** to load that surface's target from CSV or whitespace-separated text. Supply two columns (`x/c`, target value), at least two finite points, and strictly increasing `x/c` within 0–1. Optional headers are `x,cp` or `x,ue` and must match the selected type; `#` comment lines are ignored. Values and segment endpoints are preserved without sorting, resampling or clipping. A failed import reports its line and leaves the existing target intact. Imported targets remain editable and use the current operating conditions shown in the app. Import does not validate the target's aerodynamic feasibility or establish XFOIL inverse-design equivalence.
+
+
 Mixed-inverse design mode (QDES): prescribe a target pressure distribution (Cp or
 velocity) on part of the airfoil surface, and the solver computes the geometry
 that produces it. Full-inverse mode (MDES) designs an entire airfoil from a
@@ -178,3 +181,12 @@ click the **Search...** button in the menu bar.
   database for backup or sharing.
 - **Mobile layout** — the app adapts to smaller screens with a stacked panel
   layout.
+
+### Import diagnostics
+
+DAT import preserves numeric airfoil names and ignores text comments/notes. Rows beginning with numeric/non-finite coordinate tokens report the source line for malformed/non-finite coordinates and coordinates outside the supported normalized chord scale. Adjacent duplicate coordinates report their point numbers. Correct the source file and import again; coordinates are not silently removed. If repaneling fails, import stops and the current airfoil is retained. When the WASM repaneler is unavailable, raw coordinates remain the existing fallback. These checks do not certify that a contour is free of intersections or suitable for viscous analysis.
+
+### Convergence and model validity
+
+The Solve panel distinguishes numerical convergence from physical accuracy. A known nonzero-Mach viscous limitation ([#21](https://github.com/flexcompute/flexfoil/issues/21)) is shown when the selected Mach or a Mach sweep contains positive values, including when Advanced Settings are closed. This notice does not block analysis; those results remain unvalidated. See [Differences from XFOIL](./internals/differences-from-xfoil) for the station comparison and model limitations.
+
