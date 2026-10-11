@@ -351,6 +351,14 @@ Failed inviscid solves have `success=False` and `converged=False`. Polar columns
 
 Returned by `Airfoil.bl_distribution()`.
 
+`bl.summary()` reports `max_h_upper/lower`, `min_cf_upper/lower`, `negative_cf_x_upper/lower` and `x_tr_upper/lower`, alongside success/convergence/error status. Only successful, converged, finite and length-matched station arrays produce numbers; absent or invalid surfaces return `None`. H is displacement thickness divided by momentum thickness. Negative Cf locations identify stations with negative wall shear; they do not establish separation/reattachment boundaries, a bubble model or post-stall validity. These summaries reuse reported BL quantities and introduce no new aerodynamic model.
+
+```python
+bl = foil.bl_distribution(alpha=5, Re=1e6)
+print(bl.summary())
+```
+
+
 | Field | Type | Description |
 | --- | --- | --- |
 | `.success` | `bool` | Overall success flag |
