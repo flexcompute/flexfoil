@@ -35,6 +35,14 @@ class PolarResult:
     ncrit: float
     results: list[SolveResult] = field(default_factory=list)
 
+    geometry_hash: str | None = None
+    solver_version: str | None = None
+    max_iter: int | None = None
+    viscous: bool | None = None
+    re_type: int | None = None
+    xstrip_upper: float | None = None
+    xstrip_lower: float | None = None
+
     # ── Column accessors (converged points only) ──────────────
 
     @property
@@ -200,7 +208,7 @@ class PolarResult:
 
     # ── Export ─────────────────────────────────────────────────
 
-    def to_dict(self, *, summary: bool = False) -> dict:
+    def to_dict(self, *, summary: bool = False, include_failed: bool = False) -> dict:
         d = {
             "alpha": self.alpha,
             "cl": self.cl,
@@ -208,6 +216,17 @@ class PolarResult:
             "cm": self.cm,
             "ld": self.ld,
         }
+        if include_failed:
+            # Preserve requested order and label provisional/failed points explicitly.
+            d = {key: [getattr(r, key) if r.success else None for r in self.results]
+                 for key in ("cl", "cd", "cm", "ld")}
+            for key in ("alpha", "reynolds", "mach", "ncrit", "reynolds_eff",
+                        "success", "converged", "error", "iterations", "residual",
+                        "x_tr_upper", "x_tr_lower"):
+                d[key] = [getattr(r, key) for r in self.results]
+            for key in ("airfoil_name", "geometry_hash", "solver_version", "max_iter",
+                        "viscous", "re_type", "xstrip_upper", "xstrip_lower"):
+                d[key] = [getattr(self, key)] * len(self.results)
         if summary:
             d["_summary"] = {
                 "cl_max": self.cl_max,
@@ -220,11 +239,11 @@ class PolarResult:
             }
         return d
 
-    def to_dataframe(self, *, summary: bool = False):
+    def to_dataframe(self, *, summary: bool = False, include_failed: bool = False):
         """Return a pandas DataFrame (requires pandas)."""
         import pandas as pd
 
-        df = pd.DataFrame(self.to_dict())
+        df = pd.DataFrame(self.to_dict(include_failed=include_failed))
         if summary:
             df.attrs["cl_max"] = self.cl_max
             df.attrs["cl_min"] = self.cl_min
