@@ -89,7 +89,14 @@ function parseGroups(text: string): { header: string | null; groups: AirfoilPoin
   let current: AirfoilPoint[] = [];
 
   for (const [index, line] of lines.entries()) {
-    if (/^(#|!|\/\/)/.test(line.trim())) continue;
+    // Comments are not headers, but they still separate coordinate groups.
+    if (/^(#|!|\/\/)/.test(line.trim())) {
+      if (current.length > 0) {
+        groups.push(current);
+        current = [];
+      }
+      continue;
+    }
     const coord = parseCoordinateLine(line, index + 1, header === null && groups.length === 0 && current.length === 0);
     if (coord) {
       current.push(coord);

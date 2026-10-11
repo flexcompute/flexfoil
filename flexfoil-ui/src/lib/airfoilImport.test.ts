@@ -376,4 +376,26 @@ describe('DAT header and comment compatibility', () => {
     const parsed = parseAirfoilDat('test\n1 .1\n# upper surface\n0 0\n1 -.1\nTrailing notes from source', 'test.dat');
     expect(parsed.coordinates).toHaveLength(3);
   });
+
+  it('splits Lednicer groups when comments are the only separator', () => {
+    const lednicer = `TEST FOIL
+# Upper
+ 0.0000 0.0000
+ 0.2500 0.0500
+ 0.5000 0.0700
+ 0.7500 0.0400
+ 1.0000 0.0000
+! Lower
+ 0.0000 0.0000
+ 0.2500 -0.0300
+ 0.5000 -0.0500
+ 0.7500 -0.0300
+ 1.0000 0.0000
+`;
+    const parsed = parseAirfoilDat(lednicer, 'test.dat');
+    expect(parsed.name).toBe('TEST FOIL');
+    expect(parsed.coordinates).toHaveLength(9);
+    expect(parsed.coordinates[0].x).toBeCloseTo(1.0);
+    expect(parsed.coordinates.at(-1)!.x).toBeCloseTo(1.0);
+  });
 });
