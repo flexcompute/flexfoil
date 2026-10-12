@@ -377,3 +377,18 @@ describe('DAT header and comment compatibility', () => {
     expect(parsed.coordinates).toHaveLength(3);
   });
 });
+
+
+describe('comment-separated Lednicer surfaces', () => {
+  it.each(['#', '!', '//'])('treats %s as a surface separator without using it as the name', (marker) => {
+    const parsed = parseAirfoilDat(`${marker} source note\n0 0\n.5 .1\n1 .01\n${marker} lower surface\n0 0\n.5 -.1\n1 -.01`, 'my-foil.dat');
+    expect(parsed.name).toBe('my foil');
+    expect(parsed.coordinates).toEqual([
+      { x: 1, y: .01, surface: 'upper' },
+      { x: .5, y: .1, surface: 'upper' },
+      { x: 0, y: 0, surface: 'upper' },
+      { x: .5, y: -.1, surface: 'lower' },
+      { x: 1, y: -.01, surface: 'lower' },
+    ]);
+  });
+});

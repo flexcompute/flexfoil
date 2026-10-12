@@ -32,6 +32,7 @@ export const CHANGELOG: ChangelogEntry[] = [
     version: '1.4.1',
     date: '2026-10-09',
     items: [
+      { category: 'fixed', text: 'Retain comment-separated upper and lower surfaces when importing Lednicer DAT files' },
       { category: 'fixed', text: 'Explain the known nonzero-Mach viscous limitation and distinguish numerical convergence from physical validity' },
     ],
   },

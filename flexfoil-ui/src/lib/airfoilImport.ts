@@ -79,7 +79,7 @@ function annotateSurfaces(coordinates: AirfoilPoint[]): AirfoilPoint[] {
 }
 
 /**
- * Parse coordinate groups separated by blank lines / count lines.
+ * Parse coordinate groups separated by blank lines / count lines / comments.
  * Returns { header, groups } where each group is an array of AirfoilPoints.
  */
 function parseGroups(text: string): { header: string | null; groups: AirfoilPoint[][] } {
@@ -89,8 +89,8 @@ function parseGroups(text: string): { header: string | null; groups: AirfoilPoin
   let current: AirfoilPoint[] = [];
 
   for (const [index, line] of lines.entries()) {
-    if (/^(#|!|\/\/)/.test(line.trim())) continue;
-    const coord = parseCoordinateLine(line, index + 1, header === null && groups.length === 0 && current.length === 0);
+    const isComment = /^(#|!|\/\/)/.test(line.trim());
+    const coord = isComment ? null : parseCoordinateLine(line, index + 1, header === null && groups.length === 0 && current.length === 0);
     if (coord) {
       current.push(coord);
       continue;
@@ -103,7 +103,7 @@ function parseGroups(text: string): { header: string | null; groups: AirfoilPoin
     }
 
     const trimmed = line.trim();
-    if (!trimmed || isLikelyCountLine(trimmed)) continue;
+    if (isComment || !trimmed || isLikelyCountLine(trimmed)) continue;
 
     // First non-blank, non-count, non-coordinate line is the header
     if (header === null && groups.length === 0) {
