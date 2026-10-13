@@ -49,3 +49,37 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
           pytest -q
+
+      - name: Build pinned XFOIL reference
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran libx11-dev pkg-config
+          python scripts/build_solver_reference.py target/xfoil-reference
+
+      - name: Full solver reference gate
+        run: |
+          python scripts/test_solver_gate.py
+          python scripts/solver_gate.py --xfoil target/xfoil-reference/bin/xfoil --output target/solver-reference
+
+      - name: Node for WASM gate
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build shipping WASM bindings
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo install wasm-pack --version 0.13.1 --locked
+          wasm-pack build crates/rustfoil-wasm --target nodejs --out-dir ../../target/solver-wasm
+
+      - name: WASM solver reference gate
+        run: node scripts/solver_gate.cjs target/solver-wasm/rustfoil_wasm.js target/solver-reference/report.json 48
+
+      - name: Preserve solver evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solver-reference-evidence
+          path: |
+            target/solver-reference
+            target/xfoil-reference/*-build.log

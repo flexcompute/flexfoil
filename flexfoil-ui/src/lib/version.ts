@@ -29,6 +29,13 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.1.10',
+    date: '2026-10-13',
+    items: [
+      { category: 'added', text: 'Reference-backed solver checks require converged native and WebAssembly results with matched geometry and operating conditions' },
+    ],
+  },
+  {
     version: '1.1.4',
     date: '2026-04-08',
     items: [
