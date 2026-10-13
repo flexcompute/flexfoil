@@ -29,6 +29,13 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.1.11',
+    date: '2026-10-13',
+    items: [
+      { category: 'fixed', text: 'Carry compressible edge thermodynamics and velocity derivatives through the coupled boundary-layer march' },
+    ],
+  },
+  {
     version: '1.1.10',
     date: '2026-10-13',
     items: [

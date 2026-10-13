@@ -24,7 +24,7 @@ pub fn setbl(
     xstrip_lower: f64,
 ) -> AssemblyState {
     if !state.lblini {
-        mrchue(state, reynolds, ncrit, iteration, xstrip_upper, xstrip_lower);
+        mrchue(state, reynolds, ncrit, mach, iteration, xstrip_upper, xstrip_lower);
         if std::env::var("RUSTFOIL_SETBL_HANDOFF_DEBUG").is_ok() {
             let start = state.nbl_upper.saturating_sub(3);
             for ibl in start..state.nbl_upper {
@@ -44,7 +44,7 @@ pub fn setbl(
             }
         }
     }
-    mrchdu(state, reynolds, ncrit, iteration, xstrip_upper, xstrip_lower);
+    mrchdu(state, reynolds, ncrit, mach, iteration, xstrip_upper, xstrip_lower);
 
     // XFOIL re-enters SETBL with MASS coherent to the current BL state.
     // Keep the row cache aligned before building canonical stations or the
