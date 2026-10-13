@@ -15,3 +15,12 @@ export function edgeState(ui, mach, theta, re, h) {
     hk: (h - .29 * localMsq) / (1 + .113 * localMsq) };
 }
 
+export function pressure(gamma, mach) {
+  const cp = 1 - gamma * gamma;
+  const beta = Math.sqrt(1 - mach * mach);
+  return cp / (beta + .5 * mach * mach / (1 + beta) * cp);
+}
+
+export function surfaceTransition(itran, iblte) {
+  return itran <= iblte + 1;
+}

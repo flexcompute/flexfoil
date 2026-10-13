@@ -1,0 +1,46 @@
+---
+title: Surface transition location reporting
+---
+
+import Equation from '@site/src/components/SolverGate/Equation';
+import SourceCode from '@site/src/components/SolverGate/SourceCode';
+import Inspector from '@site/src/components/Compressibility/Inspector';
+
+## What it is
+
+The reporting helper returns transition x/c for each solved surface. Its inputs are the solved surface rows, transition arc length, the one-based XFOIL transition station ITRAN and the zero-based final surface index IBLTE. A transition in the wake is reported at 1.0 chord; a valid surface transition is projected onto the airfoil chord. This changes reporting, not transition physics or the solver iteration.
+
+## Theory and index frames
+
+The final valid surface station is IBLTE + 1 in the one-based transition frame. Therefore a transition is on the surface when:
+
+<Equation math={String.raw`I_{\mathrm{TRAN}}\le I_{\mathrm{BLTE}}+1`} />
+
+Interpolate the saved surface coordinates at transition arc length, then project onto the chord vector c = TE − LE:
+
+<Equation math={String.raw`x_{\mathrm{tr}}/c=\frac{(\mathbf{x}_{\mathrm{tr}}-\mathbf{x}_{\mathrm{LE}})\cdot\mathbf{c}}{\mathbf{c}\cdot\mathbf{c}}`} />
+
+This follows the station conventions retained from XFOIL and the existing transition projection. The previous comparison used the two index frames directly and suppressed valid near-trailing-edge transitions. The full reference case NACA0012/Re100000/Mach0.25/alpha0 exposed it: the reference reports about 0.9806 chord, while the old guard returned 1.0.
+
+## Source and complete call
+
+<SourceCode path="crates/rustfoil-xfoil/src/oper.rs" name="transition_x" />
+
+```python
+import flexfoil
+result = flexfoil.naca("0012").solve(alpha=0, Re=100000, mach=0.25, store=False)
+assert result.success and result.converged
+print(result.x_tr_upper, result.x_tr_lower)
+```
+
+Exact values depend on panel coordinates; the canonical gate uses saved identical coordinates in both engines.
+
+## Interactive index check
+
+<Inspector mode="transition" />
+
+## Why and limits
+
+Preserve the core's one-based transition convention and the array's zero-based storage convention. Converting the comparison is smaller and safer than renumbering marching, assembly and stored rows. Existing invalid arc-length/chord guards and chord-range clipping remain in place. This helper does not infer a laminar separation bubble, certify convergence or predict post-stall validity. Dedicated cases are needed for other geometries and transition settings; the required gate covers natural and forced transition on its saved matrix.
+
+<SourceCode path="docs-site/src/components/Compressibility/math.js" name="surfaceTransition" />

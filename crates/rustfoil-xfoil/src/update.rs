@@ -5,7 +5,7 @@ use crate::{
     assembly::AssemblyState,
     canonical_state::{rows_to_stations, sync_rows_from_stations, sync_state_views_from_rows},
     config::OperatingMode,
-    forces::compute_panel_forces_from_gamma,
+    forces::compute_panel_forces_from_gamma_at_mach,
     solve::SolveState,
     state::XfoilState,
 };
@@ -70,6 +70,7 @@ pub fn update(
         &preview.lower_u_new,
         &preview.upper_u_ac,
         &preview.lower_u_ac,
+        mach,
     );
     let dac = compute_operating_correction(
         state.operating_mode,
@@ -357,6 +358,7 @@ fn compute_trial_cl_terms(
     lower_u_new: &[f64],
     upper_u_ac: &[f64],
     lower_u_ac: &[f64],
+    mach: f64,
 ) -> (f64, f64, f64, Vec<f64>, Vec<f64>) {
     let qnew = build_panel_values_from_surface_values(
         upper_stations,
@@ -372,19 +374,21 @@ fn compute_trial_cl_terms(
         lower_u_ac,
         state.panel_x.len(),
     );
-    let (cl_new, _) = compute_panel_forces_from_gamma(&state.panel_x, &state.panel_y, &qnew, state.alpha_rad);
+    let (cl_new, _) = compute_panel_forces_from_gamma_at_mach(&state.panel_x, &state.panel_y, &qnew, state.alpha_rad, mach);
     let eps = 1.0e-6;
-    let (cl_plus, _) = compute_panel_forces_from_gamma(
+    let (cl_plus, _) = compute_panel_forces_from_gamma_at_mach(
         &state.panel_x,
         &state.panel_y,
         &qnew,
         state.alpha_rad + eps,
+        mach,
     );
-    let (cl_minus, _) = compute_panel_forces_from_gamma(
+    let (cl_minus, _) = compute_panel_forces_from_gamma_at_mach(
         &state.panel_x,
         &state.panel_y,
         &qnew,
         state.alpha_rad - eps,
+        mach,
     );
     let cl_a = (cl_plus - cl_minus) / (2.0 * eps);
     let cl_ac = if qac.iter().any(|value| value.abs() > 0.0) {
@@ -393,11 +397,12 @@ fn compute_trial_cl_terms(
             .zip(qac.iter())
             .map(|(base, operating)| base + eps * operating)
             .collect();
-        let (cl_operating, _) = compute_panel_forces_from_gamma(
+        let (cl_operating, _) = compute_panel_forces_from_gamma_at_mach(
             &state.panel_x,
             &state.panel_y,
             &qnew_operating,
             state.alpha_rad,
+            mach,
         );
         (cl_operating - cl_new) / eps
     } else {
