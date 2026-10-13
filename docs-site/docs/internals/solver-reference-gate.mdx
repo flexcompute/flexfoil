@@ -18,7 +18,7 @@ Every native result must succeed and converge. Lift, drag, moment and both trans
 
 Polar absolute tolerances are CL 2e-4, CD 1e-5, CM 1e-4 and transition positions 2e-4 chord. XFOIL's printed half-units are 5e-5 for CL/CM/transition and 5e-6 for CD, with both solvers stopping at 1e-4 RMS. Profile tolerances are Ue 2e-4, displacement thickness 5e-6 chord, momentum thickness 2e-6 chord, Cf 2e-5 and Hk 0.005; Cp is 2e-4. These bound regression on the saved matrix, including print precision and convergence differences; they do not establish physical-model accuracy, arbitrary-airfoil equivalence, post-stall validity or other Reynolds/Mach modes.
 
-Mach-zero calibration before the fix matched 2,232 natural-transition stations, with maxima Ue 4.24e-5, displacement thickness 2.19e-6, momentum thickness 6.65e-7, Cf 7.49e-6 and Hk 0.00220. The default gate intentionally includes the currently failing nonzero-Mach cases tracked in #21. It must pass before the scientific correction can merge; do not loosen tolerances or remove cases to obtain green CI.
+Mach-zero calibration before the fix matched 2,232 natural-transition stations, with maxima Ue 4.24e-5, displacement thickness 2.19e-6, momentum thickness 6.65e-7, Cf 7.49e-6 and Hk 0.00220. The baseline gate also exposed all 24 nonzero-Mach cases tracked in #21 failing to converge. With the compressible transport and reporting correction, all 48 native and all 48 WASM/reference/native cases pass locally without changing these tolerances. Current-head CI must pass before integration; do not loosen tolerances or remove cases to obtain green CI.
 
 ## Run locally
 

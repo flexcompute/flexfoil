@@ -1016,7 +1016,7 @@ fn faithful_snapshot(
         .map_err(|e| format!("Faithful solver error: {e}"))?;
 
     let gamma = state.gam.clone();
-    let cp: Vec<f64> = gamma.iter().map(|g| 1.0 - g * g).collect();
+    let cp: Vec<f64> = gamma.iter().map(|&g| rustfoil_xfoil::forces::pressure_coefficient(g, mach)).collect();
     let cp_x = state.panel_x.clone();
 
     let result = AnalysisResult {
