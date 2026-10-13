@@ -17,6 +17,7 @@ GENERATED = SITE / 'src/generated'
 API = SITE / 'docs/api'
 
 
+# shortcut: Rust/JS extraction uses column-zero braces; use compiler parsing if that source convention changes.
 def extract(path, name):
     text = (ROOT / path).read_text()
     lines = text.splitlines()
@@ -104,7 +105,7 @@ def build():
     all_items = coverage + rust
     (GENERATED / 'coverage.json').write_text(json.dumps(all_items, indent=2))
     (API / '_category_.json').write_text(json.dumps({'label': 'Generated API', 'position': 9}))
-    (API / 'index.md').write_text('---\ntitle: Generated API\nslug: /api\n---\n\nPython signatures/docstrings are generated on every build with stdlib AST. Rustdoc generates the canonical public Rust API.\n\n' + ''.join(f'- [{module}](./{module}.md)\n' for module in modules) + '\n<a href="/docs/api/rust/rustfoil_xfoil/index.html">Rust API and linked workspace crates</a>\n\n[Hand-written page coverage](./coverage.md)\n')
+    (API / 'index.md').write_text('---\ntitle: Generated API\nslug: /api\n---\n\nPython signatures/docstrings are generated on every build with stdlib AST. Rustdoc generates the canonical public Rust API.\n\n' + ''.join(f'- [{module}](./{module}.md)\n' for module in modules) + '\n<a href="/docs/api/rust/rustfoil_xfoil/index.html">Rust API and linked workspace crates</a>\n\n## Primitive pages\n\n' + ''.join(f'- [`{item["name"]}`](../{item["page"].lstrip("/")}.mdx)\n' for item in all_items if item['page']) + '\n[Hand-written page coverage](./coverage.md)\n')
     (API / 'coverage.md').write_text('---\ntitle: Hand-written page coverage\n---\n\nGenerated on every build. Python entries are public AST declarations (including constructors). Rust entries are public source declarations, possibly inside private modules; rustdoc is authoritative for export visibility. A link is counted only when a hand-written page extracts that named primitive. Existing overview pages have not been marked as complete primitive documentation.\n\n' + f'{sum(bool(x["page"]) for x in all_items)} of {len(all_items)} declarations have a mapped hand-written page.\n\n' + ''.join(f'- `{x["name"]}` — `{x["path"]}:{x["line"]}`\n' for x in all_items if not x['page']))
     subprocess.run(['cargo', 'doc', '--workspace', '--no-deps', '--quiet'], cwd=ROOT, check=True)
     destination = SITE / 'static/api/rust'
