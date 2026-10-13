@@ -3,6 +3,7 @@ title: Solver reference gate
 ---
 
 import Equation from '@site/src/components/SolverGate/Equation';
+import SourceCode from '@site/src/components/SolverGate/SourceCode';
 import GateInspector from '@site/src/components/SolverGate/Inspector';
 
 The CI Python job builds checksum-pinned official XFOIL 6.99 and compares complete solves with the native Python bindings. It then builds the shipping WASM bindings and runs them in Node against the same reference. Missing build tools, reference output, failed solves, missing cases, non-finite values or numerical mismatches fail the job. No reference test is skipped or marked as an expected failure. Branch protection configuration is separate from this workflow.
@@ -52,3 +53,12 @@ The executable source is [build_solver_reference.py](https://github.com/flexcomp
 The commands above are a minimal complete call. Keep live Fortran execution so a missing/stale fixture cannot silently pass; pin its archive checksum so upstream changes cannot silently redefine the oracle. Retain failed cases rather than scoring them as valid results. Test the actual native/WASM entry points because a correct kernel can still be reached with wrong options or serialized incorrectly. Three fixed geometries keep the gate repeatable; do not treat their measured coverage as evidence for every airfoil, wheel platform or flow mode.
 
 The documented nose/mode/platform ceilings would be raised with dedicated matched reference cases and calibrated checks, not by removing existing cases or weakening tolerances. Node avoids a browser dependency for numerical API checks; real browser and UI workflow tests remain separate. The widget illustrates one check only and does not run either aerodynamic solver.
+
+## Source extracted from this build
+
+<SourceCode path="scripts/build_solver_reference.py" name="build" />
+<SourceCode path="scripts/solver_gate.py" name="gate" />
+<SourceCode path="scripts/solver_gate.py" name="run_reference" />
+<SourceCode path="scripts/solver_gate.py" name="compare_distributions" />
+
+<SourceCode path="docs-site/src/components/SolverGate/Inspector.jsx" name="GateInspector" />
