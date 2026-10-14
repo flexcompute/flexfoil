@@ -1,0 +1,73 @@
+---
+title: Solver reference gate
+---
+
+import SourceCode from '@site/src/components/SolverGate/SourceCode';
+import GateInspector from '@site/src/components/SolverGate/Inspector';
+
+The CI Python job builds checksum-pinned official XFOIL 6.99 and compares complete solves with the native Python bindings. It then builds the shipping WASM bindings and runs them in Node against the same reference. Missing build tools, reference output, failed solves, missing cases, non-finite values or numerical mismatches fail the job. No reference test is skipped or marked as an expected failure. Branch protection configuration is separate from this workflow.
+
+## Cases and contracts
+
+The 48 cases use three saved 160-point geometries (NACA 0012, 2412 and 4412), Reynolds numbers 100,000 and 1,000,000, Mach 0 and 0.25, angles 0/4/8 degrees with Ncrit 9/free transition, plus 4 degrees with Ncrit 5 and trips at 0.3/0.4 chord. Every reference starts in a fresh process; native points and batches are independent starts. XFOIL LOAD/PCOP preserves the exact coordinates, checked against its surface dump within output rounding. Geometry generation and warm continuation are outside this matrix.
+
+Every native result must succeed and converge. Lift, drag, moment and both transition locations are compared with XFOIL; serial/batch results must agree within 1e-12. Boundary-layer replay must also converge. Matched upper/lower stations from x/c 0.05 through the trailing edge check edge speed, displacement/momentum thickness, kinematic shape factor and wall friction. The synthetic stagnation row and cross-leading-edge mapping need separate station tests; this matrix does not validate them. XFOIL's dump uses kinematic Hk and freestream-normalized friction, so the native H/local Cf are converted using the reference thermodynamic conventions before comparison. WASM checks the coefficients, all surface Cp locations/values, and agreement with native results within 1e-10.
+
+## Tolerances and limits
+
+Polar absolute tolerances are CL 2e-4, CD 1e-5, CM 1e-4 and transition positions 2e-4 chord. XFOIL's printed half-units are 5e-5 for CL/CM/transition and 5e-6 for CD, with both solvers stopping at 1e-4 RMS. Profile tolerances are Ue 2e-4, displacement thickness 5e-6 chord, momentum thickness 2e-6 chord, Cf 2e-5 and Hk 0.005; Cp is 2e-4. These bound regression on the saved matrix, including print precision and convergence differences; they do not establish physical-model accuracy, arbitrary-airfoil equivalence, post-stall validity or other Reynolds/Mach modes.
+
+Mach-zero calibration before the fix matched 2,232 natural-transition stations, with maxima Ue 4.24e-5, displacement thickness 2.19e-6, momentum thickness 6.65e-7, Cf 7.49e-6 and Hk 0.00220. The baseline gate also exposed all 24 nonzero-Mach cases tracked in #21 failing to converge. With the compressible transport and reporting correction, all 48 native and all 48 WASM/reference/native cases pass locally without changing these tolerances. Current-head CI must pass before integration; do not loosen tolerances or remove cases to obtain green CI.
+
+## Run locally
+
+Requires Python 3.12 with the locally built native extension, GNU Fortran, curl, C/make, pkg-config and X11 development libraries. On macOS use installed Homebrew compiler/X11; on Ubuntu CI installs gfortran and libx11-dev. Numerical source is unmodified. PACC accumulates in memory and PWRT saves afterward to avoid the legacy sequential-write-after-EOF append path. Exit floating-point flags in this old reference build remain a diagnostic limitation; finite results and convergence are checked explicitly.
+
+```sh
+python scripts/build_solver_reference.py target/xfoil-reference
+python scripts/test_solver_gate.py
+python scripts/solver_gate.py --xfoil target/xfoil-reference/bin/xfoil --output target/solver-reference
+wasm-pack build crates/rustfoil-wasm --target nodejs --out-dir ../../target/solver-wasm
+node scripts/solver_gate.cjs target/solver-wasm/rustfoil_wasm.js target/solver-reference/report.json 48
+```
+
+CI preserves commands, stdout/stderr, polars, pressure/BL dumps, native results and failures as `solver-reference-evidence`. Source download/build errors fail rather than use stale fixtures. `--mach-zero-only` is a local diagnostic subset and is never used by CI. Linux/Windows wheel installation, browser UI workflows, operating modes outside this matrix, gradients and inverse/multi-element models need their own checks.
+
+## Theory and interactive check
+
+For a coefficient q, the gate checks finite values and an absolute difference against the documented tolerance. Transition locations and thicknesses are normalized by chord; velocities are normalized by freestream speed. The full solve also has to converge with RMS at most 1e-4. This is numerical regression against XFOIL's model, not validation against wind-tunnel measurements.
+
+$$
+|q_{\mathrm{solver}}-q_{\mathrm{reference}}| \leq \varepsilon_q\label{eq:solver-reference-gate-1}
+$$
+
+Equation $\eqref{eq:solver-reference-gate-1}$ defines this relation.
+
+The profile comparison follows XFOIL BLPRV/BLKIN/BLDUMP: incompressible coupled UI is transformed to physical U, local Mach determines Hk and density, and local Cf is converted to freestream normalization. The governing definitions come from the pinned official [XFOIL source](https://web.mit.edu/drela/Public/web/xfoil/), notably xblsys.f BLPRV/BLKIN and xoper.f BLDUMP. This comparison assumes gamma 1.4, Qinf 1 and the same panel coordinates/flow conditions on each side.
+
+$$
+H_k=\frac{H-0.29M_e^2}{1+0.113M_e^2},\qquad C_{f,\infty}=C_{f,e}\,\frac{\rho_e}{\rho_\infty}\left(\frac{U_e}{U_\infty}\right)^2\label{eq:solver-reference-gate-2}
+$$
+
+Equation $\eqref{eq:solver-reference-gate-2}$ defines this relation.
+
+<GateInspector />
+
+## Source and design choices
+
+The extracted source below is regenerated from this checkout on every build. Numbered equations are rendered by MathJax at build time; unknown equation references fail the build.
+
+The commands above are a minimal complete call. Keep live Fortran execution so a missing/stale fixture cannot silently pass; pin its archive checksum so upstream changes cannot silently redefine the oracle. Retain failed cases rather than scoring them as valid results. Test the actual native/WASM entry points because a correct kernel can still be reached with wrong options or serialized incorrectly. Three fixed geometries keep the gate repeatable; do not treat their measured coverage as evidence for every airfoil, wheel platform or flow mode.
+
+The documented nose/mode/platform ceilings would be raised with dedicated matched reference cases and calibrated checks, not by removing existing cases or weakening tolerances. Node avoids a browser dependency for numerical API checks; real browser and UI workflow tests remain separate. The widget illustrates one check only and does not run either aerodynamic solver.
+
+## Source extracted from this build
+
+<SourceCode path="scripts/build_solver_reference.py" name="build" />
+<SourceCode path="scripts/solver_gate.py" name="gate" />
+<SourceCode path="scripts/solver_gate.py" name="run_reference" />
+<SourceCode path="scripts/solver_gate.py" name="compare_distributions" />
+
+<SourceCode path="docs-site/src/components/SolverGate/Inspector.jsx" name="GateInspector" />
+
+The matching drag decomposition is read from the final converged XFOIL iteration report, not the polar-file CDp column. Both CDf and CD−CDf use absolute tolerance 1e-5. Their measured maximum differences on the 48-case matrix are 4.91e-6 and 4.99e-6.

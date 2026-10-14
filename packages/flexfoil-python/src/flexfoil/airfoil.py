@@ -61,7 +61,9 @@ class SolveResult:
 
 @dataclass
 class BLResult:
-    """Boundary-layer distribution result (viscous only)."""
+    """Viscous BL arrays in chord units. ue_* is coupled incompressible UI/Uinf;
+    cf_* is local edge-based Cf, not freestream-normalized XFOIL DUMP Cf.
+    """
 
     success: bool
     converged: bool = False

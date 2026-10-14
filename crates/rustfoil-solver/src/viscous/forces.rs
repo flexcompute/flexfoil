@@ -115,8 +115,8 @@ pub fn compute_forces_from_canonical_state(
 ) -> AeroForces {
     let (cl, cm) = compute_panel_forces_from_gamma(panel_x, panel_y, state.panel_gamma(), alpha_rad);
 
-    let cd_friction_upper = compute_row_friction_drag(&state.upper_rows);
-    let cd_friction_lower = compute_row_friction_drag(&state.lower_rows);
+    let cd_friction_upper = compute_row_friction_drag(&state.upper_rows, alpha_rad);
+    let cd_friction_lower = compute_row_friction_drag(&state.lower_rows, alpha_rad);
     let cd_friction = cd_friction_upper + cd_friction_lower;
 
     let lower_wake: Vec<&CanonicalBlRow> = state.lower_rows.iter().filter(|row| row.is_wake).collect();
@@ -621,44 +621,18 @@ pub fn compute_friction_drag(stations: &[BlStation]) -> f64 {
     cdf
 }
 
-fn compute_row_friction_drag(rows: &[CanonicalBlRow]) -> f64 {
-    if rows.len() < 4 {
-        return 0.0;
-    }
-
-    let max_physical_cf = 0.02;
-    let r_theta_min = 80.0;
-
-    rows[3..]
-        .windows(2)
+fn compute_row_friction_drag(rows: &[CanonicalBlRow], alpha_rad: f64) -> f64 {
+    let (sa, ca) = alpha_rad.sin_cos();
+    // XFOIL CDCALC: IBL=3..IBLTE integrates real rows 1→2 onward, excluding the stagnation anchor.
+    rows.get(1..).unwrap_or_default().windows(2)
+        .filter(|pair| !pair[0].is_wake && !pair[1].is_wake)
         .map(|pair| {
-            if pair[0].is_wake || pair[1].is_wake {
-                return 0.0;
-            }
-            if pair[0].theta < 1.0e-10 || pair[1].theta < 1.0e-10 {
-                return 0.0;
-            }
-            if pair[0].r_theta < r_theta_min || pair[1].r_theta < r_theta_min {
-                return 0.0;
-            }
-
-            let dx = (pair[1].x_coord - pair[0].x_coord).abs();
-            let dx = if dx < 1.0e-12 {
-                (pair[1].x - pair[0].x).abs()
-            } else {
-                dx
-            };
-
-            let cf1 = pair[0].cf.clamp(0.0, max_physical_cf);
-            let cf2 = pair[1].cf.clamp(0.0, max_physical_cf);
-            let cf_avg = 0.5 * (cf1 + cf2);
-            let ue1 = pair[0].uedg.abs().max(0.01);
-            let ue2 = pair[1].uedg.abs().max(0.01);
-            let ue_sq_avg = 0.5 * (ue1 * ue1 + ue2 * ue2);
-
-            ue_sq_avg * cf_avg * dx
-        })
-        .sum()
+            let dx = (pair[1].x_coord - pair[0].x_coord) * ca
+                + (pair[1].y_coord - pair[0].y_coord) * sa;
+            let twice_tau1 = pair[0].cf * pair[0].uedg.powi(2);
+            let twice_tau2 = pair[1].cf * pair[1].uedg.powi(2);
+            0.5 * (twice_tau1 + twice_tau2) * dx
+        }).sum()
 }
 
 fn compute_cd_from_te_rows(upper_rows: &[CanonicalBlRow], lower_rows: &[CanonicalBlRow]) -> f64 {
@@ -1014,6 +988,27 @@ pub fn transition_drag_penalty(stations: &[BlStation], x_transition: f64) -> f64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_friction_projects_wall_shear_and_keeps_low_reynolds_rows() {
+        let rows = vec![
+            CanonicalBlRow { cf: 1000.0, ..Default::default() },
+            CanonicalBlRow { x_coord: 0.1, y_coord: 0.0, cf: 0.01, uedg: 2.0, r_theta: 20.0, ..Default::default() },
+            CanonicalBlRow { x_coord: 0.4, y_coord: 0.2, cf: 0.02, uedg: 1.0, r_theta: 30.0, ..Default::default() },
+            CanonicalBlRow { x_coord: 1.0, cf: 1000.0, uedg: 1.0, is_wake: true, ..Default::default() },
+        ];
+        assert!((compute_row_friction_drag(&rows, std::f64::consts::FRAC_PI_2) - 0.006).abs() < 1e-12);
+    }
+
+    #[test]
+    fn canonical_friction_retains_signed_shear_and_projection() {
+        let mut rows = vec![CanonicalBlRow::default(),
+            CanonicalBlRow { x_coord: 0.1, cf: -0.01, uedg: 1.0, ..Default::default() },
+            CanonicalBlRow { x_coord: 0.6, cf: -0.01, uedg: 1.0, ..Default::default() }];
+        assert!((compute_row_friction_drag(&rows, 0.0) + 0.005).abs() < 1e-12);
+        rows[2].x_coord = -0.4;
+        assert!((compute_row_friction_drag(&rows, 0.0) - 0.005).abs() < 1e-12);
+    }
 
     fn create_test_stations(n: usize) -> Vec<BlStation> {
         (0..n)

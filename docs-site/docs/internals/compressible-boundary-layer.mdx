@@ -1,0 +1,75 @@
+---
+title: Compressible boundary-layer transport
+---
+
+import SourceCode from '@site/src/components/SolverGate/SourceCode';
+import Inspector from '@site/src/components/Compressibility/Inspector';
+
+## What it is
+
+This function family supplies the compressible edge state and the derivative frame used by BLVAR, BLDIF, TRCHEK and TRDIF. Inputs are incompressible coupled speed UI normalized by freestream speed, freestream Mach squared, momentum thickness in chord units, and freestream Reynolds number. Outputs include physical edge speed U, local Mach squared, density relative to freestream, momentum-thickness Reynolds number, and analytic derivatives. The coupled mass unknown remains UI times total displacement thickness. A physical boundary-layer velocity must not silently replace UI in that mass contract.
+
+## Theory and reference
+
+The equations follow official XFOIL 6.99 SETBL/BLPRV/BLKIN in [the reference source](https://web.mit.edu/drela/Public/web/xfoil/). With Qinf = 1 and gamma = 1.4, define the Karman–Tsien parameter and edge speed:
+
+$$
+\beta=\sqrt{1-M_\infty^2},\quad \lambda=\frac{M_\infty^2}{(1+\beta)^2},\quad U=\frac{U_I(1-\lambda)}{1-\lambda U_I^2}\label{eq:compressible-boundary-layer-1}
+$$
+
+Equation $\eqref{eq:compressible-boundary-layer-1}$ defines this relation.
+
+Local Mach and density follow the stagnation enthalpy and isentropic relation:
+
+$$
+h_t^{-1}=\frac{0.4M_\infty^2}{1+0.2M_\infty^2},\quad M_e^2=\frac{U^2h_t^{-1}}{0.4(1-\frac12U^2h_t^{-1})},\quad \rho_e=\left(\frac{1+0.2M_\infty^2}{1+0.2M_e^2}\right)^{2.5}\label{eq:compressible-boundary-layer-2}
+$$
+
+Equation $\eqref{eq:compressible-boundary-layer-2}$ defines this relation.
+
+$$
+H_k=\frac{H-0.29M_e^2}{1+0.113M_e^2},\quad R_\theta=\frac{\rho_e U\theta}{\mu_e},\quad \frac{\partial F}{\partial U_I}=\frac{\partial F}{\partial U}\frac{\partial U}{\partial U_I}\label{eq:compressible-boundary-layer-3}
+$$
+
+Equation $\eqref{eq:compressible-boundary-layer-3}$ defines this relation.
+
+The closure/Jacobian calculations use physical U; their final velocity columns are transformed back to UI before mass-coupled assembly. Transition interpolation occurs in physical U before the same transformation. Both marching routines receive the actual Mach value, matching the assembly and update paths.
+
+**Reference limitation:** the pinned full XFOIL 6.99 SETBL leaves common-block HVRAT unset. Instrumented full runs on the reference build measured zero. This implementation matches that reference behavior; earlier isolated BLKIN probes explicitly set HVRAT = 0.35 and are a different thermodynamic configuration. The reference's zero ratio is not a claim about real-air viscosity. The private helper retains the explicit 0.35 probe for comparison. No test tolerance is changed to hide this distinction.
+
+## Real source and working calls
+
+<SourceCode path="crates/rustfoil-bl/src/compressibility.rs" name="edge_velocity" />
+<SourceCode path="crates/rustfoil-bl/src/compressibility.rs" name="edge_thermodynamics" />
+<SourceCode path="crates/rustfoil-bl/src/compressibility.rs" name="local_mach_squared" />
+<SourceCode path="crates/rustfoil-bl/src/compressibility.rs" name="EdgeThermodynamics" />
+<SourceCode path="crates/rustfoil-bl/src/compressibility.rs" name="edge_thermodynamics_at_hvrat" />
+
+```rust
+use rustfoil_bl::compressibility::{edge_velocity, edge_thermodynamics};
+let (u, du_dui) = edge_velocity(1.2, 0.25_f64.powi(2));
+let edge = edge_thermodynamics(u, 0.001, 0.25_f64.powi(2), 1.0e6);
+assert!(du_dui > 1.0 && edge.r_theta.is_finite());
+```
+
+The transport family is the actual [BLVAR/BLDIF/TRDIF source](https://github.com/flexcompute/flexfoil/blob/main/crates/rustfoil-bl/src/equations.rs); the snippets below are extracted from this checkout on every build and fail if the named functions disappear.
+
+<SourceCode path="crates/rustfoil-bl/src/equations.rs" name="blvar" />
+<SourceCode path="crates/rustfoil-bl/src/equations.rs" name="bldif_with_terms_ncrit" />
+<SourceCode path="crates/rustfoil-bl/src/equations.rs" name="trdif_full" />
+
+## Interactive station
+
+<Inspector />
+
+<SourceCode path="docs-site/src/components/Compressibility/math.js" name="edgeState" />
+
+## Why and limits
+
+Keep the existing UI-based mass contract and apply a velocity-frame transformation at the local residual/Jacobian boundary. Replacing the stored coupled speed with physical U would change mass, influence-matrix and update semantics throughout the solver. A Mach parameter passed only to the assembly leaves its marched state inconsistent; propagating that parameter alone improves convergence but fails the reference distributions. Local Mach, density and viscosity are needed together.
+
+The helper has no new cap, clamp or convergence workaround. Its domain is the subsonic Karman–Tsien/enthalpy transform with positive denominators. The validated complete-solve matrix is Mach 0/0.25 on three geometries and two Reynolds numbers; it does not establish arbitrary-Mach/transonic validity, universal XFOIL equivalence or differentiability of a full solve. Isolated thermodynamic derivatives and local velocity-Jacobian finite differences are tested; other global sensitivity and optimization contracts remain separate. See the [solver reference gate](./solver-reference-gate) for executable cases, tolerances and exclusions.
+
+At Mach zero the edge-speed transform is the identity, but the correction also fixes two zero-Mach Jacobian terms (MRCHDU auxiliary velocity derivative and the turbulent dissipation shape chain). Bounded converged Mach-zero results retain reference agreement; not every Jacobian term is unchanged.
+
+The retained isolated TRDIF probe with HVRAT=0.35 has mismatches in seven of nine configurations and lacks a retained Rust driver. It is diagnostic evidence of an unresolved probe/configuration gap, not TRDIF parity evidence. The complete-solve transition cases use the pinned batch configuration and are the validated acceptance evidence. Global derivatives, the legacy viscous engine, and other scaling modes remain outside that gate.

@@ -11,6 +11,7 @@
 //! - [`debug`] - Debug output for XFOIL comparison
 
 pub mod closures;
+pub mod compressibility;
 pub mod constants;
 pub mod debug;
 pub mod equations;

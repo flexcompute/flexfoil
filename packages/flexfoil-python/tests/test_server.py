@@ -26,6 +26,7 @@ _SAMPLE_RUN = {
     "ncrit": 9.0,
     "n_panels": 160,
     "max_iter": 100,
+            "cache_key": "current-engine-settings",
     "cl": 0.92,
     "cd": 0.008,
     "cm": -0.05,
@@ -118,6 +119,7 @@ class TestCacheLookup:
             "ncrit": 9.0,
             "n_panels": 160,
             "max_iter": 100,
+            "cache_key": "current-engine-settings",
         })
         assert resp.status_code == 200
         assert resp.json() is not None
@@ -133,6 +135,7 @@ class TestCacheLookup:
             "ncrit": 9.0,
             "n_panels": 160,
             "max_iter": 100,
+            "cache_key": "current-engine-settings",
         })
         assert resp.status_code == 200
         assert resp.json() is None

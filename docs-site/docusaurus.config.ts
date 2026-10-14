@@ -1,3 +1,6 @@
+import remarkMath from 'remark-math';
+import rehypeMathjax from 'rehype-mathjax';
+import equations from './src/remark/equations.mjs';
 import {themes as prismThemes} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
@@ -18,6 +21,7 @@ const config: Config = {
   projectName: 'flexfoil',
 
   onBrokenLinks: 'throw',
+  onBrokenAnchors: 'throw',
 
   i18n: {
     defaultLocale: 'en',
@@ -36,6 +40,8 @@ const config: Config = {
       {
         docs: {
           routeBasePath: '/',
+          remarkPlugins: [remarkMath, equations],
+          rehypePlugins: [rehypeMathjax],
           sidebarPath: './sidebars.ts',
           editUrl: 'https://github.com/flexcompute/flexfoil/tree/main/docs-site/',
         },

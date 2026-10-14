@@ -338,7 +338,7 @@ are byte-identical.
 
 ### BLResult
 
-Returned by `Airfoil.bl_distribution()`.
+Returned by `Airfoil.bl_distribution()`. Thicknesses and positions are in chord units. At nonzero Mach, `ue_*` is the incompressible coupled speed, not physical edge speed; `cf_*` uses local edge dynamic pressure, not freestream dynamic pressure. See the conversion equations in [compressible transport](./internals/compressible-boundary-layer) and [forces](./internals/compressible-forces) before comparing with XFOIL DUMP.
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -349,16 +349,16 @@ Returned by `Airfoil.bl_distribution()`.
 | `.x_tr_lower` | `float` | Transition x/c, lower surface |
 | `.x_upper` | `list[float]` | x-coordinates, upper surface |
 | `.x_lower` | `list[float]` | x-coordinates, lower surface |
-| `.cf_upper` | `list[float]` | Skin friction coefficient, upper surface |
-| `.cf_lower` | `list[float]` | Skin friction coefficient, lower surface |
+| `.cf_upper` | `list[float]` | Local edge-based skin friction $C_{f,e}$, upper surface |
+| `.cf_lower` | `list[float]` | Local edge-based skin friction $C_{f,e}$, lower surface |
 | `.delta_star_upper` | `list[float]` | Displacement thickness, upper surface |
 | `.delta_star_lower` | `list[float]` | Displacement thickness, lower surface |
 | `.theta_upper` | `list[float]` | Momentum thickness, upper surface |
 | `.theta_lower` | `list[float]` | Momentum thickness, lower surface |
 | `.h_upper` | `list[float]` | Shape factor, upper surface |
 | `.h_lower` | `list[float]` | Shape factor, lower surface |
-| `.ue_upper` | `list[float]` | Edge velocity, upper surface |
-| `.ue_lower` | `list[float]` | Edge velocity, lower surface |
+| `.ue_upper` | `list[float]` | Incompressible coupled speed $U_I/U_\infty$, upper surface |
+| `.ue_lower` | `list[float]` | Incompressible coupled speed $U_I/U_\infty$, lower surface |
 
 ### RunDatabase
 
@@ -412,3 +412,5 @@ The [`examples/`](https://github.com/flexcompute/flexfoil/tree/main/packages/fle
 | `10_flap_study.py` | Sweep flap deflections (0-20 deg) |
 | `11_flap_hinge_sweep.py` | Find optimal hinge position for L/D |
 | `12_matrix_sweep.py` | Alpha x Re matrix for a flapped airfoil |
+
+Low-level native `cd_friction` is signed freestream-projected wall-shear drag; `cd_pressure` is total CD minus that friction contribution, matching XFOIL’s iteration-report decomposition. It is not the separate surface-pressure integral labelled CDp in an XFOIL polar file. See [force reporting](./internals/compressible-forces) for the formula and bounded reference tests.

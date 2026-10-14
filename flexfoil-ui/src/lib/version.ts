@@ -28,6 +28,40 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  { version: '1.1.16', date: '2026-10-14', items: [
+    { category: 'fixed', text: 'Match native friction and total-minus-friction drag reporting to the reference wall-shear integration' },
+  ] },
+  { version: '1.1.15', date: '2026-10-14', items: [
+    { category: 'fixed', text: 'Preserve solver attempts and reuse only converged results from matching solver artifacts and operating settings' },
+  ] },
+  { version: '1.1.14', date: '2026-10-14', items: [
+    { category: 'added', text: 'Apply a validated trailing-edge flap in CLI inviscid and faithful polars' },
+    { category: 'fixed', text: 'Reject invalid and short flap contours, heal nonzero inviscid flap geometry, and preserve the original airfoil name' },
+  ] },
+  { version: '1.1.13', date: '2026-10-14', items: [
+    { category: 'fixed', text: 'Label boundary-layer velocity and friction frames and rebuild linked source documentation with numbered equations' },
+  ] },
+  {
+    version: '1.1.12',
+    date: '2026-10-13',
+    items: [
+      { category: 'fixed', text: 'Use Mach-corrected pressure and physical wake forces and preserve final surface transition locations' },
+    ],
+  },
+  {
+    version: '1.1.11',
+    date: '2026-10-13',
+    items: [
+      { category: 'fixed', text: 'Carry compressible edge thermodynamics and velocity derivatives through the coupled boundary-layer march' },
+    ],
+  },
+  {
+    version: '1.1.10',
+    date: '2026-10-13',
+    items: [
+      { category: 'added', text: 'Reference-backed solver checks require converged native and WebAssembly results with matched geometry and operating conditions' },
+    ],
+  },
   {
     version: '1.1.4',
     date: '2026-04-08',
