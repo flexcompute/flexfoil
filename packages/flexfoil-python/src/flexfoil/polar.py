@@ -209,13 +209,6 @@ class PolarResult:
     # ── Export ─────────────────────────────────────────────────
 
     def to_dict(self, *, summary: bool = False, include_failed: bool = False) -> dict:
-        d = {
-            "alpha": self.alpha,
-            "cl": self.cl,
-            "cd": self.cd,
-            "cm": self.cm,
-            "ld": self.ld,
-        }
         if include_failed:
             # Preserve requested order and label provisional/failed points explicitly.
             d = {key: [getattr(r, key) if r.success else None for r in self.results]
@@ -227,6 +220,14 @@ class PolarResult:
             for key in ("airfoil_name", "geometry_hash", "solver_version", "max_iter",
                         "viscous", "re_type", "xstrip_upper", "xstrip_lower"):
                 d[key] = [getattr(self, key)] * len(self.results)
+        else:
+            d = {
+                "alpha": self.alpha,
+                "cl": self.cl,
+                "cd": self.cd,
+                "cm": self.cm,
+                "ld": self.ld,
+            }
         if summary:
             d["_summary"] = {
                 "cl_max": self.cl_max,
