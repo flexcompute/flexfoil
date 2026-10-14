@@ -38,8 +38,8 @@ export const browserBackend: StorageBackend = {
     return dbInsertRunBatch(runs);
   },
 
-  lookupCache(airfoilHash, alpha, reynolds, mach, ncrit, nPanels, maxIter): RunRow | null {
-    return dbLookupCache(airfoilHash, alpha, reynolds, mach, ncrit, nPanels, maxIter);
+  lookupCache(airfoilHash, alpha, reynolds, mach, ncrit, nPanels, maxIter, cacheKey): RunRow | null {
+    return dbLookupCache(airfoilHash, alpha, reynolds, mach, ncrit, nPanels, maxIter, cacheKey);
   },
 
   queryAllRuns(): RunRow[] {

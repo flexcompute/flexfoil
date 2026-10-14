@@ -52,6 +52,7 @@ interface RunStoreState {
     ncrit: number,
     nPanels: number,
     maxIter: number,
+    cacheKey?: string | null,
   ) => RunRow | null;
   /** Compute a deterministic hash for a set of panels */
   hashPanels: (panels: { x: number; y: number }[]) => Promise<string>;
@@ -123,9 +124,9 @@ export const useRunStore = create<RunStoreState>()((set, get) => ({
     get().refresh();
   },
 
-  lookup: (hash, alpha, re, mach, ncrit, nPanels, maxIter) => {
+  lookup: (hash, alpha, re, mach, ncrit, nPanels, maxIter, cacheKey) => {
     try {
-      return getBackend().lookupCache(hash, alpha, re, mach, ncrit, nPanels, maxIter);
+      return getBackend().lookupCache(hash, alpha, re, mach, ncrit, nPanels, maxIter, cacheKey);
     } catch {
       return null;
     }

@@ -222,6 +222,7 @@ export interface RunRow {
   id: number;
   airfoil_name: string;
   airfoil_hash: string;
+  cache_key?: string | null;
   alpha: number;
   reynolds: number;
   mach: number;
