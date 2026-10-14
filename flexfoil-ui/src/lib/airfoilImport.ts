@@ -35,6 +35,7 @@ function parseCoordinateLine(line: string, lineNumber: number, allowHeader: bool
 
   const parts = trimmed.replace(/,/g, ' ').split(/\s+/);
   const numericLike = /^[+-]?(?:\d|\.\d|NaN\b|Inf(?:inity)?\b)/i.test(parts[0]);
+  const numericField = /^[+-]?(?:(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|NaN|Inf(?:inity)?)$/i;
   const nonFiniteToken = /^[+-]?(?:NaN|Inf(?:inity)?)$/i.test(parts[0]);
   if (parts.length < 2 || parts[1] === '') {
     if (nonFiniteToken || (!allowHeader && numericLike)) {
@@ -46,7 +47,10 @@ function parseCoordinateLine(line: string, lineNumber: number, allowHeader: bool
   const x = Number(parts[0]);
   const y = Number(parts[1]);
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
-    if (nonFiniteToken || (!allowHeader && numericLike)) {
+    // Two numeric fields are a coordinate row (including overflow and Inf/NaN), even in the header slot.
+    // A title such as "2412 AIRFOIL" has only one numeric field and may still be the name.
+    const coordinatePair = numericField.test(parts[0]) && numericField.test(parts[1]);
+    if (coordinatePair || nonFiniteToken || (!allowHeader && numericLike)) {
       throw new Error(`Invalid or non-finite coordinate at line ${lineNumber}.`);
     }
     return null;

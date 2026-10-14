@@ -352,6 +352,11 @@ describe('invalid geometry diagnostics', () => {
       .toThrow(/line 3/i);
   });
 
+  it.each(['0 Infinity', '1e999 0', '0 NaN', '0,Infinity', '+Infinity 0'])('rejects non-finite opening coordinates %s', (bad) => {
+    expect(() => parseAirfoilDat(`${bad}\n1 0.1\n0 0\n1 -0.1`, 'foil.dat'))
+      .toThrow(/line 1/i);
+  });
+
   it('locates adjacent duplicate coordinates', () => {
     expect(() => parseAirfoilDat('test\n1 .1\n0 0\n0 0\n1 -.1', 'test.dat'))
       .toThrow(/points 2 and 3/i);

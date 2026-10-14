@@ -10,6 +10,12 @@ describe('inverse target import', () => {
     expect(parseInverseTarget('x/c ue\n0 1.2\n1 .8', 'velocity').values).toEqual([1.2, .8]);
     expect(parseInverseTarget('0 -1\n1 0', 'cp').x).toEqual([0, 1]);
   });
+  it('strips a leading UTF-8 BOM from Excel CSV', () => {
+    expect(parseInverseTarget('\uFEFFx,cp\n.2,-4\n.6,-1\n', 'cp'))
+      .toEqual({ x: [.2, .6], values: [-4, -1] });
+    expect(parseInverseTarget('\uFEFF0,-1\n1,0', 'cp')).toEqual({ x: [0, 1], values: [-1, 0] });
+    expect(parseInverseTarget('\uFEFFx/c ue\n0 1.2\n1 .8', 'velocity').values).toEqual([1.2, .8]);
+  });
   it.each(['x,ue\n0,1\n1,1', '0,NaN\n1,0', '0,Infinity\n1,0',
     '0,1,2\n1,1', '0,1\n0,2', '.5,1\n.2,1', '-.1,1\n1,1',
     '0,1\n1.1,1', '0,1', '', '0,\n1,0'])('rejects invalid input: %s', (text) => {

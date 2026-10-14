@@ -4,7 +4,7 @@ import type { InverseDesignSurfaceTarget } from '../types';
 export function parseInverseTarget(text: string, kind: 'cp' | 'velocity'): InverseDesignSurfaceTarget {
   const x: number[] = [];
   const values: number[] = [];
-  for (const [index, line] of text.split(/\r?\n/).entries()) {
+  for (const [index, line] of text.replace(/^\uFEFF/, '').split(/\r?\n/).entries()) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
     const parts = trimmed.includes(',') ? trimmed.split(',').map((part) => part.trim()) : trimmed.split(/\s+/);
