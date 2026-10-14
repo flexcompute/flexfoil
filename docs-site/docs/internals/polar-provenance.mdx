@@ -46,3 +46,5 @@ assert rows['geometry_hash'] == [polar.geometry_hash] * len(polar.results)
 Handle missing metadata at the call boundary and verify that it owns the loaded module. Returning unknown preserves useful source/vendored execution while preventing accidental attribution to another installed wheel. Keep the solver and polar data model unchanged; no new packaging version file or runtime registry is needed. Regression tests exercise real inviscid serial/batch polars with missing, shadowed and matching metadata, and export tests confirm the recorded condition fields.
 
 The inherited full solver gate and cache provenance are separate checks. This release label does not prove an independently replaced native extension belongs to that release. Unknown provenance remains visible to downstream comparisons and exports instead of being silently filled in.
+
+Complete-attempt export builds its requested-order columns directly, avoiding a discarded construction of converged-only columns. Default export and optional summary retain their existing selection/statistics behavior.
