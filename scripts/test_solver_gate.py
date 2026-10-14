@@ -33,6 +33,22 @@ class GateFailureTests(unittest.TestCase):
                 with self.assertRaisesRegex(AssertionError, 'XFOIL exit 2'):
                     run_reference(Path('unused'), geometry, 4., 1e6, 0., 9., (1., 1.), root)
 
+    def test_drag_components_use_final_iteration_not_polar_pressure(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            geometry = root / 'input.dat'
+            geometry.write_text('test\n1 0\n0 0\n1 -.1\n')
+            (root / 'polar.txt').write_text('1 1 Reynolds number fixed\nxtrf = 1.000 (top) 1.000 (bottom)\nMach = 0.000 Re = 1.000 e 6 Ncrit = 9.000 9.000\nalpha CL CD CDp CM XtrT XtrB\n------ ----- -----\n4 .5 .00716 -.00010 -.05 .3 1 0 0\n')
+            (root / 'bl.txt').write_text('s x y ue ds th cf hk\n0 1 0 1 .001 .0001 .002 2.5\n1 0 0 1 .001 .0001 .002 2.5\n2 1 -.1 1 .001 .0001 .002 2.5\n')
+            with patch('solver_gate.subprocess.run', return_value=subprocess.CompletedProcess([], 0, 'CDf = 0.00600 CDp = 0.00116\nCDf = 0.00465 CDp = 0.00250', '')):
+                result, _ = run_reference(Path('unused'), geometry, 4., 1e6, 0., 9., (1., 1.), root)
+            self.assertEqual(result['cdp'], -.00010)
+            self.assertEqual(result['cd_friction'], .00465)
+            self.assertEqual(result['cd_pressure'], .00250)
+            with patch('solver_gate.subprocess.run', return_value=subprocess.CompletedProcess([], 0, '', '')):
+                with self.assertRaisesRegex(AssertionError, 'drag components missing'):
+                    run_reference(Path('unused'), geometry, 4., 1e6, 0., 9., (1., 1.), root)
+
 
 if __name__ == '__main__':
     unittest.main()

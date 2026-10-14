@@ -28,6 +28,9 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  { version: '1.1.16', date: '2026-10-14', items: [
+    { category: 'fixed', text: 'Match native friction and total-minus-friction drag reporting to the reference wall-shear integration' },
+  ] },
   { version: '1.1.15', date: '2026-10-14', items: [
     { category: 'fixed', text: 'Preserve solver attempts and reuse only converged results from matching solver artifacts and operating settings' },
   ] },

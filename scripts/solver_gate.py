@@ -11,7 +11,7 @@ from flexfoil import _rustfoil as native
 ROOT = Path(__file__).resolve().parents[1]
 # XFOIL polar print half-units: CL/CM/trips 5e-5, CD 5e-6; both solvers stop at 1e-4 RMS.
 # These are bounded regression tolerances for this matrix, not physical-accuracy claims.
-TOLERANCES = dict(cl=2e-4, cd=1e-5, cm=1e-4, x_tr_upper=2e-4, x_tr_lower=2e-4)
+TOLERANCES = dict(cl=2e-4, cd=1e-5, cd_pressure=1e-5, cd_friction=1e-5, cm=1e-4, x_tr_upper=2e-4, x_tr_lower=2e-4)
 
 
 def require_close(actual, expected, tolerance, label):
@@ -48,6 +48,11 @@ def run_reference(binary, geometry, alpha, reynolds, mach, ncrit, trips, directo
     row = values[0]
     require_close(row[0], alpha, 1e-8, 'reference alpha')
     result = dict(zip(['alpha', 'cl', 'cd', 'cdp', 'cm', 'x_tr_upper', 'x_tr_lower'], row))
+    # XFOIL polar CDp is the surface-pressure integral, not its reported CD-CDf component.
+    components = re.findall(r'CDf =\s*([+\-\d.eE]+)\s+CDp =\s*([+\-\d.eE]+)', process.stdout)
+    if not components:
+        raise AssertionError('Reference drag components missing')
+    result['cd_friction'], result['cd_pressure'] = map(float, components[-1])
     distribution = [list(map(float, line.split())) for line in
                     (directory / 'bl.txt').read_text().splitlines()[1:] if line.strip()]
     points = [list(map(float, line.split())) for line in geometry.read_text().splitlines()[1:]]
