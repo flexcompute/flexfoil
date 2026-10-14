@@ -36,7 +36,7 @@ export const CHANGELOG: ChangelogEntry[] = [
   ] },
   { version: '1.1.14', date: '2026-10-14', items: [
     { category: 'added', text: 'Apply a validated trailing-edge flap in CLI inviscid and faithful polars' },
-    { category: 'fixed', text: 'Reject invalid flap inputs before solving and preserve the original airfoil name' },
+    { category: 'fixed', text: 'Reject invalid and short flap contours, heal nonzero inviscid flap geometry, and preserve the original airfoil name' },
   ] },
   { version: '1.1.13', date: '2026-10-14', items: [
     { category: 'fixed', text: 'Label boundary-layer velocity and friction frames and rebuild linked source documentation with numbered equations' },
