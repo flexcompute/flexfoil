@@ -177,7 +177,7 @@ enum Commands {
         file: PathBuf,
     },
 
-    /// Viscous analysis at a single angle of attack
+    /// Legacy viscous engine (unvalidated); prefer faithful-viscous
     Viscous(ViscousCmd),
 
     /// Generate viscous polar (Cl, Cd vs alpha sweep)

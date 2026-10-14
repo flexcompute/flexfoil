@@ -5,6 +5,11 @@ on:
     branches: [main]
     paths:
       - "docs-site/**"
+      - "crates/**"
+      - "packages/flexfoil-python/**"
+      - "scripts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
 

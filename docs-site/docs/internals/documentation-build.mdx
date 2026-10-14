@@ -1,0 +1,50 @@
+---
+title: Documentation build and source coverage
+---
+
+import SourceCode from '@site/src/components/SolverGate/SourceCode';
+import CoverageInspector from '@site/src/components/SolverGate/CoverageInspector';
+
+## What it is
+
+The docs prebuild extracts the real source of every named primitive shown with SourceCode, generates the public Python API from AST signatures/docstrings without executing the package, and runs rustdoc for the workspace's public Rust API. Generated output is local build data rather than a pasted copy. It takes checked-out source and hand-written MDX pages as input and produces snippets, API pages and a Coverage page. This tooling has no aerodynamic units or coordinate frame.
+
+## Theory and assumptions
+
+Coverage is the fraction of declarations with a hand-written page that extracts the named primitive. It measures page mapping, not correctness or completeness of explanations. Public Python functions/classes/methods and constructors are found with stdlib AST. Rustdoc resolves the canonical public Rust API; the coverage candidate list additionally includes public source declarations that can live in private modules. This overinclusive list makes missing explanations visible without claiming resolved Rust visibility.
+
+$$
+C=\frac{N_{\mathrm{mapped}}}{N_{\mathrm{declared}}}\label{eq:documentation-build-1}
+$$
+
+Equation $\eqref{eq:documentation-build-1}$ defines this relation.
+
+The workflow follows the reference implementation in FlightModule's scripts/extract_snippets.py and scripts/build_api.py. Python source positions come from AST. For this repository's Rust/JS snippets, top-level definitions end at a column-zero closing brace; this deliberately bounded convention avoids adding a parser dependency. Unsupported or missing names fail the build. Extend extraction with a language parser if that convention stops being reliable.
+
+## Working call and real code
+
+```sh
+cd docs-site
+npm ci
+npm run build
+```
+
+Requires Python 3.12, the installed Rust toolchain and the normal locked Node dependencies. No native Python extension is imported to generate API docs. The build is local and does not publish the site.
+
+<SourceCode path="scripts/build_docs_reference.py" name="extract" />
+<SourceCode path="scripts/build_docs_reference.py" name="build" />
+<SourceCode path="docs-site/src/remark/equations.mjs" name="equations" />
+<SourceCode path="docs-site/src/components/SolverGate/SourceCode.jsx" name="SourceCode" />
+<SourceCode path="docs-site/src/components/SolverGate/CoverageInspector.jsx" name="CoverageInspector" />
+
+## Interactive coverage
+
+<CoverageInspector />
+
+## Why and limits
+
+Extract code on each build so source, path and line range cannot silently drift away from the page. Fail on removed names instead of showing stale snippets. Reuse Python AST and rustdoc rather than invent an API signature parser. Keep missing hand-written pages on the Coverage page; generated signatures do not replace theory, widgets, working calls or design explanations. Existing overview pages are not automatically counted as complete primitive pages. Build artifacts are ignored by Git and regenerated from HEAD.
+
+The SourceCode component shows the original path and absolute source line range alongside numbered code. MathJax renders numbered, labelled equations at build time. Unknown equation references fail the build; cross-page references link to the labelled equation. Coverage is a maintenance aid, never a test-quality or scientific-validity score. The widget filters generated build data without contacting a server.
+
+Run `node --test src/remark/equations.test.mjs` from docs-site to verify numbered same-page and cross-page links and rejection of unknown labels. `npm start` also runs the generator, so a fresh checkout does not need a prior production build. Rust API output follows Cargo’s resolved target directory, including `CARGO_TARGET_DIR`. Code/source-generator changes trigger the repository’s existing docs workflow after an authorized main merge.

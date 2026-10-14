@@ -249,13 +249,23 @@ struct BlvarDerivatives {
 /// # Reference
 /// XFOIL xblsys.f BLVAR (line 784)
 pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
+    let ui = station.u;
+    station.u = crate::compressibility::edge_velocity(ui, msq).0;
+    blvar_physical(station, flow_type, msq, re);
+    station.u = ui;
+    station.mass_defect = ui * (station.delta_star + if station.is_wake { station.dw } else { 0.0 });
+}
+
+fn blvar_physical(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
+    let edge = crate::compressibility::edge_thermodynamics(station.u, station.theta, msq, re);
+    let local_msq = edge.msq;
     // Compute shape factor H = δ*/θ
     station.h = station.delta_star / station.theta;
     let h_t = -station.h / station.theta; // ∂H/∂θ
     let h_d = 1.0 / station.theta; // ∂H/∂δ*
 
     // Kinematic shape factor Hk with compressibility correction
-    let hkin_result = hkin(station.h, msq);
+    let hkin_result = hkin(station.h, local_msq);
     let mut hk = hkin_result.hk;
     let hk_h = hkin_result.hk_h;
     let hk_msq = hkin_result.hk_msq;
@@ -275,30 +285,32 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
     // Hk depends on H and M², H depends on θ and δ*
     let hk_t = hk_h * h_t;
     let hk_d = hk_h * h_d;
-    let hk_u = 0.0; // No direct U dependence through H
-    let hk_ms = hk_msq; // M² sensitivity
+    let hk_u = hk_msq * edge.m_u;
+    let hk_ms = hk_msq * edge.m_ms;
 
     // Store Hk derivatives
+    station.derivs.hk_u = hk_u;
+    station.derivs.rt_u = edge.rt_u;
+    station.derivs.m_u = edge.m_u;
     station.derivs.hk_h = hk_h;
     station.derivs.hk_msq = hk_msq;
 
     // Compute Reynolds number Rθ = Ue * θ * Re
     // In XFOIL: RT2 = RE * U2 * T2
-    let reybl = re;
-    station.r_theta = reybl * station.u * station.theta;
-    let rt_t = reybl * station.u; // ∂Rθ/∂θ
-    let rt_u = reybl * station.theta; // ∂Rθ/∂u
-    let rt_re = station.u * station.theta; // ∂Rθ/∂Re
-    let rt_ms = 0.0; // No Mach dependence
+    station.r_theta = edge.r_theta;
+    let rt_t = station.r_theta / station.theta; // ∂Rθ/∂θ
+    let rt_u = edge.rt_u; // ∂Rθ/∂u
+    let rt_re = station.r_theta / re; // ∂Rθ/∂Re
+    let rt_ms = edge.rt_ms;
 
     // Compute M² derivatives w.r.t. U (M² = U²/a² where a is speed of sound)
     // In incompressible limit, M² doesn't depend on U through this route
     // but we track it for compressible extensions
-    let m_u = 0.0; // Simplified for now
-    let m_ms = 1.0; // Direct sensitivity
+    let m_u = edge.m_u;
+    let m_ms = edge.m_ms;
 
     // === Density shape factor Hc (xblsys.f:802-806) ===
-    let hct_result = density_shape(hk, msq);
+    let hct_result = density_shape(hk, local_msq);
     station.hc = hct_result.hc;
     let hc_hk = hct_result.hc_hk;
     let hc_msq = hct_result.hc_msq;
@@ -315,8 +327,8 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
 
     // === Energy shape factor Hs (xblsys.f:809-819) ===
     let hs_result = match flow_type {
-        FlowType::Laminar => hs_laminar(hk, station.r_theta, msq),
-        FlowType::Turbulent | FlowType::Wake => hs_turbulent(hk, station.r_theta, msq),
+        FlowType::Laminar => hs_laminar(hk, station.r_theta, local_msq),
+        FlowType::Turbulent | FlowType::Wake => hs_turbulent(hk, station.r_theta, local_msq),
     };
     station.hs = hs_result.hs;
     let hs_hk = hs_result.hs_hk;
@@ -443,12 +455,12 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
     let (cf, cf_hk, cf_rt, cf_msq) = match flow_type {
         FlowType::Wake => (0.0, 0.0, 0.0, 0.0), // Wake has no wall friction
         FlowType::Laminar => {
-            let cf_result = cf_laminar(hk, station.r_theta, msq);
+            let cf_result = cf_laminar(hk, station.r_theta, local_msq);
             (cf_result.cf, cf_result.cf_hk, cf_result.cf_rt, cf_result.cf_msq)
         }
         FlowType::Turbulent => {
-            let cf_turb = cf_turbulent(hk, station.r_theta, msq);
-            let cf_lam = cf_laminar(hk, station.r_theta, msq);
+            let cf_turb = cf_turbulent(hk, station.r_theta, local_msq);
+            let cf_lam = cf_laminar(hk, station.r_theta, local_msq);
             // Use laminar if it gives higher Cf (low Rθ case)
             if cf_lam.cf > cf_turb.cf {
                 (cf_lam.cf, cf_lam.cf_hk, cf_lam.cf_rt, cf_lam.cf_msq)
@@ -491,7 +503,7 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
         }
         FlowType::Turbulent => {
             // Turbulent wall contribution (xblsys.f:947-965)
-            let cf2t_result = cf_turbulent(hk, station.r_theta, msq);
+            let cf2t_result = cf_turbulent(hk, station.r_theta, local_msq);
             let cf2t = cf2t_result.cf;
             let cf2t_hk = cf2t_result.cf_hk;
             let cf2t_rt = cf2t_result.cf_rt;
@@ -665,9 +677,9 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
             
             // Chain rule for derivatives
             // di depends on hk, hs, us, rt, s - need to convert to primary variables
-            let di_u = di_hk_deriv * hk_u + di_hs_deriv * hs_hk * hk_u + di_us_deriv * us_u + di_rt_deriv * rt_u;
-            let di_t = di_hk_deriv * hk_t + di_hs_deriv * hs_hk * hk_t + di_us_deriv * us_t + di_rt_deriv * rt_t;
-            let di_d = di_hk_deriv * hk_d + di_hs_deriv * hs_hk * hk_d + di_us_deriv * us_d;
+            let di_u = di_hk_deriv * hk_u + di_hs_deriv * hs_u + di_us_deriv * us_u + di_rt_deriv * rt_u;
+            let di_t = di_hk_deriv * hk_t + di_hs_deriv * hs_t + di_us_deriv * us_t + di_rt_deriv * rt_t;
+            let di_d = di_hk_deriv * hk_d + di_hs_deriv * hs_d + di_us_deriv * us_d;
             let di_ms = di_hk_deriv * hk_ms + di_hs_deriv * hs_hk * hk_ms + di_us_deriv * us_ms;
             let di_re = di_rt_deriv * rt_re;
             
@@ -691,7 +703,7 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
         // Defensive check: ensure turbulent DI wins when larger than laminar.
         // This mirrors XFOIL's DI2L > DI2 override, but prevents accidental laminar selection
         // when DI2 (turbulent) should dominate.
-        let cf2t_result = cf_turbulent(hk, station.r_theta, msq);
+        let cf2t_result = cf_turbulent(hk, station.r_theta, local_msq);
         let cf2t_u = cf2t_result.cf_hk * hk_u + cf2t_result.cf_rt * rt_u + cf2t_result.cf_msq * m_u;
         let cf2t_t = cf2t_result.cf_hk * hk_t + cf2t_result.cf_rt * rt_t;
         let cf2t_d = cf2t_result.cf_hk * hk_d;
@@ -813,6 +825,7 @@ pub fn blvar(station: &mut BlStation, flow_type: FlowType, msq: f64, re: f64) {
 
     // Store DE and its derivatives
     station.de = de_final;
+    station.derivs.de_u = _de_u_val;
     station.derivs.de_t = de_t_val;
     station.derivs.de_d = de_d_val;
 
@@ -943,7 +956,7 @@ fn blmid(
     // Average values at midpoint
     let hka = 0.5 * (s1.hk + s2.hk);
     let rta = 0.5 * (s1.r_theta + s2.r_theta);
-    let ma = 0.5 * msq; // Simplified - would need proper M at each station
+    let ma = 0.5 * (crate::compressibility::local_mach_squared(s1.u, msq) + crate::compressibility::local_mach_squared(s2.u, msq));
 
     // Midpoint Cf
     let (cfm, cfm_hka, cfm_rta, cfm_ma) = match flow_type {
@@ -989,6 +1002,25 @@ fn blmid(
 ///
 /// # Reference
 /// XFOIL xblsys.f BLDIF (line 1552)
+fn physical_station(station: &BlStation, msq: f64) -> (BlStation, f64) {
+    let mut physical = station.clone();
+    let (u, u_ui) = crate::compressibility::edge_velocity(station.u, msq);
+    physical.u = u;
+    (physical, u_ui)
+}
+
+fn incompressible_velocity_jacobian(jac: &mut BlJacobian, u1_ui: f64, u2_ui: f64) {
+    for row in 0..3 {
+        jac.vs1[row][3] *= u1_ui;
+        jac.vs2[row][3] *= u2_ui;
+    }
+}
+
+fn bldif_physical(s1: &BlStation, s2: &BlStation, flow: FlowType, msq: f64, re: f64) -> (BlResiduals, BlJacobian) {
+    let (res, jac, _) = bldif_with_terms_internal(s1, s2, flow, msq, re, false, 9.0);
+    (res, jac)
+}
+
 /// Compute BL equations for similarity station using regular bldif with fixed log values
 pub fn bldif_full_simi(
     s: &BlStation,
@@ -998,7 +1030,9 @@ pub fn bldif_full_simi(
 ) -> (BlResiduals, BlJacobian) {
     // For similarity, XFOIL uses fixed log values (BLDIF with ITYP=0):
     // XLOG = 1.0, ULOG = BULE = 1.0, TLOG = 0.0, HLOG = 0.0
-    let (res, mut jac, _) = bldif_with_terms_internal(s, s, flow_type, msq, re, true, 9.0);
+    let (physical, u_ui) = physical_station(s, msq);
+    let (res, mut jac, _) = bldif_with_terms_internal(&physical, &physical, flow_type, msq, re, true, 9.0);
+    incompressible_velocity_jacobian(&mut jac, u_ui, u_ui);
 
     // XFOIL xblsys.f combines similarity-station VS1 into VS2 before assembly.
     for k in 0..3 {
@@ -1029,7 +1063,11 @@ pub fn bldif_with_terms_ncrit(
     re: f64,
     ncrit: f64,
 ) -> (BlResiduals, BlJacobian, BldifTerms) {
-    bldif_with_terms_internal(s1, s2, flow_type, msq, re, false, ncrit)
+    let (physical1, u1_ui) = physical_station(s1, msq);
+    let (physical2, u2_ui) = physical_station(s2, msq);
+    let (res, mut jac, terms) = bldif_with_terms_internal(&physical1, &physical2, flow_type, msq, re, false, ncrit);
+    incompressible_velocity_jacobian(&mut jac, u1_ui, u2_ui);
+    (res, jac, terms)
 }
 
 fn bldif_with_terms_internal(
@@ -1154,14 +1192,14 @@ fn bldif_with_terms_internal(
             let hk1_d = s1.derivs.hk_h * s1.derivs.h_delta_star;
             let hk2_t = s2.derivs.hk_h * s2.derivs.h_theta;
             let hk2_d = s2.derivs.hk_h * s2.derivs.h_delta_star;
-            let hk1_u = 0.0;
-            let hk2_u = 0.0;
+            let hk1_u = s1.derivs.hk_u;
+            let hk2_u = s2.derivs.hk_u;
             
             // Rθ derivatives: Rθ = Re * Ue * θ / ν
             let rt1_t = s1.r_theta / s1.theta.max(1e-12);
             let rt2_t = s2.r_theta / s2.theta.max(1e-12);
-            let rt1_u = s1.r_theta / s1.u.max(1e-12);
-            let rt2_u = s2.r_theta / s2.u.max(1e-12);
+            let rt1_u = s1.derivs.rt_u;
+            let rt2_u = s2.derivs.rt_u;
             
             // ax also depends directly on θ and Rθ through the midpoint averages
             // ax_t = ∂ax/∂θ_avg * ∂θ_avg/∂θ = ax_th * 0.5
@@ -1323,16 +1361,16 @@ fn bldif_with_terms_internal(
             // Rθ derivatives
             let rt1_t = s1.r_theta / s1.theta.max(1e-12);
             let rt2_t = s2.r_theta / s2.theta.max(1e-12);
-            let rt1_u = s1.r_theta / s1.u.max(1e-12);
-            let rt2_u = s2.r_theta / s2.u.max(1e-12);
+            let rt1_u = s1.derivs.rt_u;
+            let rt2_u = s2.derivs.rt_u;
 
             // Cf derivatives via Hk and Rθ
             let cf1_t = s1.derivs.cf_hk * hk1_t + s1.derivs.cf_rt * rt1_t;
             let cf1_d = s1.derivs.cf_hk * hk1_d;
-            let cf1_u = s1.derivs.cf_rt * rt1_u;
+            let cf1_u = s1.derivs.cf_hk * s1.derivs.hk_u + s1.derivs.cf_rt * rt1_u + s1.derivs.cf_msq * s1.derivs.m_u;
             let cf2_t = s2.derivs.cf_hk * hk2_t + s2.derivs.cf_rt * rt2_t;
             let cf2_d = s2.derivs.cf_hk * hk2_d;
-            let cf2_u = s2.derivs.cf_rt * rt2_u;
+            let cf2_u = s2.derivs.cf_hk * s2.derivs.hk_u + s2.derivs.cf_rt * rt2_u + s2.derivs.cf_msq * s2.derivs.m_u;
 
             // UPW derivatives w.r.t. primary variables (XFOIL xblsys.f:1637-1644)
             // UPW_T = UPW_HK * HK_T, UPW_D = UPW_HK * HK_D
@@ -1392,10 +1430,10 @@ fn bldif_with_terms_internal(
             terms.z_s2 = z_s2;
             terms.upw_t2 = upw_t2_shear;
             terms.upw_d2 = upw_d2_shear;
-            terms.upw_u2 = 0.0;
+            terms.upw_u2 = upw_hk2 * s2.derivs.hk_u;
             terms.de2_t2 = s2.derivs.de_t;
             terms.de2_d2 = s2.derivs.de_d;
-            terms.de2_u2 = 0.0;
+            terms.de2_u2 = s2.derivs.de_u;
             terms.us2_t2 = s2.derivs.us_t;
             terms.us2_d2 = s2.derivs.us_d;
             terms.us2_u2 = s2.derivs.us_u;
@@ -1407,7 +1445,7 @@ fn bldif_with_terms_internal(
             terms.cf2_u2 = cf2_u;
             terms.hk2_t2 = hk2_t;
             terms.hk2_d2 = hk2_d;
-            terms.hk2_u2 = 0.0;
+            terms.hk2_u2 = s2.derivs.hk_u;
 
             // Build Jacobian entries (xblsys.f:1848-1867)
             // XFOIL builds these in two stages:
@@ -1421,7 +1459,7 @@ fn bldif_with_terms_internal(
                 + z_cq1 * s1.derivs.cq_t + z_cf1 * cf1_t + z_hk1 * hk1_t;
             jac.vs1[0][2] = z_d1 + z_upw * upw_d1_shear + z_de1 * s1.derivs.de_d + z_us1 * s1.derivs.us_d
                 + z_cq1 * s1.derivs.cq_d + z_cf1 * cf1_d + z_hk1 * hk1_d;
-            jac.vs1[0][3] = z_u1 + z_us1 * s1.derivs.us_u + z_cq1 * s1.derivs.cq_u + z_cf1 * cf1_u;
+            jac.vs1[0][3] = z_u1 + z_upw * upw_hk1 * s1.derivs.hk_u + z_de1 * s1.derivs.de_u + z_hk1 * s1.derivs.hk_u + z_us1 * s1.derivs.us_u + z_cq1 * s1.derivs.cq_u + z_cf1 * cf1_u;
             jac.vs1[0][4] = z_x1;
 
             jac.vs2[0][0] = z_s2;
@@ -1429,7 +1467,7 @@ fn bldif_with_terms_internal(
                 + z_cq2 * s2.derivs.cq_t + z_cf2 * cf2_t + z_hk2 * hk2_t;
             jac.vs2[0][2] = z_d2 + z_upw * upw_d2_shear + z_de2 * s2.derivs.de_d + z_us2 * s2.derivs.us_d
                 + z_cq2 * s2.derivs.cq_d + z_cf2 * cf2_d + z_hk2 * hk2_d;
-            jac.vs2[0][3] = z_u2 + z_us2 * s2.derivs.us_u + z_cq2 * s2.derivs.cq_u + z_cf2 * cf2_u;
+            jac.vs2[0][3] = z_u2 + z_upw * upw_hk2 * s2.derivs.hk_u + z_de2 * s2.derivs.de_u + z_hk2 * s2.derivs.hk_u + z_us2 * s2.derivs.us_u + z_cq2 * s2.derivs.cq_u + z_cf2 * cf2_u;
             jac.vs2[0][4] = z_x2;
         }
     }
@@ -1438,7 +1476,7 @@ fn bldif_with_terms_internal(
     // === Momentum equation (xblsys.f:1864-1920) ===
     let ha = 0.5 * (s1.h + s2.h);
     terms.ha = ha;
-    let ma_avg = 0.5 * msq;
+    let ma_avg = 0.5 * (crate::compressibility::local_mach_squared(s1.u, msq) + crate::compressibility::local_mach_squared(s2.u, msq));
     let xa = 0.5 * (s1.x + s2.x);
     let ta = 0.5 * (s1.theta + s2.theta);
 
@@ -1446,7 +1484,7 @@ fn bldif_with_terms_internal(
     let hwa = 0.5 * (s1.dw / s1.theta.max(1e-20) + s2.dw / s2.theta.max(1e-20));
 
     // Get midpoint Cf and its derivatives
-    let (cfm, cfm_hk1, cfm_hk2, cfm_rt1, cfm_rt2, _) = blmid(s1, s2, flow_type, msq);
+    let (cfm, cfm_hk1, cfm_hk2, cfm_rt1, cfm_rt2, cfm_m) = blmid(s1, s2, flow_type, msq);
 
     // CFX term: 0.50*CFM*XA/TA + 0.25*(CF1*X1/T1 + CF2*X2/T2)
     let cfx = 0.5 * cfm * xa / ta + 0.25 * (s1.cf * s1.x / s1.theta + s2.cf * s2.x / s2.theta);
@@ -1560,22 +1598,22 @@ fn bldif_with_terms_internal(
     //
     // For incompressible (MSQ≈0): HK_U ≈ 0, so CFM_U ≈ 0.5*CFM_RTA*RT_U
     // RT_U = RT*(1/U) for incompressible (R_U/R and V_U/V ≈ 0)
-    let rt1_u = s1.r_theta / s1.u.max(1e-10);
-    let rt2_u = s2.r_theta / s2.u.max(1e-10);
+    let rt1_u = s1.derivs.rt_u;
+    let rt2_u = s2.derivs.rt_u;
     
     // CF_U = CF_RT * RT_U (HK_U and M_U ≈ 0 for incompressible)
-    let cf1_u = s1.derivs.cf_rt * rt1_u;
-    let cf2_u = s2.derivs.cf_rt * rt2_u;
+    let cf1_u = s1.derivs.cf_hk * s1.derivs.hk_u + s1.derivs.cf_rt * rt1_u + s1.derivs.cf_msq * s1.derivs.m_u;
+    let cf2_u = s2.derivs.cf_hk * s2.derivs.hk_u + s2.derivs.cf_rt * rt2_u + s2.derivs.cf_msq * s2.derivs.m_u;
     
     // CFM_U = CFM_RT * RT_U, where the midpoint 0.5 factor is already
     // embedded in `cfm_rt1` / `cfm_rt2` by `blmid()`.
-    let cfm_u1 = cfm_rt1 * rt1_u;
-    let cfm_u2 = cfm_rt2 * rt2_u;
+    let cfm_u1 = cfm_hk1 * s1.derivs.hk_u + cfm_rt1 * rt1_u + 0.5 * cfm_m * s1.derivs.m_u;
+    let cfm_u2 = cfm_hk2 * s2.derivs.hk_u + cfm_rt2 * rt2_u + 0.5 * cfm_m * s2.derivs.m_u;
     
     // Z_MA term: -ULOG * 0.5 * M_U, but M_U ≈ 0 for incompressible, skip
     // Full Jacobians including CF contributions
-    jac.vs1[1][3] = z_cfm * cfm_u1 + z_cf1 * cf1_u + z_u1;
-    jac.vs2[1][3] = z_cfm * cfm_u2 + z_cf2 * cf2_u + z_u2;
+    jac.vs1[1][3] = -0.5 * ulog * s1.derivs.m_u + z_cfm * cfm_u1 + z_cf1 * cf1_u + z_u1;
+    jac.vs2[1][3] = -0.5 * ulog * s2.derivs.m_u + z_cfm * cfm_u2 + z_cf2 * cf2_u + z_u2;
 
     // The x derivatives (via XLOG and CFX)
     // XFOIL: Z_XL = -DDLOG*0.5*CFX, Z_X1 = -Z_XL/X1 + Z_CFX*CFX_X1
@@ -1691,8 +1729,8 @@ fn bldif_with_terms_internal(
     // RT_U = ∂Rθ/∂Ue = Re * θ = Rθ/Ue
     let rt1_t = s1.r_theta / s1.theta.max(1e-12);
     let rt2_t = s2.r_theta / s2.theta.max(1e-12);
-    let rt1_u = s1.r_theta / s1.u.max(1e-12);
-    let rt2_u = s2.r_theta / s2.u.max(1e-12);
+    let rt1_u = s1.derivs.rt_u;
+    let rt2_u = s2.derivs.rt_u;
 
     // Hs derivatives: Hs = f(Hk, Rθ, Msq)
     // HS_T = HS_HK * HK_T + HS_RT * RT_T
@@ -1700,10 +1738,10 @@ fn bldif_with_terms_internal(
     // HS_U = HS_RT * RT_U  (via Rθ dependence on Ue)
     let hs1_t = s1.derivs.hs_hk * hk1_t + s1.derivs.hs_rt * rt1_t;
     let hs1_d = s1.derivs.hs_hk * hk1_d;
-    let hs1_u = s1.derivs.hs_rt * rt1_u;
+    let hs1_u = s1.derivs.hs_hk * s1.derivs.hk_u + s1.derivs.hs_rt * rt1_u + s1.derivs.hs_msq * s1.derivs.m_u;
     let hs2_t = s2.derivs.hs_hk * hk2_t + s2.derivs.hs_rt * rt2_t;
     let hs2_d = s2.derivs.hs_hk * hk2_d;
-    let hs2_u = s2.derivs.hs_rt * rt2_u;
+    let hs2_u = s2.derivs.hs_hk * s2.derivs.hk_u + s2.derivs.hs_rt * rt2_u + s2.derivs.hs_msq * s2.derivs.m_u;
 
     // Cf derivatives: Cf = f(Hk, Rθ, Msq)
     // CF_T = CF_HK * HK_T + CF_RT * RT_T
@@ -1711,10 +1749,10 @@ fn bldif_with_terms_internal(
     // CF_U = CF_RT * RT_U
     let cf1_t_shape = s1.derivs.cf_hk * hk1_t + s1.derivs.cf_rt * rt1_t;
     let cf1_d_shape = s1.derivs.cf_hk * hk1_d;
-    let cf1_u_shape = s1.derivs.cf_rt * rt1_u;
+    let cf1_u_shape = s1.derivs.cf_hk * s1.derivs.hk_u + s1.derivs.cf_rt * rt1_u + s1.derivs.cf_msq * s1.derivs.m_u;
     let cf2_t_shape = s2.derivs.cf_hk * hk2_t + s2.derivs.cf_rt * rt2_t;
     let cf2_d_shape = s2.derivs.cf_hk * hk2_d;
-    let cf2_u_shape = s2.derivs.cf_rt * rt2_u;
+    let cf2_u_shape = s2.derivs.cf_hk * s2.derivs.hk_u + s2.derivs.cf_rt * rt2_u + s2.derivs.cf_msq * s2.derivs.m_u;
 
     // DI (Cd) derivatives: use direct partials stored by BLVAR
     // Laminar still yields cd_* = 0 for ctau and uses chain rule internally.
@@ -1732,17 +1770,17 @@ fn bldif_with_terms_internal(
     // At M=0, hc_hk=0 so these will be zero for incompressible flow
     let hc1_t = s1.derivs.hc_hk * hk1_t;
     let hc1_d = s1.derivs.hc_hk * hk1_d;
-    let hc1_u = 0.0; // HK1_U1 ≈ 0 at low Mach
+    let hc1_u = s1.derivs.hc_hk * s1.derivs.hk_u + s1.derivs.hc_msq * s1.derivs.m_u; // HK1_U1 ≈ 0 at low Mach
     let hc2_t = s2.derivs.hc_hk * hk2_t;
     let hc2_d = s2.derivs.hc_hk * hk2_d;
-    let hc2_u = 0.0; // HK2_U2 ≈ 0 at low Mach
+    let hc2_u = s2.derivs.hc_hk * s2.derivs.hk_u + s2.derivs.hc_msq * s2.derivs.m_u; // HK2_U2 ≈ 0 at low Mach
 
     // UPW derivatives w.r.t. primary variables (XFOIL xblsys.f:1637-1644)
     // UPW depends on Hk through HL and HDCON, so use chain rule:
     // UPW_T = UPW_HK * HK_T, UPW_D = UPW_HK * HK_D, UPW_U = UPW_HK * HK_U
     //
-    let hk1_u = 0.0;
-    let hk2_u = 0.0;
+    let hk1_u = s1.derivs.hk_u;
+    let hk2_u = s2.derivs.hk_u;
     let upw_t1 = upw_hk1 * hk1_t;
     let upw_d1 = upw_hk1 * hk1_d;
     let upw_u1 = upw_hk1 * hk1_u;
@@ -2089,12 +2127,27 @@ pub fn trdif_full(
     msq: f64,
     re: f64,
 ) -> (BlResiduals, BlJacobian) {
+    let (p1, d1) = physical_station(s1, msq);
+    let (p2, d2) = physical_station(s2, msq);
+    let (res, mut jac) = trdif_full_physical(&p1, &p2, tr, ncrit, msq, re);
+    incompressible_velocity_jacobian(&mut jac, d1, d2);
+    (res, jac)
+}
+
+fn trdif_full_physical(
+    s1: &BlStation,
+    s2: &BlStation,
+    tr: &crate::closures::Trchek2FullResult,
+    ncrit: f64,
+    msq: f64,
+    re: f64,
+) -> (BlResiduals, BlJacobian) {
     use crate::constants::{CTRCON, CTRCEX};
     
     let dx = s2.x - s1.x;
     if dx <= 1e-20 || !tr.transition {
         // Degenerate case or no transition - use regular turbulent bldif
-        return bldif(s1, s2, FlowType::Turbulent, msq, re);
+        return bldif_physical(s1, s2, FlowType::Turbulent, msq, re);
     }
     
     let xt = tr.xt;
@@ -2117,8 +2170,8 @@ pub fn trdif_full(
     st_laminar.is_laminar = true;
     st_laminar.is_turbulent = false;
     
-    blvar(&mut st_laminar, FlowType::Laminar, msq, re);
-    let (res_lam, jac_lam) = bldif(s1, &st_laminar, FlowType::Laminar, msq, re);
+    blvar_physical(&mut st_laminar, FlowType::Laminar, msq, re);
+    let (res_lam, jac_lam) = bldif_physical(s1, &st_laminar, FlowType::Laminar, msq, re);
     
     // === PART 2: Turbulent interval XT → X2 ===
     // Compute turbulent equilibrium CQ at transition point
@@ -2133,7 +2186,7 @@ pub fn trdif_full(
     st_turb_temp.ampl = ncrit;
     st_turb_temp.is_laminar = false;
     st_turb_temp.is_turbulent = true;
-    blvar(&mut st_turb_temp, FlowType::Turbulent, msq, re);
+    blvar_physical(&mut st_turb_temp, FlowType::Turbulent, msq, re);
     
     // Compute initial ctau at transition (ST = CTR * CQ)
     let hk_t = st_turb_temp.hk;
@@ -2154,7 +2207,7 @@ pub fn trdif_full(
     // HK derivatives at transition point
     let hk_t_deriv = st_turb_temp.derivs.hk_h * (-st_turb_temp.h / tt.max(1e-20));
     let hk_d_deriv = st_turb_temp.derivs.hk_h * (1.0 / tt.max(1e-20));
-    let hk_u_deriv = 0.0;
+    let hk_u_deriv = st_turb_temp.derivs.hk_u;
     
     // ST = CTR * CQ, so ST_TT = CTR * CQ_T + CQ * CTR_HK * HK_T
     let st_tt = ctr * cq_t_deriv + cq_t * ctr_hk * hk_t_deriv;
@@ -2184,9 +2237,9 @@ pub fn trdif_full(
     st_turb.ampl = 0.0;
     st_turb.is_laminar = false;
     st_turb.is_turbulent = true;
-    blvar(&mut st_turb, FlowType::Turbulent, msq, re);
+    blvar_physical(&mut st_turb, FlowType::Turbulent, msq, re);
     
-    let (res_turb, jac_turb) = bldif(&st_turb, s2, FlowType::Turbulent, msq, re);
+    let (res_turb, jac_turb) = bldif_physical(&st_turb, s2, FlowType::Turbulent, msq, re);
     
     // === Transform Jacobians using full chain rule (XFOIL lines 1318-1515) ===
     

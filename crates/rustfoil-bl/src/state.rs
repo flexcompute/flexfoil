@@ -15,6 +15,12 @@
 /// Notation: `foo_bar` means ∂foo/∂bar
 #[derive(Debug, Clone, Default)]
 pub struct BlDerivatives {
+    /// Derivatives with respect to physical edge speed from BLKIN.
+    /// Compressible stations retain UI in `BlStation::u`; assembly applies dU/dUI.
+    pub hk_u: f64,
+    pub rt_u: f64,
+    pub m_u: f64,
+    pub de_u: f64,
     // === H derivatives ===
     /// ∂H/∂θ
     pub h_theta: f64,

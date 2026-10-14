@@ -25,20 +25,20 @@ import type { DistributionQuantity, RunRow, SurfaceCoordinate } from '../../type
 const X_LABELS: Record<SurfaceCoordinate, string> = { x: 'x/c', y: 'y/c', s: 's (arc-length)' };
 const Y_LABELS: Record<DistributionQuantity, string> = {
   cp: 'Cp',
-  cf: 'Cf',
+  cf: 'Cf (local edge dynamic pressure)',
   delta_star: 'δ* (displacement thickness)',
   theta: 'θ (momentum thickness)',
   h: 'H (shape factor)',
-  ue: 'ue / U∞',
+  ue: 'UI / U∞ (incompressible coupled speed)',
 };
 
 const QUANTITY_OPTIONS: { value: DistributionQuantity; label: string }[] = [
   { value: 'cp', label: 'Cp' },
-  { value: 'cf', label: 'Cf' },
+  { value: 'cf', label: 'Cf (local)' },
   { value: 'delta_star', label: 'δ*' },
   { value: 'theta', label: 'θ' },
   { value: 'h', label: 'H' },
-  { value: 'ue', label: 'ue' },
+  { value: 'ue', label: 'UI' },
 ];
 
 const COORD_OPTIONS: { value: SurfaceCoordinate; label: string }[] = [
