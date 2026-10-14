@@ -16,7 +16,7 @@ def _insert_sample(db, *, airfoil_name="NACA 2412", airfoil_hash="abc123", alpha
         reynolds=1e6, mach=0.0, ncrit=9.0, n_panels=160, max_iter=100,
         cl=0.92, cd=0.008, cm=-0.05, converged=True, iterations=15,
         residual=1e-6, x_tr_upper=0.12, x_tr_lower=0.45,
-        solver_mode="viscous", success=True,
+        solver_mode="viscous", success=True, cache_key="current-engine-settings",
     )
     defaults.update(kw)
     return db.insert_run(airfoil_name=airfoil_name, airfoil_hash=airfoil_hash, alpha=alpha, **defaults)
@@ -52,10 +52,10 @@ class TestInsertAndQuery:
         _insert_sample(db, alpha=5.0, airfoil_hash="h5")
         assert db.row_count() == 2
 
-    def test_insert_or_ignore_duplicate(self, db):
+    def test_preserves_repeat_evaluations(self, db):
         _insert_sample(db)
-        _insert_sample(db)  # same cache key -> ignored
-        assert db.row_count() == 1
+        _insert_sample(db)
+        assert db.row_count() == 2
 
     def test_insert_different_alpha_not_duplicate(self, db):
         _insert_sample(db, alpha=0.0)
@@ -70,18 +70,18 @@ class TestInsertAndQuery:
 class TestCacheLookup:
     def test_cache_hit(self, db):
         _insert_sample(db, airfoil_hash="hash0012", alpha=0.0)
-        hit = db.lookup_cache("hash0012", 0.0, 1e6, 0.0, 9.0, 160, 100)
+        hit = db.lookup_cache("hash0012", 0.0, 1e6, 0.0, 9.0, 160, 100, "current-engine-settings")
         assert hit is not None
         assert hit["cl"] == 0.92
 
     def test_cache_miss_different_alpha(self, db):
         _insert_sample(db, airfoil_hash="hash0012", alpha=0.0)
-        miss = db.lookup_cache("hash0012", 5.0, 1e6, 0.0, 9.0, 160, 100)
+        miss = db.lookup_cache("hash0012", 5.0, 1e6, 0.0, 9.0, 160, 100, "current-engine-settings")
         assert miss is None
 
     def test_cache_miss_different_re(self, db):
         _insert_sample(db, airfoil_hash="hash0012", alpha=0.0)
-        miss = db.lookup_cache("hash0012", 0.0, 2e6, 0.0, 9.0, 160, 100)
+        miss = db.lookup_cache("hash0012", 0.0, 2e6, 0.0, 9.0, 160, 100, "current-engine-settings")
         assert miss is None
 
 
@@ -264,3 +264,45 @@ class TestPruning:
         for i in range(5):
             _insert_sample(db, alpha=float(i), airfoil_hash=f"h{i}")
         assert db.row_count() == 5
+
+class TestCacheHistory:
+    def test_failed_attempt_and_legacy_run_cannot_hide_corrected_result(self, db):
+        legacy = _insert_sample(db, cache_key=None, converged=False, cl=0.15)
+        failed = _insert_sample(db, converged=False, cl=0.2)
+        assert db.lookup_cache('abc123', 5, 1e6, 0, 9, 160, 100, 'current-engine-settings') is None
+        fresh = _insert_sample(db, cl=0.4432)
+        assert db.lookup_cache('abc123', 5, 1e6, 0, 9, 160, 100, 'current-engine-settings')['id'] == fresh
+        assert db.get_run(legacy)['cl'] == 0.15
+        assert db.get_run(failed)['cl'] == 0.2
+        assert db.row_count() == 3
+        assert db.lookup_cache('abc123', 5, 1e6, 0, 9, 160, 100) is None
+        assert db.lookup_cache('abc123', 5, 1e6, 0, 9, 160, 100, 'other-engine-or-settings') is None
+
+    def test_import_migrates_legacy_unique_index_without_losing_history(self, db, tmp_path):
+        old_path = tmp_path / 'legacy.db'
+        old = RunDatabase(old_path)
+        legacy = _insert_sample(old, cache_key=None)
+        old._conn.execute('CREATE UNIQUE INDEX idx_cache_key ON runs(airfoil_hash,alpha,reynolds,mach,ncrit,n_panels,max_iter)')
+        old._conn.execute('DROP INDEX idx_cache_lookup')
+        old._conn.execute('ALTER TABLE runs DROP COLUMN cache_key')
+        data = old.export_bytes()
+        old.close()
+        db.import_bytes(data)
+        assert db.get_run(legacy)['cl'] == 0.92
+        assert db.get_run(legacy)['cache_key'] is None
+        fresh = _insert_sample(db, cl=0.4432)
+        assert db.row_count() == 2
+        assert db.lookup_cache('abc123', 5, 1e6, 0, 9, 160, 100, 'current-engine-settings')['id'] == fresh
+        restored = RunDatabase(tmp_path / 'roundtrip.db')
+        restored.import_bytes(db.export_bytes())
+        assert restored.row_count() == 2
+        assert restored.lookup_cache('abc123', 5, 1e6, 0, 9, 160, 100, 'current-engine-settings')['cl'] == 0.4432
+        restored.close()
+
+
+def test_invalid_import_keeps_existing_history(db):
+    saved = _insert_sample(db)
+    with pytest.raises(sqlite3.DatabaseError):
+        db.import_bytes(b"not a SQLite database")
+    assert db.get_run(saved)["cl"] == 0.92
+    assert db.row_count() == 1

@@ -2,23 +2,30 @@
 title: Compressible pressure and force reporting
 ---
 
-import Equation from '@site/src/components/SolverGate/Equation';
 import SourceCode from '@site/src/components/SolverGate/SourceCode';
 import Inspector from '@site/src/components/Compressibility/Inspector';
 
 ## What it is
 
-The faithful solver's pressure/force family converts normalized incompressible panel gamma to pressure coefficient at the requested freestream Mach. It integrates that pressure on the existing contour for CL and quarter-chord CM. Wake drag and friction use physical edge speed and density. Python/CLI coefficient results, trial operating corrections and the shipping WASM Cp array use the same conventions. Coordinates and thicknesses are normalized by chord; gamma and U are normalized by freestream speed. Angles passed to force integration are radians.
+The faithful solver's pressure/force family converts normalized incompressible panel gamma to pressure coefficient at the requested freestream Mach. It integrates that pressure on the existing contour for CL and quarter-chord CM. Total wake drag uses physical edge speed and density. The separate CDf and CD−CDf drag fields use XFOIL CDCALC wall-shear projection and have bounded reference coverage. Python/CLI coefficient results, trial operating corrections and the shipping WASM Cp array use the same conventions. Coordinates and thicknesses are normalized by chord; gamma and U are normalized by freestream speed. Angles passed to force integration are radians.
 
 ## Theory
 
 The pressure correction is XFOIL CPCALC/CLCALC, not just Prandtl–Glauert scaling:
 
-<Equation math={String.raw`C_{p,0}=1-\gamma^2,\quad C_p=\frac{C_{p,0}}{\beta+\frac{M_\infty^2}{2(1+\beta)}C_{p,0}},\quad \beta=\sqrt{1-M_\infty^2}`} />
+$$
+C_{p,0}=1-\gamma^2,\quad C_p=\frac{C_{p,0}}{\beta+\frac{M_\infty^2}{2(1+\beta)}C_{p,0}},\quad \beta=\sqrt{1-M_\infty^2}\label{eq:compressible-forces-1}
+$$
+
+Equation $\eqref{eq:compressible-forces-1}$ defines this relation.
 
 The pressure array is integrated by the existing panel force routine; its Mach-zero wrapper preserves the old public calling convention. XFOIL CDCALC applies the Squire–Young wake extrapolation using the physical wake speed, with wake shape factor formed from total displacement thickness:
 
-<Equation math={String.raw`C_D=2\theta_w\left(\frac{U_w}{U_\infty}\right)^{(5+H_w)/2},\qquad C_{f,\infty}=C_{f,e}\frac{\rho_e}{\rho_\infty}\left(\frac{U_e}{U_\infty}\right)^2`} />
+$$
+C_D=2\theta_w\left(\frac{U_w}{U_\infty}\right)^{(5+H_w)/2},\qquad C_{f,\infty}=C_{f,e}\frac{\rho_e}{\rho_\infty}\left(\frac{U_e}{U_\infty}\right)^2\label{eq:compressible-forces-2}
+$$
+
+Equation $\eqref{eq:compressible-forces-2}$ defines this relation.
 
 Source: [official XFOIL 6.99](https://web.mit.edu/drela/Public/web/xfoil/), xfoil.f CPCALC/CLCALC/CDCALC. This is the same approximate aerodynamic model used by the reference, not evidence of post-stall or transonic physical validity.
 
@@ -51,3 +58,23 @@ Reusing one CPCALC helper prevents WASM's Cp display and the faithful solver's r
 The change retains existing contour integration and canonical wake/friction routines. The full reference gate checks integrated CL/CD/CM, all WASM surface Cp values and binding agreement on the bounded matrix. Other Reynolds/Mach scaling modes and arbitrary geometry integration are not established by those cases. The reference viscosity-ratio limitation is documented in [compressible transport](./compressible-boundary-layer). Physical-model validity requires independent experimental evidence; a converged solve alone is insufficient.
 
 <SourceCode path="docs-site/src/components/Compressibility/math.js" name="pressure" />
+
+The reference gate now checks total CD, `cd_friction`, and `cd_pressure` on all 48 cases. `cd_pressure` means **CD−CDf**, matching XFOIL's iteration report. The polar-file CDp column is a distinct surface-pressure integral from CLCALC and is not this field. No new surface-pressure-drag output is added.
+
+CDCALC integrates local wall shear along the freestream direction, beginning with the first pair of real surface stations (IBL=3 in Fortran), excluding the synthetic stagnation row and wake:
+
+$$
+C_{Df}=\sum_{IS=1}^{2}\sum_{IBL=3}^{IBLTE(IS)}\frac{(\tau_{IBL} + \tau_{IBL-1})}{\rho_\infty U_\infty^2}\left[\Delta x\cos\alpha+\Delta y\sin\alpha\right],\qquad \tau=\frac12\rho_e U_e^2 C_{f,e}\label{eq:compressible-friction}
+$$
+
+Equation $\eqref{eq:compressible-friction}$ keeps the sign of wall shear and projection and includes low-Reynolds-number surface stations. The canonical force bridge carries physical speed, density-weighted Cf and actual surface y coordinates. Legacy clamp/low-Rtheta exclusions and absolute-x projection are removed from this canonical route; the separate legacy station-based engine remains unvalidated.
+
+<SourceCode path="crates/rustfoil-solver/src/viscous/forces.rs" name="compute_row_friction_drag" />
+<SourceCode path="crates/rustfoil-xfoil/src/forces.rs" name="canonical_force_state" />
+
+Measured maxima across the 48 cases are CDf 4.91e-6 and CD−CDf 4.99e-6 versus XFOIL's five-decimal iteration output, within the 1e-5 acceptance tolerance. Total CD and the other previously gated outputs keep their existing tolerances. This is bounded numerical agreement, not a new physical-validity or global-derivative claim.
+
+## Interactive wall-shear projection
+
+<Inspector mode="friction" />
+<SourceCode path="docs-site/src/components/Compressibility/Inspector.jsx" name="CompressibilityInspector" />

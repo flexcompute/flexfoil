@@ -1,0 +1,52 @@
+---
+title: Run history and solver cache identity
+---
+
+import SourceCode from '@site/src/components/SolverGate/SourceCode';
+import RunCacheInspector from '@site/src/components/RunCache/Inspector';
+
+## What it is
+
+RunDatabase stores individual solver attempts in SQLite. Browser mode persists SQLite with IndexedDB; local server mode uses the compatible Python SQLite schema. The cache is a lookup into this history, not a uniqueness constraint on it. A retry can append a corrected result beside an older failed or successful attempt without replacing either. Existing explicit clear/import and 50,000-row retention policies still apply; migration itself deletes no run.
+
+Point conditions use the panel-coordinate geometry hash, alpha in degrees, freestream Reynolds number, Mach, Ncrit, panel count and maximum iteration count. A separate nullable `cache_key` records a JSON namespace containing the release/content-hashed WASM asset revision, solver mode, and (for viscous solves) Reynolds scaling type and forced upper/lower trips in x/c. The geometry hash still identifies geometry only. Inviscid settings that do not reach that solver are omitted from the namespace.
+
+## Theory and assumptions
+
+For a requested point $p$ with namespace $k$, eligibility is:
+
+$$
+E(r,p,k)=(k\ne\varnothing)\land(r.k=k)\land(r.p=p)\land r.\mathrm{success}\land r.\mathrm{converged}\label{eq:run-cache-eligibility}
+$$
+
+Equation $\eqref{eq:run-cache-eligibility}$ defines reuse, not solver accuracy. If multiple attempts qualify, the most recent id wins. Legacy rows have unknown provenance (SQL NULL), remain readable, and never qualify. Failed/nonconverged rows are also retained but never reused. Development assets have no production content hash, so development runs retain history without cache reuse. Production keys change when the WASM content, release or relevant settings change. Unprovenanced Python/sweep/import producers retain history with NULL and do not create cache candidates.
+
+## Code and working call
+
+```python
+from flexfoil.database import RunDatabase
+with_version = '["release:hashed.wasm","viscous",1,1,1]'
+db = RunDatabase('/tmp/flexfoil-history-example.sqlite')
+db.insert_run(airfoil_name='demo', airfoil_hash='geometry', alpha=4,
+              reynolds=1e6, mach=.25, ncrit=9, n_panels=160, max_iter=100,
+              success=True, converged=True, cl=.44, cache_key=with_version)
+assert db.lookup_cache('geometry',4,1e6,.25,9,160,100,with_version)['cl'] == .44
+db.close()
+```
+
+The example key illustrates the format; only a producer that knows its actual solver/settings identity should claim a reusable key.
+
+<SourceCode path="flexfoil-ui/src/lib/runDatabase.ts" name="solverCacheKey" />
+<SourceCode path="flexfoil-ui/src/lib/runDatabase.ts" name="lookupCache" />
+<SourceCode path="packages/flexfoil-python/src/flexfoil/database.py" name="RunDatabase" />
+
+## Interactive eligibility
+
+<RunCacheInspector />
+<SourceCode path="docs-site/src/components/RunCache/Inspector.jsx" name="RunCacheInspector" />
+
+## Why and limits
+
+Drop the old unique operating-point index instead of deleting legacy rows or rewriting airfoil hashes. Keep an ordinary lookup index, append attempts, and require known matching provenance and convergence before skipping the solver. Browser/local-API backends transport the same nullable namespace; the Python lookup endpoint uses the same predicate. Import validates and migrates a separate copy before replacing live history. Browser and Python tests cover legacy migrations, failed retries, corrected reuse, settings/revision misses, roundtrips, and invalid-import history preservation.
+
+The current local client keeps only its fetched history window available for synchronous lookup; older eligible rows may produce a harmless miss. Exported databases with repeated operating points require the updated clients: an older client recreating the old unique index cannot read them. No backward-compatibility workaround should discard history. A cached result contains the existing stored coefficient summary; full distributions are recomputed separately and are not established by cache eligibility. History retention is bounded by the existing policy, not an unlimited archival guarantee.

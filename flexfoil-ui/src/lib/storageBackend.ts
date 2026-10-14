@@ -13,6 +13,7 @@ import type { RunRow, SolverMode } from '../types';
 export interface RunInsert {
   airfoil_name: string;
   airfoil_hash: string;
+  cache_key?: string | null;
   alpha: number;
   reynolds: number;
   mach: number;
@@ -48,6 +49,7 @@ export interface StorageBackend {
     ncrit: number,
     nPanels: number,
     maxIter: number,
+    cacheKey?: string | null,
   ): RunRow | null;
   queryAllRuns(): RunRow[];
   updateRunAirfoilName(id: number, newName: string): Promise<void>;

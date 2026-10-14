@@ -55,6 +55,7 @@ function apiRowToRunRow(obj: Record<string, unknown>): RunRow {
     id: obj.id as number,
     airfoil_name: obj.airfoil_name as string,
     airfoil_hash: obj.airfoil_hash as string,
+    cache_key: (obj.cache_key as string | null) ?? null,
     alpha: obj.alpha as number,
     reynolds: obj.reynolds as number,
     mach: obj.mach as number,
@@ -90,6 +91,7 @@ function runInsertPayload(run: RunInsert): Record<string, unknown> {
   return {
     airfoil_name: run.airfoil_name,
     airfoil_hash: run.airfoil_hash,
+    cache_key: run.cache_key ?? null,
     alpha: run.alpha,
     reynolds: run.reynolds,
     mach: run.mach,
@@ -186,7 +188,8 @@ export const localApiBackend: StorageBackend = {
     return runs.length;
   },
 
-  lookupCache(airfoilHash, alpha, reynolds, mach, ncrit, nPanels, maxIter): RunRow | null {
+  lookupCache(airfoilHash, alpha, reynolds, mach, ncrit, nPanels, maxIter, cacheKey): RunRow | null {
+    if (!cacheKey) return null;
     return (
       _cachedRuns.find(
         (r) =>
@@ -196,7 +199,8 @@ export const localApiBackend: StorageBackend = {
           r.mach === mach &&
           r.ncrit === ncrit &&
           r.n_panels === nPanels &&
-          r.max_iter === maxIter,
+          r.max_iter === maxIter &&
+          r.cache_key === cacheKey && r.success && r.converged,
       ) ?? null
     );
   },

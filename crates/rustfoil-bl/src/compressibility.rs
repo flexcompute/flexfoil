@@ -129,23 +129,14 @@ mod jacobian_tests {
             blvar(&mut second, flow, 0.0625, 1e6);
             let (_, jac) = bldif(&first, &second, flow, 0.0625, 1e6);
             for side in 0..2 {
-                for variable in [3] {
-                    let step = if variable == 1 || variable == 2 {
-                        1e-8
-                    } else {
-                        1e-6
-                    };
+                {
+                    let variable = 3;
+                    let step = 1e-6;
                     let evaluate = |offset: f64| {
                         let mut a = first.clone();
                         let mut b = second.clone();
                         let station = if side == 0 { &mut a } else { &mut b };
-                        match variable {
-                            0 if flow == FlowType::Laminar => station.ampl += offset,
-                            0 => station.ctau += offset,
-                            1 => station.theta += offset,
-                            2 => station.delta_star += offset,
-                            _ => station.u += offset,
-                        }
+                        station.u += offset;
                         blvar(station, flow, 0.0625, 1e6);
                         let (res, _) = bldif(&a, &b, flow, 0.0625, 1e6);
                         [res.res_third, res.res_mom, res.res_shape]

@@ -2,7 +2,6 @@
 title: Surface transition location reporting
 ---
 
-import Equation from '@site/src/components/SolverGate/Equation';
 import SourceCode from '@site/src/components/SolverGate/SourceCode';
 import Inspector from '@site/src/components/Compressibility/Inspector';
 
@@ -14,11 +13,19 @@ The reporting helper returns transition x/c for each solved surface. Its inputs 
 
 The final valid surface station is IBLTE + 1 in the one-based transition frame. Therefore a transition is on the surface when:
 
-<Equation math={String.raw`I_{\mathrm{TRAN}}\le I_{\mathrm{BLTE}}+1`} />
+$$
+I_{\mathrm{TRAN}}\le I_{\mathrm{BLTE}}+1\label{eq:transition-location-1}
+$$
+
+Equation $\eqref{eq:transition-location-1}$ defines this relation.
 
 Interpolate the saved surface coordinates at transition arc length, then project onto the chord vector c = TE − LE:
 
-<Equation math={String.raw`x_{\mathrm{tr}}/c=\frac{(\mathbf{x}_{\mathrm{tr}}-\mathbf{x}_{\mathrm{LE}})\cdot\mathbf{c}}{\mathbf{c}\cdot\mathbf{c}}`} />
+$$
+x_{\mathrm{tr}}/c=\frac{(\mathbf{x}_{\mathrm{tr}}-\mathbf{x}_{\mathrm{LE}})\cdot\mathbf{c}}{\mathbf{c}\cdot\mathbf{c}}\label{eq:transition-location-2}
+$$
+
+Equation $\eqref{eq:transition-location-2}$ defines this relation.
 
 This follows the station conventions retained from XFOIL and the existing transition projection. The previous comparison used the two index frames directly and suppressed valid near-trailing-edge transitions. The full reference case NACA0012/Re100000/Mach0.25/alpha0 exposed it: the reference reports about 0.9806 chord, while the old guard returned 1.0.
 

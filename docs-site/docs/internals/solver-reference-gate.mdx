@@ -2,7 +2,6 @@
 title: Solver reference gate
 ---
 
-import Equation from '@site/src/components/SolverGate/Equation';
 import SourceCode from '@site/src/components/SolverGate/SourceCode';
 import GateInspector from '@site/src/components/SolverGate/Inspector';
 
@@ -38,17 +37,25 @@ CI preserves commands, stdout/stderr, polars, pressure/BL dumps, native results 
 
 For a coefficient q, the gate checks finite values and an absolute difference against the documented tolerance. Transition locations and thicknesses are normalized by chord; velocities are normalized by freestream speed. The full solve also has to converge with RMS at most 1e-4. This is numerical regression against XFOIL's model, not validation against wind-tunnel measurements.
 
-<Equation math={String.raw`|q_{\mathrm{solver}}-q_{\mathrm{reference}}| \leq \varepsilon_q`} />
+$$
+|q_{\mathrm{solver}}-q_{\mathrm{reference}}| \leq \varepsilon_q\label{eq:solver-reference-gate-1}
+$$
+
+Equation $\eqref{eq:solver-reference-gate-1}$ defines this relation.
 
 The profile comparison follows XFOIL BLPRV/BLKIN/BLDUMP: incompressible coupled UI is transformed to physical U, local Mach determines Hk and density, and local Cf is converted to freestream normalization. The governing definitions come from the pinned official [XFOIL source](https://web.mit.edu/drela/Public/web/xfoil/), notably xblsys.f BLPRV/BLKIN and xoper.f BLDUMP. This comparison assumes gamma 1.4, Qinf 1 and the same panel coordinates/flow conditions on each side.
 
-<Equation math={String.raw`H_k=\frac{H-0.29M_e^2}{1+0.113M_e^2},\qquad C_{f,\infty}=C_{f,e}\,\frac{\rho_e}{\rho_\infty}\left(\frac{U_e}{U_\infty}\right)^2`} />
+$$
+H_k=\frac{H-0.29M_e^2}{1+0.113M_e^2},\qquad C_{f,\infty}=C_{f,e}\,\frac{\rho_e}{\rho_\infty}\left(\frac{U_e}{U_\infty}\right)^2\label{eq:solver-reference-gate-2}
+$$
+
+Equation $\eqref{eq:solver-reference-gate-2}$ defines this relation.
 
 <GateInspector />
 
 ## Source and design choices
 
-The executable source is [build_solver_reference.py](https://github.com/flexcompute/flexfoil/blob/codex/solver-reference-gate/scripts/build_solver_reference.py#L13), [solver_gate.py](https://github.com/flexcompute/flexfoil/blob/codex/solver-reference-gate/scripts/solver_gate.py#L17), [solver_gate.cjs](https://github.com/flexcompute/flexfoil/blob/codex/solver-reference-gate/scripts/solver_gate.cjs#L10) and [negative tests](https://github.com/flexcompute/flexfoil/blob/codex/solver-reference-gate/scripts/test_solver_gate.py#L11). The interactive explanation is real [Inspector.jsx source](https://github.com/flexcompute/flexfoil/blob/codex/solver-reference-gate/docs-site/src/components/SolverGate/Inspector.jsx#L3); [Equation.jsx](https://github.com/flexcompute/flexfoil/blob/codex/solver-reference-gate/docs-site/src/components/SolverGate/Equation.jsx#L5) renders its equations with the project's existing KaTeX dependency.
+The extracted source below is regenerated from this checkout on every build. Numbered equations are rendered by MathJax at build time; unknown equation references fail the build.
 
 The commands above are a minimal complete call. Keep live Fortran execution so a missing/stale fixture cannot silently pass; pin its archive checksum so upstream changes cannot silently redefine the oracle. Retain failed cases rather than scoring them as valid results. Test the actual native/WASM entry points because a correct kernel can still be reached with wrong options or serialized incorrectly. Three fixed geometries keep the gate repeatable; do not treat their measured coverage as evidence for every airfoil, wheel platform or flow mode.
 
@@ -62,3 +69,5 @@ The documented nose/mode/platform ceilings would be raised with dedicated matche
 <SourceCode path="scripts/solver_gate.py" name="compare_distributions" />
 
 <SourceCode path="docs-site/src/components/SolverGate/Inspector.jsx" name="GateInspector" />
+
+The matching drag decomposition is read from the final converged XFOIL iteration report, not the polar-file CDp column. Both CDf and CD−CDf use absolute tolerance 1e-5. Their measured maximum differences on the 48-case matrix are 4.91e-6 and 4.99e-6.

@@ -74,10 +74,18 @@ jobs:
       - name: WASM solver reference gate
         run: node scripts/solver_gate.cjs target/solver-wasm/rustfoil_wasm.js target/solver-reference/report.json 48
 
+      - name: Browser cache regressions and production build
+        run: |
+          wasm-pack build crates/rustfoil-wasm --target web --out-dir ../../pkg
+          npm ci --prefix flexfoil-ui
+          (cd flexfoil-ui && npx vitest run)
+          npm run build --prefix flexfoil-ui
+
       - name: Build documentation and generated API
         run: |
           python scripts/test_docs_reference.py
           npm ci --prefix docs-site
+          npm test --prefix docs-site
           npm run build --prefix docs-site
 
       - name: Preserve solver evidence
