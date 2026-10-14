@@ -33,6 +33,7 @@ cargo run --release -p rustfoil-cli -- faithful-polar testdata/naca0012.dat \
 Both commands apply the real Rust geometry transformation. The faithful command uses the Rust faithful solver, not a temporary file handed to an external XFOIL executable. Polar convergence must be checked; a valid flap flag alone does not establish numerical or physical accuracy.
 
 <SourceCode path="crates/rustfoil-cli/src/main.rs" name="parse_flap_spec" />
+<SourceCode path="crates/rustfoil-cli/src/main.rs" name="prepare_cli_flap" />
 <SourceCode path="crates/rustfoil-cli/src/main.rs" name="run_polar" />
 <SourceCode path="crates/rustfoil-cli/src/main.rs" name="run_faithful_polar" />
 <SourceCode path="crates/rustfoil-core/src/flap.rs" name="xfoil_flap" />
@@ -45,3 +46,5 @@ Both commands apply the real Rust geometry transformation. The faithful command 
 ## Why and limits
 
 Use Clap's shared value parser for both commands so invalid specifications cannot fall through to a different geometry. Reject NaN/infinity and out-of-range fractions at the CLI boundary instead of relying on the core's y-fraction clamp. Preserve the existing XFOIL-style spline/contour operation rather than adding another flap algorithm. Tests exercise the compiled CLI: bad flags print no polar, valid deflection changes the inviscid result, and zero deflection preserves it. Those tests do not establish complete XFOIL equivalence for every flap or validate stalled/flapped viscous flow.
+
+A requested nonzero flap requires at least six finite contour points; short contours fail before polar output instead of silently dropping the flap. The geometry function returns a buffer with an opening-side break for later spline healing. Nonzero inviscid flaps are healed with the existing XFOIL-style spline repaneler at the original point count before Body construction. Faithful polars use their existing requested-panel repaneling step. Zero deflection retains the original inviscid points. A compiled CLI regression compares inviscid coefficients with the same documented SDK geometry/solver path; it does not claim full XFOIL flap equivalence.
