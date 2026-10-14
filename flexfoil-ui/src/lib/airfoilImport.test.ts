@@ -392,3 +392,9 @@ describe('comment-separated Lednicer surfaces', () => {
     ]);
   });
 });
+
+describe('headerless non-finite coordinates', () => {
+  it.each(['0 Infinity', '1e999 0', '0 NaN', '0 1e999', '0.2.3 0'])('rejects the leading coordinate row %s', (row) => {
+    expect(() => parseAirfoilDat(`${row}\n1 .01\n0 0\n1 -.01`, 'foil.dat')).toThrow(/line 1/);
+  });
+});

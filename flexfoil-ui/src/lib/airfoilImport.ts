@@ -46,7 +46,8 @@ function parseCoordinateLine(line: string, lineNumber: number, allowHeader: bool
   const x = Number(parts[0]);
   const y = Number(parts[1]);
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
-    if (nonFiniteToken || (!allowHeader && numericLike)) {
+    const coordinatePair = numericLike && (!Number.isNaN(y) || /^[+-]?NaN$/i.test(parts[1]));
+    if (nonFiniteToken || coordinatePair || (!allowHeader && numericLike)) {
       throw new Error(`Invalid or non-finite coordinate at line ${lineNumber}.`);
     }
     return null;

@@ -16,3 +16,11 @@ describe('inverse target import', () => {
     expect(() => parseInverseTarget(text, 'cp')).toThrow();
   });
 });
+
+describe('UTF-8 BOM from spreadsheet exports', () => {
+  it.each(['cp', 'velocity'] as const)('retains a BOM-prefixed %s target exactly', (kind) => {
+    const header = kind === 'cp' ? 'cp' : 'ue';
+    expect(parseInverseTarget(`\uFEFFx,${header}\r\n0,1.2\r\n1,.8`, kind))
+      .toEqual({ x: [0, 1], values: [1.2, .8] });
+  });
+});

@@ -1,0 +1,45 @@
+---
+title: DAT import validation and preserved geometry
+---
+
+import SourceCode from '@site/src/components/SolverGate/SourceCode';
+import ImportValidationInspector from '@site/src/components/ImportValidation/Inspector';
+
+## What it is
+
+`parseAirfoilDat` reads Selig/Lednicer text into a named, ordered point contour with surface annotations. Coordinates use normalized chord units (x/c and y/c). It preserves legitimate numeric airfoil names and recognizes count/group/comment separators. Definite numeric coordinate pairs with non-finite/overflow or malformed values report the source line even when no header has appeared. A bad leading row is not silently renamed and discarded.
+
+`prepareImportedAirfoil` validates adjacent duplicates and repaneler output before the store replaces the current foil. It returns the parsed coordinates and panels or a located error. Existing no-WASM raw-point fallback remains; this is a trust-boundary guard, not a repair or aerodynamic-validity proof.
+
+## Theory and assumptions
+
+A finite coordinate pair must satisfy:
+
+$$
+\mathrm{finite}(x)\land\mathrm{finite}(y)\land(-0.5\le x\le1.5)\land(-1.5\le y\le1.5)\label{eq:dat-finite-coordinate}
+$$
+
+Equation $\eqref{eq:dat-finite-coordinate}$ is the importer's supported normalized-scale guard. It does not prove absence of contour intersections. Name recognition is separate: a leading numeric word followed by text can be an airfoil name, while a definite numeric pair such as `0 Infinity`, `0 NaN` or `1e999 0` is an invalid coordinate. Ambiguous free text is not guessed into repaired geometry. Lednicer counts are format metadata, not points.
+
+## Code and working call
+
+```ts
+const parsed = parseAirfoilDat('demo\n1 .01\n0 0\n1 -.01', 'demo.dat');
+console.log(parsed.name, parsed.coordinates);
+// parseAirfoilDat('0 Infinity\n1 .01\n0 0\n1 -.01', 'demo.dat') throws at line 1.
+```
+
+<SourceCode path="flexfoil-ui/src/lib/airfoilImport.ts" name="parseCoordinateLine" />
+<SourceCode path="flexfoil-ui/src/lib/airfoilImport.ts" name="parseAirfoilDat" />
+<SourceCode path="flexfoil-ui/src/lib/airfoilImport.ts" name="prepareImportedAirfoil" />
+
+## Interactive first-line decision
+
+<ImportValidationInspector />
+<SourceCode path="docs-site/src/components/ImportValidation/Inspector.jsx" name="ImportValidationInspector" />
+
+## Why and limits
+
+Keep coordinate validation at the shared parser boundary used by menu, library and catalog importers. Identify definite numeric pairs without forbidding names such as `2412 AIRFOIL`; do not relax the finite guard just because a header is still allowed. Five headerless non-finite/malformed cases failed before the fix and pass afterward; existing numeric-name, Selig/Lednicer, comment and repaneling regressions remain green. Store replacement occurs only after successful preparation.
+
+There is no automatic geometric repair or universal catalog compatibility claim. Contour ordering/intersections, arbitrary coordinate scales and inverse-solver physical validity require separate validation. Spreadsheet inverse-target headers already accept UTF-8 BOM through the existing trim; both Cp and velocity target cases are covered without adding another parser path.

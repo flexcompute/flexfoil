@@ -193,3 +193,5 @@ The Solve panel reports numerical convergence separately from physical accuracy.
 ### Boundary-layer distribution frames
 
 The distribution panel labels UI as the incompressible coupled speed normalized by freestream speed. At nonzero Mach it differs from physical edge speed. Cf uses local edge dynamic pressure; convert it before comparing with freestream-normalized XFOIL DUMP output. Positions and thicknesses use chord units. See [transport](./internals/compressible-boundary-layer) and [force reporting](./internals/compressible-forces).
+
+DAT validation also rejects a leading numeric/non-finite coordinate pair in a headerless file (including overflow such as `1e999 0`) instead of treating it as a name and discarding it. Existing numeric airfoil names followed by text remain supported.
