@@ -111,7 +111,8 @@ def build():
     destination = SITE / 'static/api/rust'
     if destination.exists():
         shutil.rmtree(destination)
-    shutil.copytree(ROOT / 'target/doc', destination)
+    metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=ROOT))
+    shutil.copytree(Path(metadata['target_directory']) / 'doc', destination)
     assert (destination / 'rustfoil_xfoil/index.html').exists()
     print(f'{len(snippets)} extracted primitives; {len(coverage)} Python API entries; {len(rust)} Rust coverage candidates')
 

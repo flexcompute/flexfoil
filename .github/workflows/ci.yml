@@ -78,6 +78,7 @@ jobs:
         run: |
           python scripts/test_docs_reference.py
           npm ci --prefix docs-site
+          npm test --prefix docs-site
           npm run build --prefix docs-site
 
       - name: Preserve solver evidence

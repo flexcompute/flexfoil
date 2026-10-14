@@ -26,6 +26,26 @@ class SourceExtractionTests(unittest.TestCase):
             self.assertEqual(snippet['code'].splitlines()[-1], '}')
             self.assertGreater(snippet['end'], snippet['start'])
 
+class CargoTargetTests(unittest.TestCase):
+    def test_build_copies_resolved_cargo_target_not_root_target(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        import build_docs_reference as docs
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            site = root / 'docs-site'
+            (site / 'docs').mkdir(parents=True)
+            (root / 'packages/flexfoil-python/src/flexfoil').mkdir(parents=True)
+            (root / 'crates').mkdir()
+            target = root / 'custom-target/doc/rustfoil_xfoil'
+            target.mkdir(parents=True)
+            (target / 'index.html').write_text('current Rust API')
+            with patch.multiple(docs, ROOT=root, SITE=site, GENERATED=site/'src/generated', API=site/'docs/api'), patch.object(docs.subprocess, 'run'), patch.object(docs.subprocess, 'check_output', return_value=json.dumps({'target_directory': str(root/'custom-target')})):
+                docs.build()
+            self.assertEqual((site/'static/api/rust/rustfoil_xfoil/index.html').read_text(), 'current Rust API')
+
 
 if __name__ == '__main__':
     unittest.main()

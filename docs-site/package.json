@@ -14,7 +14,9 @@
     "write-translations": "docusaurus write-translations",
     "write-heading-ids": "docusaurus write-heading-ids",
     "typecheck": "tsc",
-    "prebuild": "python3 ../scripts/build_docs_reference.py"
+    "prebuild": "python3 ../scripts/build_docs_reference.py",
+    "prestart": "python3 ../scripts/build_docs_reference.py",
+    "test": "node --test src/remark/*.test.mjs"
   },
   "dependencies": {
     "@docusaurus/core": "3.9.2",
@@ -22,10 +24,11 @@
     "@docusaurus/theme-mermaid": "^3.9.2",
     "@mdx-js/react": "^3.0.0",
     "clsx": "^2.0.0",
-    "katex": "^0.16.27",
     "prism-react-renderer": "^2.3.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "remark-math": "^6.0.0",
+    "rehype-mathjax": "^7.1.0"
   },
   "devDependencies": {
     "@docusaurus/module-type-aliases": "3.9.2",
@@ -47,5 +50,8 @@
   },
   "engines": {
     "node": ">=20.0"
+  },
+  "overrides": {
+    "@xmldom/xmldom": "0.9.12"
   }
 }
