@@ -16,7 +16,7 @@ import type { IAggFunc, IAggFuncParams, IRowNode } from 'ag-grid-community';
 import type { RunRow } from '../types';
 
 type NumericKey = {
-  [K in keyof RunRow]: RunRow[K] extends number | null ? K : never;
+  [K in keyof RunRow]-?: RunRow[K] extends number | null ? K : never;
 }[keyof RunRow];
 
 /**

@@ -28,6 +28,9 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  { version: '1.1.15', date: '2026-10-14', items: [
+    { category: 'fixed', text: 'Preserve solver attempts and reuse only converged results from matching solver artifacts and operating settings' },
+  ] },
   { version: '1.1.14', date: '2026-10-14', items: [
     { category: 'added', text: 'Apply a validated trailing-edge flap in CLI inviscid and faithful polars' },
     { category: 'fixed', text: 'Reject invalid flap inputs before solving and preserve the original airfoil name' },
