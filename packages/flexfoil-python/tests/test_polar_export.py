@@ -29,6 +29,32 @@ def test_complete_export_keeps_failed_and_unconverged_points():
     assert frame.attrs["cl_max"] == 1
 
 
+def test_inviscid_complete_export_records_requested_conditions(monkeypatch):
+    def raw_for(alpha):
+        if alpha == 4:
+            return {"success": False, "error": "singular system"}
+        return {"success": True, "cl": 0.5, "cm": -0.05}
+
+    monkeypatch.setattr("flexfoil.airfoil.analyze_inviscid", lambda _coords, alpha: raw_for(alpha))
+    monkeypatch.setattr(
+        "flexfoil._rustfoil.analyze_inviscid_batch",
+        lambda _coords, alphas: [raw_for(alpha) for alpha in alphas],
+    )
+    foil = Airfoil("test", [], [])
+    for parallel in (False, True):
+        polar = foil.polar(
+            alpha=[2, 4], Re=2e6, mach=0.2, ncrit=7,
+            viscous=False, store=False, parallel=parallel,
+        )
+        assert [(row.reynolds, row.mach, row.ncrit) for row in polar.results] == [(2e6, 0.2, 7)] * 2
+        data = polar.to_dict(include_failed=True)
+        assert data["alpha"] == [2, 4]
+        assert data["cl"] == [0.5, None]
+        assert data["reynolds"] == [2e6, 2e6]
+        assert data["mach"] == [0.2, 0.2]
+        assert data["ncrit"] == [7, 7]
+
+
 def test_empty_complete_export():
     polar = PolarResult("test", 1e6, 0, 9)
     assert polar.to_dict(include_failed=True)["alpha"] == []

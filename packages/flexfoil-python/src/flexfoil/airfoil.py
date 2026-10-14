@@ -236,7 +236,7 @@ class Airfoil:
         Parameters
         ----------
         alpha : angle of attack in degrees
-        Re : Reynolds number (ignored for inviscid)
+        Re : Reynolds number (stored on the result; inviscid coefficients do not depend on it)
         mach : Mach number
         ncrit : e^N transition criterion
         max_iter : maximum Newton iterations
@@ -282,9 +282,9 @@ class Airfoil:
                 x_tr_upper=1.0,
                 x_tr_lower=1.0,
                 alpha=alpha,
-                reynolds=0.0,
-                mach=0.0,
-                ncrit=0.0,
+                reynolds=Re,
+                mach=mach,
+                ncrit=ncrit,
                 success=raw.get("success", False),
                 error=raw.get("error"),
                 cp=raw.get("cp"),
@@ -452,9 +452,9 @@ class Airfoil:
                     x_tr_upper=1.0,
                     x_tr_lower=1.0,
                     alpha=a,
-                    reynolds=0.0,
-                    mach=0.0,
-                    ncrit=0.0,
+                    reynolds=Re,
+                    mach=mach,
+                    ncrit=ncrit,
                     success=raw.get("success", False),
                     error=raw.get("error"),
                 )

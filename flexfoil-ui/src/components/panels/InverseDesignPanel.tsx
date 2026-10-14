@@ -131,8 +131,19 @@ const TargetCurveEditor: React.FC<TargetCurveEditorProps> = ({
   );
 };
 
+type SurfaceImportErrors = { upper: string | null; lower: string | null };
+
+function formatSurfaceImportErrors(errors: SurfaceImportErrors): string | null {
+  const parts: string[] = [];
+  if (errors.upper) parts.push(errors.lower ? `Upper: ${errors.upper}` : errors.upper);
+  if (errors.lower) parts.push(errors.upper ? `Lower: ${errors.lower}` : errors.lower);
+  return parts.length ? parts.join(' ') : null;
+}
+
 export function InverseDesignPanel() {
-  const [importError, setImportError] = useState<string | null>(null);
+  const [importErrors, setImportErrors] = useState<SurfaceImportErrors>({ upper: null, lower: null });
+  const importEpoch = useRef({ upper: 0, lower: 0 });
+  const importError = formatSurfaceImportErrors(importErrors);
   const svgRef = useRef<SVGSVGElement>(null);
   const [dragging, setDragging] = useState<{ surface: 'upper' | 'lower'; index: number } | null>(null);
   const [method, setMethod] = useState<InverseMethod>('qdes');
@@ -153,15 +164,20 @@ export function InverseDesignPanel() {
     const file = input.files?.[0];
     if (!file) return;
     const kind = inverseDesign.targetKind;
+    const epoch = ++importEpoch.current[surface];
+    const stillCurrent = () => importEpoch.current[surface] === epoch;
     try {
       const target = parseInverseTarget(await file.text(), kind);
+      if (!stillCurrent()) return;
       if (useAirfoilStore.getState().inverseDesign.targetKind !== kind) {
         throw new Error('Target type changed during import. Select the file again.');
       }
       setInverseDesignTarget(surface, target);
-      setImportError(null);
+      setImportErrors((current) => ({ ...current, [surface]: null }));
     } catch (error) {
-      setImportError(error instanceof Error ? error.message : 'Could not read target file.');
+      if (!stillCurrent()) return;
+      const message = error instanceof Error ? error.message : 'Could not read target file.';
+      setImportErrors((current) => ({ ...current, [surface]: message }));
     } finally {
       input.value = '';
     }

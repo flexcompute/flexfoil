@@ -9,7 +9,7 @@ import PolarProvenanceInspector from '@site/src/components/PolarProvenance/Inspe
 
 `Airfoil.polar` produces scalar or matrix polars and records the geometry hash, requested operating conditions, iteration limit, solver mode, Reynolds scaling mode and forced trips. Alpha is in degrees; trips and geometry use chord fractions; Reynolds number, Mach and Ncrit are dimensionless. `solver_version` records the matching installed Python distribution release, or `None` when that provenance is unknown. It does not prevent source/vendored/frozen use and must not claim a shadowed wheel's release.
 
-`PolarResult.to_dict(include_failed=True)` retains failed/nonconverged attempts with their conditions and status. Default aerodynamic plotting/export behavior continues to select the existing converged points. A distribution release is a provenance label, not a native binary digest, numerical convergence flag or physical-validity measurement.
+`PolarResult.to_dict(include_failed=True)` retains failed/nonconverged attempts with their conditions and status. Inviscid rows record the sweep's requested Reynolds number, Mach and Ncrit. Default aerodynamic plotting/export behavior continues to select the existing converged points. A distribution release is a provenance label, not a native binary digest, numerical convergence flag or physical-validity measurement.
 
 ## Theory and assumptions
 

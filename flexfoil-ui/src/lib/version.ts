@@ -28,6 +28,10 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  { version: '1.4.3', date: '2026-10-14', items: [
+    { category: 'fixed', text: 'Record requested Reynolds number, Mach and Ncrit on inviscid polar rows and complete exports' },
+    { category: 'fixed', text: 'Keep a failed inverse-design surface import visible when the other surface imports successfully' },
+  ] },
   { version: '1.4.2', date: '2026-10-14', items: [
     { category: 'fixed', text: 'Keep source and vendored polars working with unknown provenance and remove the resolved Mach mismatch notice' },
     { category: 'fixed', text: 'Reject leading non-finite coordinate rows without discarding points or numeric airfoil names' },
