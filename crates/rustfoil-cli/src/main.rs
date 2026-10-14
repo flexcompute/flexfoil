@@ -521,7 +521,7 @@ fn run_polar(
 ) -> Result<(), CliError> {
     let (name, mut points) = load_airfoil(file)?;
     if let Some(parts) = flap {
-        points = rustfoil_core::flap::xfoil_flap(&points, parts[0], parts[1], parts[2]);
+        points = prepare_cli_flap(&points, parts, Some(points.len()))?;
         eprintln!("# applied XFOIL flap hinge_x={} hinge_y={} defl={} deg", parts[0], parts[1], parts[2]);
     }
     let body = Body::from_points(&name, &points)?;
@@ -553,6 +553,23 @@ fn run_polar(
     }
 
     Ok(())
+}
+
+fn prepare_cli_flap(points: &[Point], parts: [f64; 3], heal_points: Option<usize>) -> Result<Vec<Point>, CliError> {
+    let nonzero = parts[2].abs() >= 1e-10; // Match the existing geometry routine's zero-deflection guard.
+    if nonzero && points.len() < 6 {
+        return Err(CliError::Solver("Nonzero flap deflection requires at least six contour points".into()));
+    }
+    if !points.iter().all(|point| point.x.is_finite() && point.y.is_finite()) {
+        return Err(CliError::Solver("Flap contour coordinates must be finite".into()));
+    }
+    let flapped = rustfoil_core::flap::xfoil_flap(points, parts[0], parts[1], parts[2]);
+    if nonzero {
+        if let Some(count) = heal_points {
+            return Ok(CubicSpline::from_points(&flapped)?.resample_xfoil(count, &PanelingParams::default()));
+        }
+    }
+    Ok(flapped)
 }
 
 fn parse_flap_spec(spec: &str) -> Result<[f64; 3], String> {
@@ -1133,7 +1150,7 @@ fn run_faithful_viscous(cmd: FaithfulViscousCmd) -> Result<(), CliError> {
 fn run_faithful_polar(cmd: FaithfulPolarCmd) -> Result<(), CliError> {
     let (name, body) = if let Some(parts) = cmd.flap {
         let (name, points) = load_airfoil(&cmd.file)?;
-        let flapped = rustfoil_core::flap::xfoil_flap(&points, parts[0], parts[1], parts[2]);
+        let flapped = prepare_cli_flap(&points, parts, None)?;
         eprintln!("# applied XFOIL flap hinge_x={} hinge_y={} defl={} deg", parts[0], parts[1], parts[2]);
         build_body_for_faithful_points(&name, flapped, cmd.panels, false)?
     } else {
