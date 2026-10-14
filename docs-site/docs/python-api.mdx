@@ -433,3 +433,5 @@ The [`examples/`](https://github.com/flexcompute/flexfoil/tree/main/packages/fle
 | `12_matrix_sweep.py` | Alpha x Re matrix for a flapped airfoil |
 
 A polar’s `solver_version` identifies the installed Flexfoil distribution only when its metadata belongs to the loaded package. Source, vendored, frozen or shadowing copies without matching metadata report `None` (unknown), rather than crashing or claiming another installed wheel’s version. This release label is not a native binary fingerprint.
+
+Low-level native `cd_friction` is signed freestream-projected wall-shear drag; `cd_pressure` is total CD minus that friction contribution, matching XFOIL’s iteration-report decomposition. It is not the separate surface-pressure integral labelled CDp in an XFOIL polar file. See [force reporting](./internals/compressible-forces) for the formula and bounded reference tests.

@@ -73,6 +73,9 @@ export const CHANGELOG: ChangelogEntry[] = [
       { category: 'added', text: 'Python complete polar exports retain failed attempts, diagnostics and solver/transition provenance with include_failed=True' },
     ],
   },
+  { version: '1.1.16', date: '2026-10-14', items: [
+    { category: 'fixed', text: 'Match native friction and total-minus-friction drag reporting to the reference wall-shear integration' },
+  ] },
   { version: '1.1.15', date: '2026-10-14', items: [
     { category: 'fixed', text: 'Preserve solver attempts and reuse only converged results from matching solver artifacts and operating settings' },
   ] },
