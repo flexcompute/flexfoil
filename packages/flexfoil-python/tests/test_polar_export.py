@@ -36,6 +36,9 @@ def test_empty_complete_export():
 
 
 def test_generated_polar_records_conditions(monkeypatch):
+    from types import SimpleNamespace
+    import flexfoil.airfoil
+    monkeypatch.setattr('importlib.metadata.distribution', lambda _: SimpleNamespace(version='1.4.2', locate_file=lambda _: flexfoil.airfoil.__file__))
     foil = Airfoil("test", [(1., 0.), (0., .1), (1., -.1)], [])
     monkeypatch.setattr(foil, "_polar_batch", lambda *args, **kwargs: [point(0)])
     polar = foil.polar(alpha=[0], Re=1e6, re_type=2, max_iter=42,
@@ -45,4 +48,4 @@ def test_generated_polar_records_conditions(monkeypatch):
     assert data["re_type"] == [2]
     assert data["xstrip_lower"] == [.6]
     assert data["geometry_hash"] == [foil.hash]
-    assert data["solver_version"][0]
+    assert data["solver_version"][0] == "1.4.2"

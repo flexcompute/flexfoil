@@ -332,7 +332,15 @@ class Airfoil:
         list[PolarResult] if any are lists (one per outer-product combination).
         """
         from flexfoil.polar import PolarResult
-        from importlib.metadata import version
+        from importlib.metadata import distribution, PackageNotFoundError
+        from pathlib import Path
+
+        # Vendored/source copies must not claim a different installed wheel’s identity.
+        try:
+            metadata = distribution("flexfoil")
+            solver_version = metadata.version if Path(metadata.locate_file("flexfoil/airfoil.py")).resolve() == Path(__file__).resolve() else None
+        except PackageNotFoundError:
+            solver_version = None
 
         import numpy as np
 
@@ -378,7 +386,7 @@ class Airfoil:
                         ncrit=ncrit_val,
                         results=results,
                         geometry_hash=self.hash,
-                        solver_version=version("flexfoil"),
+                        solver_version=solver_version,
                         max_iter=max_iter,
                         viscous=viscous,
                         re_type=re_type if viscous else None,

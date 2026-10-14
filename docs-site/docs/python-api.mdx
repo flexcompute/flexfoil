@@ -431,3 +431,5 @@ The [`examples/`](https://github.com/flexcompute/flexfoil/tree/main/packages/fle
 | `10_flap_study.py` | Sweep flap deflections (0-20 deg) |
 | `11_flap_hinge_sweep.py` | Find optimal hinge position for L/D |
 | `12_matrix_sweep.py` | Alpha x Re matrix for a flapped airfoil |
+
+A polar’s `solver_version` identifies the installed Flexfoil distribution only when its metadata belongs to the loaded package. Source, vendored, frozen or shadowing copies without matching metadata report `None` (unknown), rather than crashing or claiming another installed wheel’s version. This release label is not a native binary fingerprint.

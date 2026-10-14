@@ -28,43 +28,14 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
-  { version: '1.1.15', date: '2026-10-14', items: [
-    { category: 'fixed', text: 'Preserve solver attempts and reuse only converged results from matching solver artifacts and operating settings' },
+  { version: '1.4.2', date: '2026-10-14', items: [
+    { category: 'fixed', text: 'Keep source and vendored polars working with unknown provenance and remove the resolved Mach mismatch notice' },
   ] },
-  { version: '1.1.14', date: '2026-10-14', items: [
-    { category: 'added', text: 'Apply a validated trailing-edge flap in CLI inviscid and faithful polars' },
-    { category: 'fixed', text: 'Reject invalid flap inputs before solving and preserve the original airfoil name' },
-  ] },
-  { version: '1.1.13', date: '2026-10-14', items: [
-    { category: 'fixed', text: 'Label boundary-layer velocity and friction frames and rebuild linked source documentation with numbered equations' },
-  ] },
-  {
-    version: '1.1.12',
-    date: '2026-10-13',
-    items: [
-      { category: 'fixed', text: 'Use Mach-corrected pressure and physical wake forces and preserve final surface transition locations' },
-    ],
-  },
-  {
-    version: '1.1.11',
-    date: '2026-10-13',
-    items: [
-      { category: 'fixed', text: 'Carry compressible edge thermodynamics and velocity derivatives through the coupled boundary-layer march' },
-    ],
-  },
-  {
-    version: '1.1.10',
-    date: '2026-10-13',
-    items: [
-      { category: 'added', text: 'Reference-backed solver checks require converged native and WebAssembly results with matched geometry and operating conditions' },
-    ],
-  },
   {
     version: '1.4.1',
     date: '2026-10-09',
     items: [
       { category: 'fixed', text: 'Retain comment-separated upper and lower surfaces when importing Lednicer DAT files' },
-      { category: 'fixed', text: 'Explain the known nonzero-Mach viscous limitation and distinguish numerical convergence from physical validity' },
     ],
   },
   {
@@ -100,6 +71,37 @@ export const CHANGELOG: ChangelogEntry[] = [
     date: '2026-10-09',
     items: [
       { category: 'added', text: 'Python complete polar exports retain failed attempts, diagnostics and solver/transition provenance with include_failed=True' },
+    ],
+  },
+  { version: '1.1.15', date: '2026-10-14', items: [
+    { category: 'fixed', text: 'Preserve solver attempts and reuse only converged results from matching solver artifacts and operating settings' },
+  ] },
+  { version: '1.1.14', date: '2026-10-14', items: [
+    { category: 'added', text: 'Apply a validated trailing-edge flap in CLI inviscid and faithful polars' },
+    { category: 'fixed', text: 'Reject invalid flap inputs before solving and preserve the original airfoil name' },
+  ] },
+  { version: '1.1.13', date: '2026-10-14', items: [
+    { category: 'fixed', text: 'Label boundary-layer velocity and friction frames and rebuild linked source documentation with numbered equations' },
+  ] },
+  {
+    version: '1.1.12',
+    date: '2026-10-13',
+    items: [
+      { category: 'fixed', text: 'Use Mach-corrected pressure and physical wake forces and preserve final surface transition locations' },
+    ],
+  },
+  {
+    version: '1.1.11',
+    date: '2026-10-13',
+    items: [
+      { category: 'fixed', text: 'Carry compressible edge thermodynamics and velocity derivatives through the coupled boundary-layer march' },
+    ],
+  },
+  {
+    version: '1.1.10',
+    date: '2026-10-13',
+    items: [
+      { category: 'added', text: 'Reference-backed solver checks require converged native and WebAssembly results with matched geometry and operating conditions' },
     ],
   },
   {
@@ -342,5 +344,5 @@ export const CHANGELOG: ChangelogEntry[] = [
       { category: 'added', text: 'SQLite run database with export/import' },
       { category: 'added', text: 'Mobile-responsive layout' },
     ],
-  },
+  }
 ];
