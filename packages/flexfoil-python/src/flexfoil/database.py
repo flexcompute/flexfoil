@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS runs (
@@ -39,8 +40,7 @@ CREATE TABLE IF NOT EXISTS runs (
   session_id    TEXT
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_cache_key
-  ON runs(airfoil_hash, alpha, reynolds, mach, ncrit, n_panels, max_iter);
+DROP INDEX IF EXISTS idx_cache_key;
 
 CREATE TABLE IF NOT EXISTS airfoils (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,6 +58,7 @@ _REQUIRED_COLUMNS: list[tuple[str, str]] = [
     ("coordinates_json", "TEXT"),
     ("panels_json", "TEXT"),
     ("flaps_json", "TEXT"),
+    ("cache_key", "TEXT"),
 ]
 
 
@@ -90,6 +91,8 @@ class RunDatabase:
                     f"ALTER TABLE runs ADD COLUMN {col_name} {col_def}"
                 )
 
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_lookup ON runs(cache_key, airfoil_hash, alpha)")
+
     def insert_run(
         self,
         *,
@@ -116,14 +119,15 @@ class RunDatabase:
         panels_json: str | None = None,
         flaps_json: str | None = None,
         session_id: str | None = None,
+        cache_key: str | None = None,
     ) -> int:
         cur = self._conn.execute(
-            """INSERT OR IGNORE INTO runs
+            """INSERT INTO runs
                (airfoil_name, airfoil_hash, alpha, reynolds, mach, ncrit,
                 n_panels, max_iter, cl, cd, cm, converged, iterations, residual,
                 x_tr_upper, x_tr_lower, solver_mode, success, error,
-                coordinates_json, panels_json, flaps_json, session_id)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                coordinates_json, panels_json, flaps_json, session_id, cache_key)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 airfoil_name,
                 airfoil_hash,
@@ -148,6 +152,7 @@ class RunDatabase:
                 panels_json,
                 flaps_json,
                 session_id,
+                cache_key,
             ),
         )
         self._conn.commit()
@@ -163,13 +168,18 @@ class RunDatabase:
         ncrit: float,
         n_panels: int,
         max_iter: int,
+        cache_key: str | None = None,
     ) -> dict | None:
+        """Reuse only successful, converged runs with known matching solver/settings provenance."""
+        if not cache_key:
+            return None
         cur = self._conn.execute(
             """SELECT * FROM runs
                WHERE airfoil_hash=? AND alpha=? AND reynolds=? AND mach=?
                  AND ncrit=? AND n_panels=? AND max_iter=?
-               LIMIT 1""",
-            (airfoil_hash, alpha, reynolds, mach, ncrit, n_panels, max_iter),
+                 AND cache_key=? AND success=1 AND converged=1
+               ORDER BY id DESC LIMIT 1""",
+            (airfoil_hash, alpha, reynolds, mach, ncrit, n_panels, max_iter, cache_key),
         )
         row = cur.fetchone()
         if row is None:
@@ -246,19 +256,16 @@ class RunDatabase:
 
     def import_bytes(self, data: bytes) -> None:
         """Replace the database with imported bytes."""
-        self._conn.close()
-        wal_path = Path(str(self.path) + "-wal")
-        shm_path = Path(str(self.path) + "-shm")
-        if wal_path.exists():
-            wal_path.unlink()
-        if shm_path.exists():
-            shm_path.unlink()
-        with open(self.path, "wb") as f:
-            f.write(data)
-        self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.executescript(_SCHEMA)
-        self._conn.commit()
+        # Validate and migrate a separate copy before replacing the live history.
+        with TemporaryDirectory(dir=self.path.parent) as directory:
+            candidate_path = Path(directory) / "import.db"
+            candidate_path.write_bytes(data)
+            candidate = RunDatabase(candidate_path)
+            try:
+                candidate._conn.backup(self._conn)
+                self._conn.commit()
+            finally:
+                candidate.close()
 
     def close(self) -> None:
         self._conn.close()

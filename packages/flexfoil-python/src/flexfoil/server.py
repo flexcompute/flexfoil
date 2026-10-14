@@ -178,6 +178,7 @@ async def lookup_cache(request: Request) -> JSONResponse:
         ncrit=body["ncrit"],
         n_panels=body["n_panels"],
         max_iter=body["max_iter"],
+        cache_key=body.get("cache_key"),
     )
     if row is None:
         return JSONResponse(None, status_code=200)

@@ -412,3 +412,5 @@ The [`examples/`](https://github.com/flexcompute/flexfoil/tree/main/packages/fle
 | `10_flap_study.py` | Sweep flap deflections (0-20 deg) |
 | `11_flap_hinge_sweep.py` | Find optimal hinge position for L/D |
 | `12_matrix_sweep.py` | Alpha x Re matrix for a flapped airfoil |
+
+Low-level native `cd_friction` is signed freestream-projected wall-shear drag; `cd_pressure` is total CD minus that friction contribution, matching XFOIL’s iteration-report decomposition. It is not the separate surface-pressure integral labelled CDp in an XFOIL polar file. See [force reporting](./internals/compressible-forces) for the formula and bounded reference tests.

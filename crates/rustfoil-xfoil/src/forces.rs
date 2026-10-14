@@ -119,18 +119,18 @@ fn canonical_force_state(
     let mut canonical = XfoilLikeViscousState::new(state.n_panel_nodes());
     canonical.gam = state.gam.clone();
     canonical.gam_a = state.gam_a.clone();
-    canonical.upper_rows = upper_stations.iter().map(|s| canonical_row_from_station(s, mach)).collect();
-    canonical.lower_rows = lower_stations.iter().map(|s| canonical_row_from_station(s, mach)).collect();
+    canonical.upper_rows = upper_stations.iter().zip(&state.upper_rows).map(|(s, row)| canonical_row_from_station(s, mach, row.y_coord)).collect();
+    canonical.lower_rows = lower_stations.iter().zip(&state.lower_rows).map(|(s, row)| canonical_row_from_station(s, mach, row.y_coord)).collect();
     canonical
 }
 
-fn canonical_row_from_station(station: &BlStation, mach: f64) -> CanonicalBlRow {
+fn canonical_row_from_station(station: &BlStation, mach: f64, y_coord: f64) -> CanonicalBlRow {
     let u = rustfoil_bl::compressibility::edge_velocity(station.u, mach * mach).0;
     let density = rustfoil_bl::compressibility::edge_thermodynamics(u, station.theta, mach * mach, 1.0).density;
     CanonicalBlRow {
         x: station.x,
         x_coord: station.x_coord,
-        y_coord: 0.0,
+        y_coord,
         panel_idx: station.panel_idx,
         uedg: u,
         uinv: station.u,

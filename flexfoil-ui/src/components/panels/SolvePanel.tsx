@@ -6,6 +6,9 @@
  * skip the solver entirely and return the stored result.
  */
 
+import wasmAssetUrl from 'rustfoil-wasm/rustfoil_wasm_bg.wasm?url';
+import { APP_VERSION } from '../../lib/version';
+import { solverCacheKey } from '../../lib/runDatabase';
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useAirfoilStore, clearPolarSuppression } from '../../stores/airfoilStore';
 import { useRouteUiStore } from '../../stores/routeUiStore';
@@ -194,6 +197,11 @@ export function SolvePanel() {
   const cacheMach = isViscous ? mach : 0;
   const cacheNcrit = isViscous ? ncrit : 0;
   const cacheMaxIter = isViscous ? maxIterations : 0;
+  // Development assets have no content hash; retain history without reusing an unknown engine.
+  const cacheKey = solverCacheKey(
+    import.meta.env.DEV ? null : `${APP_VERSION}:${wasmAssetUrl}`,
+    solverMode, reType, xstripUpper, xstripLower,
+  );
 
   const buildCaseMetadata = useCallback((overrides: Record<string, unknown> = {}) => ({
     airfoil: name,
@@ -213,8 +221,8 @@ export function SolvePanel() {
     nPanels: number,
     logContext?: { caseId: string; label: string },
   ): Promise<SolveOrCacheResult> => {
-    const cached = lookup(airfoilHash, alpha, cacheRe, cacheMach, cacheNcrit, nPanels, cacheMaxIter);
-    if (cached && cached.success) {
+    const cached = lookup(airfoilHash, alpha, cacheRe, cacheMach, cacheNcrit, nPanels, cacheMaxIter, cacheKey);
+    if (cached && cached.success && cached.converged) {
       const result = {
         cl: cached.cl ?? 0,
         cd: cached.cd ?? 0,
@@ -273,6 +281,7 @@ export function SolvePanel() {
     const run: RunInsert = {
       airfoil_name: name,
       airfoil_hash: airfoilHash,
+      cache_key: cacheKey,
       alpha,
       reynolds: cacheRe,
       mach: cacheMach,
@@ -319,6 +328,7 @@ export function SolvePanel() {
     cacheMach,
     cacheNcrit,
     cacheMaxIter,
+    cacheKey,
     runSolver,
     lookup,
     addRun,

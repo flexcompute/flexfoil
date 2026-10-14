@@ -28,6 +28,12 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  { version: '1.1.16', date: '2026-10-14', items: [
+    { category: 'fixed', text: 'Match native friction and total-minus-friction drag reporting to the reference wall-shear integration' },
+  ] },
+  { version: '1.1.15', date: '2026-10-14', items: [
+    { category: 'fixed', text: 'Preserve solver attempts and reuse only converged results from matching solver artifacts and operating settings' },
+  ] },
   { version: '1.1.14', date: '2026-10-14', items: [
     { category: 'added', text: 'Apply a validated trailing-edge flap in CLI inviscid and faithful polars' },
     { category: 'fixed', text: 'Reject invalid and short flap contours, heal nonzero inviscid flap geometry, and preserve the original airfoil name' },
