@@ -7,8 +7,9 @@
 // another page resolves to that page's number. An unknown label fails the build, as a missing code snippet does.
 import fs from 'node:fs';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 
-const DOCS = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../docs');
+const DOCS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../docs');
 const BLOCK = /^\$\$\s*\n([\s\S]*?)\n\$\$/gm;
 const LABEL = /\\label\{([^}]+)\}/;
 
