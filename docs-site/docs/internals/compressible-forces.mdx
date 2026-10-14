@@ -1,0 +1,62 @@
+---
+title: Compressible pressure and force reporting
+---
+
+import SourceCode from '@site/src/components/SolverGate/SourceCode';
+import Inspector from '@site/src/components/Compressibility/Inspector';
+
+## What it is
+
+The faithful solver's pressure/force family converts normalized incompressible panel gamma to pressure coefficient at the requested freestream Mach. It integrates that pressure on the existing contour for CL and quarter-chord CM. Total wake drag uses physical edge speed and density. The separate friction/pressure drag decomposition retains a legacy integrator and is not reference matched. Python/CLI coefficient results, trial operating corrections and the shipping WASM Cp array use the same conventions. Coordinates and thicknesses are normalized by chord; gamma and U are normalized by freestream speed. Angles passed to force integration are radians.
+
+## Theory
+
+The pressure correction is XFOIL CPCALC/CLCALC, not just Prandtl–Glauert scaling:
+
+$$
+C_{p,0}=1-\gamma^2,\quad C_p=\frac{C_{p,0}}{\beta+\frac{M_\infty^2}{2(1+\beta)}C_{p,0}},\quad \beta=\sqrt{1-M_\infty^2}\label{eq:compressible-forces-1}
+$$
+
+Equation $\eqref{eq:compressible-forces-1}$ defines this relation.
+
+The pressure array is integrated by the existing panel force routine; its Mach-zero wrapper preserves the old public calling convention. XFOIL CDCALC applies the Squire–Young wake extrapolation using the physical wake speed, with wake shape factor formed from total displacement thickness:
+
+$$
+C_D=2\theta_w\left(\frac{U_w}{U_\infty}\right)^{(5+H_w)/2},\qquad C_{f,\infty}=C_{f,e}\frac{\rho_e}{\rho_\infty}\left(\frac{U_e}{U_\infty}\right)^2\label{eq:compressible-forces-2}
+$$
+
+Equation $\eqref{eq:compressible-forces-2}$ defines this relation.
+
+Source: [official XFOIL 6.99](https://web.mit.edu/drela/Public/web/xfoil/), xfoil.f CPCALC/CLCALC/CDCALC. This is the same approximate aerodynamic model used by the reference, not evidence of post-stall or transonic physical validity.
+
+## Real code and minimal call
+
+<SourceCode path="crates/rustfoil-xfoil/src/forces.rs" name="pressure_coefficient" />
+<SourceCode path="crates/rustfoil-xfoil/src/forces.rs" name="compute_panel_forces_from_gamma_at_mach" />
+
+```rust
+let cp = rustfoil_xfoil::forces::pressure_coefficient(1.2, 0.25);
+assert!(cp.is_finite() && cp < 0.0);
+```
+
+For a complete solve, use the existing Python call with the requested Mach:
+
+```python
+import flexfoil
+result = flexfoil.naca("0012").solve(alpha=4, Re=1e6, mach=0.25, store=False)
+assert result.success and result.converged
+```
+
+## Interactive pressure
+
+<Inspector mode="pressure" />
+
+## Why and limits
+
+Reusing one CPCALC helper prevents WASM's Cp display and the faithful solver's reported forces from drifting apart. Carry Mach into trial CL calculations as well as final reporting, so operating corrections use the same pressure model. Preserve the old Mach-zero public force function for existing Rust callers; add an explicit Mach variant instead of silently changing its input contract.
+
+The change retains existing contour integration and canonical wake/friction routines. The full reference gate checks integrated CL/CD/CM, all WASM surface Cp values and binding agreement on the bounded matrix. Other Reynolds/Mach scaling modes and arbitrary geometry integration are not established by those cases. The reference viscosity-ratio limitation is documented in [compressible transport](./compressible-boundary-layer). Physical-model validity requires independent experimental evidence; a converged solve alone is insufficient.
+
+<SourceCode path="docs-site/src/components/Compressibility/math.js" name="pressure" />
+
+The gate validates **total CD**, not the separate `cd_friction` / `cd_pressure` fields. Saved NACA 2412, Re=1e6, alpha=4° controls show pressure drag 0.00262 versus XFOIL 0.00107 at Mach zero, and 0.00282 versus −0.00010 at Mach 0.25. The legacy friction integrator excludes low momentum-thickness Reynolds-number rows and differs in wall-shear projection. Do not use these component fields as XFOIL-equivalent values. Correcting that decomposition requires separate reference-backed integration tests; these discrepancies do not invalidate the measured total-CD agreement.

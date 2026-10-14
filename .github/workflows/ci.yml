@@ -30,7 +30,6 @@ jobs:
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    continue-on-error: ${{ github.ref == 'refs/heads/dev' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -49,3 +48,58 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
           pytest -q
+
+      - name: Build pinned XFOIL reference
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran libx11-dev pkg-config
+          python scripts/build_solver_reference.py target/xfoil-reference
+
+      - name: Full solver reference gate
+        run: |
+          python scripts/test_solver_gate.py
+          python scripts/solver_gate.py --xfoil target/xfoil-reference/bin/xfoil --output target/solver-reference
+
+      - name: Node for WASM gate
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build shipping WASM bindings
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo install wasm-pack --version 0.13.1 --locked
+          wasm-pack build crates/rustfoil-wasm --target nodejs --out-dir ../../target/solver-wasm
+
+      - name: WASM solver reference gate
+        run: node scripts/solver_gate.cjs target/solver-wasm/rustfoil_wasm.js target/solver-reference/report.json 48
+
+      - name: Browser cache regressions and production build
+        run: |
+          wasm-pack build crates/rustfoil-wasm --target web --out-dir ../../pkg
+          npm ci --prefix flexfoil-ui
+          (cd flexfoil-ui && npx vitest run)
+          npm run build --prefix flexfoil-ui
+
+      - name: Build documentation and generated API
+        run: |
+          python scripts/test_docs_reference.py
+          npm ci --prefix docs-site
+          npm test --prefix docs-site
+          npm run build --prefix docs-site
+
+      - name: Preserve solver evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solver-reference-evidence
+          path: |
+            target/solver-reference/report.json
+            target/solver-reference/**/commands.in
+            target/solver-reference/**/foil.dat
+            target/solver-reference/**/stdout.log
+            target/solver-reference/**/stderr.log
+            target/solver-reference/**/polar.txt
+            target/solver-reference/**/cp.txt
+            target/solver-reference/**/bl.txt
+            target/xfoil-reference/*-build.log

@@ -73,8 +73,7 @@ CREATE TABLE IF NOT EXISTS runs (
   session_id    TEXT
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_cache_key
-  ON runs(airfoil_hash, alpha, reynolds, mach, ncrit, n_panels, max_iter);
+DROP INDEX IF EXISTS idx_cache_key;
 `;
 
 const REQUIRED_COLUMNS: Array<{ name: string; definition: string }> = [
@@ -82,11 +81,11 @@ const REQUIRED_COLUMNS: Array<{ name: string; definition: string }> = [
   { name: 'coordinates_json', definition: 'TEXT' },
   { name: 'panels_json', definition: 'TEXT' },
   { name: 'flaps_json', definition: 'TEXT' },
+  { name: 'cache_key', definition: 'TEXT' },
   { name: 'is_outlier', definition: 'INTEGER NOT NULL DEFAULT 0' },
 ];
 
-function ensureSchemaColumns(): void {
-  const d = getDb();
+function ensureSchemaColumns(d: Database = getDb()): void {
   const info = d.exec("PRAGMA table_info('runs')");
   const existing = new Set(
     (info[0]?.values ?? []).map((row) => String(row[1])),
@@ -96,6 +95,7 @@ function ensureSchemaColumns(): void {
       d.run(`ALTER TABLE runs ADD COLUMN ${column.name} ${column.definition}`);
     }
   }
+  d.run("CREATE INDEX IF NOT EXISTS idx_cache_lookup ON runs(cache_key, airfoil_hash, alpha)");
 }
 
 export async function initRunDatabase(): Promise<void> {
@@ -136,6 +136,7 @@ function getDb(): Database {
 export interface RunInsert {
   airfoil_name: string;
   airfoil_hash: string;
+  cache_key?: string | null;
   alpha: number;
   reynolds: number;
   mach: number;
@@ -158,16 +159,24 @@ export interface RunInsert {
   flaps_json: string | null;
 }
 
+/** Versioned solver/settings provenance; geometry and numeric point conditions stay separate. */
+export function solverCacheKey(
+  revision: string | null, mode: SolverMode, reType: number, upperTrip: number, lowerTrip: number,
+): string | null {
+  if (!revision) return null;
+  return JSON.stringify([revision, mode, ...(mode === 'viscous' ? [reType, upperTrip, lowerTrip] : [])]);
+}
+
 export async function insertRunBatch(runs: RunInsert[]): Promise<number> {
   if (runs.length === 0) return 0;
   const d = getDb();
   const sid = getSessionId();
   const stmt = d.prepare(
-    `INSERT OR IGNORE INTO runs
+    `INSERT INTO runs
        (airfoil_name, airfoil_hash, alpha, reynolds, mach, ncrit, n_panels, max_iter,
         cl, cd, cm, converged, iterations, residual, x_tr_upper, x_tr_lower,
-       solver_mode, success, error, coordinates_json, panels_json, flaps_json, session_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       solver_mode, success, error, coordinates_json, panels_json, flaps_json, session_id, cache_key)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   );
   for (const run of runs) {
     stmt.run([
@@ -176,7 +185,7 @@ export async function insertRunBatch(runs: RunInsert[]): Promise<number> {
       run.cl, run.cd, run.cm, run.converged ? 1 : 0,
       run.iterations, run.residual, run.x_tr_upper, run.x_tr_lower,
       run.solver_mode, run.success ? 1 : 0, run.error,
-      run.coordinates_json, run.panels_json, run.flaps_json, sid,
+      run.coordinates_json, run.panels_json, run.flaps_json, sid, run.cache_key ?? null,
     ]);
   }
   stmt.free();
@@ -187,11 +196,11 @@ export async function insertRunBatch(runs: RunInsert[]): Promise<number> {
 export async function insertRun(run: RunInsert): Promise<number> {
   const d = getDb();
   d.run(
-    `INSERT OR IGNORE INTO runs
+    `INSERT INTO runs
        (airfoil_name, airfoil_hash, alpha, reynolds, mach, ncrit, n_panels, max_iter,
         cl, cd, cm, converged, iterations, residual, x_tr_upper, x_tr_lower,
-       solver_mode, success, error, coordinates_json, panels_json, flaps_json, session_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       solver_mode, success, error, coordinates_json, panels_json, flaps_json, session_id, cache_key)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       run.airfoil_name,
       run.airfoil_hash,
@@ -216,12 +225,14 @@ export async function insertRun(run: RunInsert): Promise<number> {
       run.panels_json,
       run.flaps_json,
       getSessionId(),
+      run.cache_key ?? null,
     ]
   );
-  await persistToIdb();
-
+  // sql.js export resets SQLite's connection-local last_insert_rowid.
   const result = d.exec('SELECT last_insert_rowid() as id');
-  return (result[0]?.values[0]?.[0] as number) ?? -1;
+  const id = (result[0]?.values[0]?.[0] as number) ?? -1;
+  await persistToIdb();
+  return id;
 }
 
 export function lookupCache(
@@ -232,14 +243,17 @@ export function lookupCache(
   ncrit: number,
   nPanels: number,
   maxIter: number,
+  cacheKey?: string | null,
 ): RunRow | null {
+  if (!cacheKey) return null;
   const d = getDb();
   const rows = d.exec(
     `SELECT * FROM runs
      WHERE airfoil_hash = ? AND alpha = ? AND reynolds = ? AND mach = ?
        AND ncrit = ? AND n_panels = ? AND max_iter = ?
-     LIMIT 1`,
-    [airfoilHash, alpha, reynolds, mach, ncrit, nPanels, maxIter]
+       AND cache_key = ? AND success = 1 AND converged = 1
+     ORDER BY id DESC LIMIT 1`,
+    [airfoilHash, alpha, reynolds, mach, ncrit, nPanels, maxIter, cacheKey]
   );
   if (!rows.length || !rows[0].values.length) return null;
   return rowToRunRow(rows[0].columns, rows[0].values[0]);
@@ -303,10 +317,16 @@ export async function importDatabase(data: Uint8Array): Promise<void> {
   const SQL = await initSqlJs({
     locateFile: () => sqlWasmUrl,
   });
+  const imported = new SQL.Database(data);
+  try {
+    imported.run(SCHEMA);
+    ensureSchemaColumns(imported);
+  } catch (error) {
+    imported.close();
+    throw error;
+  }
   if (db) db.close();
-  db = new SQL.Database(data);
-  db.run(SCHEMA);
-  ensureSchemaColumns();
+  db = imported;
   await persistToIdb();
 }
 
@@ -378,6 +398,7 @@ function rowToRunRow(columns: string[], values: (string | number | null | Uint8A
     id: obj.id as number,
     airfoil_name: obj.airfoil_name as string,
     airfoil_hash: obj.airfoil_hash as string,
+    cache_key: (obj.cache_key as string | null) ?? null,
     alpha: obj.alpha as number,
     reynolds: obj.reynolds as number,
     mach: obj.mach as number,

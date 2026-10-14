@@ -7,13 +7,30 @@ use rustfoil_solver::viscous::config::ViscousSolverConfig;
 use rustfoil_solver::viscous::forces::compute_forces_from_canonical_state;
 use rustfoil_solver::viscous::state::{CanonicalBlRow, XfoilLikeViscousState};
 
+/// Karman–Tsien Cp from XFOIL CPCALC, with velocity normalized by Qinf.
+pub fn pressure_coefficient(gamma: f64, mach: f64) -> f64 {
+    let cp_inc = 1.0 - gamma * gamma;
+    let beta = (1.0 - mach * mach).sqrt();
+    cp_inc / (beta + 0.5 * mach * mach / (1.0 + beta) * cp_inc)
+}
+
 pub fn compute_panel_forces_from_gamma(
     panel_x: &[f64],
     panel_y: &[f64],
     gamma: &[f64],
     alpha: f64,
 ) -> (f64, f64) {
-    let cp: Vec<f64> = gamma.iter().map(|&g| 1.0 - g * g).collect();
+    compute_panel_forces_from_gamma_at_mach(panel_x, panel_y, gamma, alpha, 0.0)
+}
+
+pub fn compute_panel_forces_from_gamma_at_mach(
+    panel_x: &[f64],
+    panel_y: &[f64],
+    gamma: &[f64],
+    alpha: f64,
+    mach: f64,
+) -> (f64, f64) {
+    let cp: Vec<f64> = gamma.iter().map(|&g| pressure_coefficient(g, mach)).collect();
     let cosa = alpha.cos();
     let sina = alpha.sin();
     let x_ref = 0.25;
@@ -43,7 +60,7 @@ pub fn compute_panel_forces_from_gamma(
 
 pub fn update_force_state(state: &mut XfoilState, mach: f64, reynolds: f64) {
     let (cl, cm) =
-        compute_panel_forces_from_gamma(&state.panel_x, &state.panel_y, &state.gam, state.alpha_rad);
+        compute_panel_forces_from_gamma_at_mach(&state.panel_x, &state.panel_y, &state.gam, state.alpha_rad, mach);
     let msq = mach * mach;
     let upper_len = active_force_len(&state.upper_rows, state.nbl_upper);
     let lower_len = active_force_len(&state.lower_rows, state.nbl_lower);
@@ -61,7 +78,7 @@ pub fn update_force_state(state: &mut XfoilState, mach: f64, reynolds: f64) {
         msq,
         reynolds,
     );
-    let canonical_state = canonical_force_state(state, &upper_stations, &lower_stations);
+    let canonical_state = canonical_force_state(state, &upper_stations, &lower_stations, mach);
     let drag_forces = compute_forces_from_canonical_state(
         &canonical_state,
         &state.panel_x,
@@ -97,22 +114,25 @@ fn canonical_force_state(
     state: &XfoilState,
     upper_stations: &[BlStation],
     lower_stations: &[BlStation],
+    mach: f64,
 ) -> XfoilLikeViscousState {
     let mut canonical = XfoilLikeViscousState::new(state.n_panel_nodes());
     canonical.gam = state.gam.clone();
     canonical.gam_a = state.gam_a.clone();
-    canonical.upper_rows = upper_stations.iter().map(canonical_row_from_station).collect();
-    canonical.lower_rows = lower_stations.iter().map(canonical_row_from_station).collect();
+    canonical.upper_rows = upper_stations.iter().map(|s| canonical_row_from_station(s, mach)).collect();
+    canonical.lower_rows = lower_stations.iter().map(|s| canonical_row_from_station(s, mach)).collect();
     canonical
 }
 
-fn canonical_row_from_station(station: &BlStation) -> CanonicalBlRow {
+fn canonical_row_from_station(station: &BlStation, mach: f64) -> CanonicalBlRow {
+    let u = rustfoil_bl::compressibility::edge_velocity(station.u, mach * mach).0;
+    let density = rustfoil_bl::compressibility::edge_thermodynamics(u, station.theta, mach * mach, 1.0).density;
     CanonicalBlRow {
         x: station.x,
         x_coord: station.x_coord,
         y_coord: 0.0,
         panel_idx: station.panel_idx,
-        uedg: station.u,
+        uedg: u,
         uinv: station.u,
         uinv_a: 0.0,
         theta: station.theta,
@@ -130,7 +150,7 @@ fn canonical_row_from_station(station: &BlStation) -> CanonicalBlRow {
         hs: station.hs,
         hc: station.hc,
         r_theta: station.r_theta,
-        cf: station.cf,
+        cf: station.cf * density,
         cd: station.cd,
         us: station.us,
         cq: station.cq,
@@ -140,5 +160,19 @@ fn canonical_row_from_station(station: &BlStation) -> CanonicalBlRow {
         is_turbulent: station.is_turbulent,
         is_wake: station.is_wake,
         derivs: station.derivs.clone(),
+    }
+}
+
+#[cfg(test)]
+mod compressible_pressure_tests {
+    use super::*;
+
+    #[test]
+    fn pressure_preserves_incompressible_and_stagnation_limits() {
+        for gamma in [-1.2, -0.5, 0.5, 1.2] {
+            assert_eq!(pressure_coefficient(gamma, 0.0), 1.0 - gamma * gamma);
+        }
+        assert_eq!(pressure_coefficient(1.0, 0.25), 0.0);
+        assert!(pressure_coefficient(1.2, 0.25) < pressure_coefficient(1.2, 0.0));
     }
 }

@@ -615,7 +615,7 @@ pub fn rust_setbl_state(alpha_deg: f64) -> FortranMarchState {
 pub fn rust_mrchue_state(alpha_deg: f64) -> FortranMarchState {
     let (mut state, _) = build_march_state(alpha_deg);
     blpini(&mut state, 1.0e6);
-    mrchue(&mut state, 1.0e6, 9.0, 0, 1.0, 1.0);
+    mrchue(&mut state, 1.0e6, 9.0, 0.0, 0, 1.0, 1.0);
     march_state_snapshot(&state)
 }
 

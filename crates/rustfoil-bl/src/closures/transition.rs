@@ -981,6 +981,12 @@ pub fn trchek2_full(
     msq: f64,
     re: f64,
 ) -> Trchek2FullResult {
+    // BLPRV converts the externally coupled incompressible velocities before TRCHEK.
+    let u1 = crate::compressibility::edge_velocity(u1, msq).0;
+    let u2 = crate::compressibility::edge_velocity(u2, msq).0;
+    let edge1 = crate::compressibility::edge_thermodynamics(u1, t1, msq, re);
+    let edge2 = crate::compressibility::edge_thermodynamics(u2, t2, msq, re);
+
     const DAEPS: f64 = 5.0e-5;
     const MAX_ITER: usize = 30;
 
@@ -990,8 +996,8 @@ pub fn trchek2_full(
     }
 
     // Hk derivatives from hkin
-    let hkin1 = hkin(d1 / t1.max(1e-20), msq);
-    let hkin2 = hkin(d2 / t2.max(1e-20), msq);
+    let hkin1 = hkin(d1 / t1.max(1e-20), edge1.msq);
+    let hkin2 = hkin(d2 / t2.max(1e-20), edge2.msq);
     
     // H = δ*/θ, so dH/dθ = -H/θ, dH/dδ* = 1/θ
     let h1 = d1 / t1.max(1e-20);
@@ -1003,23 +1009,24 @@ pub fn trchek2_full(
     
     let hk1_t1 = hkin1.hk_h * h1_t1;
     let hk1_d1 = hkin1.hk_h * h1_d1;
-    let hk1_ms = hkin1.hk_msq;
+    let hk1_ms = hkin1.hk_msq * edge1.m_ms;
+    let hk1_u1 = hkin1.hk_msq * edge1.m_u;
     
     let hk2_t2 = hkin2.hk_h * h2_t2;
     let hk2_d2 = hkin2.hk_h * h2_d2;
-    let hk2_ms = hkin2.hk_msq;
+    let hk2_ms = hkin2.hk_msq * edge2.m_ms;
     
     let reybl = re;
     // Rθ = RE * U * θ, matching XFOIL's RT2 = RE * U2 * T2.
-    let rt1_t1 = reybl * u1;
-    let rt1_u1 = reybl * t1;
-    let rt1_re = u1 * t1;
-    let rt1_ms = 0.0;
+    let rt1_t1 = edge1.r_theta / t1;
+    let rt1_u1 = edge1.rt_u;
+    let rt1_re = edge1.r_theta / re;
+    let rt1_ms = edge1.rt_ms;
     
-    let rt2_t2 = reybl * u2;
-    let rt2_u2 = reybl * t2;
-    let rt2_re = u2 * t2;
-    let rt2_ms = 0.0;
+    let rt2_t2 = edge2.r_theta / t2;
+    let rt2_u2 = edge2.rt_u;
+    let rt2_re = edge2.r_theta / re;
+    let rt2_ms = edge2.rt_ms;
 
     // Initial amplification rate with derivatives
     let ax_init = axset_full(hk1, t1, rt1, ampl1, hk2, t2, rt2, ampl1, ncrit);
@@ -1104,21 +1111,22 @@ pub fn trchek2_full(
         
         // Compute Hk at transition point
         let ht = if tt > 1e-20 { dt / tt } else { hk1 * wf1 + hk2 * wf2 };
-        let hkt_result = hkin(ht, msq);
+        let edge_t = crate::compressibility::edge_thermodynamics(ut, tt, msq, re);
+        let hkt_result = hkin(ht, edge_t.msq);
         let hkt = hkt_result.hk;
         
         // HKT derivatives for AX_A2 calculation
         let hkt_tt = hkt_result.hk_h * (-ht / tt.max(1e-20));
         let hkt_dt = hkt_result.hk_h * (1.0 / tt.max(1e-20));
-        let hkt_ut = 0.0;
-        let hkt_ms = hkt_result.hk_msq;
+        let hkt_ut = hkt_result.hk_msq * edge_t.m_u;
+        let hkt_ms = hkt_result.hk_msq * edge_t.m_ms;
         
         // Rθ at transition point
-        let rtt = reybl * ut * tt;
-        let rtt_tt = reybl * ut;
-        let rtt_ut = reybl * tt;
-        let rtt_re = ut * tt;
-        let rtt_ms = 0.0;
+        let rtt = edge_t.r_theta;
+        let rtt_tt = edge_t.r_theta / tt;
+        let rtt_ut = edge_t.rt_u;
+        let rtt_re = edge_t.r_theta / re;
+        let rtt_ms = edge_t.rt_ms;
         
         // Compute averaged amplification rate with derivatives
         let amplt = amplt_local;
@@ -1284,19 +1292,20 @@ pub fn trchek2_full(
     
     // Compute Hk and Rθ at transition with derivatives
     let ht = if tt > 1e-20 { dt / tt } else { hk1 * wf1 + hk2 * wf2 };
-    let hkt_result = hkin(ht, msq);
+    let edge_t = crate::compressibility::edge_thermodynamics(ut, tt, msq, re);
+        let hkt_result = hkin(ht, edge_t.msq);
     let hkt = hkt_result.hk;
     
     let hkt_tt = hkt_result.hk_h * (-ht / tt.max(1e-20));
     let hkt_dt = hkt_result.hk_h * (1.0 / tt.max(1e-20));
-    let hkt_ut = 0.0;
-    let hkt_ms = hkt_result.hk_msq;
+    let hkt_ut = hkt_result.hk_msq * edge_t.m_u;
+    let hkt_ms = hkt_result.hk_msq * edge_t.m_ms;
     
-    let rtt = reybl * ut * tt;
-    let rtt_tt = reybl * ut;
-    let rtt_ut = reybl * tt;
-    let rtt_ms = 0.0;
-    let rtt_re = ut * tt;
+    let rtt = edge_t.r_theta;
+    let rtt_tt = edge_t.r_theta / tt;
+    let rtt_ut = edge_t.rt_u;
+    let rtt_ms = edge_t.rt_ms;
+    let rtt_re = edge_t.r_theta / re;
     
     let amplt = if ampl2 <= ncrit { ampl2 } else { ncrit };
     let ax_result = axset_full(hk1, t1, rt1, ampl1, hkt, tt, rtt, amplt, ncrit);
@@ -1345,7 +1354,7 @@ pub fn trchek2_full(
     let ax_t1 = ax_result.ax_hk1 * hk1_t1 + ax_result.ax_t1 + ax_result.ax_rt1 * rt1_t1
               + ax_tt * tt_t1_base;
     let ax_d1 = ax_result.ax_hk1 * hk1_d1 + ax_dt * dt_d1_base;
-    let ax_u1 = ax_result.ax_rt1 * rt1_u1 + ax_ut * ut_u1_base;
+    let ax_u1 = ax_result.ax_hk1 * hk1_u1 + ax_result.ax_rt1 * rt1_u1 + ax_ut * ut_u1_base;
     let ax_a1 = ax_result.ax_a1
               + ax_tt * tt_a1_via_wf + ax_dt * dt_a1_via_wf + ax_ut * ut_a1_via_wf;
     let ax_x1 = ax_tt * tt_x1 + ax_dt * dt_x1 + ax_ut * ut_x1;

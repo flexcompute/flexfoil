@@ -264,11 +264,12 @@ pub fn mrchue(
     state: &mut XfoilState,
     reynolds: f64,
     ncrit: f64,
+    mach: f64,
     iteration: usize,
     xstrip_upper: f64,
     xstrip_lower: f64,
 ) {
-    let msq = 0.0_f64;
+    let msq = mach * mach;
 
     // Upper surface (IS=1): other side = lower (stale values)
     let other_te = te_values(&state.lower_rows, state.iblte_lower);
@@ -508,7 +509,7 @@ fn march_ue_side(
                 // Check Hk for direct→inverse switch (skip TE+1)
                 if ibl != iblte + 1 {
                     let htest = (dsi + rlx * rhs[2]) / (thi + rlx * rhs[1]).max(1e-12);
-                    let hktest = hkin(htest, msq).hk;
+                    let hktest = hkin(htest, rustfoil_bl::compressibility::local_mach_squared(uei, msq)).hk;
                     let hmax = if is_laminar_interval(ibl, itran) { HLMAX } else { HTMAX };
                     if hktest >= hmax {
                         direct = false;
@@ -530,7 +531,7 @@ fn march_ue_side(
                 // Inverse mode: Hk prescribed
                 let hk2_t2 = station_2.derivs.hk_h * station_2.derivs.h_theta;
                 let hk2_d2 = station_2.derivs.hk_h * station_2.derivs.h_delta_star;
-                sys[3] = [0.0, hk2_t2, hk2_d2, 0.0];
+                sys[3] = [0.0, hk2_t2, hk2_d2, station_2.derivs.hk_u * rustfoil_bl::compressibility::edge_velocity(uei, msq).1];
                 rhs[3] = htarg - station_2.hk;
                 gauss_4x4(&mut sys, &mut rhs);
 
@@ -561,7 +562,7 @@ fn march_ue_side(
             // ---- DSLIM ----
             let hklim = if ibl <= iblte { 1.02 } else { 1.00005 };
             let mut dsw = dsi - dswaki;
-            dslim(&mut dsw, thi, msq, hklim);
+            dslim(&mut dsw, thi, rustfoil_bl::compressibility::local_mach_squared(uei, msq), hklim);
             dsi = dsw + dswaki;
 
             if dmax <= 1e-5 {
@@ -771,11 +772,12 @@ pub fn mrchdu(
     state: &mut XfoilState,
     reynolds: f64,
     ncrit: f64,
+    mach: f64,
     iteration: usize,
     xstrip_upper: f64,
     xstrip_lower: f64,
 ) {
-    let msq = 0.0_f64;
+    let msq = mach * mach;
 
     // Upper surface
     let other_te = te_values(&state.lower_rows, state.iblte_lower);
@@ -1028,7 +1030,7 @@ fn march_du_side(
 
             // ---- First iteration: set baselines (xbl.f:1101-1128) ----
             if itbl == 0 {
-                ueref = station_2.u;
+                ueref = rustfoil_bl::compressibility::edge_velocity(station_2.u, msq).0;
                 hkref = station_2.hk;
 
                 // Transition reversal (xbl.f:1108-1115)
@@ -1036,7 +1038,7 @@ fn march_du_side(
                     if ibl > 1 {
                         let prev = &rows[ibl - 1];
                         let hm = prev.dstr / prev.theta.max(1e-12);
-                        hkref = hkin(hm, msq).hk;
+                        hkref = hkin(hm, rustfoil_bl::compressibility::local_mach_squared(prev.uedg, msq)).hk;
                     }
                 }
 
@@ -1058,18 +1060,20 @@ fn march_du_side(
             if simi || ibl == iblte + 1 {
                 // Prescribe Ue (xbl.f:1131-1138)
                 // U2_UEI = 1.0 for incompressible
-                sys[3] = [0.0, 0.0, 0.0, 1.0];
-                rhs[3] = ueref - station_2.u;
+                let (u2, u2_uei) = rustfoil_bl::compressibility::edge_velocity(station_2.u, msq);
+                sys[3] = [0.0, 0.0, 0.0, u2_uei];
+                rhs[3] = ueref - u2;
             } else {
                 // Ue-Hk characteristic slope (xbl.f:1142-1176)
                 let hk2_t2 = station_2.derivs.hk_h * station_2.derivs.h_theta;
                 let hk2_d2 = station_2.derivs.hk_h * station_2.derivs.h_delta_star;
-                let hk2_u2 = 0.0_f64; // incompressible
+                let hk2_u2 = station_2.derivs.hk_u;
+                let (u2, u2_uei) = rustfoil_bl::compressibility::edge_velocity(station_2.u, msq);
 
                 // Solve auxiliary system for dUe/dHk (xbl.f:1144-1162)
                 let mut vtmp = sys;
                 let mut vztmp = rhs;
-                vtmp[3] = [0.0, hk2_t2, hk2_d2, hk2_u2 + 1.0]; // U2_UEI=1 for incomp
+                vtmp[3] = [0.0, hk2_t2, hk2_d2, hk2_u2 * u2_uei];
                 vztmp[3] = 1.0;
                 gauss_4x4(&mut vtmp, &mut vztmp);
 
@@ -1088,10 +1092,10 @@ fn march_du_side(
                     0.0,
                     hk2_t2 * hkref,
                     hk2_d2 * hkref,
-                    (hk2_u2 * hkref + sens / ueref_safe) * 1.0, // U2_UEI=1
+                    (hk2_u2 * hkref + sens / ueref_safe) * u2_uei,
                 ];
                 rhs[3] = -(hkref * hkref) * (station_2.hk / hkref - 1.0)
-                    - sens * (station_2.u / ueref_safe - 1.0);
+                    - sens * (u2 / ueref_safe - 1.0);
             }
 
             // ---- Solve ----
@@ -1165,7 +1169,7 @@ fn march_du_side(
             // ---- DSLIM ----
             let hklim = if ibl <= iblte { 1.02 } else { 1.00005 };
             let mut dsw = dsi - dswaki;
-            dslim(&mut dsw, thi, msq, hklim);
+            dslim(&mut dsw, thi, rustfoil_bl::compressibility::local_mach_squared(uei, msq), hklim);
             dsi = dsw + dswaki;
 
             if dmax <= DEPS {

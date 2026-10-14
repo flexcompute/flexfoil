@@ -10,7 +10,7 @@ use crate::{
     canonical_state::rows_to_stations,
     config::{OperatingMode, XfoilOptions},
     error::{Result, XfoilError},
-    forces::{compute_panel_forces_from_gamma, update_force_state},
+    forces::{compute_panel_forces_from_gamma_at_mach, update_force_state},
     march::blpini,
     result::XfoilViscousResult,
     solve::blsolv,
@@ -129,11 +129,12 @@ pub fn solve_operating_point_from_state(
     }
     qwcalc(state, factorized);
     if std::env::var("RUSTFOIL_CL_DEBUG").is_ok() {
-        let (cl_inv, cm_inv) = compute_panel_forces_from_gamma(
+        let (cl_inv, cm_inv) = compute_panel_forces_from_gamma_at_mach(
             &state.panel_x,
             &state.panel_y,
             &state.qinv,
             state.alpha_rad,
+            options.mach,
         );
         eprintln!(
             "[CL DEBUG] initial inviscid cl={:.6e} cm={:.6e}",
@@ -142,11 +143,12 @@ pub fn solve_operating_point_from_state(
     }
     // Seed state.cl from inviscid solution so Type 2/3 have an initial CL estimate.
     {
-        let (cl_inv, _cm_inv) = compute_panel_forces_from_gamma(
+        let (cl_inv, _cm_inv) = compute_panel_forces_from_gamma_at_mach(
             &state.panel_x,
             &state.panel_y,
             &state.qinv,
             state.alpha_rad,
+            options.mach,
         );
         state.cl = cl_inv;
     }
@@ -307,7 +309,7 @@ fn transition_x(state: &crate::state::XfoilState, surface: crate::state::XfoilSu
             &state.lower_rows,
         ),
     };
-    if itran >= iblte || xssitr <= 0.0 || rows.len() < 2 || state.panel_x.is_empty() {
+    if itran > iblte + 1 || xssitr <= 0.0 || rows.len() < 2 || state.panel_x.is_empty() {
         return 1.0;
     }
     let surface_limit = iblte.min(rows.len().saturating_sub(1));
@@ -357,4 +359,31 @@ fn separation_x(
         .into_iter()
         .find(|station| !station.is_wake && station.cf <= 0.0)
         .map(|station| station.x_coord)
+}
+
+#[cfg(test)]
+mod transition_reporting_tests {
+    use super::*;
+
+    #[test]
+    fn final_surface_intervals_are_not_mistaken_for_wake() {
+        let coordinates: Vec<(f64, f64)> = include_str!("../../../testdata/solver-reference/naca0012.dat")
+            .lines().skip(1).map(|line| {
+                let values: Vec<f64> = line.split_whitespace().map(|value| value.parse().unwrap()).collect();
+                (values[0], values[1])
+            }).collect();
+        let (mut state, _) = build_state_from_coords("test", &coordinates, AlphaSpec::AlphaDeg(0.0), &XfoilOptions::default()).unwrap();
+        state.xle = 0.0; state.yle = 0.0; state.xte = 1.0; state.yte = 0.0;
+        state.upper_rows = [0.0, 0.5, 1.0].iter().map(|&x| crate::state::XfoilBlRow {
+            x, x_coord: x, ..Default::default()
+        }).collect();
+        state.iblte_upper = 2;
+        state.xssitr_upper = 0.75;
+        for itran in [2, 3] {
+            state.itran_upper = itran;
+            assert!((transition_x(&state, crate::state::XfoilSurface::Upper) - 0.75).abs() < 1e-12);
+        }
+        state.itran_upper = 4;
+        assert_eq!(transition_x(&state, crate::state::XfoilSurface::Upper), 1.0);
+    }
 }

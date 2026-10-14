@@ -103,3 +103,8 @@ packages/flexfoil-python/src/flexfoil/_static/
 packages/flexfoil-python/dist/
 packages/flexfoil-python/*.png
 packages/flexfoil-python/*.csv
+
+# Documentation generated from HEAD on every build
+docs-site/src/generated/
+docs-site/docs/api/
+docs-site/static/api/rust/

@@ -349,7 +349,7 @@ Failed inviscid solves have `success=False` and `converged=False`. Polar columns
 
 ### BLResult
 
-Returned by `Airfoil.bl_distribution()`.
+Returned by `Airfoil.bl_distribution()`. Thicknesses and positions are in chord units. At nonzero Mach, `ue_*` is the incompressible coupled speed, not physical edge speed; `cf_*` uses local edge dynamic pressure, not freestream dynamic pressure. See the conversion equations in [compressible transport](./internals/compressible-boundary-layer) and [forces](./internals/compressible-forces) before comparing with XFOIL DUMP.
 
 `bl.summary()` reports `max_h_upper/lower`, `min_cf_upper/lower`, `negative_cf_x_upper/lower` and `x_tr_upper/lower`, alongside success/convergence/error status. Only successful, converged, finite and length-matched station arrays produce numbers; absent or invalid surfaces return `None`. H is displacement thickness divided by momentum thickness. Negative Cf locations identify stations with negative wall shear; they do not establish separation/reattachment boundaries, a bubble model or post-stall validity. These summaries reuse reported BL quantities and introduce no new aerodynamic model.
 
@@ -368,16 +368,16 @@ print(bl.summary())
 | `.x_tr_lower` | `float` | Transition x/c, lower surface |
 | `.x_upper` | `list[float]` | x-coordinates, upper surface |
 | `.x_lower` | `list[float]` | x-coordinates, lower surface |
-| `.cf_upper` | `list[float]` | Skin friction coefficient, upper surface |
-| `.cf_lower` | `list[float]` | Skin friction coefficient, lower surface |
+| `.cf_upper` | `list[float]` | Local edge-based skin friction $C_{f,e}$, upper surface |
+| `.cf_lower` | `list[float]` | Local edge-based skin friction $C_{f,e}$, lower surface |
 | `.delta_star_upper` | `list[float]` | Displacement thickness, upper surface |
 | `.delta_star_lower` | `list[float]` | Displacement thickness, lower surface |
 | `.theta_upper` | `list[float]` | Momentum thickness, upper surface |
 | `.theta_lower` | `list[float]` | Momentum thickness, lower surface |
 | `.h_upper` | `list[float]` | Shape factor, upper surface |
 | `.h_lower` | `list[float]` | Shape factor, lower surface |
-| `.ue_upper` | `list[float]` | Edge velocity, upper surface |
-| `.ue_lower` | `list[float]` | Edge velocity, lower surface |
+| `.ue_upper` | `list[float]` | Incompressible coupled speed $U_I/U_\infty$, upper surface |
+| `.ue_lower` | `list[float]` | Incompressible coupled speed $U_I/U_\infty$, lower surface |
 
 ### RunDatabase
 

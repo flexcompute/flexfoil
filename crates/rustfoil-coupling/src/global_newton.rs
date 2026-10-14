@@ -2266,7 +2266,7 @@ fn apply_dslim_like_xfoil(station: &mut BlStation, msq: f64) {
     let theta = station.theta.max(1.0e-12);
     let dsw = station.delta_star;
     let h = dsw / theta;
-    let hkin_result = hkin(h, msq);
+    let hkin_result = hkin(h, rustfoil_bl::compressibility::local_mach_squared(station.u, msq));
 
     if hkin_result.hk_h.abs() > 1.0e-12 {
         let dh = (hklim - hkin_result.hk).max(0.0) / hkin_result.hk_h;
@@ -3700,6 +3700,11 @@ mod tests {
         ];
         upper[0].is_laminar = true;
         lower[0].is_laminar = true;
+
+        // The operating RHS requires the secondary variables and their BLKIN derivatives.
+        for station in upper.iter_mut().chain(lower.iter_mut()) {
+            blvar(station, FlowType::Turbulent, 0.0, 1.0e6);
+        }
 
         let mut system = GlobalNewtonSystem::new(upper.len(), lower.len(), 2, 2);
         system.setup_index_mappings(&upper, &lower);

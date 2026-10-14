@@ -190,3 +190,6 @@ DAT import preserves numeric airfoil names and ignores text comments/notes. Line
 
 The Solve panel distinguishes numerical convergence from physical accuracy. A known nonzero-Mach viscous limitation ([#21](https://github.com/flexcompute/flexfoil/issues/21)) is shown when the selected Mach or a Mach sweep contains positive values, including when Advanced Settings are closed. This notice does not block analysis; those results remain unvalidated. See [Differences from XFOIL](./internals/differences-from-xfoil) for the station comparison and model limitations.
 
+### Boundary-layer distribution frames
+
+The distribution panel labels UI as the incompressible coupled speed normalized by freestream speed. At nonzero Mach it differs from physical edge speed. Cf uses local edge dynamic pressure; convert it before comparing with freestream-normalized XFOIL DUMP output. Positions and thicknesses use chord units. See [transport](./internals/compressible-boundary-layer) and [force reporting](./internals/compressible-forces).
