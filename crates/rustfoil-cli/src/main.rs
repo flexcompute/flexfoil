@@ -176,7 +176,7 @@ enum Commands {
     /// Legacy viscous engine (unvalidated); prefer faithful-viscous
     Viscous(ViscousCmd),
 
-    /// Generate viscous polar (Cl, Cd vs alpha sweep)
+    /// Legacy viscous polar (unvalidated); prefer faithful-polar
     ViscousPolar(ViscousPolarCmd),
 
     /// Run the standalone faithful XFOIL side path at one operating point
