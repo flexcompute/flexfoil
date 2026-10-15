@@ -49,3 +49,21 @@ def test_generated_polar_records_conditions(monkeypatch):
     assert data["xstrip_lower"] == [.6]
     assert data["geometry_hash"] == [foil.hash]
     assert data["solver_version"][0] == "1.4.2"
+
+
+def test_inviscid_complete_export_preserves_requested_conditions():
+    import flexfoil
+    for parallel in (False, True):
+        polar = flexfoil.naca('0012').polar(
+            alpha=[0, 4], Re=730000, mach=.25, ncrit=7,
+            viscous=False, store=False, parallel=parallel,
+            xstrip_upper=.2, xstrip_lower=.6,
+        )
+        data = polar.to_dict(include_failed=True)
+        assert data['reynolds'] == [730000] * 2
+        assert data['mach'] == [.25] * 2
+        assert data['ncrit'] == [7] * 2
+        assert data['viscous'] == [False] * 2
+        assert data['xstrip_upper'] == [None] * 2
+        assert data['xstrip_lower'] == [None] * 2
+        assert data['reynolds_eff'] == [None] * 2

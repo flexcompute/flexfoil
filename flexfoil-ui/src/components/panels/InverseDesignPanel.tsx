@@ -132,7 +132,7 @@ const TargetCurveEditor: React.FC<TargetCurveEditorProps> = ({
 };
 
 export function InverseDesignPanel() {
-  const [importError, setImportError] = useState<string | null>(null);
+  const [importErrors, setImportErrors] = useState<{ upper?: string; lower?: string }>({});
   const svgRef = useRef<SVGSVGElement>(null);
   const [dragging, setDragging] = useState<{ surface: 'upper' | 'lower'; index: number } | null>(null);
   const [method, setMethod] = useState<InverseMethod>('qdes');
@@ -159,9 +159,9 @@ export function InverseDesignPanel() {
         throw new Error('Target type changed during import. Select the file again.');
       }
       setInverseDesignTarget(surface, target);
-      setImportError(null);
+      setImportErrors(errors => ({ ...errors, [surface]: undefined }));
     } catch (error) {
-      setImportError(error instanceof Error ? error.message : 'Could not read target file.');
+      setImportErrors(errors => ({ ...errors, [surface]: error instanceof Error ? error.message : 'Could not read target file.' }));
     } finally {
       input.value = '';
     }
@@ -488,7 +488,9 @@ export function InverseDesignPanel() {
               onChange={(event) => void importTarget(surface, event)} />
           </label>
         ))}
-        {importError && <span role="alert" style={{ color: 'var(--accent-danger)', fontSize: '11px' }}>{importError}</span>}
+        {(['upper', 'lower'] as const).map(surface => importErrors[surface] && (
+          <span key={surface} role="alert" style={{ color: 'var(--accent-danger)', fontSize: '11px' }}>{surface}: {importErrors[surface]}</span>
+        ))}
         {inverseDesign.upperTarget && (
           <button className="btn btn-xs" onClick={() => setInverseDesignTarget('upper', null)} title="Clear upper target">
             × Upper

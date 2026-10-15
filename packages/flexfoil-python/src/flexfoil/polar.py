@@ -213,11 +213,12 @@ class PolarResult:
             # Preserve requested order and label provisional/failed points explicitly.
             d = {key: [getattr(r, key) if r.success else None for r in self.results]
                  for key in ("cl", "cd", "cm", "ld")}
-            for key in ("alpha", "reynolds", "mach", "ncrit", "reynolds_eff",
+            for key in ("alpha", "reynolds_eff",
                         "success", "converged", "error", "iterations", "residual",
                         "x_tr_upper", "x_tr_lower"):
                 d[key] = [getattr(r, key) for r in self.results]
-            for key in ("airfoil_name", "geometry_hash", "solver_version", "max_iter",
+            for key in ("reynolds", "mach", "ncrit",
+                        "airfoil_name", "geometry_hash", "solver_version", "max_iter",
                         "viscous", "re_type", "xstrip_upper", "xstrip_lower"):
                 d[key] = [getattr(self, key)] * len(self.results)
         else:

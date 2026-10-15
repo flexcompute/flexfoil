@@ -26,6 +26,8 @@ All three run in the browser via RustFoil WASM — no server round-trip.
 
 ## QDES — Mixed-Inverse Design
 
+Target-file errors are retained separately for upper and lower surfaces. A successful import clears only that surface’s error; a failure leaves its existing target unchanged, including when the other file finishes reading later.
+
 ### Concept
 
 QDES lets you prescribe a **target pressure coefficient (Cp) or edge velocity** on the upper surface, lower surface, or both. The solver iterates, perturbing the airfoil geometry to match your target while keeping the rest of the airfoil fixed.

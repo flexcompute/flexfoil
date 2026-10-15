@@ -48,3 +48,5 @@ Handle missing metadata at the call boundary and verify that it owns the loaded 
 The inherited full solver gate and cache provenance are separate checks. This release label does not prove an independently replaced native extension belongs to that release. Unknown provenance remains visible to downstream comparisons and exports instead of being silently filled in.
 
 Complete-attempt export builds its requested-order columns directly, avoiding a discarded construction of converged-only columns. Default export and optional summary retain their existing selection/statistics behavior.
+
+Complete exports take requested Reynolds number, Mach and Ncrit from the enclosing polar for both serial and batch runs. Inviscid solves ignore these inputs: `viscous=False`, not-applied `reynolds_eff=None` and unknown/not-applied trip fields distinguish the incompressible calculation from requested conditions. Exporting requested Mach does not imply a compressible inviscid solve. Viscous per-point effective Reynolds remains a separate column.
