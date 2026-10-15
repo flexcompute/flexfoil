@@ -156,6 +156,9 @@ Direct geometry manipulation tools:
 QDES and MDES are works in progress and may produce unexpected results.
 :::
 
+In QDES, select **Target Cp** or **Target Ue**, then use **Import upper/lower** to load that surface's target from CSV or whitespace-separated text. Supply two columns (`x/c`, target value), at least two finite points, and strictly increasing `x/c` within 0–1. Optional headers are `x,cp` or `x,ue` and must match the selected type; `#` comment lines are ignored. Values and segment endpoints are preserved without sorting, resampling or clipping. A failed import reports its line and leaves the existing target intact. Imported targets remain editable and use the current operating conditions shown in the app. Import does not validate the target's aerodynamic feasibility or establish XFOIL inverse-design equivalence.
+
+
 Mixed-inverse design mode (QDES): prescribe a target pressure distribution (Cp or
 velocity) on part of the airfoil surface, and the solver computes the geometry
 that produces it. Full-inverse mode (MDES) designs an entire airfoil from a
@@ -179,6 +182,16 @@ click the **Search...** button in the menu bar.
 - **Mobile layout** — the app adapts to smaller screens with a stacked panel
   layout.
 
+### Import diagnostics
+
+DAT import preserves numeric airfoil names and ignores text comments/notes. Lines starting with `#`, `!` or `//` can separate the upper and lower coordinate groups in Lednicer files, like blank lines; they do not become the airfoil name. Rows beginning with numeric/non-finite coordinate tokens report the source line for malformed/non-finite coordinates and coordinates outside the supported normalized chord scale. Adjacent duplicate coordinates report their point numbers. Correct the source file and import again; coordinates are not silently removed. If repaneling fails, import stops and the current airfoil is retained. When the WASM repaneler is unavailable, raw coordinates remain the existing fallback. These checks do not certify that a contour is free of intersections or suitable for viscous analysis.
+
+### Convergence and model validity
+
+The Solve panel reports numerical convergence separately from physical accuracy. The inherited full-workflow gate validates Mach 0 and 0.25 on its bounded 48-case matrix; the former zero-Mach marching discrepancy is corrected. Arbitrary conditions and post-stall/transonic validity are not established. See [the executable reference gate](./internals/solver-reference-gate) and [Differences from XFOIL](./internals/differences-from-xfoil).
+
 ### Boundary-layer distribution frames
 
 The distribution panel labels UI as the incompressible coupled speed normalized by freestream speed. At nonzero Mach it differs from physical edge speed. Cf uses local edge dynamic pressure; convert it before comparing with freestream-normalized XFOIL DUMP output. Positions and thicknesses use chord units. See [transport](./internals/compressible-boundary-layer) and [force reporting](./internals/compressible-forces).
+
+DAT validation also rejects a leading numeric/non-finite coordinate pair in a headerless file (including overflow such as `1e999 0`) instead of treating it as a name and discarding it. Existing numeric airfoil names followed by text remain supported.

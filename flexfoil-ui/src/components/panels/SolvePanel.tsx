@@ -967,6 +967,7 @@ export function SolvePanel() {
                     min={0}
                     max={0.8}
                   />
+
                 </div>
                 <div>
                   <label style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
@@ -1093,6 +1094,9 @@ export function SolvePanel() {
                     : `Not converged after ${result.iterations} iterations (residual ${result.residual.toExponential(2)})`)
                 : 'Direct panel solve'}
             </div>
+            <p style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+              Convergence is a numerical status. It does not establish physical accuracy, particularly for strongly separated or transonic flow.
+            </p>
           </div>
         )}
 

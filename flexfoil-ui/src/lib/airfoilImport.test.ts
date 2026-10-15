@@ -345,3 +345,56 @@ describe('prepareImportedAirfoil', () => {
     expect(imported.panels).toEqual(parsed.coordinates);
   });
 });
+
+describe('invalid geometry diagnostics', () => {
+  it.each(['NaN 0', '0 Infinity', '0 broken', '2.0 0.1', '1e999 0', '0.2.3 0', '0', '0,', '2e+ 0'])('reports the source line for %s', (bad) => {
+    expect(() => parseAirfoilDat(`test\n1 0.1\n${bad}\n0 0\n1 -0.1`, 'test.dat'))
+      .toThrow(/line 3/i);
+  });
+
+  it('locates adjacent duplicate coordinates', () => {
+    expect(() => parseAirfoilDat('test\n1 .1\n0 0\n0 0\n1 -.1', 'test.dat'))
+      .toThrow(/points 2 and 3/i);
+  });
+
+  it('does not substitute raw geometry after failed repaneling', () => {
+    const parsed = parseAirfoilDat(NACA_2412, 'test.dat');
+    expect(() => prepareImportedAirfoil(parsed, 160, () => []))
+      .toThrow(/repanel/i);
+    expect(parsed.coordinates.length).toBeGreaterThan(20);
+  });
+});
+
+
+describe('DAT header and comment compatibility', () => {
+  it.each(['20-32C AIRFOIL', '12% JOUKOWSKI AIRFOIL', '2412 AIRFOIL'])('accepts numeric airfoil name %s', (name) => {
+    const parsed = parseAirfoilDat(`${name}\n1 .1\n0 0\n1 -.1`, 'test.dat');
+    expect(parsed.name).toBe(name);
+    expect(parsed.coordinates).toHaveLength(3);
+  });
+  it('retains all points around section comments and trailing notes', () => {
+    const parsed = parseAirfoilDat('test\n1 .1\n# upper surface\n0 0\n1 -.1\nTrailing notes from source', 'test.dat');
+    expect(parsed.coordinates).toHaveLength(3);
+  });
+});
+
+
+describe('comment-separated Lednicer surfaces', () => {
+  it.each(['#', '!', '//'])('treats %s as a surface separator without using it as the name', (marker) => {
+    const parsed = parseAirfoilDat(`${marker} source note\n0 0\n.5 .1\n1 .01\n${marker} lower surface\n0 0\n.5 -.1\n1 -.01`, 'my-foil.dat');
+    expect(parsed.name).toBe('my foil');
+    expect(parsed.coordinates).toEqual([
+      { x: 1, y: .01, surface: 'upper' },
+      { x: .5, y: .1, surface: 'upper' },
+      { x: 0, y: 0, surface: 'upper' },
+      { x: .5, y: -.1, surface: 'lower' },
+      { x: 1, y: -.01, surface: 'lower' },
+    ]);
+  });
+});
+
+describe('headerless non-finite coordinates', () => {
+  it.each(['0 Infinity', '1e999 0', '0 NaN', '0 1e999', '0.2.3 0'])('rejects the leading coordinate row %s', (row) => {
+    expect(() => parseAirfoilDat(`${row}\n1 .01\n0 0\n1 -.01`, 'foil.dat')).toThrow(/line 1/);
+  });
+});

@@ -7,27 +7,31 @@ description: Known behavioural differences between RustFoil and XFOIL
 
 # Differences from XFOIL
 
-RustFoil is a faithful, function-by-function port of XFOIL. The goal is
-bit-level reproducibility of XFOIL's behaviour, including its known limitations
-and failure modes.
+RustFoil aims to reproduce XFOIL's analysis behavior. Agreement must be assessed for the geometry, operating conditions, paneling and initialization being used; the port is not a guarantee of bit-level or universal physical equivalence.
 
 ## Analysis (OPER)
 
-The core analysis pipeline — inviscid panel method, boundary layer solver,
-viscous-inviscid coupling, and transition prediction — has no known behavioural
-differences from XFOIL. Validation results:
+The analysis pipeline includes inviscid panels, boundary-layer closures, viscous-inviscid coupling and transition prediction. Existing reported validation results apply to the cases tested, not every operating condition:
 
 | Component | Agreement |
 |-----------|-----------|
 | Paneling (PANGEN) | ~4e-7 RMS position error |
 | Inviscid CL, Cp, γ | 5–6 significant figures |
-| Closure relations (Hk, Hs, Cf, DI) | Formula-identical |
-| Viscous-inviscid coupling | Same Newton system |
+| Closure relations (Hk, Hs, Cf, DI) | Correlations ported; compressible station inputs remain incomplete |
+| Viscous-inviscid coupling | Newton coupling with compressible edge transport; bounded reference matrix passes |
 | Transition (e^N) | Same DAMPL correlation |
 | Polar types 1/2/3 | Same Re-scaling formulas |
 
 See [Inviscid Validation](./inviscid-validation), [Paneling Validation](./paneling-validation),
 and [Formula Comparison](./xfoil-formula-comparison) for detailed evidence.
+
+### Bounded compressible validation
+
+The former zero-Mach march/edge-thermodynamic discrepancy is corrected in the inherited solver foundation. The full reference gate requires converged native and shipping WASM results, coefficients, transitions and matched BL profiles on 48 cases at Mach 0 and 0.25. See [the gate](./solver-reference-gate) for geometry, conditions, tolerances and measured scope. The reference is the pinned XFOIL 6.99 batch configuration; it does not establish arbitrary-Mach, transonic, stalled-flow or global-derivative validity. Numerical convergence is not an experimental accuracy measurement.
+
+### Numerical status and physical applicability
+
+A successful call means the solver returned a result; convergence means its numerical stopping criterion was met. Neither certifies physical accuracy. XFOIL's integral boundary-layer and compressibility models have limitations in strongly separated flow and transonic/shocked flow. Assess convergence, model applicability and comparison with experiment/validated CFD separately; there is no universal angle-of-attack cutoff or confidence score.
 
 ## Design Modes
 
@@ -57,6 +61,10 @@ Geometry operations (flap deflection, TE gap, LE radius, thickness/camber
 scaling) match XFOIL's approach. Flap deflection uses a high-resolution
 intermediate representation for sub-0.001c precision at the hinge.
 
+## Invalid geometry
+
+Panel construction rejects NaN, infinite coordinates and arithmetic overflow with a `NonFinitePanel` error and a zero-based panel index. Adjacent duplicate points still return `DegeneratePanel`. These checks prevent invalid panels from reaching body construction and the solvers; they do not certify ordering, absence of intersections or suitability for viscous analysis. Python, WASM and CLI entry points that construct a body share this validation.
+
 ## Reporting Differences
 
 If you find a case where RustFoil's analysis output differs from XFOIL's for
@@ -64,3 +72,5 @@ the same airfoil and operating conditions, please report it as a bug at
 [github.com/flexcompute/flexfoil/issues](https://github.com/flexcompute/flexfoil/issues).
 Include the airfoil coordinates, operating conditions (Re, Mach, Ncrit, alpha),
 and both outputs.
+
+Spreadsheet target imports already accept UTF-8 BOM-prefixed x/Cp and x/Ue headers through the existing whitespace trim, with regression coverage for both target types. Target samples are preserved exactly.

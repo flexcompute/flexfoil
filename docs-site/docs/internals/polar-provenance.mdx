@@ -1,0 +1,52 @@
+---
+title: Polar conditions and distribution provenance
+---
+
+import SourceCode from '@site/src/components/SolverGate/SourceCode';
+import PolarProvenanceInspector from '@site/src/components/PolarProvenance/Inspector';
+
+## What it is
+
+`Airfoil.polar` produces scalar or matrix polars and records the geometry hash, requested operating conditions, iteration limit, solver mode, Reynolds scaling mode and forced trips. Alpha is in degrees; trips and geometry use chord fractions; Reynolds number, Mach and Ncrit are dimensionless. `solver_version` records the matching installed Python distribution release, or `None` when that provenance is unknown. It does not prevent source/vendored/frozen use and must not claim a shadowed wheel's release.
+
+`PolarResult.to_dict(include_failed=True)` retains failed/nonconverged attempts with their conditions and status. Default aerodynamic plotting/export behavior continues to select the existing converged points. A distribution release is a provenance label, not a native binary digest, numerical convergence flag or physical-validity measurement.
+
+## Theory and assumptions
+
+Let $D$ be installed distribution metadata, and let $P_D$ and $P_L$ be the resolved metadata and loaded-module paths. The release label is:
+
+$$
+\nu = \begin{cases}D.\mathrm{version} & D\text{ exists and }P_D=P_L\\\mathrm{None} & \text{otherwise}\end{cases}\label{eq:polar-distribution-provenance}
+$$
+
+Equation $\eqref{eq:polar-distribution-provenance}$ describes metadata ownership, not an aerodynamic equation. Installed metadata can be absent for vendored, source or frozen execution, and another wheel can be present elsewhere. Both situations produce unknown provenance. No fallback release is guessed.
+
+## Code and working call
+
+```python
+import flexfoil
+polar = flexfoil.naca('0012').polar(alpha=[0,4], Re=1e6, mach=0,
+                                   re_type=1, xstrip_upper=1,
+                                   xstrip_lower=1, store=False)
+rows = polar.to_dict(include_failed=True)
+assert rows['geometry_hash'] == [polar.geometry_hash] * len(polar.results)
+# solver_version may be None; generation and status still work.
+```
+
+<SourceCode path="packages/flexfoil-python/src/flexfoil/airfoil.py" name="Airfoil.polar" />
+<SourceCode path="packages/flexfoil-python/src/flexfoil/polar.py" name="PolarResult.to_dict" />
+
+## Interactive provenance
+
+<PolarProvenanceInspector />
+<SourceCode path="docs-site/src/components/PolarProvenance/Inspector.jsx" name="PolarProvenanceInspector" />
+
+## Why and limits
+
+Handle missing metadata at the call boundary and verify that it owns the loaded module. Returning unknown preserves useful source/vendored execution while preventing accidental attribution to another installed wheel. Keep the solver and polar data model unchanged; no new packaging version file or runtime registry is needed. Regression tests exercise real inviscid serial/batch polars with missing, shadowed and matching metadata, and export tests confirm the recorded condition fields.
+
+The inherited full solver gate and cache provenance are separate checks. This release label does not prove an independently replaced native extension belongs to that release. Unknown provenance remains visible to downstream comparisons and exports instead of being silently filled in.
+
+Complete-attempt export builds its requested-order columns directly, avoiding a discarded construction of converged-only columns. Default export and optional summary retain their existing selection/statistics behavior.
+
+Complete exports take requested Reynolds number, Mach and Ncrit from the enclosing polar for both serial and batch runs. Inviscid solves ignore these inputs: `viscous=False`, not-applied `reynolds_eff=None` and unknown/not-applied trip fields distinguish the incompressible calculation from requested conditions. Exporting requested Mach does not imply a compressible inviscid solve. Viscous per-point effective Reynolds remains a separate column.

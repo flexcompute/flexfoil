@@ -83,7 +83,16 @@ polar = foil.polar(alpha=(-5, 15, 0.5), Re=1e6, parallel=False)
 # Export to pandas (with summary statistics in df.attrs)
 df = polar.to_dataframe(summary=True)
 df.to_csv("polar.csv", index=False)
+
+# Preserve every attempted point, including failures, for coverage/retry analysis
+complete = polar.to_dataframe(include_failed=True)
+complete.to_csv("polar-complete.csv", index=False)
+retry_alphas = complete.loc[~(complete.success & complete.converged), "alpha"].tolist()
 ```
+
+The default export remains converged-only. `include_failed=True` retains requested order, status, errors, iteration/residual diagnostics, effective Reynolds and actual transition locations. Failed coefficients are empty (`None`/NaN); coefficients from successful but unconverged attempts are provisional. Additional columns record the panel-geometry hash, installed solver version, iteration limit, solver mode, Reynolds mode and requested upper/lower trips. Manually constructed `PolarResult` objects have unknown provenance (`None`) unless supplied explicitly. The geometry hash identifies the panel coordinates to eight decimal places; save the geometry separately to reproduce it.
+
+Serial and parallel Python sweeps both start each point independently. `parallel=False` does not enable warm-start continuation. Selecting `retry_alphas` does not itself retry or change solver settings.
 
 ### Compare multiple airfoils
 
@@ -306,6 +315,8 @@ are byte-identical.
 | `.success` | `bool` | Overall success flag |
 | `.error` | `str \| None` | Error message if failed |
 
+Failed inviscid solves have `success=False` and `converged=False`. Polar columns, plots, exports and aggregate statistics include only successful, converged points; inspect `.results` to retain failures and their errors. Convergence is a numerical status, not evidence of physical validity.
+
 ### PolarResult
 
 | Property / Method | Description |
@@ -315,7 +326,7 @@ are byte-identical.
 | `.cd` | `list[float]` — drag coefficients |
 | `.cm` | `list[float]` — moment coefficients |
 | `.ld` | `list[float]` — lift-to-drag ratios |
-| `.converged` | `list[SolveResult]` — converged results only |
+| `.converged` | `list[SolveResult]` — successful, converged results only |
 | `.results` | `list[SolveResult]` — all results |
 | `.cl_max` | `float \| None` — maximum CL |
 | `.cl_min` | `float \| None` — minimum CL |
@@ -332,13 +343,21 @@ are byte-identical.
 | `.argmax(target, return_col, filter_outliers=False)` | Value of *return_col* at max of *target* |
 | `.argmin(target, return_col, filter_outliers=False)` | Value of *return_col* at min of *target* |
 | `.summary()` | Dict of all aggregate statistics |
-| `.to_dict(summary=False)` | Export as `dict` (optionally include summary) |
-| `.to_dataframe(summary=False)` | Export as `pandas.DataFrame` (summary in `.attrs`) |
+| `.to_dict(summary=False, include_failed=False)` | Export as `dict` (optionally include summary) |
+| `.to_dataframe(summary=False, include_failed=False)` | Export as `pandas.DataFrame` (summary in `.attrs`) |
 | `.plot(show=True, backend="plotly")` | 4-panel figure (plotly default, or `"matplotlib"`) |
 
 ### BLResult
 
 Returned by `Airfoil.bl_distribution()`. Thicknesses and positions are in chord units. At nonzero Mach, `ue_*` is the incompressible coupled speed, not physical edge speed; `cf_*` uses local edge dynamic pressure, not freestream dynamic pressure. See the conversion equations in [compressible transport](./internals/compressible-boundary-layer) and [forces](./internals/compressible-forces) before comparing with XFOIL DUMP.
+
+`bl.summary()` reports `max_h_upper/lower`, `min_cf_upper/lower`, `negative_cf_x_upper/lower` and `x_tr_upper/lower`, alongside success/convergence/error status. Only successful, converged, finite and length-matched station arrays produce numbers; absent or invalid surfaces return `None`. H is displacement thickness divided by momentum thickness. Negative Cf locations identify stations with negative wall shear; they do not establish separation/reattachment boundaries, a bubble model or post-stall validity. These summaries reuse reported BL quantities and introduce no new aerodynamic model.
+
+```python
+bl = foil.bl_distribution(alpha=5, Re=1e6)
+print(bl.summary())
+```
+
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -412,5 +431,7 @@ The [`examples/`](https://github.com/flexcompute/flexfoil/tree/main/packages/fle
 | `10_flap_study.py` | Sweep flap deflections (0-20 deg) |
 | `11_flap_hinge_sweep.py` | Find optimal hinge position for L/D |
 | `12_matrix_sweep.py` | Alpha x Re matrix for a flapped airfoil |
+
+A polar’s `solver_version` identifies the installed Flexfoil distribution only when its metadata belongs to the loaded package. Source, vendored, frozen or shadowing copies without matching metadata report `None` (unknown), rather than crashing or claiming another installed wheel’s version. This release label is not a native binary fingerprint.
 
 Low-level native `cd_friction` is signed freestream-projected wall-shear drag; `cd_pressure` is total CD minus that friction contribution, matching XFOIL’s iteration-report decomposition. It is not the separate surface-pressure integral labelled CDp in an XFOIL polar file. See [force reporting](./internals/compressible-forces) for the formula and bounded reference tests.

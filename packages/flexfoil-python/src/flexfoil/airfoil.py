@@ -83,6 +83,24 @@ class BLResult:
     ue_upper: list[float] = field(default_factory=list)
     ue_lower: list[float] = field(default_factory=list)
 
+    def summary(self) -> dict:
+        """Summarize converged BL stations; negative Cf is a wall-shear indicator."""
+        import math
+
+        summary = {"success": self.success, "converged": self.converged, "error": self.error}
+        for surface in ("upper", "lower"):
+            x = getattr(self, f"x_{surface}")
+            h = getattr(self, f"h_{surface}")
+            cf = getattr(self, f"cf_{surface}")
+            usable = (self.success and self.converged and len(x) > 0
+                      and len(x) == len(h) == len(cf)
+                      and all(math.isfinite(v) for values in (x, h, cf) for v in values))
+            summary[f"max_h_{surface}"] = max(h) if usable else None
+            summary[f"min_cf_{surface}"] = min(cf) if usable else None
+            summary[f"negative_cf_x_{surface}"] = [position for position, shear in zip(x, cf) if shear < 0] if usable else None
+            summary[f"x_tr_{surface}"] = getattr(self, f"x_tr_{surface}") if usable else None
+        return summary
+
     def __repr__(self) -> str:
         if not self.success:
             return f"BLResult(success=False, error={self.error!r})"
@@ -258,7 +276,7 @@ class Airfoil:
                 cl=raw.get("cl", 0.0),
                 cd=0.0,
                 cm=raw.get("cm", 0.0),
-                converged=True,
+                converged=raw.get("success", False),
                 iterations=0,
                 residual=0.0,
                 x_tr_upper=1.0,
@@ -314,6 +332,15 @@ class Airfoil:
         list[PolarResult] if any are lists (one per outer-product combination).
         """
         from flexfoil.polar import PolarResult
+        from importlib.metadata import distribution, PackageNotFoundError
+        from pathlib import Path
+
+        # Vendored/source copies must not claim a different installed wheel’s identity.
+        try:
+            metadata = distribution("flexfoil")
+            solver_version = metadata.version if Path(metadata.locate_file("flexfoil/airfoil.py")).resolve() == Path(__file__).resolve() else None
+        except PackageNotFoundError:
+            solver_version = None
 
         import numpy as np
 
@@ -358,6 +385,13 @@ class Airfoil:
                         mach=mach_val,
                         ncrit=ncrit_val,
                         results=results,
+                        geometry_hash=self.hash,
+                        solver_version=solver_version,
+                        max_iter=max_iter,
+                        viscous=viscous,
+                        re_type=re_type if viscous else None,
+                        xstrip_upper=xstrip_upper if viscous else None,
+                        xstrip_lower=xstrip_lower if viscous else None,
                     ))
 
         return all_polars if is_matrix else all_polars[0]
@@ -412,7 +446,7 @@ class Airfoil:
                     cl=raw.get("cl", 0.0),
                     cd=0.0,
                     cm=raw.get("cm", 0.0),
-                    converged=True,
+                    converged=raw.get("success", False),
                     iterations=0,
                     residual=0.0,
                     x_tr_upper=1.0,

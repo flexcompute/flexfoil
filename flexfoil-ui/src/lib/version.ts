@@ -28,6 +28,55 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG: ChangelogEntry[] = [
+  { version: '1.4.3', date: '2026-10-15', items: [
+    { category: 'fixed', text: 'Preserve requested inviscid polar export conditions and retain independent surface import errors' },
+  ] },
+  { version: '1.4.2', date: '2026-10-14', items: [
+    { category: 'fixed', text: 'Keep source and vendored polars working with unknown provenance and remove the resolved Mach mismatch notice' },
+    { category: 'fixed', text: 'Reject leading non-finite coordinate rows without discarding points or numeric airfoil names' },
+  ] },
+  {
+    version: '1.4.1',
+    date: '2026-10-09',
+    items: [
+      { category: 'fixed', text: 'Retain comment-separated upper and lower surfaces when importing Lednicer DAT files' },
+    ],
+  },
+  {
+    version: '1.4.0',
+    date: '2026-10-09',
+    items: [
+      { category: 'added', text: 'Python boundary-layer summaries report maximum H, minimum Cf and negative wall-shear locations for converged station data' },
+    ],
+  },
+  {
+    version: '1.3.0',
+    date: '2026-10-09',
+    items: [
+      { category: 'added', text: 'Import exact upper and lower Cp or velocity target distributions from CSV or text into experimental QDES' },
+    ],
+  },
+  {
+    version: '1.2.2',
+    date: '2026-10-09',
+    items: [
+      { category: 'fixed', text: 'Airfoil imports report invalid coordinate locations and failed repaneling instead of silently dropping data' },
+    ],
+  },
+  {
+    version: '1.2.1',
+    date: '2026-10-09',
+    items: [
+      { category: 'fixed', text: 'Invalid non-finite panel geometry returns a located error instead of entering the solver or panicking' },
+    ],
+  },
+  {
+    version: '1.2.0',
+    date: '2026-10-09',
+    items: [
+      { category: 'added', text: 'Python complete polar exports retain failed attempts, diagnostics and solver/transition provenance with include_failed=True' },
+    ],
+  },
   { version: '1.1.16', date: '2026-10-14', items: [
     { category: 'fixed', text: 'Match native friction and total-minus-friction drag reporting to the reference wall-shear integration' },
   ] },
@@ -60,6 +109,13 @@ export const CHANGELOG: ChangelogEntry[] = [
     date: '2026-10-13',
     items: [
       { category: 'added', text: 'Reference-backed solver checks require converged native and WebAssembly results with matched geometry and operating conditions' },
+    ],
+  },
+  {
+    version: '1.1.9',
+    date: '2026-10-09',
+    items: [
+      { category: 'fixed', text: 'Python failed inviscid solves no longer count as converged points in polar plots, exports or statistics' },
     ],
   },
   {
@@ -295,5 +351,5 @@ export const CHANGELOG: ChangelogEntry[] = [
       { category: 'added', text: 'SQLite run database with export/import' },
       { category: 'added', text: 'Mobile-responsive layout' },
     ],
-  },
+  }
 ];
