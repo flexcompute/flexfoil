@@ -1,0 +1,11 @@
+---
+title: Documentation development server security
+---
+
+The documentation build uses Docusaurus 3.9.2. Its local development server reaches `webpack-dev-server`, Express and `proxy-addr`; the lockfile pins `proxy-addr` 2.0.8. This patch preserves the existing Express `~2.0.7` range and the same `forwarded` and `ipaddr.js` dependencies. Use `npm ci` in `docs-site/` to install the reviewed dependency graph.
+
+[GHSA-jqcg-44mw-7w3h](https://github.com/jshttp/proxy-addr/security/advisories/GHSA-jqcg-44mw-7w3h) describes incorrect proxy trust matching for IPv4 addresses against IPv6 subnets. In vulnerable versions, a setting such as `::ffff:10.0.0.0/8` or `::/1` can trust arbitrary IPv4 clients and accept their spoofed `X-Forwarded-For` address. Express defaults to `trust proxy=false`; the inspected Docusaurus/webpack-dev-server setup does not enable those subnet settings. Applicability therefore depends on an enabled proxy trust configuration and a consumer using the resolved IP for authorization, rate limits or logging. No such exploitable Flexfoil configuration was demonstrated.
+
+The patched package rejects these mismatched IPv4/IPv6 trust matches while preserving ordinary IPv4 ranges and correctly mapped IPv6 prefixes. Installed-package assertions exercise spoofed forwarding, trusted internal proxies and direct clients. These are package-boundary checks, not a complete externally exposed development-server exploit test.
+
+The existing deployment workflow builds static files and copies them to S3/CloudFront. This dependency is part of the docs development/build toolchain; it is not evidence that the published static site runs Express. Updating this lockfile neither deploys the site nor changes solver behavior. Other unresolved dependency alerts remain tracked separately.
